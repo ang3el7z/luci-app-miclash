@@ -7,6 +7,7 @@ unified-delay: true
 tcp-concurrent: true
 external-controller: 0.0.0.0:9090
 external-ui: ./ui
+external-ui-url: 'https://github.com/Zephyruso/zashboard/releases/latest/download/dist-no-fonts.zip'
 
 # DNS server settings
 # This section is optional. When not present, the DNS server will be disabled.
@@ -20,7 +21,8 @@ dns:
   nameserver-policy:
     '+.polaris-iot.com': [77.88.8.8, 77.88.8.1]
   # Upstream DNS
-  nameserver: ['https://dns10.quad9.net/dns-query#PROXY', 'https://dns.aa.net.uk/dns-query#PROXY']
+  nameserver: ['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']
+  # nameserver: ['https://cloudflare-dns.com/dns-query#PROXY', 'https://dns.google/dns-query#PROXY']
 
 # find-process-mode: off
 # global-client-fingerprint: chrome
@@ -92,20 +94,8 @@ proxy-providers:
     type: http
     url: "https://provider-domain.example.org/subscription-url" # change it
     path: ./proxy_providers/provider1.yaml
-    interval: 43200
-    proxy: PROXY
-    header:
-      User-Agent:
-      - "mihomo/1.19.4"
-      Authorization:
-      - 'token 123'
-    health-check:
-      enable: true
-      url: https://www.gstatic.com/generate_204
-      interval: 300
-      timeout: 5000
-      lazy: true
-      expected-status: 204
+    interval: 600
+    # proxy: PROXY
 
 proxy-groups:
   # Select (used for selecting proxy or proxy group)
@@ -133,6 +123,8 @@ proxy-groups:
   - name: SUBS
     type: select
     use: [provider1]
+    # filter: 'Игры|VPN'
+    # exclude-filter: 'Russia|Россия|Обход'
 
 rule-providers:
   direct-domain:
@@ -142,7 +134,7 @@ rule-providers:
     url: 'https://YOUR_URL/direct-domain.list' # change it
     interval: 1800
     path: ./ruleset/direct-domain.txt
-    proxy: PROXY
+    # proxy: PROXY
   direct-ip:
     behavior: classical
     type: http
@@ -150,7 +142,7 @@ rule-providers:
     url: 'https://YOUR_URL/direct-ip.list' # change it
     interval: 1800
     path: ./ruleset/direct-ip.txt
-    proxy: PROXY
+    # proxy: PROXY
   proxy-domain:
     behavior: classical
     type: http
@@ -158,7 +150,7 @@ rule-providers:
     url: 'https://YOUR_URL/proxy-domain.list' # change it
     interval: 1800
     path: ./ruleset/proxy-domain.txt
-    proxy: PROXY
+    # proxy: PROXY
   local-list-proxy-domain:
     behavior: classical
     type: file
@@ -171,7 +163,7 @@ rule-providers:
     url: 'https://YOUR_URL/proxy-ip.list' # change it
     interval: 1800
     path: ./ruleset/proxy-ip.txt
-    proxy: PROXY
+    # proxy: PROXY
   antifilter-ip:
     behavior: classical
     type: http
@@ -179,7 +171,7 @@ rule-providers:
     url: 'https://YOUR_URL/antifilter-ip.list' # change it
     interval: 43200
     path: ./ruleset/antifilter-ip.txt
-    proxy: PROXY
+    # proxy: PROXY
 
 rules:
   # - SRC-IP-CIDR,192.168.1.101/32,DIRECT # To exclude a specific device on your network
