@@ -16,7 +16,7 @@
 apk update
 apk add curl kmod-nft-tproxy kmod-tun coreutils-base64
 release=$(curl -s https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash-${release#v}-r1.apk" -o /tmp/luci-app-miclash.apk
+curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash-${release#v}.apk" -o /tmp/luci-app-miclash.apk
 apk add /tmp/luci-app-miclash.apk --allow-untrusted && rm -rf /tmp/*.apk
 ```
 
@@ -25,7 +25,7 @@ apk add /tmp/luci-app-miclash.apk --allow-untrusted && rm -rf /tmp/*.apk
 ```bash
 opkg update && opkg install curl kmod-nft-tproxy kmod-tun coreutils-base64
 release=$(curl -s https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash_${release#v}-r1_all.ipk" -o /tmp/luci-app-miclash.ipk && opkg install /tmp/luci-app-miclash.ipk && rm -rf /tmp/*.ipk
+curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash_${release#v}_all.ipk" -o /tmp/luci-app-miclash.ipk && opkg install /tmp/luci-app-miclash.ipk && rm -rf /tmp/*.ipk
 ```
 
 *Для OpenWrt 21.x вместо `kmod-nft-tproxy` нужен `iptables-mod-tproxy`*

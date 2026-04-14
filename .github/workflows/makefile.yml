@@ -203,6 +203,37 @@ jobs:
           find "$SDK_HOME/bin" -type f \( -name "${PACKAGE_NAME}_*.${{ matrix.pkg_type }}" -o -name "${PACKAGE_NAME}-*.${{ matrix.pkg_type }}" \) \
             -exec cp -v -f {} "${{ github.workspace }}" \;
 
+      - name: Normalize Package Filenames
+        shell: bash
+        env:
+          TAG_VERSION: ${{ needs.sync-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          files=( "${{ github.workspace }}"/*.${{ matrix.pkg_type }} )
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No package files found for extension .${{ matrix.pkg_type }}"
+            exit 0
+          fi
+
+          for f in "${files[@]}"; do
+            base="$(basename "$f")"
+            normalized="$base"
+
+            if [[ "$base" == *.apk ]]; then
+              normalized="$(echo "$base" | sed -E 's/-r[0-9]+(\.apk)$/\1/')"
+            elif [[ "$base" == *.ipk ]]; then
+              normalized="$(echo "$base" | sed -E 's/-r[0-9]+(_[^/]+\.ipk)$/\1/')"
+            fi
+
+            if [[ "$normalized" != "$base" ]]; then
+              mv -v "$f" "${{ github.workspace }}/$normalized"
+            fi
+          done
+
+          ls -lah "${{ github.workspace }}"/*.${{ matrix.pkg_type }}
+
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -228,6 +259,23 @@ jobs:
           set -euo pipefail
           mkdir -p release_files
           find artifacts -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} release_files/ \;
+
+          for f in release_files/*; do
+            [ -f "$f" ] || continue
+            base="$(basename "$f")"
+            normalized="$base"
+
+            if [[ "$base" == *.apk ]]; then
+              normalized="$(echo "$base" | sed -E 's/-r[0-9]+(\.apk)$/\1/')"
+            elif [[ "$base" == *.ipk ]]; then
+              normalized="$(echo "$base" | sed -E 's/-r[0-9]+(_[^/]+\.ipk)$/\1/')"
+            fi
+
+            if [[ "$normalized" != "$base" ]]; then
+              mv -f "$f" "release_files/$normalized"
+            fi
+          done
+
           ls -lah release_files
 
       - name: Generate Release Notes
