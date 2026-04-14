@@ -1472,17 +1472,75 @@ async function loadClashLogs() {
 }
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const SYSLOG_CLASH_RE = /^.*? ([\d:]{8}) .*?daemon\.(\w+)\s+(clash(?:-rules|-hotplug)?)\b(?:\[\d+\])?:\s*(.*)$/;
+
+function normalizeLogMessage(message) {
+	let text = String(message || '').trim();
+	if (!text) return '';
+
+	const msgOnly = text.match(/^msg="(.*)"$/);
+	if (msgOnly) text = msgOnly[1];
+
+	const clashCore = text.match(/^time="[^"]+"\s+level=\w+\s+msg="(.*)"$/);
+	if (clashCore) text = clashCore[1];
+
+	return text.replace(/\\"/g, '"').trim();
+}
+
+function formatLogLine(line) {
+	const raw = String(line || '').replace(ANSI_RE, '').trim();
+	if (!raw) return null;
+
+	const syslogMatch = raw.match(SYSLOG_CLASH_RE);
+	if (syslogMatch) {
+		const time = syslogMatch[1];
+		const level = String(syslogMatch[2] || '').toUpperCase();
+		const daemon = syslogMatch[3];
+		const message = normalizeLogMessage(syslogMatch[4]);
+
+		return {
+			text: '[' + time + '] [' + daemon + '] [' + level + '] ' + message,
+			level: level
+		};
+	}
+
+	const clashRawMatch = raw.match(/^time="([^"]+)"\s+level=(\w+)\s+msg="(.*)"$/);
+	if (clashRawMatch) {
+		const isoTime = clashRawMatch[1];
+		const level = String(clashRawMatch[2] || '').toUpperCase();
+		const message = normalizeLogMessage(clashRawMatch[3]);
+		const time = (isoTime.match(/(\d{2}:\d{2}:\d{2})/) || [null, '--:--:--'])[1];
+
+		return {
+			text: '[' + time + '] [clash] [' + level + '] ' + message,
+			level: level
+		};
+	}
+
+	if (!/clash/i.test(raw)) return null;
+
+	const fallbackLevel =
+		/\b(FATAL|PANIC|ERRO|ERROR)\b/i.test(raw) ? 'ERROR' :
+		/\b(WARN|WARNING)\b/i.test(raw) ? 'WARN' :
+		/\b(INFO)\b/i.test(raw) ? 'INFO' : 'MUTED';
+
+	return { text: raw, level: fallbackLevel };
+}
 
 function colorizeLog(raw) {
 	if (!raw) return '<span class="sbox-log-muted">No logs yet.</span>';
 
-	return String(raw || '').split('\n').map((line) => {
-		const clean = line.replace(ANSI_RE, '');
-		const esc = safeText(clean);
+	const rows = String(raw || '').split('\n')
+		.map((line) => formatLogLine(line))
+		.filter((item) => !!item && !!item.text);
 
-		if (/\b(FATAL|PANIC|ERRO|ERROR)\b/i.test(clean)) return '<span class="sbox-log-error">' + esc + '</span>';
-		if (/\b(WARN|WARNING)\b/i.test(clean)) return '<span class="sbox-log-warn">' + esc + '</span>';
-		if (/\b(INFO)\b/i.test(clean)) return '<span class="sbox-log-info">' + esc + '</span>';
+	if (!rows.length) return '<span class="sbox-log-muted">No logs yet.</span>';
+
+	return rows.map((item) => {
+		const esc = safeText(item.text);
+		if (/(FATAL|PANIC|ERRO|ERROR)/i.test(item.level)) return '<span class="sbox-log-error">' + esc + '</span>';
+		if (/(WARN|WARNING)/i.test(item.level)) return '<span class="sbox-log-warn">' + esc + '</span>';
+		if (/(INFO)/i.test(item.level)) return '<span class="sbox-log-info">' + esc + '</span>';
 		return '<span class="sbox-log-muted">' + esc + '</span>';
 	}).join('\n');
 }
