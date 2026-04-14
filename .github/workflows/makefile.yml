@@ -1,0 +1,255 @@
+name: Build And Release From Tag
+run-name: Release ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  sync-version:
+    name: Sync Version To Branch
+    runs-on: ubuntu-22.04
+    outputs:
+      tag_version: ${{ steps.tag.outputs.tag_version }}
+      target_branch: ${{ steps.branch.outputs.target_branch }}
+      sync_sha: ${{ steps.sync.outputs.sync_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse Tag Version
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_NAME="${GITHUB_REF_NAME}"
+          TAG_VERSION="${TAG_NAME#v}"
+
+          if [ "$TAG_VERSION" = "$TAG_NAME" ]; then
+            echo "Tag must start with 'v' (example: v1.2.3)." >&2
+            exit 1
+          fi
+
+          if ! [[ "$TAG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid tag version: $TAG_VERSION" >&2
+            exit 1
+          fi
+
+          echo "tag_version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Detect Target Branch From Tag Commit
+        id: branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch origin "+refs/heads/*:refs/remotes/origin/*"
+
+          mapfile -t BRANCHES < <(git branch -r --contains "$GITHUB_SHA" | sed 's/^[*[:space:]]*//' | grep -v 'origin/HEAD' | sed 's#^origin/##' || true)
+
+          TARGET_BRANCH=""
+          for b in "${BRANCHES[@]}"; do
+            if [ "$b" != "$DEFAULT_BRANCH" ]; then
+              TARGET_BRANCH="$b"
+              break
+            fi
+          done
+
+          if [ -z "$TARGET_BRANCH" ] && [ "${#BRANCHES[@]}" -gt 0 ]; then
+            TARGET_BRANCH="${BRANCHES[0]}"
+          fi
+
+          if [ -z "$TARGET_BRANCH" ]; then
+            TARGET_BRANCH="$DEFAULT_BRANCH"
+          fi
+
+          echo "target_branch=$TARGET_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "Will sync version in branch: $TARGET_BRANCH"
+
+      - name: Sync Version In Files And Push
+        id: sync
+        shell: bash
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.tag_version }}
+          TARGET_BRANCH: ${{ steps.branch.outputs.target_branch }}
+        run: |
+          set -euo pipefail
+
+          if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
+            git switch -C "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+          else
+            git switch --detach
+          fi
+
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+
+          tag = os.environ["TAG_VERSION"]
+
+          makefile = pathlib.Path("luci-app-miclash/Makefile")
+
+          for f in (makefile,):
+              if not f.exists():
+                  print(f"Required file not found: {f}", file=sys.stderr)
+                  sys.exit(1)
+
+          text = makefile.read_text(encoding="utf-8")
+          text_new, changed = re.subn(r"^PKG_VERSION:=.*$", f"PKG_VERSION:={tag}", text, count=1, flags=re.M)
+          if changed != 1:
+              print("Failed to update PKG_VERSION in Makefile", file=sys.stderr)
+              sys.exit(1)
+          makefile.write_text(text_new, encoding="utf-8", newline="\n")
+          PY
+
+          if git diff --quiet; then
+            echo "No version changes detected."
+          else
+            git add luci-app-miclash/Makefile
+            git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
+              commit -m "github-actions[bot]: sync Makefile version to v${TAG_VERSION}"
+
+            if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
+              git push origin "HEAD:${TARGET_BRANCH}"
+            else
+              echo "Target branch '${TARGET_BRANCH}' not found. Skipping push."
+            fi
+          fi
+
+          echo "sync_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.pkg_type }}, OpenWrt ${{ matrix.sdk_version }})
+    runs-on: ubuntu-22.04
+    needs: sync-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk_version: "24.10.2"
+            pkg_type: "ipk"
+            arch: "x86/64"
+          - sdk_version: "25.12.0-rc2"
+            pkg_type: "apk"
+            arch: "x86/64"
+    env:
+      PACKAGE_NAME: luci-app-miclash
+      SDK_NAME: -sdk-
+      SDK_URL_PATH: https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/targets/${{ matrix.arch }}/
+    steps:
+      - name: Checkout Synced Commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync-version.outputs.sync_sha }}
+          fetch-depth: 0
+
+      - name: Ensure Version Equals Tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i "s/^PKG_VERSION:=.*$/PKG_VERSION:=${{ needs.sync-version.outputs.tag_version }}/" luci-app-miclash/Makefile
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq gettext libncurses5-dev rsync xsltproc build-essential gawk unzip
+
+      - name: Create Build Directories
+        run: |
+          echo "SDK_DL_DIR=$(mktemp -d)" >> "$GITHUB_ENV"
+          echo "SDK_HOME=$(mktemp -d)" >> "$GITHUB_ENV"
+
+      - name: Download And Verify OpenWrt SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SDK_DL_DIR"
+
+          if ! wget -q -O - "$SDK_URL_PATH/sha256sums" | grep -- "$SDK_NAME" > sha256sums.small 2>/dev/null; then
+            echo "Cannot find SDK archive in sha256sums for $SDK_URL_PATH" >&2
+            exit 1
+          fi
+
+          SDK_FILE="$(cut -d' ' -f2 < sha256sums.small | sed 's/*//g')"
+          wget -q -O "$SDK_FILE" "$SDK_URL_PATH/$SDK_FILE"
+
+          if ! sha256sum -c ./sha256sums.small >/dev/null 2>&1; then
+            echo "SDK checksum verification failed." >&2
+            exit 1
+          fi
+
+          tar --zstd -xf "$SDK_FILE" -C "$SDK_HOME" --strip=1
+
+      - name: Build Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SDK_HOME"
+          ./scripts/feeds update > /dev/null 2>&1
+          ./scripts/feeds install -a > /dev/null 2>&1
+          ln -s "${{ github.workspace }}/luci-app-miclash" "package/$PACKAGE_NAME"
+          make defconfig > /dev/null 2>&1
+          make package/${PACKAGE_NAME}/compile V=s
+
+          find "$SDK_HOME/bin" -type f \( -name "${PACKAGE_NAME}_*.${{ matrix.pkg_type }}" -o -name "${PACKAGE_NAME}-*.${{ matrix.pkg_type }}" \) \
+            -exec cp -v -f {} "${{ github.workspace }}" \;
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.pkg_type }}-${{ matrix.sdk_version }}
+          path: "*.${{ matrix.pkg_type }}"
+          retention-days: 1
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-22.04
+    needs:
+      - sync-version
+      - build
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect Release Files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release_files
+          find artifacts -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} release_files/ \;
+          ls -lah release_files
+
+      - name: Generate Release Notes
+        shell: bash
+        run: |
+          cat > release_notes.md <<'EOF'
+          ## MiClash ${{ github.ref_name }}
+
+          - Tag version: `${{ needs.sync-version.outputs.tag_version }}`
+          - Source branch: `${{ needs.sync-version.outputs.target_branch }}`
+          - Source commit: `${{ needs.sync-version.outputs.sync_sha }}`
+
+          ### Packages
+          - IPK packages for OpenWrt 24.10.x (opkg)
+          - APK packages for OpenWrt 25.12.x (apk)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          body_path: release_notes.md
+          files: release_files/*
+          draft: false
+          prerelease: false
