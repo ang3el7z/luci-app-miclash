@@ -25,7 +25,7 @@ jobs:
             arch: "x86/64"
     
     env:
-      PACKAGE_NAME: luci-app-ssclash
+      PACKAGE_NAME: luci-app-miclash
       SDK_URL_PATH: https://downloads.openwrt.org/releases/${{ matrix.version }}/targets/${{ matrix.arch }}/
       SDK_NAME: -sdk-
       
@@ -62,7 +62,7 @@ jobs:
           cd "$SDK_HOME"
           ./scripts/feeds update > /dev/null 2>&1
           ./scripts/feeds install -a > /dev/null 2>&1
-          ln -s "${{ github.workspace }}/luci-app-ssclash" "package/$PACKAGE_NAME"
+          ln -s "${{ github.workspace }}/luci-app-miclash" "package/$PACKAGE_NAME"
           make defconfig > /dev/null 2>&1
           make package/${PACKAGE_NAME}/compile V=s
           

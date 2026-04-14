@@ -3,12 +3,12 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=luci-app-ssclash
+PKG_NAME:=luci-app-miclash
 PKG_VERSION:=3.9.0
 PKG_RELEASE:=1
-PKG_MAINTAINER:=ZeroChaos <dev@null.la>
+PKG_MAINTAINER:=ang3el7z
 
-LUCI_TITLE:=LuCI Support for SSClash
+LUCI_TITLE:=LuCI Support for MiClash
 LUCI_DEPENDS:=+luci-base +coreutils-base64 +kmod-tun
 LUCI_PKGARCH:=all
 
@@ -31,7 +31,7 @@ endef
 
 define Package/$(PKG_NAME)/config
 choice
-	prompt "Transparent Proxy Backend for SSClash"
+	prompt "Transparent Proxy Backend for MiClash"
 	default PACKAGE_$(PKG_NAME)_Iptables_Transparent_Proxy if !PACKAGE_firewall4
 	default PACKAGE_$(PKG_NAME)_Nftables_Transparent_Proxy if PACKAGE_firewall4
 
@@ -47,7 +47,7 @@ endchoice
 endef
 
 define Package/$(PKG_NAME)/description
-	LuCI interface for SSClash, a tool for managing and configuring Clash.
+	LuCI interface for MiClash, a tool for managing and configuring Clash.
 endef
 
 define Build/Prepare
@@ -56,10 +56,10 @@ endef
 
 define Build/Compile
 	@mkdir -p $(PKG_BUILD_DIR)/po/ru
-	@if [ -f "./rootfs/po/ru/ssclash.po" ]; then \
+	@if [ -f "./rootfs/po/ru/miclash.po" ]; then \
 		$(STAGING_DIR_HOSTPKG)/bin/po2lmo \
-			"./rootfs/po/ru/ssclash.po" \
-			"$(PKG_BUILD_DIR)/po/ru/ssclash.lmo"; \
+			"./rootfs/po/ru/miclash.po" \
+			"$(PKG_BUILD_DIR)/po/ru/miclash.lmo"; \
 	fi
 endef
 
@@ -86,37 +86,39 @@ define Package/$(PKG_NAME)/install
 	$(CP) ./rootfs/opt/clash/ui/* $(1)/opt/clash/ui/
 
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
-	$(INSTALL_DATA) ./rootfs/usr/share/luci/menu.d/luci-app-ssclash.json $(1)/usr/share/luci/menu.d/
+	$(INSTALL_DATA) ./rootfs/usr/share/luci/menu.d/luci-app-miclash.json $(1)/usr/share/luci/menu.d/
 
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
-	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-ssclash.json $(1)/usr/share/rpcd/acl.d/
+	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json $(1)/usr/share/rpcd/acl.d/
 
-	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/ssclash
-	$(CP) ./rootfs/www/luci-static/resources/view/ssclash/* $(1)/www/luci-static/resources/view/ssclash/
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/miclash
+	$(CP) ./rootfs/www/luci-static/resources/view/miclash/* $(1)/www/luci-static/resources/view/miclash/
 
 	$(INSTALL_DIR) $(1)/opt/clash/lst
 
 ifdef CONFIG_USE_APK
 	$(INSTALL_DIR) $(1)/etc/apk/protected_paths.d
-	$(INSTALL_DATA) ./rootfs/etc/apk/protected_paths.d/ssclash.list $(1)/etc/apk/protected_paths.d/
+	$(INSTALL_DATA) ./rootfs/etc/apk/protected_paths.d/miclash.list $(1)/etc/apk/protected_paths.d/
 endif
 
-	@if [ -f "$(PKG_BUILD_DIR)/po/ru/ssclash.lmo" ]; then \
+	@if [ -f "$(PKG_BUILD_DIR)/po/ru/miclash.lmo" ]; then \
 		$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n; \
-		$(INSTALL_DATA) "$(PKG_BUILD_DIR)/po/ru/ssclash.lmo" \
-			"$(1)/usr/lib/lua/luci/i18n/ssclash.ru.lmo"; \
+		$(INSTALL_DATA) "$(PKG_BUILD_DIR)/po/ru/miclash.lmo" \
+			"$(1)/usr/lib/lua/luci/i18n/miclash.ru.lmo"; \
 	fi
 endef
 
 define Package/$(PKG_NAME)/preinst
 #!/bin/sh
-[ -f /opt/clash/config.yaml ] && cp -p /opt/clash/config.yaml /tmp/ssclash_config.yaml.bak
+[ -f /opt/clash/config.yaml ] && cp -p /opt/clash/config.yaml /tmp/miclash_config.yaml.bak
 exit 0
 endef
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
-if [ -f /tmp/ssclash_config.yaml.bak ]; then
+if [ -f /tmp/miclash_config.yaml.bak ]; then
+	mv /tmp/miclash_config.yaml.bak /opt/clash/config.yaml
+elif [ -f /tmp/ssclash_config.yaml.bak ]; then
 	mv /tmp/ssclash_config.yaml.bak /opt/clash/config.yaml
 fi
 [ -n "$$IPKG_INSTROOT" ] || {
@@ -149,10 +151,13 @@ define Package/$(PKG_NAME)/postrm
 	rm -rf /opt/clash/ui
 	rm -f /opt/clash/ruleset
 	rm -rf /tmp/clash
+	rm -rf /www/luci-static/resources/view/miclash
 	rm -rf /www/luci-static/resources/view/ssclash
+	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
 	rm -f /usr/lib/lua/luci/i18n/ssclash.*.lmo
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
+	rm -f /etc/apk/protected_paths.d/miclash.list
 	rm -f /etc/apk/protected_paths.d/ssclash.list
 }
 endef

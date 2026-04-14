@@ -1,8 +1,8 @@
 <p align="center">
- <img src=".github/assets/images/logos/SSClash.png" width="200">
+ <img src=".github/assets/images/logos/MiClash.png" width="200">
 </p>
 
-<h3 align="center">Пошаговая инструкция по установке и настройке SSClash на вашем роутере с OpenWrt</h3>
+<h3 align="center">Пошаговая инструкция по установке и настройке MiClash на вашем роутере с OpenWrt</h3>
 
 # Руководство по установке
 
@@ -17,7 +17,7 @@ opkg update
 
 ## Шаг 2: Установка необходимых пакетов
 
-В большинстве случаев **не нужно ничего устанавливать вручную**: при установке `luci-app-ssclash` из настроенного фида OpenWrt `opkg` автоматически подтянет:
+В большинстве случаев **не нужно ничего устанавливать вручную**: при установке `luci-app-miclash` из настроенного фида OpenWrt `opkg` автоматически подтянет:
 
 - `coreutils-base64` — для скриптов, работающих с Base64;
 - `kmod-tun` — модуль ядра для режима TUN;
@@ -35,13 +35,13 @@ opkg install kmod-nft-tproxy
 opkg install iptables-mod-tproxy
 ```
 
-## Шаг 3: Загрузка и установка пакета `luci-app-ssclash`
+## Шаг 3: Загрузка и установка пакета `luci-app-miclash`
 
-Загрузите пакет SSClash и установите его.
+Загрузите пакет MiClash и установите его.
 
 ```bash
-curl -L https://github.com/zerolabnet/ssclash/releases/download/v3.9.0/luci-app-ssclash_3.9.0-r1_all.ipk -o /tmp/luci-app-ssclash_3.9.0-r1_all.ipk
-opkg install /tmp/luci-app-ssclash_3.9.0-r1_all.ipk
+curl -L https://github.com/ang3el7z/luci-app-miclash/releases/download/v3.9.0/luci-app-miclash_3.9.0-r1_all.ipk -o /tmp/luci-app-miclash_3.9.0-r1_all.ipk
+opkg install /tmp/luci-app-miclash_3.9.0-r1_all.ipk
 rm /tmp/*.ipk
 ```
 
@@ -94,7 +94,7 @@ chmod +x clash
 
 ## Шаг 5: Настройка режима обработки интерфейсов
 
-SSClash предлагает два режима обработки интерфейсов:
+MiClash предлагает два режима обработки интерфейсов:
 
 ### Режим исключения (Универсальный подход) - **Рекомендуется для большинства пользователей**
 
@@ -172,6 +172,8 @@ SSClash предлагает два режима обработки интерф
 Чтобы полностью удалить Clash:
 
 ```bash
-opkg remove luci-app-ssclash
+opkg remove luci-app-miclash
 rm -rf /opt/clash
 ```
+
+

@@ -2,10 +2,10 @@
 - [Русский](README.ru.md)
 
 <p align="center">
- <img src=".github/assets/images/logos/SSClash.png" width="200">
+ <img src=".github/assets/images/logos/MiClash.png" width="200">
 </p>
 
-<h3 align="center">Here's the step-by-step process for installing and configuring SSClash on your OpenWrt router</h3>
+<h3 align="center">Here's the step-by-step process for installing and configuring MiClash on your OpenWrt router</h3>
 
 # Setup Guide
 
@@ -19,7 +19,7 @@ opkg update
 
 ## Step 2: Install Required Packages
 
-In most cases you **do not need to install anything manually**: when you install `luci-app-ssclash` from a configured OpenWrt feed, `opkg` will automatically pull in:
+In most cases you **do not need to install anything manually**: when you install `luci-app-miclash` from a configured OpenWrt feed, `opkg` will automatically pull in:
 
 - `coreutils-base64` – for scripts that use Base64;
 - `kmod-tun` – for TUN mode;
@@ -37,13 +37,13 @@ opkg install kmod-nft-tproxy
 opkg install iptables-mod-tproxy
 ```
 
-## Step 3: Download and Install `luci-app-ssclash` Package
+## Step 3: Download and Install `luci-app-miclash` Package
 
-Download the SSClash package and install it.
+Download the MiClash package and install it.
 
 ```bash
-curl -L https://github.com/zerolabnet/ssclash/releases/download/v3.9.0/luci-app-ssclash_3.9.0-r1_all.ipk -o /tmp/luci-app-ssclash_3.9.0-r1_all.ipk
-opkg install /tmp/luci-app-ssclash_3.9.0-r1_all.ipk
+curl -L https://github.com/ang3el7z/luci-app-miclash/releases/download/v3.9.0/luci-app-miclash_3.9.0-r1_all.ipk -o /tmp/luci-app-miclash_3.9.0-r1_all.ipk
+opkg install /tmp/luci-app-miclash_3.9.0-r1_all.ipk
 rm /tmp/*.ipk
 ```
 
@@ -95,7 +95,7 @@ chmod +x clash
 
 ## Step 5: Configure Interface Processing Mode
 
-SSClash offers two interface processing modes:
+MiClash offers two interface processing modes:
 
 ### Exclude Mode (Universal approach) - **Recommended for most users**
 
@@ -171,6 +171,8 @@ Access the Clash dashboard directly from the LuCI interface with automatic confi
 To remove Clash completely:
 
 ```bash
-opkg remove luci-app-ssclash
+opkg remove luci-app-miclash
 rm -rf /opt/clash
 ```
+
+

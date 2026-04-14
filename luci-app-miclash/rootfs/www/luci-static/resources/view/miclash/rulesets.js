@@ -21,8 +21,8 @@ function loadScript(src) {
 }
 
 async function initializeAceEditor(filename, content) {
-    await loadScript('/luci-static/resources/view/ssclash/ace/ace.js');
-    ace.config.set('basePath', '/luci-static/resources/view/ssclash/ace/');
+    await loadScript('/luci-static/resources/view/miclash/ace/ace.js');
+    ace.config.set('basePath', '/luci-static/resources/view/miclash/ace/');
 
     const editor = ace.edit(`editor-${filename}`);
     editor.setTheme("ace/theme/tomorrow_night_bright");

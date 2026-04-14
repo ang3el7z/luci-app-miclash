@@ -546,3 +546,119 @@ msgstr "Автоматически генерируемые значения:"
 
 msgid "Adding HWID headers to configuration..."
 msgstr "Добавление HWID-заголовков в конфигурацию..."
+
+### MiClash UI strings ###
+
+msgid "Control Center"
+msgstr "Центр управления"
+
+msgid "Checking service..."
+msgstr "Проверка службы..."
+
+msgid "Configuration applied and service reloaded."
+msgstr "Конфигурация применена, служба перезагружена."
+
+msgid "Configuration saved."
+msgstr "Конфигурация сохранена."
+
+msgid "Download failed: %s"
+msgstr "Ошибка загрузки: %s"
+
+msgid "Download Subscription"
+msgstr "Скачать подписку"
+
+msgid "Downloaded file is empty."
+msgstr "Загруженный файл пуст."
+
+msgid "Editor with safe YAML validation: invalid changes are automatically rolled back."
+msgstr "Редактор с безопасной проверкой YAML: некорректные изменения автоматически откатываются."
+
+msgid "Failed to apply configuration: %s"
+msgstr "Не удалось применить конфигурацию: %s"
+
+msgid "Failed to apply subscription: %s"
+msgstr "Не удалось применить подписку: %s"
+
+msgid "Failed to initialize editor: %s"
+msgstr "Не удалось инициализировать редактор: %s"
+
+msgid "Failed to save configuration: %s"
+msgstr "Не удалось сохранить конфигурацию: %s"
+
+msgid "Failed to save URL: %s"
+msgstr "Не удалось сохранить URL: %s"
+
+msgid "Invalid subscription URL."
+msgstr "Некорректный URL подписки."
+
+msgid "Loading versions..."
+msgstr "Загрузка версий..."
+
+msgid "MiClash Control Center"
+msgstr "Центр управления MiClash"
+
+msgid "MiClash Log"
+msgstr "Журнал MiClash"
+
+msgid "MiClash: %s  |  Mihomo: %s  |  OpenWrt: %s"
+msgstr "MiClash: %s  |  Mihomo: %s  |  OpenWrt: %s"
+
+msgid "Open the remaining MiClash sections."
+msgstr "Откройте остальные разделы MiClash."
+
+msgid "Quick Navigation"
+msgstr "Быстрая навигация"
+
+msgid "Real-time Clash service logs."
+msgstr "Логи службы Clash в реальном времени."
+
+msgid "Restart"
+msgstr "Перезапуск"
+
+msgid "Save & Apply"
+msgstr "Сохранить и применить"
+
+msgid "Save URL"
+msgstr "Сохранить URL"
+
+msgid "Save your subscription URL and download config directly to /opt/clash/config.yaml with automatic YAML validation."
+msgstr "Сохраните URL подписки и загрузите конфиг напрямую в /opt/clash/config.yaml с автоматической проверкой YAML."
+
+msgid "Service running"
+msgstr "Служба запущена"
+
+msgid "Service stopped"
+msgstr "Служба остановлена"
+
+msgid "Start"
+msgstr "Запуск"
+
+msgid "Stop"
+msgstr "Остановка"
+
+msgid "Subscription downloaded, validated and applied."
+msgstr "Подписка загружена, проверена и применена."
+
+msgid "Subscription URL"
+msgstr "URL подписки"
+
+msgid "Subscription URL is empty."
+msgstr "URL подписки пуст."
+
+msgid "Subscription URL saved."
+msgstr "URL подписки сохранен."
+
+msgid "Unable to toggle service: %s"
+msgstr "Не удалось переключить состояние службы: %s"
+
+msgid "Validate YAML"
+msgstr "Проверить YAML"
+
+msgid "YAML Configuration"
+msgstr "YAML-конфигурация"
+
+msgid "YAML validation failed: %s"
+msgstr "Проверка YAML не пройдена: %s"
+
+msgid "YAML validation passed."
+msgstr "Проверка YAML пройдена."

@@ -434,7 +434,7 @@ async function loadSettings() {
             includedInterfaces: [],
             excludedInterfaces: [],
             enableHwid: false,
-            hwidUserAgent: 'SSClash',
+            hwidUserAgent: 'MiClash',
             hwidDeviceOS: 'OpenWrt'
         };
 
@@ -487,7 +487,7 @@ async function loadSettings() {
             includedInterfaces: [],
             excludedInterfaces: [],
             enableHwid: false,
-            hwidUserAgent: 'SSClash',
+            hwidUserAgent: 'MiClash',
             hwidDeviceOS: 'OpenWrt'
         };
     }
@@ -1412,8 +1412,8 @@ function createAdditionalSettings(blockQuic, useTmpfsRules, enableHwid, hwidUser
         'type': 'text',
         'id': 'hwid_user_agent',
         'class': 'cbi-input-text',
-        'value': hwidUserAgent || 'SSClash',
-        'placeholder': 'SSClash'
+        'value': hwidUserAgent || 'MiClash',
+        'placeholder': 'MiClash'
     });
     const userAgentDesc = E('div', {
         'style': 'font-size: 11px; color: #666; margin-top: 5px;'
@@ -1706,7 +1706,7 @@ return view.extend({
                 const blockQuic = additionalSettings.querySelector('#block_quic').checked;
                 const useTmpfsRules = additionalSettings.querySelector('#use_tmpfs_rules')?.checked ?? true;
                 const enableHwid = additionalSettings.querySelector('#enable_hwid')?.checked || false;
-                const hwidUserAgent = additionalSettings.querySelector('#hwid_user_agent')?.value || 'SSClash';
+                const hwidUserAgent = additionalSettings.querySelector('#hwid_user_agent')?.value || 'MiClash';
                 const hwidDeviceOS = additionalSettings.querySelector('#hwid_device_os')?.value || 'OpenWrt';
 
                 const selected = [];
@@ -1952,3 +1952,4 @@ return view.extend({
     handleSaveApply: null,
     handleReset: null
 });
+

@@ -19,8 +19,8 @@ function loadScript(src) {
 }
 
 async function initializeAceEditor() {
-    await loadScript('/luci-static/resources/view/ssclash/ace/ace.js');
-    ace.config.set('basePath', '/luci-static/resources/view/ssclash/ace/');
+    await loadScript('/luci-static/resources/view/miclash/ace/ace.js');
+    ace.config.set('basePath', '/luci-static/resources/view/miclash/ace/');
     editor = ace.edit("logfile");
     editor.setTheme("ace/theme/tomorrow_night_bright");
     editor.session.setMode("ace/mode/text");
@@ -135,15 +135,39 @@ return view.extend({
     },
 
     render: function () {
+        const css = `
+            .miclash-log-card {
+                background: var(--card-bg-color, var(--background-color, #fff));
+                border: 1px solid var(--border-color-medium, var(--border-color, #ddd));
+                border-radius: 10px;
+                padding: 16px;
+            }
+            .miclash-log-title {
+                margin: 0 0 6px;
+                font-size: 15px;
+                font-weight: 700;
+            }
+            .miclash-log-meta {
+                margin: 0 0 10px;
+                font-size: 12px;
+                color: var(--text-color-high, #666);
+            }
+        `;
+
         const view = E(
             'div',
-            { class: 'cbi-map' },
-            E('div', { class: 'cbi-section' }, [
+            { class: 'cbi-map miclash-log-page' },
+            [
+            E('style', {}, css),
+            E('div', { class: 'miclash-log-card' }, [
+                E('h2', { class: 'miclash-log-title' }, _('MiClash Log')),
+                E('p', { class: 'miclash-log-meta' }, _('Real-time Clash service logs.')),
                 E('div', {
                     id: 'logfile',
                     style: 'width: 100% !important; height: 640px;'
                 })
             ])
+            ]
         );
 
         initializeAceEditor();

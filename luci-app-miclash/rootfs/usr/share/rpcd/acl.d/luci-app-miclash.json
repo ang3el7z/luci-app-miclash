@@ -1,5 +1,5 @@
 {
-    "luci-app-ssclash": {
+    "luci-app-miclash": {
         "description": "Grant access to Clash procedures",
         "read": {
             "file": {
@@ -39,6 +39,7 @@
                 "/opt/clash/lst/*.txt": [ "write", "remove" ],
                 "/opt/clash/bin/clash-rules": [ "exec" ],
                 "/tmp/mihomo-*": [ "write", "remove" ],
+                "/tmp/miclash-*": [ "write", "remove" ],
                 "/etc/init.d/clash": [ "exec" ],
                 "/usr/bin/curl": [ "exec" ],
                 "/bin/gzip": [ "exec" ],
