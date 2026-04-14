@@ -1,4 +1,4 @@
-# Russian translation for SSClash
+# Russian translation for MiClash
 # Copyright (C) 2024-2025 ZeroChaos
 # This file is distributed under the same license as the package.
 #

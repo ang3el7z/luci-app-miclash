@@ -1,4 +1,4 @@
-# Copyright 2024-2026 ZeroChaos (https://github.com/zerolabnet/SSClash)
+# Copyright 2024-2026 ZeroChaos (https://github.com/zerolabnet/MiClash)
 # This is free software, licensed under the GNU General Public License v2.
 
 include $(TOPDIR)/rules.mk
@@ -118,8 +118,6 @@ define Package/$(PKG_NAME)/postinst
 #!/bin/sh
 if [ -f /tmp/miclash_config.yaml.bak ]; then
 	mv /tmp/miclash_config.yaml.bak /opt/clash/config.yaml
-elif [ -f /tmp/ssclash_config.yaml.bak ]; then
-	mv /tmp/ssclash_config.yaml.bak /opt/clash/config.yaml
 fi
 [ -n "$$IPKG_INSTROOT" ] || {
 	/etc/init.d/rpcd reload
@@ -152,13 +150,10 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /opt/clash/ruleset
 	rm -rf /tmp/clash
 	rm -rf /www/luci-static/resources/view/miclash
-	rm -rf /www/luci-static/resources/view/ssclash
 	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
-	rm -f /usr/lib/lua/luci/i18n/ssclash.*.lmo
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
 	rm -f /etc/apk/protected_paths.d/miclash.list
-	rm -f /etc/apk/protected_paths.d/ssclash.list
 }
 endef
 

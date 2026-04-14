@@ -967,13 +967,13 @@ apply_nft_tun_forward_rules() {
     esac
 
     if nft list table inet fw4 >/dev/null 2>&1; then
-        nft insert rule inet fw4 input iifname "clash-tun" accept comment "ssclash-fwd" 2>/dev/null
-        nft insert rule inet fw4 forward iifname "clash-tun" accept comment "ssclash-fwd" 2>/dev/null
-        nft insert rule inet fw4 forward oifname "clash-tun" accept comment "ssclash-fwd" 2>/dev/null
+        nft insert rule inet fw4 input iifname "clash-tun" accept comment "miclash-fwd" 2>/dev/null
+        nft insert rule inet fw4 forward iifname "clash-tun" accept comment "miclash-fwd" 2>/dev/null
+        nft insert rule inet fw4 forward oifname "clash-tun" accept comment "miclash-fwd" 2>/dev/null
         msg "Inserted clash-tun input+forward rules into inet fw4 (TUN/MIXED mode)"
     else
-        nft add chain inet clash ssclash_input '{ type filter hook input priority -1; policy accept; }' 2>/dev/null
-        nft add rule inet clash ssclash_input iifname "clash-tun" accept 2>/dev/null
+        nft add chain inet clash miclash_input '{ type filter hook input priority -1; policy accept; }' 2>/dev/null
+        nft add rule inet clash miclash_input iifname "clash-tun" accept 2>/dev/null
         nft add chain inet clash forward '{ type filter hook forward priority -1; policy accept; }' 2>/dev/null
         nft add rule inet clash forward iifname "clash-tun" accept 2>/dev/null
         nft add rule inet clash forward oifname "clash-tun" accept 2>/dev/null
@@ -987,7 +987,7 @@ teardown_nft_tun_forward_rules() {
         local chain
         for chain in input forward; do
             nft -a list chain inet fw4 "$chain" 2>/dev/null \
-                | awk '/ssclash-fwd/ { for(i=1;i<=NF;i++) if($i=="handle") { print $(i+1); break } }' \
+                | awk '/miclash-fwd/ { for(i=1;i<=NF;i++) if($i=="handle") { print $(i+1); break } }' \
                 | while IFS= read -r handle; do
                     [ -n "$handle" ] && nft delete rule inet fw4 "$chain" handle "$handle" 2>/dev/null
                   done
@@ -1013,11 +1013,11 @@ validate_forward_state() {
 
     if hash nft 2>/dev/null; then
         if nft list table inet fw4 >/dev/null 2>&1; then
-            nft -a list chain inet fw4 input 2>/dev/null | grep -q "ssclash-fwd" || return 1
-            nft -a list chain inet fw4 forward 2>/dev/null | grep -q "ssclash-fwd" || return 1
+            nft -a list chain inet fw4 input 2>/dev/null | grep -q "miclash-fwd" || return 1
+            nft -a list chain inet fw4 forward 2>/dev/null | grep -q "miclash-fwd" || return 1
             return 0
         else
-            nft list chain inet clash ssclash_input >/dev/null 2>&1 || return 1
+            nft list chain inet clash miclash_input >/dev/null 2>&1 || return 1
             nft list chain inet clash forward >/dev/null 2>&1 || return 1
             return 0
         fi
@@ -1032,7 +1032,7 @@ validate_forward_state() {
 
 # Idempotently restore the clash-tun forward accept rules.
 # Called from:
-#  - /var/etc/ssclash.include  (by fw4 on every reload — most critical path)
+#  - /var/etc/miclash.include  (by fw4 on every reload — most critical path)
 #  - service_started() in init.d/clash (on procd respawn)
 repair_forward_rules() {
     load_all_settings_once
@@ -2003,23 +2003,23 @@ start() {
 
     # Register a fw4 include hook so our clash-tun forward accept rules survive
     # any future firewall reload. When fw4 restarts it wipes the inet fw4 table
-    # (dropping our ssclash-fwd rules) but leaves ip rules/routes and the inet
+    # (dropping our miclash-fwd rules) but leaves ip rules/routes and the inet
     # clash table intact. The include file causes fw4 to call repair_forward_rules
     # after it rebuilds its own tables. Only active in TUN/MIXED modes.
     case "$PROXY_MODE" in
         "tun"|"mixed")
             mkdir -p /var/etc
-            cat > /var/etc/ssclash.include <<-'FW4EOF'
+            cat > /var/etc/miclash.include <<-'FW4EOF'
 CLASH_RULES_QUIET=1 /opt/clash/bin/clash-rules repair_forward_rules 2>/dev/null || true
 FW4EOF
             uci -q batch <<-'UCI_EOF'
-delete firewall.ssclash
-set firewall.ssclash=include
-set firewall.ssclash.path=/var/etc/ssclash.include
-set firewall.ssclash.fw4_compatible=1
+delete firewall.miclash
+set firewall.miclash=include
+set firewall.miclash.path=/var/etc/miclash.include
+set firewall.miclash.fw4_compatible=1
 commit firewall
 UCI_EOF
-            msg "Registered fw4 include hook: /var/etc/ssclash.include"
+            msg "Registered fw4 include hook: /var/etc/miclash.include"
             ;;
     esac
 }
@@ -2058,8 +2058,8 @@ stop() {
 
     # Remove the fw4 include hook registered in start().  Delete the UCI entry
     # first so that a concurrent fw4 reload does not try to run a missing file.
-    uci -q delete firewall.ssclash 2>/dev/null; uci -q commit firewall 2>/dev/null
-    rm -f /var/etc/ssclash.include
+    uci -q delete firewall.miclash 2>/dev/null; uci -q commit firewall 2>/dev/null
+    rm -f /var/etc/miclash.include
 
     restore_bridge_nf_call
 
