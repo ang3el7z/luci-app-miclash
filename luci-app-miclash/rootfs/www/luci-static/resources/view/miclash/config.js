@@ -2106,7 +2106,7 @@ function buildPageHtml() {
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
 			'<button id="sbox-theme-toggle" type="button" class="cbi-button cbi-button-neutral sbox-header-button sbox-theme-toggle" title="' + safeText(_('Switch theme')) + '">o</button>' +
-			'<button id="sbox-dashboard" type="button" class="cbi-button cbi-button-neutral sbox-header-button">' + safeText(_('Dashboard')) + '</button>' +
+			'<button id="sbox-dashboard" type="button" class="cbi-button sbox-header-button sbox-btn-dashboard">' + safeText(_('Dashboard')) + '</button>' +
 		'</div>' +
 
 		'<div class="sbox-card">' +
@@ -2121,8 +2121,8 @@ function buildPageHtml() {
 							'<span class="sbox-dot sbox-dot-off"></span>' +
 							'<span id="sbox-status-label">' + safeText(_('Service stopped')) + '</span>' +
 						'</span>' +
-						'<button id="sbox-start-stop" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Start')) + '</button>' +
-						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Restart')) + '</button>' +
+						'<button id="sbox-start-stop" type="button" class="cbi-button sbox-btn-start">' + safeText(_('Start')) + '</button>' +
+						'<button id="sbox-restart" type="button" class="cbi-button sbox-btn-restart">' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
@@ -2144,10 +2144,9 @@ function buildPageHtml() {
 				'</div>' +
 				'<div id="miclash-editor" class="sbox-editor"></div>' +
 				'<div class="sbox-actions">' +
-					'<button id="sbox-validate" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Validate YAML')) + '</button>' +
-					'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
-					'<button id="sbox-save-apply" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save & Apply')) + '</button>' +
-					'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear Editor')) + '</button>' +
+						'<button id="sbox-validate" type="button" class="cbi-button sbox-btn-validate">' + safeText(_('Validate YAML')) + '</button>' +
+						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
+						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear Editor')) + '</button>' +
 				'</div>' +
 				'<div class="sbox-config-footer">' +
 					'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Rulesets')) + '</button>' +
@@ -2171,6 +2170,8 @@ function updateHeaderAndControlDom() {
 	const statusLabel = pageRoot.querySelector('#sbox-status-label');
 	const dot = pageRoot.querySelector('#sbox-status .sbox-dot');
 	const startStop = pageRoot.querySelector('#sbox-start-stop');
+	const restartBtn = pageRoot.querySelector('#sbox-restart');
+	const dashboardBtn = pageRoot.querySelector('#sbox-dashboard');
 	const appVersion = pageRoot.querySelector('#sbox-app-version');
 	const kernelVersion = pageRoot.querySelector('#sbox-kernel-version');
 	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
@@ -2185,8 +2186,19 @@ function updateHeaderAndControlDom() {
 
 	if (startStop) {
 		startStop.textContent = appState.serviceRunning ? _('Stop') : _('Start');
-		startStop.classList.toggle('cbi-button-negative', appState.serviceRunning);
-		startStop.classList.toggle('cbi-button-apply', !appState.serviceRunning);
+		startStop.classList.toggle('sbox-btn-stop', appState.serviceRunning);
+		startStop.classList.toggle('sbox-btn-start', !appState.serviceRunning);
+	}
+
+	if (restartBtn) {
+		restartBtn.style.display = appState.serviceRunning ? '' : 'none';
+		restartBtn.disabled = !appState.serviceRunning;
+	}
+
+	if (dashboardBtn) {
+		dashboardBtn.disabled = !appState.serviceRunning;
+		dashboardBtn.classList.toggle('sbox-btn-dashboard-on', appState.serviceRunning);
+		dashboardBtn.classList.toggle('sbox-btn-dashboard-off', !appState.serviceRunning);
 	}
 
 	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
@@ -2453,9 +2465,12 @@ function bindControlAndHeaderEvents() {
 
 	const dashboardBtn = pageRoot.querySelector('#sbox-dashboard');
 	if (dashboardBtn) {
-		dashboardBtn.addEventListener('click', () => openDashboard().catch((e) => {
+		dashboardBtn.addEventListener('click', () => {
+			if (dashboardBtn.disabled) return;
+			openDashboard().catch((e) => {
 			notify('error', _('Failed to open dashboard: %s').format(e.message));
-		}));
+			});
+		});
 	}
 }
 
@@ -2532,20 +2547,6 @@ function bindConfigEvents() {
 			if (!editor) return;
 			const tested = await testConfigContent(editor.getValue(), true);
 			if (!tested.ok) throw new Error(tested.message);
-			appState.configContent = editor.getValue();
-			notify('info', _('Configuration saved.'));
-		}).catch((e) => {
-			notify('error', _('Failed to save configuration: %s').format(e.message));
-		}));
-	}
-
-	const saveApplyBtn = pageRoot.querySelector('#sbox-save-apply');
-	if (saveApplyBtn) {
-		saveApplyBtn.addEventListener('click', () => withButtons(saveApplyBtn, async () => {
-			if (!editor) return;
-			const tested = await testConfigContent(editor.getValue(), true);
-			if (!tested.ok) throw new Error(tested.message);
-
 			appState.configContent = editor.getValue();
 			await execService('reload');
 			appState.serviceRunning = await getServiceStatus();
@@ -2704,6 +2705,28 @@ const PAGE_CSS = `
 	font-size: 11px;
 	padding: 2px 8px;
 	min-height: 24px;
+}
+.sbox-btn-validate,
+.sbox-btn-restart,
+.sbox-btn-dashboard-on {
+	background: var(--sbox-accent) !important;
+	border-color: var(--sbox-accent) !important;
+	color: #fff !important;
+}
+.sbox-btn-start {
+	background: var(--sbox-success) !important;
+	border-color: var(--sbox-success) !important;
+	color: #fff !important;
+}
+.sbox-btn-stop,
+.sbox-btn-dashboard-off {
+	background: var(--sbox-danger) !important;
+	border-color: var(--sbox-danger) !important;
+	color: #fff !important;
+}
+.sbox-btn-dashboard:disabled {
+	cursor: not-allowed;
+	opacity: 0.8;
 }
 .sbox-theme-toggle {
 	width: 24px;
