@@ -6,6 +6,13 @@
 'require network';
 
 const CONFIG_PATH = '/opt/clash/config.yaml';
+const CONFIG_DIR = '/opt/clash';
+const MAIN_CONFIG_NAME = 'config.yaml';
+const CONFIG_PROFILES = [
+	{ name: 'config.yaml', label: 'Main Config #1' },
+	{ name: 'config2.yaml', label: 'Backup Config #2' },
+	{ name: 'config3.yaml', label: 'Backup Config #3' }
+];
 const SETTINGS_PATH = '/opt/clash/settings';
 const RULESET_PATH = '/opt/clash/lst/';
 const FAKEIP_WHITELIST_FILENAME = 'fakeip-whitelist-ipcidr.txt';
@@ -46,6 +53,8 @@ const appState = {
 	proxyMode: 'tproxy',
 	configContent: '',
 	subscriptionUrl: '',
+	selectedConfigName: MAIN_CONFIG_NAME,
+	configProfiles: CONFIG_PROFILES.slice(),
 	settings: null,
 	interfaces: [],
 	selectedInterfaces: [],
@@ -84,6 +93,67 @@ function isValidUrl(url) {
 		return parsed.protocol === 'http:' || parsed.protocol === 'https:';
 	} catch (e) {
 		return false;
+	}
+}
+
+function normalizeConfigProfileName(name) {
+	const clean = String(name || '').trim();
+	return CONFIG_PROFILES.some((item) => item.name === clean) ? clean : MAIN_CONFIG_NAME;
+}
+
+function getConfigProfileByName(name) {
+	const normalized = normalizeConfigProfileName(name);
+	return CONFIG_PROFILES.find((item) => item.name === normalized) || CONFIG_PROFILES[0];
+}
+
+function getConfigLabel(name) {
+	return getConfigProfileByName(name).label;
+}
+
+function getConfigPathByName(name) {
+	return CONFIG_DIR + '/' + normalizeConfigProfileName(name);
+}
+
+function getSubscriptionKeyForConfig(name) {
+	const normalized = normalizeConfigProfileName(name).replace(/[^A-Za-z0-9]/g, '_').toUpperCase();
+	return 'SUBSCRIPTION_URL_' + normalized;
+}
+
+async function setFileMode(path) {
+	await L.resolveDefault(fs.exec('/bin/chmod', ['0644', path]), null);
+	await L.resolveDefault(fs.exec('/usr/bin/chmod', ['0644', path]), null);
+}
+
+async function readConfigFileByName(name) {
+	const path = getConfigPathByName(name);
+	await setFileMode(path);
+	return String(await L.resolveDefault(fs.read(path), ''));
+}
+
+async function writeConfigFileByName(name, content) {
+	const path = getConfigPathByName(name);
+	const normalized = String(content || '').trimEnd() + '\n';
+	await fs.write(path, normalized);
+	await setFileMode(path);
+}
+
+async function ensureConfigProfilesReady(seedMainContent) {
+	const mainPath = getConfigPathByName(MAIN_CONFIG_NAME);
+	let mainContent = await L.resolveDefault(fs.read(mainPath), null);
+	if (mainContent == null) {
+		mainContent = String(seedMainContent || '');
+		await fs.write(mainPath, String(mainContent).trimEnd() + '\n');
+	}
+	await setFileMode(mainPath);
+
+	for (let i = 0; i < CONFIG_PROFILES.length; i++) {
+		const profile = CONFIG_PROFILES[i];
+		const path = getConfigPathByName(profile.name);
+		const existing = await L.resolveDefault(fs.read(path), null);
+		if (existing == null) {
+			await fs.write(path, String(mainContent || '').trimEnd() + '\n');
+		}
+		await setFileMode(path);
 	}
 }
 
@@ -170,15 +240,27 @@ function applyUiTheme(theme) {
 	applyEditorTheme();
 }
 
-async function readSubscriptionUrl() {
+async function readSubscriptionUrl(configName) {
+	const normalized = normalizeConfigProfileName(configName || MAIN_CONFIG_NAME);
+	const key = getSubscriptionKeyForConfig(normalized);
 	const settings = await readSettingsMap();
-	return String(settings.SUBSCRIPTION_URL || '').trim();
+
+	if (normalized === MAIN_CONFIG_NAME) {
+		return String(settings[key] || settings.SUBSCRIPTION_URL || '').trim();
+	}
+
+	return String(settings[key] || '').trim();
 }
 
-async function saveSubscriptionUrl(url) {
+async function saveSubscriptionUrl(url, configName) {
+	const normalized = normalizeConfigProfileName(configName || MAIN_CONFIG_NAME);
+	const key = getSubscriptionKeyForConfig(normalized);
 	const clean = String(url || '').trim().replace(/\r?\n/g, '');
 	const settings = await readSettingsMap();
-	settings.SUBSCRIPTION_URL = clean;
+	settings[key] = clean;
+	if (normalized === MAIN_CONFIG_NAME) {
+		settings.SUBSCRIPTION_URL = clean;
+	}
 	await writeSettingsMap(settings);
 }
 
@@ -789,34 +871,47 @@ function extractTestError(testResult) {
 	return lines[lines.length - 1].trim();
 }
 
-async function testConfigContent(content, keepOnSuccess) {
+async function testConfigContent(content, keepOnSuccess, targetPath) {
 	const normalized = String(content || '').trimEnd() + '\n';
+	const configPath = String(targetPath || CONFIG_PATH);
 	let original = '';
 
 	try {
-		original = await fs.read(CONFIG_PATH);
+		original = await fs.read(configPath);
 	} catch (e) {
 		original = '';
 	}
 
 	try {
-		await fs.write(CONFIG_PATH, normalized);
-		const testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-t']);
+		await fs.write(configPath, normalized);
+		await setFileMode(configPath);
+		let testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-f', configPath, '-t']);
+		if (testResult.code !== 0 && configPath === CONFIG_PATH) {
+			// Fallback for older builds that only validate default config path.
+			testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-t']);
+		}
 
 		if (testResult.code !== 0) {
-			await fs.write(CONFIG_PATH, original);
+			await fs.write(configPath, original);
+			await setFileMode(configPath);
 			return { ok: false, message: extractTestError(testResult) };
 		}
 
-		if (!keepOnSuccess) await fs.write(CONFIG_PATH, original);
+		if (!keepOnSuccess) {
+			await fs.write(configPath, original);
+			await setFileMode(configPath);
+		}
 		return { ok: true, message: '' };
 	} catch (e) {
-		try { await fs.write(CONFIG_PATH, original); } catch (restoreError) {}
+		try {
+			await fs.write(configPath, original);
+			await setFileMode(configPath);
+		} catch (restoreError) {}
 		return { ok: false, message: e.message || 'test failed' };
 	}
 }
 
-async function fetchSubscriptionAsYaml(url) {
+async function fetchSubscriptionAsYaml(url, targetPath) {
 	const settingsMap = await readSettingsMap();
 	const versions = await getVersions();
 	const profile = buildSubscriptionClientProfile(settingsMap, versions.app);
@@ -848,7 +943,7 @@ async function fetchSubscriptionAsYaml(url) {
 		throw new Error(_('The subscription server returned links/base64 instead of Clash YAML. For Remnawave use the /mihomo subscription path.'));
 	}
 
-	const tested = await testConfigContent(payload, false);
+	const tested = await testConfigContent(payload, false, targetPath || CONFIG_PATH);
 	if (!tested.ok) throw new Error(tested.message || _('YAML validation failed.'));
 
 	return { content: payload, mode: mode };
@@ -1439,7 +1534,10 @@ async function switchProxyModeFromHeader(targetMode) {
 	appState.proxyMode = normalizeProxyMode(appState.settings.proxyMode || nextMode);
 	appState.serviceRunning = await getServiceStatus();
 
-	const freshConfig = await L.resolveDefault(fs.read(CONFIG_PATH), '');
+	const freshConfig = await L.resolveDefault(
+		fs.read(getConfigPathByName(appState.selectedConfigName)),
+		''
+	);
 	appState.configContent = freshConfig;
 	if (editor) {
 		editor.setValue(String(freshConfig || ''), -1);
@@ -2147,6 +2245,14 @@ function buildSettingsPaneHtml() {
 		'</div>';
 }
 
+function buildConfigOptionsHtml() {
+	return (appState.configProfiles || CONFIG_PROFILES).map((item) =>
+		'<option value="' + safeText(item.name) + '"' +
+		(item.name === appState.selectedConfigName ? ' selected' : '') +
+		'>' + safeText(_(item.label)) + '</option>'
+	).join('');
+}
+
 function buildPageHtml() {
 	const versionApp = safeText(appState.versions.app || _('unknown'));
 	const versionKernel = safeText(appState.versions.clash || _('unknown'));
@@ -2193,23 +2299,26 @@ function buildPageHtml() {
 				'<button type="button" class="sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
 			'</div>' +
 
-			'<div id="sbox-pane-config">' +
-				'<div class="sbox-config-toolbar">' +
-					'<select class="cbi-input-select sbox-select" disabled><option>' + safeText(_('Main Config')) + '</option></select>' +
-					'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
-					'<button id="sbox-save-url" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save URL')) + '</button>' +
-					'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Update')) + '</button>' +
-				'</div>' +
+				'<div id="sbox-pane-config">' +
+					'<div class="sbox-config-toolbar">' +
+						'<select id="sbox-config-select" class="cbi-input-select sbox-select">' + buildConfigOptionsHtml() + '</select>' +
+						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
+						'<button id="sbox-save-url" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save URL')) + '</button>' +
+						'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Update')) + '</button>' +
+					'</div>' +
 				'<div id="miclash-editor" class="sbox-editor"></div>' +
 				'<div class="sbox-actions">' +
 						'<button id="sbox-validate" type="button" class="cbi-button sbox-btn-validate">' + safeText(_('Validate YAML')) + '</button>' +
 						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
 						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear Editor')) + '</button>' +
+					'</div>' +
+					'<div class="sbox-config-footer">' +
+						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Rulesets')) + '</button>' +
+						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply"' +
+							(appState.selectedConfigName === MAIN_CONFIG_NAME ? ' style="display:none"' : '') +
+						'>' + safeText(_('Set as Main')) + '</button>' +
+					'</div>' +
 				'</div>' +
-				'<div class="sbox-config-footer">' +
-					'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Rulesets')) + '</button>' +
-				'</div>' +
-			'</div>' +
 
 			'<div id="sbox-pane-logs" style="display:none">' +
 				'<div class="sbox-log-toolbar">' +
@@ -2401,7 +2510,10 @@ function bindSettingsPaneEvents() {
 				appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
 				appState.serviceRunning = await getServiceStatus();
 
-				const freshConfig = await L.resolveDefault(fs.read(CONFIG_PATH), '');
+				const freshConfig = await L.resolveDefault(
+					fs.read(getConfigPathByName(appState.selectedConfigName)),
+					''
+				);
 				appState.configContent = freshConfig;
 				if (editor) {
 					editor.setValue(String(freshConfig || ''), -1);
@@ -2532,8 +2644,102 @@ function bindControlAndHeaderEvents() {
 	}
 }
 
+async function switchConfigProfile(profileName) {
+	const selected = normalizeConfigProfileName(profileName);
+	const [content, url] = await Promise.all([
+		readConfigFileByName(selected),
+		readSubscriptionUrl(selected)
+	]);
+
+	appState.selectedConfigName = selected;
+	appState.configContent = String(content || '');
+	appState.subscriptionUrl = String(url || '');
+
+	if (editor) {
+		editor.setValue(appState.configContent, -1);
+		editor.clearSelection();
+	}
+
+	if (pageRoot) {
+		const selectEl = pageRoot.querySelector('#sbox-config-select');
+		const urlEl = pageRoot.querySelector('#sbox-subscription-url');
+		const setMainBtn = pageRoot.querySelector('#sbox-set-main-config');
+		if (selectEl) selectEl.value = selected;
+		if (urlEl) urlEl.value = appState.subscriptionUrl;
+		if (setMainBtn) setMainBtn.style.display = selected === MAIN_CONFIG_NAME ? 'none' : '';
+	}
+}
+
+async function setSelectedConfigAsMain() {
+	const selected = normalizeConfigProfileName(appState.selectedConfigName);
+	if (selected === MAIN_CONFIG_NAME) return;
+
+	const [mainContent, selectedContent, mainUrl, selectedUrl] = await Promise.all([
+		readConfigFileByName(MAIN_CONFIG_NAME),
+		readConfigFileByName(selected),
+		readSubscriptionUrl(MAIN_CONFIG_NAME),
+		readSubscriptionUrl(selected)
+	]);
+
+	await writeConfigFileByName(MAIN_CONFIG_NAME, selectedContent);
+	await writeConfigFileByName(selected, mainContent);
+	await saveSubscriptionUrl(selectedUrl, MAIN_CONFIG_NAME);
+	await saveSubscriptionUrl(mainUrl, selected);
+
+	await execService('restart');
+	appState.serviceRunning = await getServiceStatus();
+	await switchConfigProfile(MAIN_CONFIG_NAME);
+	await refreshHeaderAndControl();
+
+	notify('info', _('%s is now main config.').format(_(getConfigLabel(selected))));
+}
+
 function bindConfigEvents() {
 	const subInput = pageRoot.querySelector('#sbox-subscription-url');
+	const configSelect = pageRoot.querySelector('#sbox-config-select');
+	const setMainBtn = pageRoot.querySelector('#sbox-set-main-config');
+
+	if (configSelect) {
+		configSelect.addEventListener('change', async function() {
+			const nextConfig = normalizeConfigProfileName(this.value);
+			this.disabled = true;
+			try {
+				await switchConfigProfile(nextConfig);
+			} catch (e) {
+				notify('error', _('Failed to load config profile: %s').format(e.message));
+			} finally {
+				if (this.isConnected) this.disabled = false;
+			}
+		});
+	}
+
+	if (setMainBtn) {
+		setMainBtn.addEventListener('click', () => withButtons(setMainBtn, async () => {
+			const selected = normalizeConfigProfileName(appState.selectedConfigName);
+			if (selected === MAIN_CONFIG_NAME) return;
+
+			showModal({
+				title: _('Set as Main'),
+				body: _('Selected config will be swapped with Main config, saved, and Clash will restart. Continue?'),
+				buttons: [
+					{
+						label: _('Set as Main'),
+						className: 'cbi-button cbi-button-apply',
+						onClick: async function(ctx) {
+							await setSelectedConfigAsMain();
+							ctx.closeModal();
+						}
+					},
+					{
+						label: _('Cancel'),
+						className: 'cbi-button cbi-button-neutral'
+					}
+				]
+			});
+		}).catch((e) => {
+			notify('error', _('Failed to set main config: %s').format(e.message));
+		}));
+	}
 
 	const saveUrlBtn = pageRoot.querySelector('#sbox-save-url');
 	if (saveUrlBtn) {
@@ -2542,47 +2748,52 @@ function bindConfigEvents() {
 			if (!url) throw new Error(_('Subscription URL is empty.'));
 			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
 
-			await saveSubscriptionUrl(url);
+			await saveSubscriptionUrl(url, appState.selectedConfigName);
 			appState.subscriptionUrl = url;
 			notify('info', _('Subscription URL saved.'));
 		}).catch((e) => notify('error', e.message)));
 	}
 
 	const updateBtn = pageRoot.querySelector('#sbox-update-sub');
-	if (updateBtn) {
-		updateBtn.addEventListener('click', () => withButtons(updateBtn, async () => {
-			const url = String(subInput?.value || '').trim();
-			if (!url) throw new Error(_('Subscription URL is empty.'));
-			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
+		if (updateBtn) {
+			updateBtn.addEventListener('click', () => withButtons(updateBtn, async () => {
+				const url = String(subInput?.value || '').trim();
+				if (!url) throw new Error(_('Subscription URL is empty.'));
+				if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
 
-			await saveSubscriptionUrl(url);
-			appState.subscriptionUrl = url;
+				const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
+				const selectedPath = getConfigPathByName(selectedConfig);
+				await saveSubscriptionUrl(url, selectedConfig);
+				appState.subscriptionUrl = url;
 
-			const downloadedInfo = await fetchSubscriptionAsYaml(url);
-			const downloaded = String(downloadedInfo.content || '').trimEnd() + '\n';
+				const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
+				const downloaded = String(downloadedInfo.content || '').trimEnd() + '\n';
 
-			const tested = await testConfigContent(downloaded, true);
-			if (!tested.ok) throw new Error(_('YAML validation failed: %s').format(tested.message));
+				const tested = await testConfigContent(downloaded, true, selectedPath);
+				if (!tested.ok) throw new Error(_('YAML validation failed: %s').format(tested.message));
 
-			appState.configContent = downloaded;
-			if (editor) {
-				editor.setValue(downloaded, -1);
-				editor.clearSelection();
-			}
+				appState.configContent = downloaded;
+				if (editor) {
+					editor.setValue(downloaded, -1);
+					editor.clearSelection();
+				}
 
-			await execService('reload');
+				if (selectedConfig === MAIN_CONFIG_NAME) {
+					await execService('reload');
+					appState.serviceRunning = await getServiceStatus();
+					updateHeaderAndControlDom();
+				}
 
-			if (downloadedInfo.mode === 'remnawave-client-path') {
-				notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
-			} else {
-				notify('info', _('Subscription downloaded and applied.'));
-			}
-
-			appState.serviceRunning = await getServiceStatus();
-			updateHeaderAndControlDom();
-		}).catch((e) => {
-			notify('error', _('Failed to apply subscription: %s').format(e.message));
-		}).finally(async () => {
+				if (downloadedInfo.mode === 'remnawave-client-path') {
+					notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
+				} else if (selectedConfig === MAIN_CONFIG_NAME) {
+					notify('info', _('Subscription downloaded and applied.'));
+				} else {
+					notify('info', _('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
+				}
+			}).catch((e) => {
+				notify('error', _('Failed to apply subscription: %s').format(e.message));
+			}).finally(async () => {
 			try { await fs.remove(TMP_SUBSCRIPTION_PATH); } catch (removeErr) {}
 		}));
 	}
@@ -2591,7 +2802,11 @@ function bindConfigEvents() {
 	if (validateBtn) {
 		validateBtn.addEventListener('click', () => withButtons(validateBtn, async () => {
 			if (!editor) return;
-			const tested = await testConfigContent(editor.getValue(), false);
+			const tested = await testConfigContent(
+				editor.getValue(),
+				false,
+				getConfigPathByName(appState.selectedConfigName)
+			);
 			if (!tested.ok) throw new Error(tested.message);
 			notify('info', _('YAML validation passed.'));
 		}).catch((e) => {
@@ -2603,13 +2818,20 @@ function bindConfigEvents() {
 	if (saveBtn) {
 		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
 			if (!editor) return;
-			const tested = await testConfigContent(editor.getValue(), true);
+			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
+			const selectedPath = getConfigPathByName(selectedConfig);
+			const tested = await testConfigContent(editor.getValue(), true, selectedPath);
 			if (!tested.ok) throw new Error(tested.message);
 			appState.configContent = editor.getValue();
-			await execService('reload');
-			appState.serviceRunning = await getServiceStatus();
-			updateHeaderAndControlDom();
-			notify('info', _('Configuration applied and service reloaded.'));
+
+			if (selectedConfig === MAIN_CONFIG_NAME) {
+				await execService('reload');
+				appState.serviceRunning = await getServiceStatus();
+				updateHeaderAndControlDom();
+				notify('info', _('Configuration applied and service reloaded.'));
+			} else {
+				notify('info', _('%s saved.').format(_(getConfigLabel(selectedConfig))));
+			}
 		}).catch((e) => {
 			notify('error', _('Failed to apply configuration: %s').format(e.message));
 		}));
@@ -2909,6 +3131,8 @@ const PAGE_CSS = `
 .sbox-config-footer {
 	display: flex;
 	justify-content: flex-end;
+	gap: 8px;
+	flex-wrap: wrap;
 	margin-top: 8px;
 }
 .sbox-muted {
@@ -3263,8 +3487,11 @@ return view.extend({
 	},
 
 	render: async function(data) {
-		appState.configContent = data[0] || '';
-		appState.subscriptionUrl = data[1] || '';
+		await ensureConfigProfilesReady(data[0] || '');
+		appState.configProfiles = CONFIG_PROFILES.slice();
+		appState.selectedConfigName = MAIN_CONFIG_NAME;
+		appState.configContent = await readConfigFileByName(MAIN_CONFIG_NAME);
+		appState.subscriptionUrl = await readSubscriptionUrl(MAIN_CONFIG_NAME);
 		appState.uiTheme = normalizeTheme(data[2] || 'dark');
 		appState.settings = data[3] || await loadOperationalSettings();
 		appState.interfaces = data[4] || [];

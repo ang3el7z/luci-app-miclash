@@ -799,3 +799,35 @@ msgstr "Ядро установлено, служба перезапущена."
 
 msgid "Kernel installed, but failed to restart service: %s"
 msgstr "Ядро установлено, но перезапустить службу не удалось: %s"
+
+### Multi-config profiles (config.js) ###
+
+msgid "Main Config #1"
+msgstr "Основной конфиг #1"
+
+msgid "Backup Config #2"
+msgstr "Резервный конфиг #2"
+
+msgid "Backup Config #3"
+msgstr "Резервный конфиг #3"
+
+msgid "Set as Main"
+msgstr "Сделать главным"
+
+msgid "Selected config will be swapped with Main config, saved, and Clash will restart. Continue?"
+msgstr "Выбранный конфиг будет обменян с основным, сохранён, и Clash будет перезапущен. Продолжить?"
+
+msgid "Failed to load config profile: %s"
+msgstr "Не удалось загрузить профиль конфига: %s"
+
+msgid "Failed to set main config: %s"
+msgstr "Не удалось сделать конфиг главным: %s"
+
+msgid "%s is now main config."
+msgstr "%s теперь основной конфиг."
+
+msgid "%s downloaded and saved."
+msgstr "%s загружен и сохранён."
+
+msgid "%s saved."
+msgstr "%s сохранён."
