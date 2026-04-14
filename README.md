@@ -2,7 +2,7 @@
 
 Super Simple Clash от [Zerolab.net](http://Zerolab.net)
 
-1. Скачать свежую https://github.com/zerolabnet/SSClash/releases
+1. Скачать свежую https://github.com/ang3el7z/luci-app-miclash/releases
 2. Веб интерфейс -> `Software` -> `Update lists` -> `Upload Package` установить скачанный файл `.ipk`
 3. Там же в фильтре ищем `kmod-nft-tproxy` для OpenWrt 23-24 или `iptables-mod-tproxy` для древних OpenWrt и ставим его.
 4. Выходим из админки `Log out` и заходим снова, появляется меню `Services` -> `SSClash`
@@ -22,17 +22,17 @@ Super Simple Clash от [Zerolab.net](http://Zerolab.net)
 ```bash
 apk update
 apk add curl kmod-nft-tproxy kmod-tun coreutils-base64
-release=$(curl -s https://api.github.com/repos/zerolabnet/SSClash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/zerolabnet/SSClash/releases/download/${release}/luci-app-ssclash-${release#v}-r1.apk" -o /tmp/luci-app-ssclash.apk
-apk add /tmp/luci-app-ssclash.apk --allow-untrusted && rm -rf /tmp/*.apk
+release=$(curl -s https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
+curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash-${release#v}-r1.apk" -o /tmp/luci-app-miclash.apk
+apk add /tmp/luci-app-miclash.apk --allow-untrusted && rm -rf /tmp/*.apk
 ```
 
 # OpenWRT 23.05.x - 24.10.x
 
 ```bash
 opkg update && opkg install curl kmod-nft-tproxy kmod-tun coreutils-base64
-release=$(curl -s https://api.github.com/repos/zerolabnet/SSClash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/zerolabnet/SSClash/releases/download/${release}/luci-app-ssclash_${release#v}-r1_all.ipk" -o /tmp/luci-app-ssclash.ipk && opkg install /tmp/luci-app-ssclash.ipk && rm -rf /tmp/*.ipk
+release=$(curl -s https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
+curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash_${release#v}-r1_all.ipk" -o /tmp/luci-app-miclash.ipk && opkg install /tmp/luci-app-miclash.ipk && rm -rf /tmp/*.ipk
 ```
 
 *Для OpenWrt 21.x вместо `kmod-nft-tproxy` нужен `iptables-mod-tproxy`*
@@ -78,3 +78,4 @@ rm -rf /tmp/clash.gz
 ```bash
 service clash start
 ```
+
