@@ -291,15 +291,64 @@ function parsePackageVersion(raw, packageName) {
 	return '';
 }
 
+function parseVersionFromOpkgStatus(raw, packageNames) {
+	const text = String(raw || '');
+	if (!text) return '';
+
+	for (let i = 0; i < packageNames.length; i++) {
+		const escaped = String(packageNames[i] || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		const pattern = new RegExp(
+			'(^|\\n)\\s*Package\\s*:\\s*' + escaped + '\\s*[\\s\\S]*?\\n\\s*Version\\s*:\\s*([^\\s\\n]+)',
+			'i'
+		);
+		const match = text.match(pattern);
+		if (match && match[2]) return match[2].trim();
+	}
+
+	return '';
+}
+
+function parseVersionFromApkDb(raw, packageNames) {
+	const text = String(raw || '');
+	if (!text) return '';
+
+	for (let i = 0; i < packageNames.length; i++) {
+		const escaped = String(packageNames[i] || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		const pattern = new RegExp('(^|\\n)P:' + escaped + '\\n[\\s\\S]*?\\nV:([^\\s\\n]+)', 'i');
+		const match = text.match(pattern);
+		if (match && match[2]) return match[2].trim();
+	}
+
+	return '';
+}
+
 async function getVersions() {
 	const info = { app: 'unknown', clash: 'unknown' };
 
 	const packageName = 'luci-app-miclash';
+	const packageNames = [
+		'luci-app-miclash',
+		'luci-app-miclash_git',
+		'luci-i18n-miclash-ru',
+		'miclash'
+	];
+	const parseAnyPackageVersion = (raw) => {
+		for (let i = 0; i < packageNames.length; i++) {
+			const parsed = parsePackageVersion(raw, packageNames[i]);
+			if (parsed) return parsed;
+		}
+		return '';
+	};
+
 	const packageQueries = [
 		['/bin/opkg', ['list-installed', packageName]],
+		['/bin/opkg', ['list-installed']],
 		['/bin/opkg', ['status', packageName]],
+		['/bin/opkg', ['status']],
 		['/usr/bin/apk', ['info', '-v', packageName]],
+		['/usr/bin/apk', ['info', '-v']],
 		['/usr/bin/apk', ['list', '--installed', packageName]],
+		['/usr/bin/apk', ['list', '--installed']],
 		['/usr/bin/apk', ['policy', packageName]]
 	];
 
@@ -308,7 +357,23 @@ async function getVersions() {
 		try {
 			const result = await fs.exec(query[0], query[1]);
 			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-			const parsed = parsePackageVersion(raw, packageName);
+			const parsed = parseAnyPackageVersion(raw);
+			if (parsed) info.app = parsed;
+		} catch (_) {}
+	}
+
+	if (info.app === 'unknown') {
+		try {
+			const opkgStatusRaw = await fs.read('/usr/lib/opkg/status');
+			const parsed = parseVersionFromOpkgStatus(opkgStatusRaw, packageNames);
+			if (parsed) info.app = parsed;
+		} catch (_) {}
+	}
+
+	if (info.app === 'unknown') {
+		try {
+			const apkDbRaw = await fs.read('/lib/apk/db/installed');
+			const parsed = parseVersionFromApkDb(apkDbRaw, packageNames);
 			if (parsed) info.app = parsed;
 		} catch (_) {}
 	}
@@ -2255,7 +2320,11 @@ function buildConfigOptionsHtml() {
 
 function buildPageHtml() {
 	const versionApp = safeText(appState.versions.app || _('unknown'));
-	const versionKernel = safeText(appState.versions.clash || _('unknown'));
+	const versionKernel = safeText(
+		appState.kernelStatus && appState.kernelStatus.installed
+			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
+			: _('Not installed')
+	);
 
 	return '' +
 		'<div class="sbox-header">' +
@@ -2270,7 +2339,7 @@ function buildPageHtml() {
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
 			'<button id="sbox-theme-toggle" type="button" class="cbi-button cbi-button-neutral sbox-header-button sbox-theme-toggle" title="' + safeText(_('Switch theme')) + '">o</button>' +
-			'<button id="sbox-dashboard" type="button" class="cbi-button sbox-header-button sbox-btn-dashboard">' + safeText(_('Dashboard')) + '</button>' +
+			'<button id="sbox-dashboard" type="button" class="cbi-button cbi-button-negative sbox-header-button">' + safeText(_('Dashboard')) + '</button>' +
 		'</div>' +
 
 		'<div class="sbox-card">' +
@@ -2285,8 +2354,8 @@ function buildPageHtml() {
 							'<span class="sbox-dot sbox-dot-off"></span>' +
 							'<span id="sbox-status-label">' + safeText(_('Service stopped')) + '</span>' +
 						'</span>' +
-						'<button id="sbox-start-stop" type="button" class="cbi-button sbox-btn-start">' + safeText(_('Start')) + '</button>' +
-						'<button id="sbox-restart" type="button" class="cbi-button sbox-btn-restart">' + safeText(_('Restart')) + '</button>' +
+						'<button id="sbox-start-stop" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Start')) + '</button>' +
+						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
@@ -2308,21 +2377,21 @@ function buildPageHtml() {
 					'</div>' +
 				'<div id="miclash-editor" class="sbox-editor"></div>' +
 				'<div class="sbox-actions">' +
-						'<button id="sbox-validate" type="button" class="cbi-button sbox-btn-validate">' + safeText(_('Validate YAML')) + '</button>' +
+						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Validate YAML')) + '</button>' +
 						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
 						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear Editor')) + '</button>' +
+						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' +
+							(appState.selectedConfigName === MAIN_CONFIG_NAME ? ' style="display:none"' : '') +
+						'>' + safeText(_('Set as Main')) + '</button>' +
 					'</div>' +
 					'<div class="sbox-config-footer">' +
 						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Rulesets')) + '</button>' +
-						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply"' +
-							(appState.selectedConfigName === MAIN_CONFIG_NAME ? ' style="display:none"' : '') +
-						'>' + safeText(_('Set as Main')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
 			'<div id="sbox-pane-logs" style="display:none">' +
 				'<div class="sbox-log-toolbar">' +
-					'<button id="sbox-log-refresh" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Refresh')) + '</button>' +
+					'<button id="sbox-log-refresh" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Refresh')) + '</button>' +
 					'<span id="sbox-log-updated" class="sbox-log-updated"></span>' +
 				'</div>' +
 				'<pre id="sbox-log-content" class="sbox-log-content"></pre>' +
@@ -2353,8 +2422,7 @@ function updateHeaderAndControlDom() {
 
 	if (startStop) {
 		startStop.textContent = appState.serviceRunning ? _('Stop') : _('Start');
-		startStop.classList.toggle('sbox-btn-stop', appState.serviceRunning);
-		startStop.classList.toggle('sbox-btn-start', !appState.serviceRunning);
+		startStop.className = 'cbi-button ' + (appState.serviceRunning ? 'cbi-button-negative' : 'cbi-button-positive');
 	}
 
 	if (restartBtn) {
@@ -2364,12 +2432,15 @@ function updateHeaderAndControlDom() {
 
 	if (dashboardBtn) {
 		dashboardBtn.disabled = !appState.serviceRunning;
-		dashboardBtn.classList.toggle('sbox-btn-dashboard-on', appState.serviceRunning);
-		dashboardBtn.classList.toggle('sbox-btn-dashboard-off', !appState.serviceRunning);
+		dashboardBtn.className = 'cbi-button cbi-button-negative sbox-header-button';
 	}
 
 	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
-	if (kernelVersion) kernelVersion.textContent = appState.versions.clash || _('unknown');
+	if (kernelVersion) {
+		kernelVersion.textContent = appState.kernelStatus && appState.kernelStatus.installed
+			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
+			: _('Not installed');
+	}
 	if (modeSelect) modeSelect.value = normalizeProxyMode(appState.proxyMode);
 }
 
