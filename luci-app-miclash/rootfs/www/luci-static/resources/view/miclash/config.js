@@ -3,1355 +3,3165 @@
 'require fs';
 'require ui';
 'require rpc';
+'require network';
 
 const CONFIG_PATH = '/opt/clash/config.yaml';
 const SETTINGS_PATH = '/opt/clash/settings';
+const RULESET_PATH = '/opt/clash/lst/';
+const FAKEIP_WHITELIST_FILENAME = 'fakeip-whitelist-ipcidr.txt';
 const ACE_BASE = '/luci-static/resources/view/miclash/ace/';
 const TMP_SUBSCRIPTION_PATH = '/tmp/miclash-subscription.yaml';
-
-let editor = null;
-let startStopButton = null;
-let statusBadge = null;
-let appVersionBadge = null;
-let kernelBadge = null;
-let themeToggleButton = null;
-let pageRoot = null;
-let subscriptionInput = null;
-let servicePollTimer = null;
-let currentUiTheme = 'light';
-
 const UI_THEME_KEY = 'UI_THEME';
 
 const callServiceList = rpc.declare({
-    object: 'service',
-    method: 'list',
-    params: ['name'],
-    expect: { '': {} }
+	object: 'service',
+	method: 'list',
+	params: ['name'],
+	expect: { '': {} }
 });
 
+const REMNAWAVE_CLIENT_TYPES = {
+	mihomo: true,
+	clash: true,
+	singbox: true,
+	stash: true,
+	json: true,
+	'v2ray-json': true
+};
+
+const LOG_POLL_MS = 5000;
+const STATUS_POLL_MS = 5000;
+
+let editor = null;
+let pageRoot = null;
+let controlPollTimer = null;
+let logPollTimer = null;
+let rulesetMainEditor = null;
+let rulesetWhitelistEditor = null;
+
+const appState = {
+	versions: { app: 'unknown', clash: 'unknown' },
+	kernelStatus: { installed: false, version: null },
+	serviceRunning: false,
+	proxyMode: 'tproxy',
+	configContent: '',
+	subscriptionUrl: '',
+	settings: null,
+	interfaces: [],
+	selectedInterfaces: [],
+	detectedLan: '',
+	detectedWan: '',
+	activeCtrlTab: 'control',
+	activeCfgTab: 'config',
+	logsRaw: '',
+	logsUpdatedAt: 0,
+	uiTheme: 'dark'
+};
+
 function notify(type, message) {
-    ui.addNotification(null, E('p', message), type);
+	const node = ui.addNotification(null, E('p', String(message || '')), type);
+	const timeout = type === 'error' ? 10000 : 6000;
+	if (node) {
+		setTimeout(() => {
+			try {
+				node.remove();
+			} catch (e) {}
+		}, timeout);
+	}
 }
 
-function normalizeTheme(theme) {
-    return theme === 'dark' ? 'dark' : 'light';
-}
-
-function applyEditorTheme() {
-    if (!editor) return;
-    const preferredTheme = currentUiTheme === 'dark' ? 'ace/theme/tomorrow_night_bright' : 'ace/theme/textmate';
-    try {
-        editor.setTheme(preferredTheme);
-    } catch (e) {
-        editor.setTheme('ace/theme/tomorrow_night_bright');
-    }
-}
-
-function parseSettingsToMap(raw) {
-    const map = {};
-    String(raw || '').split('\n').forEach((line) => {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.charAt(0) === '#') return;
-        const equalIndex = trimmed.indexOf('=');
-        if (equalIndex <= 0) return;
-        const key = trimmed.slice(0, equalIndex).trim();
-        const value = trimmed.slice(equalIndex + 1).trim();
-        if (key) map[key] = value;
-    });
-    return map;
-}
-
-function mapToSettingsContent(map) {
-    const lines = Object.keys(map).map((key) => key + '=' + map[key]);
-    return lines.length ? lines.join('\n') + '\n' : '';
-}
-
-async function readSettingsMap() {
-    try {
-        return parseSettingsToMap(await fs.read(SETTINGS_PATH));
-    } catch (e) {
-        return {};
-    }
-}
-
-async function writeSettingsMap(map) {
-    await fs.write(SETTINGS_PATH, mapToSettingsContent(map));
-}
-
-async function readThemePreference() {
-    const settings = await readSettingsMap();
-    return normalizeTheme(settings[UI_THEME_KEY] || 'light');
-}
-
-async function saveThemePreference(theme) {
-    const settings = await readSettingsMap();
-    settings[UI_THEME_KEY] = normalizeTheme(theme);
-    await writeSettingsMap(settings);
-}
-
-function applyUiTheme(theme) {
-    currentUiTheme = normalizeTheme(theme);
-
-    if (pageRoot) {
-        pageRoot.classList.toggle('miclash-theme-dark', currentUiTheme === 'dark');
-        pageRoot.classList.toggle('miclash-theme-light', currentUiTheme === 'light');
-    }
-
-    if (themeToggleButton) {
-        themeToggleButton.textContent = currentUiTheme === 'dark' ? _('Theme: Dark') : _('Theme: Light');
-    }
-
-    applyEditorTheme();
+function safeText(value) {
+	return String(value == null ? '' : value)
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;');
 }
 
 function isValidUrl(url) {
-    try {
-        const parsed = new URL(url);
-        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-    } catch (e) {
-        return false;
-    }
+	try {
+		const parsed = new URL(url);
+		return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+	} catch (e) {
+		return false;
+	}
 }
 
-function looksLikeBase64Text(value) {
-    const cleaned = String(value || '').replace(/\s+/g, '');
-    if (cleaned.length < 64 || cleaned.length % 4 !== 0) return false;
-    return /^[A-Za-z0-9+/=]+$/.test(cleaned);
+function parseSettingsToMap(raw) {
+	const map = {};
+	String(raw || '').split('\n').forEach((line) => {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.charAt(0) === '#') return;
+		const idx = trimmed.indexOf('=');
+		if (idx <= 0) return;
+		const key = trimmed.slice(0, idx).trim();
+		const value = trimmed.slice(idx + 1).trim();
+		if (key) map[key] = value;
+	});
+	return map;
 }
 
-function tryDecodeBase64(value) {
-    try {
-        if (typeof atob !== 'function') return null;
-        const cleaned = String(value || '').replace(/\s+/g, '');
-        return atob(cleaned);
-    } catch (e) {
-        return null;
-    }
+function mapToSettingsContent(map) {
+	return Object.keys(map).map((k) => k + '=' + map[k]).join('\n') + '\n';
 }
 
-function looksLikeUriSubscription(value) {
-    const content = String(value || '');
-    return /(?:^|\n)\s*(vmess|vless|trojan|ss|ssr|hysteria|hysteria2|tuic):\/\/[^\s]+/i.test(content);
+async function readSettingsMap() {
+	try {
+		return parseSettingsToMap(await fs.read(SETTINGS_PATH));
+	} catch (e) {
+		return {};
+	}
 }
 
-function normalizeSubscriptionContent(raw) {
-    let content = String(raw || '').trim();
-    let decodedFromBase64 = false;
-
-    if (content && looksLikeBase64Text(content) && content.indexOf(':') === -1) {
-        const decoded = tryDecodeBase64(content);
-        if (decoded && decoded.trim()) {
-            content = decoded.trim();
-            decodedFromBase64 = true;
-        }
-    }
-
-    return {
-        content: content ? content + '\n' : '',
-        decodedFromBase64: decodedFromBase64
-    };
+async function writeSettingsMap(map) {
+	await fs.write(SETTINGS_PATH, mapToSettingsContent(map));
 }
 
-async function loadScript(src) {
-    return new Promise((resolve, reject) => {
-        if (document.querySelector('script[src="' + src + '"]')) {
-            resolve();
-            return;
-        }
-        const script = document.createElement('script');
-        script.src = src;
-        script.onload = resolve;
-        script.onerror = reject;
-        document.head.appendChild(script);
-    });
+function normalizeTheme(theme) {
+	return theme === 'light' ? 'light' : 'dark';
 }
 
-function parseYamlValue(yaml, key) {
-    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp('^\\s*' + escapedKey + '\\s*:\\s*(["\\\']?)([^#\\r\\n]+?)\\1\\s*(?:#.*)?$', 'm');
-    const m = yaml.match(re);
-    return m ? m[2].trim() : null;
+function getPreferredAceTheme() {
+	return appState.uiTheme === 'light' ? 'ace/theme/textmate' : 'ace/theme/tomorrow_night_bright';
 }
 
-function normalizeHostPortFromAddr(addr, fallbackHost, fallbackPort) {
-    if (!addr) return { host: fallbackHost, port: fallbackPort };
-    const cleaned = addr.replace(/["']/g, '').trim();
-    const hostPort = cleaned.replace(/^\[|\]$/g, '');
-    const lastColon = hostPort.lastIndexOf(':');
-    let host = fallbackHost;
-    let port = fallbackPort;
-    if (lastColon !== -1) {
-        host = hostPort.slice(0, lastColon);
-        port = hostPort.slice(lastColon + 1);
-    }
-    if (host === '0.0.0.0' || host === '::' || host === '') {
-        host = fallbackHost;
-    }
-    return { host, port };
+function applyThemeToEditor(editorInstance) {
+	if (!editorInstance) return;
+	try {
+		editorInstance.setTheme(getPreferredAceTheme());
+	} catch (e) {
+		editorInstance.setTheme('ace/theme/tomorrow_night_bright');
+	}
 }
 
-function computeUiPath(externalUiName, externalUi) {
-    if (externalUiName) {
-        const name = externalUiName.replace(/(^\/+|\/+$)/g, '');
-        return '/' + name + '/';
-    }
-    if (externalUi && !/[\/\\\.]/.test(externalUi)) {
-        const name = externalUi.trim();
-        return '/' + name + '/';
-    }
-    return '/ui/';
+async function readThemePreference() {
+	const settings = await readSettingsMap();
+	return normalizeTheme(settings[UI_THEME_KEY] || 'dark');
 }
 
-async function getServiceStatus() {
-    try {
-        const instances = (await callServiceList('clash'))['clash']?.instances;
-        return Object.values(instances || {})[0]?.running || false;
-    } catch (e) {
-        return false;
-    }
+async function saveThemePreference(theme) {
+	const settings = await readSettingsMap();
+	settings[UI_THEME_KEY] = normalizeTheme(theme);
+	await writeSettingsMap(settings);
 }
 
-async function execService(action) {
-    return fs.exec('/etc/init.d/clash', [action]);
+function applyEditorTheme() {
+	applyThemeToEditor(editor);
+	applyThemeToEditor(rulesetMainEditor);
+	applyThemeToEditor(rulesetWhitelistEditor);
 }
 
-function parseVersion(raw, fallback) {
-    const str = String(raw || '').trim();
-    if (!str) return fallback;
-    const matched = str.match(/(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/);
-    return matched ? matched[1] : str.split('\n')[0];
-}
+function applyUiTheme(theme) {
+	appState.uiTheme = normalizeTheme(theme);
 
-function sanitizeAppVersion(version) {
-    return String(version || '').replace(/-r\d+$/i, '');
-}
+	if (pageRoot) {
+		pageRoot.classList.toggle('sbox-theme-dark', appState.uiTheme === 'dark');
+		pageRoot.classList.toggle('sbox-theme-light', appState.uiTheme === 'light');
 
-async function getVersions() {
-    const info = {
-        app: 'unknown',
-        clash: 'unknown'
-    };
+		const btn = pageRoot.querySelector('#sbox-theme-toggle');
+		if (btn) {
+			btn.textContent = appState.uiTheme === 'dark' ? '\u2600' : '\u263D';
+			btn.title = appState.uiTheme === 'dark'
+				? _('Switch to light theme')
+				: _('Switch to dark theme');
+		}
+	}
 
-    try {
-        const opkgMiclash = await fs.exec('/bin/sh', ['-c', 'opkg list-installed luci-app-miclash 2>/dev/null']);
-        const opkgSsc = await fs.exec('/bin/sh', ['-c', 'opkg list-installed luci-app-ssclash 2>/dev/null']);
-        const apkMiclash = await fs.exec('/bin/sh', ['-c', 'apk info -v luci-app-miclash 2>/dev/null']);
-        const raw = String(opkgMiclash.stdout || opkgSsc.stdout || apkMiclash.stdout || '').trim();
-        if (raw) {
-            info.app = sanitizeAppVersion(parseVersion(raw, 'installed'));
-        }
-    } catch (e) {}
-
-    try {
-        const clashV = await fs.exec('/opt/clash/bin/clash', ['-v']);
-        const clashVersion = String(clashV.stdout || clashV.stderr || '');
-        if (clashVersion) {
-            info.clash = parseVersion(clashVersion, 'installed');
-        } else {
-            const clashVersionAlt = await fs.exec('/opt/clash/bin/clash', ['version']);
-            info.clash = parseVersion(clashVersionAlt.stdout || clashVersionAlt.stderr, 'installed');
-        }
-    } catch (e) {}
-
-    return info;
-}
-
-async function detectSystemArchitecture() {
-    try {
-        const releaseInfo = await L.resolveDefault(fs.read('/etc/openwrt_release'), null);
-        const match = String(releaseInfo || '').match(/^DISTRIB_ARCH=['"]?([^'"\n]+)['"]?/m);
-        const distribArch = match ? match[1] : '';
-
-        if (!distribArch) return 'amd64';
-        if (distribArch.startsWith('aarch64_')) return 'arm64';
-        if (distribArch === 'x86_64') return 'amd64';
-        if (distribArch.startsWith('i386_')) return '386';
-        if (distribArch.startsWith('riscv64_')) return 'riscv64';
-        if (distribArch.startsWith('loongarch64_')) return 'loong64';
-        if (distribArch.includes('_neon-vfp')) return 'armv7';
-        if (distribArch.includes('_neon') || distribArch.includes('_vfp')) return 'armv6';
-        if (distribArch.startsWith('arm_')) return 'armv5';
-        if (distribArch.startsWith('mips64el_')) return 'mips64le';
-        if (distribArch.startsWith('mips64_')) return 'mips64';
-        if (distribArch.startsWith('mipsel_')) return distribArch.includes('hardfloat') ? 'mipsle-hardfloat' : 'mipsle-softfloat';
-        if (distribArch.startsWith('mips_')) return distribArch.includes('hardfloat') ? 'mips-hardfloat' : 'mips-softfloat';
-    } catch (e) {}
-
-    return 'amd64';
-}
-
-function normalizeVersion(str) {
-    if (!str) return '';
-    const match = String(str).match(/v?(\d+\.\d+\.\d+)/i);
-    return match ? match[1] : String(str).trim();
-}
-
-async function getMihomoStatus() {
-    const binPath = '/opt/clash/bin/clash';
-
-    try {
-        const stat = await L.resolveDefault(fs.stat(binPath), null);
-        if (!stat) {
-            return { installed: false, version: null };
-        }
-    } catch (e) {
-        return { installed: false, version: null };
-    }
-
-    try {
-        const result = await fs.exec(binPath, ['-v']);
-        const output = String(result?.stdout || result?.stderr || '').trim();
-        if (output) {
-            return { installed: true, version: parseVersion(output, _('Installed')) };
-        }
-    } catch (e) {}
-
-    try {
-        const result = await fs.exec(binPath, ['version']);
-        const output = String(result?.stdout || result?.stderr || '').trim();
-        if (output) {
-            return { installed: true, version: parseVersion(output, _('Installed')) };
-        }
-    } catch (e) {}
-
-    return { installed: true, version: _('Installed') };
-}
-
-async function getLatestMihomoRelease() {
-    try {
-        const response = await fetch('https://api.github.com/repos/MetaCubeX/mihomo/releases/latest');
-        if (!response.ok) return null;
-
-        const data = await response.json();
-        if (!data || data.prerelease || !data.tag_name || !Array.isArray(data.assets)) {
-            return null;
-        }
-
-        return {
-            version: data.tag_name,
-            assets: data.assets
-        };
-    } catch (e) {
-        return null;
-    }
-}
-
-function findKernelAsset(release, arch) {
-    if (!release || !Array.isArray(release.assets)) return null;
-
-    const tag = String(release.version || '');
-    const cleanTag = tag.replace(/^v/i, '');
-    const exactNames = [
-        'mihomo-linux-' + arch + '-' + tag + '.gz',
-        'mihomo-linux-' + arch + '-' + cleanTag + '.gz'
-    ];
-
-    for (let i = 0; i < exactNames.length; i++) {
-        const asset = release.assets.find((item) => item.name === exactNames[i]);
-        if (asset) return asset;
-    }
-
-    return release.assets.find((item) => item.name && item.name.indexOf('mihomo-linux-' + arch + '-') === 0 && item.name.endsWith('.gz')) || null;
-}
-
-async function downloadMihomoKernel(downloadUrl, version, arch) {
-    const safeVersion = String(version || '').replace(/[^\w.-]/g, '');
-    const fileName = 'mihomo-linux-' + arch + '-' + safeVersion + '.gz';
-    const downloadPath = '/tmp/' + fileName;
-    const extractedFile = downloadPath.replace(/\.gz$/, '');
-    const targetFile = '/opt/clash/bin/clash';
-
-    try {
-        notify('info', _('Downloading Mihomo kernel...'));
-        const curlResult = await fs.exec('/usr/bin/curl', ['-L', '-fsS', downloadUrl, '-o', downloadPath]);
-        if (curlResult.code !== 0) {
-            throw new Error(String(curlResult.stderr || curlResult.stdout || _('Download failed')).trim());
-        }
-
-        const extractResult = await fs.exec('/bin/gzip', ['-df', downloadPath]);
-        if (extractResult.code !== 0) {
-            throw new Error(String(extractResult.stderr || extractResult.stdout || _('Extraction failed')).trim());
-        }
-
-        await fs.exec('/bin/mv', [extractedFile, targetFile]);
-        await fs.exec('/bin/chmod', ['+x', targetFile]);
-
-        notify('info', _('Mihomo kernel downloaded and installed.'));
-        return true;
-    } catch (e) {
-        notify('error', _('Kernel download failed: %s').format(e.message));
-        return false;
-    } finally {
-        try { await fs.remove(downloadPath); } catch (removeErr) {}
-    }
-}
-
-function showModal(options) {
-    const overlay = E('div', { 'class': 'miclash-modal-overlay' });
-    const modal = E('div', { 'class': 'miclash-modal' });
-    const titleNode = E('div', { 'class': 'miclash-modal-title' }, String(options.title || ''));
-    const bodyNode = options.body && options.body.nodeType
-        ? options.body
-        : E('div', { 'class': 'miclash-modal-body' }, String(options.body || ''));
-    const actionsNode = E('div', { 'class': 'miclash-modal-actions' });
-
-    function closeModal() {
-        overlay.remove();
-    }
-
-    (options.buttons || []).forEach((item) => {
-        const button = E('button', { 'class': item.className || 'btn' }, String(item.label || ''));
-        button.addEventListener('click', async function(ev) {
-            ev.preventDefault();
-            if (item.onClick) {
-                const prevText = button.textContent;
-                button.disabled = true;
-                try {
-                    await item.onClick({ closeModal: closeModal, button: button });
-                } finally {
-                    if (button.isConnected) {
-                        button.disabled = false;
-                        button.textContent = prevText;
-                    }
-                }
-            } else {
-                closeModal();
-            }
-        });
-        actionsNode.appendChild(button);
-    });
-
-    modal.appendChild(titleNode);
-    modal.appendChild(bodyNode);
-    modal.appendChild(actionsNode);
-    overlay.appendChild(modal);
-
-    overlay.addEventListener('click', function(ev) {
-        if (ev.target === overlay) closeModal();
-    });
-
-    document.body.appendChild(overlay);
-    return closeModal;
-}
-
-async function openKernelModal() {
-    try {
-        const [status, arch, release] = await Promise.all([
-            getMihomoStatus(),
-            detectSystemArchitecture(),
-            getLatestMihomoRelease()
-        ]);
-
-        const asset = findKernelAsset(release, arch);
-        const localVersion = normalizeVersion(status.version);
-        const latestVersion = normalizeVersion(release ? release.version : '');
-
-        let downloadLabel = _('Download Kernel');
-        if (status.installed && release && localVersion && latestVersion && localVersion === latestVersion) {
-            downloadLabel = _('Reinstall Kernel');
-        } else if (status.installed && release) {
-            downloadLabel = _('Download Update');
-        }
-
-        const info = E('div', { 'class': 'miclash-modal-body miclash-kernel-info' }, [
-            E('div', {}, _('Status: %s').format(status.installed ? _('Installed') : _('Not installed'))),
-            E('div', {}, _('Installed version: %s').format(status.installed ? status.version : _('Not installed'))),
-            E('div', {}, _('Architecture: %s').format(arch)),
-            E('div', {}, _('Latest release: %s').format(release ? release.version : _('Unavailable')))
-        ]);
-
-        const buttons = [];
-
-        if (release && asset) {
-            buttons.push({
-                label: downloadLabel,
-                className: 'btn cbi-button-apply',
-                onClick: async function(ctx) {
-                    ctx.button.textContent = _('Downloading...');
-                    const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
-                    if (ok) {
-                        await refreshHeaderState();
-                        ctx.closeModal();
-                    }
-                }
-            });
-        }
-
-        buttons.push({
-            label: _('Restart Service'),
-            className: 'btn',
-            onClick: async function(ctx) {
-                ctx.button.textContent = _('Restarting...');
-                try {
-                    await execService('restart');
-                    notify('info', _('Clash service restarted successfully.'));
-                    await refreshHeaderState();
-                    ctx.closeModal();
-                } catch (e) {
-                    notify('error', _('Failed to restart Clash service: %s').format(e.message));
-                }
-            }
-        });
-
-        buttons.push({
-            label: _('Close'),
-            className: 'btn'
-        });
-
-        showModal({
-            title: _('Mihomo Kernel'),
-            body: info,
-            buttons: buttons
-        });
-    } catch (e) {
-        notify('error', _('Failed to load kernel information: %s').format(e.message));
-    }
+	applyEditorTheme();
 }
 
 async function readSubscriptionUrl() {
-    const settings = await readSettingsMap();
-    return String(settings.SUBSCRIPTION_URL || '').trim();
+	const settings = await readSettingsMap();
+	return String(settings.SUBSCRIPTION_URL || '').trim();
 }
 
 async function saveSubscriptionUrl(url) {
-    const clean = String(url || '').trim();
-    const value = clean.replace(/\r?\n/g, '');
-    const settings = await readSettingsMap();
-    settings.SUBSCRIPTION_URL = value;
-    await writeSettingsMap(settings);
+	const clean = String(url || '').trim().replace(/\r?\n/g, '');
+	const settings = await readSettingsMap();
+	settings.SUBSCRIPTION_URL = clean;
+	await writeSettingsMap(settings);
+}
+
+function parseVersion(raw, fallback) {
+	const str = String(raw || '').trim();
+	if (!str) return fallback;
+	const matched = str.match(/(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/);
+	return matched ? matched[1] : str.split('\n')[0];
+}
+
+function sanitizeAppVersion(version) {
+	return String(version || '').replace(/-r\d+$/i, '');
+}
+
+async function getVersions() {
+	const info = { app: 'unknown', clash: 'unknown' };
+
+	try {
+		const opkgMiclash = await fs.exec('/bin/sh', ['-c', 'opkg list-installed luci-app-miclash 2>/dev/null']);
+		const opkgSsc = await fs.exec('/bin/sh', ['-c', 'opkg list-installed luci-app-ssclash 2>/dev/null']);
+		const apkMiclash = await fs.exec('/bin/sh', ['-c', 'apk info -v luci-app-miclash 2>/dev/null']);
+		const raw = String(opkgMiclash.stdout || opkgSsc.stdout || apkMiclash.stdout || '').trim();
+		if (raw) info.app = sanitizeAppVersion(parseVersion(raw, 'installed'));
+	} catch (e) {}
+
+	try {
+		const clashV = await fs.exec('/opt/clash/bin/clash', ['-v']);
+		const clashVersion = String(clashV.stdout || clashV.stderr || '');
+		if (clashVersion) {
+			info.clash = parseVersion(clashVersion, 'installed');
+		} else {
+			const alt = await fs.exec('/opt/clash/bin/clash', ['version']);
+			info.clash = parseVersion(alt.stdout || alt.stderr, 'installed');
+		}
+	} catch (e) {}
+
+	return info;
+}
+
+function normalizeVersion(str) {
+	if (!str) return '';
+	const match = String(str).match(/v?(\d+\.\d+\.\d+)/i);
+	return match ? match[1] : String(str).trim();
+}
+
+async function detectSystemArchitecture() {
+	try {
+		const releaseInfo = await L.resolveDefault(fs.read('/etc/openwrt_release'), null);
+		const match = String(releaseInfo || '').match(/^DISTRIB_ARCH=['"]?([^'"\n]+)['"]?/m);
+		const distribArch = match ? match[1] : '';
+
+		if (!distribArch) return 'amd64';
+		if (distribArch.startsWith('aarch64_')) return 'arm64';
+		if (distribArch === 'x86_64') return 'amd64';
+		if (distribArch.startsWith('i386_')) return '386';
+		if (distribArch.startsWith('riscv64_')) return 'riscv64';
+		if (distribArch.startsWith('loongarch64_')) return 'loong64';
+		if (distribArch.includes('_neon-vfp')) return 'armv7';
+		if (distribArch.includes('_neon') || distribArch.includes('_vfp')) return 'armv6';
+		if (distribArch.startsWith('arm_')) return 'armv5';
+		if (distribArch.startsWith('mips64el_')) return 'mips64le';
+		if (distribArch.startsWith('mips64_')) return 'mips64';
+		if (distribArch.startsWith('mipsel_')) return distribArch.includes('hardfloat') ? 'mipsle-hardfloat' : 'mipsle-softfloat';
+		if (distribArch.startsWith('mips_')) return distribArch.includes('hardfloat') ? 'mips-hardfloat' : 'mips-softfloat';
+	} catch (e) {}
+
+	return 'amd64';
+}
+
+async function getMihomoStatus() {
+	const binPath = '/opt/clash/bin/clash';
+
+	try {
+		const stat = await L.resolveDefault(fs.stat(binPath), null);
+		if (!stat) return { installed: false, version: null };
+	} catch (e) {
+		return { installed: false, version: null };
+	}
+
+	try {
+		const result = await fs.exec(binPath, ['-v']);
+		const output = String(result.stdout || result.stderr || '').trim();
+		if (output) return { installed: true, version: parseVersion(output, _('Installed')) };
+	} catch (e) {}
+
+	try {
+		const result = await fs.exec(binPath, ['version']);
+		const output = String(result.stdout || result.stderr || '').trim();
+		if (output) return { installed: true, version: parseVersion(output, _('Installed')) };
+	} catch (e) {}
+
+	return { installed: true, version: _('Installed') };
+}
+
+async function getLatestMihomoRelease() {
+	try {
+		const response = await fetch('https://api.github.com/repos/MetaCubeX/mihomo/releases/latest');
+		if (!response.ok) return null;
+		const data = await response.json();
+		if (!data || data.prerelease || !data.tag_name || !Array.isArray(data.assets)) return null;
+		return { version: data.tag_name, assets: data.assets };
+	} catch (e) {
+		return null;
+	}
+}
+
+function findKernelAsset(release, arch) {
+	if (!release || !Array.isArray(release.assets)) return null;
+
+	const tag = String(release.version || '');
+	const cleanTag = tag.replace(/^v/i, '');
+	const exactNames = [
+		'mihomo-linux-' + arch + '-' + tag + '.gz',
+		'mihomo-linux-' + arch + '-' + cleanTag + '.gz'
+	];
+
+	for (let i = 0; i < exactNames.length; i++) {
+		const asset = release.assets.find((item) => item.name === exactNames[i]);
+		if (asset) return asset;
+	}
+
+	return release.assets.find((item) =>
+		item.name && item.name.indexOf('mihomo-linux-' + arch + '-') === 0 && item.name.endsWith('.gz')) || null;
+}
+
+async function downloadMihomoKernel(downloadUrl, version, arch) {
+	const safeVersion = String(version || '').replace(/[^\w.-]/g, '');
+	const fileName = 'mihomo-linux-' + arch + '-' + safeVersion + '.gz';
+	const downloadPath = '/tmp/' + fileName;
+	const extractedFile = downloadPath.replace(/\.gz$/, '');
+	const targetFile = '/opt/clash/bin/clash';
+
+	try {
+		notify('info', _('Downloading Mihomo kernel...'));
+
+		const curlResult = await fs.exec('/usr/bin/curl', ['-L', '-fsS', downloadUrl, '-o', downloadPath]);
+		if (curlResult.code !== 0) {
+			throw new Error(String(curlResult.stderr || curlResult.stdout || _('Download failed')).trim());
+		}
+
+		const extractResult = await fs.exec('/bin/gzip', ['-df', downloadPath]);
+		if (extractResult.code !== 0) {
+			throw new Error(String(extractResult.stderr || extractResult.stdout || _('Extraction failed')).trim());
+		}
+
+		await fs.exec('/bin/mv', [extractedFile, targetFile]);
+		await fs.exec('/bin/chmod', ['+x', targetFile]);
+
+		notify('info', _('Mihomo kernel downloaded and installed.'));
+		return true;
+	} catch (e) {
+		notify('error', _('Kernel download failed: %s').format(e.message));
+		return false;
+	} finally {
+		try { await fs.remove(downloadPath); } catch (removeErr) {}
+	}
+}
+
+function showModal(options) {
+	const overlayClass = 'sbox-modal-overlay' + (options.overlayClass ? ' ' + options.overlayClass : '');
+	const modalClass = 'sbox-modal' + (options.modalClass ? ' ' + options.modalClass : '');
+	const overlay = E('div', { 'class': overlayClass });
+	const modal = E('div', { 'class': modalClass });
+	const titleNode = E('div', { 'class': 'sbox-modal-title' }, String(options.title || ''));
+	const bodyNode = options.body && options.body.nodeType
+		? options.body
+		: E('div', { 'class': 'sbox-modal-body' }, String(options.body || ''));
+	const actionsNode = E('div', { 'class': 'sbox-modal-actions' });
+	let isClosed = false;
+
+	function closeModal() {
+		if (isClosed) return;
+		isClosed = true;
+		document.removeEventListener('keydown', onKeyDown);
+		if (options.onClose) {
+			try { options.onClose(); } catch (e) {}
+		}
+		overlay.remove();
+	}
+
+	function onKeyDown(ev) {
+		if (ev.key === 'Escape') closeModal();
+	}
+
+	(options.buttons || []).forEach((item) => {
+		const button = E('button', {
+			'class': item.className || 'cbi-button cbi-button-neutral'
+		}, String(item.label || ''));
+
+		button.addEventListener('click', async function(ev) {
+			ev.preventDefault();
+			if (item.onClick) {
+				const oldText = button.textContent;
+				button.disabled = true;
+				try {
+					await item.onClick({ closeModal: closeModal, button: button });
+				} finally {
+					if (button.isConnected) {
+						button.disabled = false;
+						button.textContent = oldText;
+					}
+				}
+			} else {
+				closeModal();
+			}
+		});
+
+		actionsNode.appendChild(button);
+	});
+
+	modal.appendChild(titleNode);
+	modal.appendChild(bodyNode);
+	modal.appendChild(actionsNode);
+	overlay.appendChild(modal);
+
+	overlay.addEventListener('click', function(ev) {
+		if (ev.target === overlay) closeModal();
+	});
+	document.addEventListener('keydown', onKeyDown);
+
+	if (pageRoot && pageRoot.appendChild) {
+		pageRoot.appendChild(overlay);
+	} else {
+		document.body.appendChild(overlay);
+	}
+	return closeModal;
+}
+
+async function openKernelModal() {
+	try {
+		const [status, arch, release] = await Promise.all([
+			getMihomoStatus(),
+			detectSystemArchitecture(),
+			getLatestMihomoRelease()
+		]);
+
+		const asset = findKernelAsset(release, arch);
+		const localVersion = normalizeVersion(status.version);
+		const latestVersion = normalizeVersion(release ? release.version : '');
+
+		let downloadLabel = _('Download Kernel');
+		if (status.installed && release && localVersion && latestVersion && localVersion === latestVersion) {
+			downloadLabel = _('Reinstall Kernel');
+		} else if (status.installed && release) {
+			downloadLabel = _('Download Update');
+		}
+
+		const info = E('div', { 'class': 'sbox-modal-body' }, [
+			E('div', {}, _('Status: %s').format(status.installed ? _('Installed') : _('Not installed'))),
+			E('div', {}, _('Installed version: %s').format(status.installed ? status.version : _('Not installed'))),
+			E('div', {}, _('Architecture: %s').format(arch)),
+			E('div', {}, _('Latest release: %s').format(release ? release.version : _('Unavailable')))
+		]);
+
+		const buttons = [];
+		if (release && asset) {
+			buttons.push({
+				label: downloadLabel,
+				className: 'cbi-button cbi-button-apply',
+				onClick: async function(ctx) {
+					ctx.button.textContent = _('Downloading...');
+					const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
+					if (ok) {
+						await refreshHeaderAndControl();
+						ctx.closeModal();
+					}
+				}
+			});
+		}
+
+		buttons.push({
+			label: _('Restart Service'),
+			className: 'cbi-button cbi-button-neutral',
+			onClick: async function(ctx) {
+				ctx.button.textContent = _('Restarting...');
+				try {
+					await execService('restart');
+					notify('info', _('Clash service restarted successfully.'));
+					await refreshHeaderAndControl();
+					ctx.closeModal();
+				} catch (e) {
+					notify('error', _('Failed to restart Clash service: %s').format(e.message));
+				}
+			}
+		});
+
+		buttons.push({
+			label: _('Close'),
+			className: 'cbi-button cbi-button-neutral'
+		});
+
+		showModal({
+			title: _('Mihomo Kernel'),
+			body: info,
+			buttons: buttons
+		});
+	} catch (e) {
+		notify('error', _('Failed to load kernel information: %s').format(e.message));
+	}
+}
+
+async function withButtons(btns, fn) {
+	const list = Array.isArray(btns) ? btns : (btns ? [btns] : []);
+	const saved = list.map((b) => b.innerHTML);
+
+	list.forEach((b) => {
+		b.disabled = true;
+		b.innerHTML = '<span class="sbox-spinner"></span> ' + safeText(b.textContent || '').trim();
+	});
+
+	try {
+		return await fn();
+	} finally {
+		list.forEach((b, i) => {
+			if (b && b.isConnected) {
+				b.disabled = false;
+				b.innerHTML = saved[i];
+			}
+		});
+	}
+}
+
+function parseYamlValue(yaml, key) {
+	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const re = new RegExp('^\\s*' + escapedKey + '\\s*:\\s*(["\\\']?)([^#\\r\\n]+?)\\1\\s*(?:#.*)?$', 'm');
+	const m = String(yaml || '').match(re);
+	return m ? m[2].trim() : null;
+}
+
+function normalizeHostPortFromAddr(addr, fallbackHost, fallbackPort) {
+	if (!addr) return { host: fallbackHost, port: fallbackPort };
+	const cleaned = addr.replace(/["']/g, '').trim();
+	const hostPort = cleaned.replace(/^\[|\]$/g, '');
+	const lastColon = hostPort.lastIndexOf(':');
+	let host = fallbackHost;
+	let port = fallbackPort;
+
+	if (lastColon !== -1) {
+		host = hostPort.slice(0, lastColon);
+		port = hostPort.slice(lastColon + 1);
+	}
+	if (host === '0.0.0.0' || host === '::' || host === '') host = fallbackHost;
+	return { host, port };
+}
+
+function computeUiPath(externalUiName, externalUi) {
+	if (externalUiName) {
+		const name = externalUiName.replace(/(^\/+|\/+$)/g, '');
+		return '/' + name + '/';
+	}
+	if (externalUi && !/[\/\\\.]/.test(externalUi)) {
+		const name = externalUi.trim();
+		return '/' + name + '/';
+	}
+	return '/ui/';
+}
+
+async function getServiceStatus() {
+	try {
+		const instances = (await callServiceList('clash')).clash?.instances;
+		return Object.values(instances || {})[0]?.running || false;
+	} catch (e) {
+		return false;
+	}
+}
+
+async function execService(action) {
+	return fs.exec('/etc/init.d/clash', [action]);
+}
+
+function looksLikeBase64Text(value) {
+	const cleaned = String(value || '').replace(/\s+/g, '');
+	if (cleaned.length < 64 || cleaned.length % 4 !== 0) return false;
+	return /^[A-Za-z0-9+/=]+$/.test(cleaned);
+}
+
+function tryDecodeBase64(value) {
+	try {
+		if (typeof atob !== 'function') return null;
+		const cleaned = String(value || '').replace(/\s+/g, '');
+		return atob(cleaned);
+	} catch (e) {
+		return null;
+	}
+}
+
+function looksLikeUriSubscription(value) {
+	const content = String(value || '');
+	return /(?:^|\n)\s*(vmess|vless|trojan|ss|ssr|hysteria|hysteria2|tuic):\/\/[^\s]+/i.test(content);
 }
 
 function looksLikeBase64Blob(text) {
-    const compact = String(text || '').replace(/\s+/g, '');
-    if (compact.length < 48) return false;
-    if (String(text || '').indexOf(':') !== -1) return false;
-    return /^[A-Za-z0-9+/=]+$/.test(compact);
+	const compact = String(text || '').replace(/\s+/g, '');
+	if (compact.length < 48) return false;
+	if (String(text || '').indexOf(':') !== -1) return false;
+	return /^[A-Za-z0-9+/=]+$/.test(compact);
 }
 
-const REMNAWAVE_CLIENT_TYPES = {
-    mihomo: true,
-    clash: true,
-    singbox: true,
-    stash: true,
-    json: true,
-    'v2ray-json': true
-};
-
 async function getOpenWrtReleaseVersion() {
-    try {
-        const release = await fs.read('/etc/openwrt_release');
-        const line = String(release || '').split('\n').find((item) => item.indexOf('DISTRIB_RELEASE=') === 0);
-        return line ? line.split('=')[1].replace(/['"]/g, '').trim() : '';
-    } catch (e) {
-        return '';
-    }
+	try {
+		const release = await fs.read('/etc/openwrt_release');
+		const line = String(release || '').split('\n').find((item) => item.indexOf('DISTRIB_RELEASE=') === 0);
+		return line ? line.split('=')[1].replace(/["']/g, '').trim() : '';
+	} catch (e) {
+		return '';
+	}
 }
 
 async function getSystemModel() {
-    try {
-        return String(await fs.read('/tmp/sysinfo/model') || '').trim();
-    } catch (e) {
-        return '';
-    }
+	try {
+		return String(await fs.read('/tmp/sysinfo/model') || '').trim();
+	} catch (e) {
+		return '';
+	}
 }
 
 async function getHwidHash() {
-    const probes = [
-        "cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | md5sum | cut -c1-14",
-        "for i in /sys/class/net/*/address; do n=\"${i%/address}\"; n=\"${n##*/}\"; [ \"$n\" = \"lo\" ] && continue; cat \"$i\" 2>/dev/null | tr -d ':' | md5sum | cut -c1-14 && break; done"
-    ];
+	const probes = [
+		"cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | md5sum | cut -c1-14",
+		"for i in /sys/class/net/*/address; do n=\"${i%/address}\"; n=\"${n##*/}\"; [ \"$n\" = \"lo\" ] && continue; cat \"$i\" 2>/dev/null | tr -d ':' | md5sum | cut -c1-14 && break; done"
+	];
 
-    for (let i = 0; i < probes.length; i++) {
-        try {
-            const r = await fs.exec('/bin/sh', ['-c', probes[i]]);
-            if (r.code === 0) {
-                const hwid = String(r.stdout || '').trim();
-                if (hwid && hwid !== 'unknown') return hwid;
-            }
-        } catch (e) {}
-    }
+	for (let i = 0; i < probes.length; i++) {
+		try {
+			const r = await fs.exec('/bin/sh', ['-c', probes[i]]);
+			if (r.code === 0) {
+				const hwid = String(r.stdout || '').trim();
+				if (hwid && hwid !== 'unknown') return hwid;
+			}
+		} catch (e) {}
+	}
 
-    return '';
+	return '';
 }
 
 function buildSubscriptionClientProfile(settings, appVersion) {
-    const safeVersion = /^\d+\.\d+\.\d+/.test(String(appVersion || '')) ? String(appVersion) : '1.0.0';
-    const settingsUa = String(settings.HWID_USER_AGENT || '').trim();
-    const userAgent = settingsUa || ('MiClash/' + safeVersion);
-
-    return {
-        ua: userAgent
-    };
+	const safeVersion = /^\d+\.\d+\.\d+/.test(String(appVersion || '')) ? String(appVersion) : '1.0.0';
+	const settingsUa = String(settings.HWID_USER_AGENT || '').trim();
+	return { ua: settingsUa || ('MiClash/' + safeVersion) };
 }
 
 function normalizeSubscriptionDownloadUrl(rawUrl) {
-    let parsed = null;
-    try {
-        parsed = new URL(rawUrl);
-    } catch (e) {
-        return {
-            url: rawUrl,
-            mode: 'direct',
-            remnawaveCandidateUrl: null
-        };
-    }
+	let parsed = null;
+	try {
+		parsed = new URL(rawUrl);
+	} catch (e) {
+		return { url: rawUrl, mode: 'direct', remnawaveCandidateUrl: null };
+	}
 
-    const segments = parsed.pathname.split('/').filter(Boolean);
-    const subIndex = segments.indexOf('sub');
-    if (subIndex < 0 || !segments[subIndex + 1]) {
-        return {
-            url: parsed.toString(),
-            mode: 'direct',
-            remnawaveCandidateUrl: null
-        };
-    }
+	const segments = parsed.pathname.split('/').filter(Boolean);
+	const subIndex = segments.indexOf('sub');
+	if (subIndex < 0 || !segments[subIndex + 1]) {
+		return { url: parsed.toString(), mode: 'direct', remnawaveCandidateUrl: null };
+	}
 
-    const clientType = String(segments[subIndex + 2] || '').toLowerCase();
+	const clientType = String(segments[subIndex + 2] || '').toLowerCase();
 
-    if (clientType && REMNAWAVE_CLIENT_TYPES[clientType]) {
-        return {
-            url: parsed.toString(),
-            mode: 'remnawave-client-path',
-            remnawaveCandidateUrl: null
-        };
-    }
+	if (clientType && REMNAWAVE_CLIENT_TYPES[clientType]) {
+		if (clientType === 'mihomo') {
+			return { url: parsed.toString(), mode: 'remnawave-client-path', remnawaveCandidateUrl: null };
+		}
 
-    if (clientType && clientType !== 'info') {
-        return {
-            url: parsed.toString(),
-            mode: 'direct',
-            remnawaveCandidateUrl: null
-        };
-    }
+		const candidateSegments = segments.slice();
+		candidateSegments[subIndex + 2] = 'mihomo';
 
-    const candidateSegments = segments.slice();
-    if (clientType === 'info') {
-        candidateSegments[subIndex + 2] = 'mihomo';
-    } else {
-        candidateSegments.push('mihomo');
-    }
+		const candidate = new URL(parsed.toString());
+		candidate.pathname = '/' + candidateSegments.join('/');
 
-    const candidate = new URL(parsed.toString());
-    candidate.pathname = '/' + candidateSegments.join('/');
+		return {
+			url: parsed.toString(),
+			mode: 'remnawave-client-path',
+			remnawaveCandidateUrl: candidate.toString()
+		};
+	}
 
-    parsed.pathname = '/' + segments.join('/');
+	if (clientType && clientType !== 'info') {
+		return { url: parsed.toString(), mode: 'direct', remnawaveCandidateUrl: null };
+	}
 
-    return {
-        url: parsed.toString(),
-        mode: 'direct',
-        remnawaveCandidateUrl: candidate.toString()
-    };
+	const candidateSegments = segments.slice();
+	if (clientType === 'info') {
+		candidateSegments[subIndex + 2] = 'mihomo';
+	} else {
+		candidateSegments.push('mihomo');
+	}
+
+	const candidate = new URL(parsed.toString());
+	candidate.pathname = '/' + candidateSegments.join('/');
+
+	return {
+		url: parsed.toString(),
+		mode: 'direct',
+		remnawaveCandidateUrl: candidate.toString()
+	};
 }
 
 async function buildSubscriptionDeviceHeaders(settings) {
-    const headers = {};
-    const deviceOs = String(settings.HWID_DEVICE_OS || 'OpenWrt').trim() || 'OpenWrt';
-    headers['x-device-os'] = deviceOs;
+	const headers = {};
+	const deviceOs = String(settings.HWID_DEVICE_OS || 'OpenWrt').trim() || 'OpenWrt';
+	headers['x-device-os'] = deviceOs;
 
-    const release = await getOpenWrtReleaseVersion();
-    if (release) headers['x-ver-os'] = release;
+	const release = await getOpenWrtReleaseVersion();
+	if (release) headers['x-ver-os'] = release;
 
-    const model = await getSystemModel();
-    if (model) headers['x-device-model'] = model;
+	const model = await getSystemModel();
+	if (model) headers['x-device-model'] = model;
 
-    if (String(settings.ENABLE_HWID || '').toLowerCase() === 'true') {
-        const hwid = await getHwidHash();
-        if (hwid) headers['x-hwid'] = hwid;
-    }
+	if (String(settings.ENABLE_HWID || '').toLowerCase() === 'true') {
+		const hwid = await getHwidHash();
+		if (hwid) headers['x-hwid'] = hwid;
+	}
 
-    return headers;
+	return headers;
 }
 
 async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode) {
-    const args = [
-        '-L', '-fsS',
-        '-A', profile.ua,
-        '-H', 'Accept: application/yaml, text/yaml, text/plain, */*',
-        '-H', 'Cache-Control: no-cache',
-        '-H', 'Pragma: no-cache'
-    ];
+	const args = [
+		'-L', '-fsS',
+		'-A', profile.ua,
+		'-H', 'Accept: application/yaml, text/yaml, text/plain, */*',
+		'-H', 'Cache-Control: no-cache',
+		'-H', 'Pragma: no-cache'
+	];
 
-    Object.keys(deviceHeaders || {}).forEach((key) => {
-        const value = String(deviceHeaders[key] || '').trim();
-        if (!value) return;
-        args.push('-H');
-        args.push(key + ': ' + value);
-    });
+	Object.keys(deviceHeaders || {}).forEach((key) => {
+		const value = String(deviceHeaders[key] || '').trim();
+		if (!value) return;
+		args.push('-H');
+		args.push(key + ': ' + value);
+	});
 
-    args.push(url);
-    args.push('-o');
-    args.push(TMP_SUBSCRIPTION_PATH);
+	args.push(url);
+	args.push('-o');
+	args.push(TMP_SUBSCRIPTION_PATH);
 
-    const dl = await fs.exec('/usr/bin/curl', args);
-    if (dl.code !== 0) {
-        const msg = String(dl.stderr || dl.stdout || _('Download failed')).trim();
-        if (mode === 'remnawave-client-path' && /403/.test(msg)) {
-            throw new Error(_('Remnawave blocked /mihomo path (HTTP 403). Disable "Disable Subscription Access by Path" in Remnawave response-rules settings.'));
-        }
-        throw new Error(msg);
-    }
+	const dl = await fs.exec('/usr/bin/curl', args);
+	if (dl.code !== 0) {
+		const msg = String(dl.stderr || dl.stdout || _('Download failed')).trim();
+		if (mode === 'remnawave-client-path' && /403/.test(msg)) {
+			throw new Error(_('Remnawave blocked /mihomo path (HTTP 403). Disable "Disable Subscription Access by Path" in Remnawave response-rules settings.'));
+		}
+		throw new Error(msg);
+	}
 
-    const catResult = await fs.exec('/bin/cat', [TMP_SUBSCRIPTION_PATH]);
-    if (catResult.code !== 0) {
-        throw new Error(String(catResult.stderr || catResult.stdout || _('Unable to read downloaded file')).trim());
-    }
+	const catResult = await fs.exec('/bin/cat', [TMP_SUBSCRIPTION_PATH]);
+	if (catResult.code !== 0) {
+		throw new Error(String(catResult.stderr || catResult.stdout || _('Unable to read downloaded file')).trim());
+	}
 
-    return String(catResult.stdout || '');
+	return String(catResult.stdout || '');
 }
 
-async function fetchSubscriptionAsYaml(url) {
-    const settings = await readSettingsMap();
-    const versions = await getVersions();
-    const profile = buildSubscriptionClientProfile(settings, versions.app);
-    const deviceHeaders = await buildSubscriptionDeviceHeaders(settings);
-    const resolved = normalizeSubscriptionDownloadUrl(url);
-    let mode = resolved.mode;
-
-    let payload = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, resolved.mode);
-    if (!payload.trim()) {
-        throw new Error(_('Downloaded file is empty.'));
-    }
-
-    if (looksLikeBase64Blob(payload) && resolved.remnawaveCandidateUrl) {
-        payload = await downloadSubscriptionWithProfile(
-            resolved.remnawaveCandidateUrl,
-            profile,
-            deviceHeaders,
-            'remnawave-client-path'
-        );
-        mode = 'remnawave-client-path';
-    }
-
-    if (looksLikeBase64Blob(payload)) {
-        throw new Error(_('The subscription server returned non-YAML data (likely base64 links). Ask your provider for Clash/Mihomo YAML output.'));
-    }
-
-    const tested = await testConfigContent(payload, false);
-    if (!tested.ok) {
-        throw new Error(tested.message || _('YAML validation failed.'));
-    }
-
-    return {
-        content: payload,
-        mode: mode
-    };
+function looksLikeYamlConfig(content) {
+	const text = String(content || '');
+	return /(^|\n)\s*(proxies|proxy-providers|mixed-port|port|mode|rules):\s*/m.test(text);
 }
 
 function extractTestError(testResult) {
-    const rawDetail = String(testResult?.stderr || testResult?.stdout || '').trim();
-    if (!rawDetail) return 'unknown error';
+	const rawDetail = String(testResult?.stderr || testResult?.stdout || '').trim();
+	if (!rawDetail) return 'unknown error';
 
-    const lines = rawDetail.split('\n').filter((l) => l.trim().length > 0);
-    for (let i = 0; i < lines.length; i++) {
-        const msgMatch = lines[i].match(/msg="([^"]+)"/);
-        if (msgMatch) return msgMatch[1].trim();
-    }
-    return lines[lines.length - 1].trim();
+	const lines = rawDetail.split('\n').filter((l) => l.trim().length > 0);
+	for (let i = 0; i < lines.length; i++) {
+		const msgMatch = lines[i].match(/msg="([^"]+)"/);
+		if (msgMatch) return msgMatch[1].trim();
+	}
+	return lines[lines.length - 1].trim();
 }
 
 async function testConfigContent(content, keepOnSuccess) {
-    const normalized = String(content || '').trimEnd() + '\n';
-    let original = '';
+	const normalized = String(content || '').trimEnd() + '\n';
+	let original = '';
 
-    try {
-        original = await fs.read(CONFIG_PATH);
-    } catch (e) {
-        original = '';
-    }
+	try {
+		original = await fs.read(CONFIG_PATH);
+	} catch (e) {
+		original = '';
+	}
 
-    try {
-        await fs.write(CONFIG_PATH, normalized);
-        const testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-t']);
+	try {
+		await fs.write(CONFIG_PATH, normalized);
+		const testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-t']);
 
-        if (testResult.code !== 0) {
-            await fs.write(CONFIG_PATH, original);
-            return {
-                ok: false,
-                message: extractTestError(testResult)
-            };
-        }
+		if (testResult.code !== 0) {
+			await fs.write(CONFIG_PATH, original);
+			return { ok: false, message: extractTestError(testResult) };
+		}
 
-        if (!keepOnSuccess) {
-            await fs.write(CONFIG_PATH, original);
-        }
-
-        return { ok: true, message: '' };
-    } catch (e) {
-        try {
-            await fs.write(CONFIG_PATH, original);
-        } catch (restoreError) {}
-        return {
-            ok: false,
-            message: e.message || 'test failed'
-        };
-    }
+		if (!keepOnSuccess) await fs.write(CONFIG_PATH, original);
+		return { ok: true, message: '' };
+	} catch (e) {
+		try { await fs.write(CONFIG_PATH, original); } catch (restoreError) {}
+		return { ok: false, message: e.message || 'test failed' };
+	}
 }
 
-async function refreshHeaderState() {
-    const [running, versions, kernelStatus] = await Promise.all([
-        getServiceStatus(),
-        getVersions(),
-        getMihomoStatus()
-    ]);
+async function fetchSubscriptionAsYaml(url) {
+	const settingsMap = await readSettingsMap();
+	const versions = await getVersions();
+	const profile = buildSubscriptionClientProfile(settingsMap, versions.app);
+	const deviceHeaders = await buildSubscriptionDeviceHeaders(settingsMap);
+	const resolved = normalizeSubscriptionDownloadUrl(url);
+	let mode = resolved.mode;
 
-    if (startStopButton) {
-        startStopButton.textContent = running ? _('Stop') : _('Start');
-    }
+	let payload = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, mode);
+	if (!payload.trim()) throw new Error(_('Downloaded file is empty.'));
 
-    if (statusBadge) {
-        statusBadge.classList.toggle('miclash-status-on', running);
-        statusBadge.classList.toggle('miclash-status-off', !running);
-        statusBadge.textContent = running ? _('Service running') : _('Service stopped');
-    }
+	if (looksLikeBase64Blob(payload) && resolved.remnawaveCandidateUrl) {
+		payload = await downloadSubscriptionWithProfile(
+			resolved.remnawaveCandidateUrl,
+			profile,
+			deviceHeaders,
+			'remnawave-client-path'
+		);
+		mode = 'remnawave-client-path';
+	}
 
-    if (appVersionBadge) {
-        appVersionBadge.textContent = _('MiClash %s').format(versions.app);
-    }
+	if (looksLikeBase64Blob(payload)) {
+		const decoded = tryDecodeBase64(payload);
+		if (decoded && looksLikeYamlConfig(decoded)) {
+			payload = decoded;
+		}
+	}
 
-    if (kernelBadge) {
-        if (kernelStatus.installed) {
-            kernelBadge.textContent = _('Kernel %s').format(kernelStatus.version || versions.clash);
-            kernelBadge.classList.remove('miclash-pill-warn');
-        } else {
-            kernelBadge.textContent = _('Kernel not installed');
-            kernelBadge.classList.add('miclash-pill-warn');
-        }
-    }
+	if (looksLikeBase64Blob(payload) || looksLikeUriSubscription(payload)) {
+		throw new Error(_('The subscription server returned links/base64 instead of Clash YAML. For Remnawave use the /mihomo subscription path.'));
+	}
+
+	const tested = await testConfigContent(payload, false);
+	if (!tested.ok) throw new Error(tested.message || _('YAML validation failed.'));
+
+	return { content: payload, mode: mode };
 }
 
 async function openDashboard() {
-    try {
-        if (!(await getServiceStatus())) {
-            notify('error', _('Service is not running.'));
-            return;
-        }
+	try {
+		if (!(await getServiceStatus())) {
+			notify('error', _('Service is not running.'));
+			return;
+		}
 
-        const config = await fs.read(CONFIG_PATH);
-        const ec = parseYamlValue(config, 'external-controller');
-        const ecTls = parseYamlValue(config, 'external-controller-tls');
-        const secret = parseYamlValue(config, 'secret');
-        const externalUi = parseYamlValue(config, 'external-ui');
-        const externalUiName = parseYamlValue(config, 'external-ui-name');
+		const config = await fs.read(CONFIG_PATH);
+		const ec = parseYamlValue(config, 'external-controller');
+		const ecTls = parseYamlValue(config, 'external-controller-tls');
+		const secret = parseYamlValue(config, 'secret');
+		const externalUi = parseYamlValue(config, 'external-ui');
+		const externalUiName = parseYamlValue(config, 'external-ui-name');
 
-        const baseHost = window.location.hostname;
-        const basePort = '9090';
-        const useTls = !!ecTls;
+		const baseHost = window.location.hostname;
+		const basePort = '9090';
+		const useTls = !!ecTls;
 
-        const hostPort = normalizeHostPortFromAddr(useTls ? ecTls : ec, baseHost, basePort);
-        const scheme = useTls ? 'https:' : 'http:';
-        const uiPath = computeUiPath(externalUiName, externalUi);
+		const hostPort = normalizeHostPortFromAddr(useTls ? ecTls : ec, baseHost, basePort);
+		const scheme = useTls ? 'https:' : 'http:';
+		const uiPath = computeUiPath(externalUiName, externalUi);
 
-        const qp = new URLSearchParams();
-        if (secret) qp.set('secret', secret);
-        qp.set('hostname', hostPort.host);
-        qp.set('port', hostPort.port);
-        const url = scheme + '//' + hostPort.host + ':' + hostPort.port + uiPath + '?' + qp.toString();
+		const qp = new URLSearchParams();
+		if (secret) qp.set('secret', secret);
+		qp.set('hostname', hostPort.host);
+		qp.set('port', hostPort.port);
 
-        const newWindow = window.open(url, '_blank');
-        if (!newWindow) {
-            notify('warning', _('Popup was blocked. Please allow popups for this site.'));
-        }
-    } catch (e) {
-        notify('error', _('Failed to open dashboard: %s').format(e.message));
-    }
+		const url = scheme + '//' + hostPort.host + ':' + hostPort.port + uiPath + '?' + qp.toString();
+		const popup = window.open(url, '_blank');
+
+		if (!popup) {
+			notify('warning', _('Popup was blocked. Please allow popups for this site.'));
+		}
+	} catch (e) {
+		notify('error', _('Failed to open dashboard: %s').format(e.message));
+	}
+}
+
+function createInterfaceEntry(name) {
+	let category = 'other';
+
+	if (/\.\d+$/.test(name) || /^(br-|bridge|eth|lan|switch|bond|team)/.test(name)) {
+		category = 'ethernet';
+	} else if (/^(wlan|wifi|ath|phy|ra|mt|rtl|iwl)/.test(name)) {
+		category = 'wifi';
+	} else if (/^(wan|ppp|modem|3g|4g|5g|lte|gsm|cdma|hsdpa|hsupa|umts)/.test(name)) {
+		category = 'wan';
+	} else if (/^(tun|tap|vpn|wg|ovpn|openvpn|l2tp|pptp|sstp|ikev2|ipsec)/.test(name)) {
+		category = 'vpn';
+	} else if (/^(veth|macvlan|ipvlan|dummy|vrf|vcan|vxcan)/.test(name)) {
+		category = 'virtual';
+	}
+
+	return {
+		name: name,
+		category: category,
+		description: name
+	};
+}
+
+async function getNetworkInterfaces() {
+	const result = [];
+	const seen = new Set();
+
+	const pushIface = (name) => {
+		const clean = String(name || '').trim();
+		if (!clean || clean === 'lo' || clean === 'clash-tun' || seen.has(clean)) return;
+		seen.add(clean);
+		result.push(createInterfaceEntry(clean));
+	};
+
+	try {
+		const r = await fs.exec('ls', ['/sys/class/net/']);
+		if (r.code === 0 && r.stdout) {
+			String(r.stdout).split('\n').forEach(pushIface);
+		}
+	} catch (e) {}
+
+	try {
+		const r = await fs.exec('ip', ['link', 'show']);
+		if (r.code === 0 && r.stdout) {
+			String(r.stdout).split('\n').forEach((line) => {
+				const m = line.match(/^\d+:\s+([^:@]+)/);
+				if (m && m[1]) pushIface(m[1]);
+			});
+		}
+	} catch (e) {}
+
+	try {
+		const devices = await network.getDevices();
+		devices.forEach((dev) => {
+			const n = dev.getName && dev.getName();
+			if (n) pushIface(n);
+		});
+	} catch (e) {}
+
+	try {
+		const nets = await network.getNetworks();
+		nets.forEach((net) => {
+			const dev = net.getL3Device && net.getL3Device();
+			const n = dev && dev.getName && dev.getName();
+			if (n) pushIface(n);
+		});
+	} catch (e) {}
+
+	const order = ['wan', 'ethernet', 'wifi', 'vpn', 'virtual', 'other'];
+	return result.sort((a, b) => {
+		const ca = order.indexOf(a.category);
+		const cb = order.indexOf(b.category);
+		if (ca !== cb) return ca - cb;
+		return a.name.localeCompare(b.name);
+	});
+}
+
+async function getHwidValues() {
+	try {
+		let hwid = 'unknown';
+		try {
+			const macResult = await fs.exec('/bin/sh', ['-c',
+				"cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | md5sum | cut -c1-14"
+			]);
+			if (macResult.code === 0 && macResult.stdout) hwid = macResult.stdout.trim();
+		} catch (e) {}
+
+		let verOs = 'unknown';
+		try {
+			const verResult = await fs.exec('/bin/sh', ['-c',
+				'. /etc/openwrt_release && echo $DISTRIB_RELEASE'
+			]);
+			if (verResult.code === 0 && verResult.stdout) verOs = verResult.stdout.trim();
+		} catch (e) {}
+
+		let deviceModel = 'Router';
+		try {
+			const modelResult = await fs.exec('/bin/sh', ['-c', 'cat /tmp/sysinfo/model 2>/dev/null']);
+			if (modelResult.code === 0 && modelResult.stdout) deviceModel = modelResult.stdout.trim();
+		} catch (e) {}
+
+		return { hwid, verOs, deviceModel };
+	} catch (e) {
+		return { hwid: 'unknown', verOs: 'unknown', deviceModel: 'Router' };
+	}
+}
+
+function addHwidToYaml(yamlContent, userAgent, deviceOS, hwid, verOs, deviceModel) {
+	const lines = String(yamlContent || '').split('\n');
+	const result = [];
+	let inProxyProviders = false;
+	let inProvider = false;
+	let currentProvider = [];
+	let hasHeader = false;
+
+	function flushProvider() {
+		result.push(...currentProvider);
+		if (!hasHeader) {
+			while (result.length > 0 && result[result.length - 1].trim() === '') result.pop();
+			result.push('    header:');
+			result.push('      User-Agent: [' + userAgent + ']');
+			result.push('      x-hwid: [' + hwid + ']');
+			result.push('      x-device-os: [' + deviceOS + ']');
+			result.push('      x-ver-os: [' + verOs + ']');
+			result.push('      x-device-model: [' + deviceModel + ']');
+			result.push('');
+		}
+	}
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+
+		if (/^proxy-providers:\s*$/.test(line)) {
+			inProxyProviders = true;
+			result.push(line);
+			continue;
+		}
+
+		if (inProxyProviders) {
+			if (/^[a-zA-Z]/.test(line)) {
+				if (inProvider) flushProvider();
+				inProxyProviders = false;
+				inProvider = false;
+				result.push(line);
+				continue;
+			}
+
+			const providerMatch = line.match(/^  ([a-zA-Z0-9_-]+):\s*$/);
+			if (providerMatch) {
+				if (inProvider) flushProvider();
+				currentProvider = [line];
+				inProvider = true;
+				hasHeader = false;
+				continue;
+			}
+
+			if (inProvider && /^    header:\s*$/.test(line)) hasHeader = true;
+
+			if (inProvider) {
+				currentProvider.push(line);
+			} else {
+				result.push(line);
+			}
+		} else {
+			result.push(line);
+		}
+	}
+
+	if (inProvider) flushProvider();
+	return result.join('\n');
+}
+
+function transformProxyMode(content, proxyMode, tunStack) {
+	const lines = String(content || '').split('\n');
+	const newLines = [];
+	let inTunSection = false;
+	let tunIndentLevel = 0;
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const trimmed = line.trim();
+
+		if (/^#\s*Proxy\s+Mode:/i.test(trimmed)) continue;
+
+		if (trimmed === '' && i + 1 < lines.length && lines[i + 1].trim() === '') continue;
+
+		if (trimmed === '' && i + 1 < lines.length) {
+			const nextLine = lines[i + 1].trim();
+			if (/^#\s*Proxy\s+Mode:/i.test(nextLine) || /^tproxy-port/.test(nextLine) || /^tun:/.test(nextLine)) {
+				continue;
+			}
+		}
+
+		if (/^tproxy-port:/.test(trimmed)) continue;
+
+		if (/^tun:/.test(trimmed)) {
+			inTunSection = true;
+			tunIndentLevel = line.search(/\S/);
+			continue;
+		}
+
+		if (inTunSection) {
+			const currentIndent = line.search(/\S/);
+			if (line.trim() === '' || line.trim().startsWith('#') || (currentIndent > tunIndentLevel && line.trim() !== '')) {
+				continue;
+			}
+			inTunSection = false;
+		}
+
+		newLines.push(line);
+	}
+
+	let insertIndex = 0;
+	for (let i = 0; i < newLines.length; i++) {
+		if (/^mode:/.test(newLines[i].trim())) {
+			insertIndex = i + 1;
+			break;
+		}
+	}
+
+	const normalizedTunStack = ['system', 'gvisor', 'mixed'].includes(tunStack) ? tunStack : 'system';
+	let configToInsert = [];
+
+	switch (proxyMode) {
+		case 'tproxy':
+			configToInsert = ['# Proxy Mode: TPROXY', 'tproxy-port: 7894'];
+			break;
+		case 'tun':
+			configToInsert = [
+				'# Proxy Mode: TUN',
+				'tun:',
+				'  enable: true',
+				'  device: clash-tun',
+				'  stack: ' + normalizedTunStack,
+				'  auto-route: false',
+				'  auto-redirect: false',
+				'  auto-detect-interface: false'
+			];
+			break;
+		case 'mixed':
+			configToInsert = [
+				'# Proxy Mode: MIXED (TCP via TPROXY, UDP via TUN)',
+				'tproxy-port: 7894',
+				'tun:',
+				'  enable: true',
+				'  device: clash-tun',
+				'  stack: ' + normalizedTunStack,
+				'  auto-route: false',
+				'  auto-redirect: false',
+				'  auto-detect-interface: false'
+			];
+			break;
+	}
+
+	newLines.splice(insertIndex, 0, ...configToInsert);
+	return newLines.join('\n');
+}
+
+async function detectCurrentProxyMode() {
+	try {
+		const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
+		if (!configContent) return 'tproxy';
+
+		const lines = configContent.split('\n');
+		let hasTproxy = false;
+		let hasTun = false;
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const trimmed = line.trim();
+
+			if (/^tproxy-port:/.test(trimmed) && !trimmed.startsWith('#')) hasTproxy = true;
+			if (/^tun:/.test(trimmed)) {
+				for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
+					const next = lines[j].trim();
+					if (/^enable:\s*true/.test(next)) {
+						hasTun = true;
+						break;
+					}
+					if (/^[a-zA-Z]/.test(next) && !next.startsWith('#')) break;
+				}
+			}
+		}
+
+		if (hasTproxy && hasTun) return 'mixed';
+		if (hasTun) return 'tun';
+		if (hasTproxy) return 'tproxy';
+		return 'tproxy';
+	} catch (e) {
+		return 'tproxy';
+	}
+}
+
+async function loadOperationalSettings() {
+	try {
+		const content = await L.resolveDefault(fs.read(SETTINGS_PATH), '');
+		const settings = {
+			mode: 'exclude',
+			proxyMode: '',
+			tunStack: 'system',
+			autoDetectLan: true,
+			autoDetectWan: true,
+			blockQuic: true,
+			useTmpfsRules: true,
+			detectedLan: '',
+			detectedWan: '',
+			includedInterfaces: [],
+			excludedInterfaces: [],
+			enableHwid: false,
+			hwidUserAgent: 'MiClash',
+			hwidDeviceOS: 'OpenWrt'
+		};
+
+		String(content || '').split('\n').forEach((line) => {
+			const idx = line.indexOf('=');
+			if (idx === -1) return;
+			const key = line.slice(0, idx).trim();
+			const value = line.slice(idx + 1).trim();
+
+			switch (key) {
+				case 'INTERFACE_MODE': settings.mode = value; break;
+				case 'PROXY_MODE': settings.proxyMode = value; break;
+				case 'TUN_STACK': settings.tunStack = value || 'system'; break;
+				case 'AUTO_DETECT_LAN': settings.autoDetectLan = value === 'true'; break;
+				case 'AUTO_DETECT_WAN': settings.autoDetectWan = value === 'true'; break;
+				case 'BLOCK_QUIC': settings.blockQuic = value === 'true'; break;
+				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
+				case 'DETECTED_LAN': settings.detectedLan = value; break;
+				case 'DETECTED_WAN': settings.detectedWan = value; break;
+				case 'INCLUDED_INTERFACES':
+					settings.includedInterfaces = value ? value.split(',').map((i) => i.trim()).filter(Boolean) : [];
+					break;
+				case 'EXCLUDED_INTERFACES':
+					settings.excludedInterfaces = value ? value.split(',').map((i) => i.trim()).filter(Boolean) : [];
+					break;
+				case 'ENABLE_HWID': settings.enableHwid = value === 'true'; break;
+				case 'HWID_USER_AGENT': settings.hwidUserAgent = value || 'MiClash'; break;
+				case 'HWID_DEVICE_OS': settings.hwidDeviceOS = value || 'OpenWrt'; break;
+			}
+		});
+
+		return settings;
+	} catch (e) {
+		return {
+			mode: 'exclude',
+			proxyMode: '',
+			tunStack: 'system',
+			autoDetectLan: true,
+			autoDetectWan: true,
+			blockQuic: true,
+			useTmpfsRules: true,
+			detectedLan: '',
+			detectedWan: '',
+			includedInterfaces: [],
+			excludedInterfaces: [],
+			enableHwid: false,
+			hwidUserAgent: 'MiClash',
+			hwidDeviceOS: 'OpenWrt'
+		};
+	}
+}
+
+async function loadInterfacesByMode(mode) {
+	const settings = await loadOperationalSettings();
+	const manualList = mode === 'explicit' ? settings.includedInterfaces : settings.excludedInterfaces;
+	const detected = mode === 'explicit' ? settings.detectedLan : settings.detectedWan;
+
+	const all = manualList.slice();
+	if (detected && !all.includes(detected)) all.push(detected);
+	return all;
+}
+
+async function detectLanBridge() {
+	try {
+		try {
+			const nets = await network.getNetworks();
+			for (let i = 0; i < nets.length; i++) {
+				const net = nets[i];
+				if (net.getName && net.getName() === 'lan') {
+					const dev = net.getL3Device && net.getL3Device();
+					if (dev && dev.getName && dev.getName()) return dev.getName();
+				}
+			}
+		} catch (e) {}
+
+		const ipResult = await fs.exec('ip', ['addr', 'show']);
+		if (ipResult.code === 0 && ipResult.stdout) {
+			const lines = String(ipResult.stdout).split('\n');
+			let currentIface = '';
+
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i];
+				const ifaceMatch = line.match(/^\d+:\s+([^:@]+):/);
+				if (ifaceMatch) {
+					currentIface = ifaceMatch[1];
+					continue;
+				}
+
+				const ipMatch = line.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
+				if (ipMatch && currentIface && currentIface !== 'lo') {
+					const ip = ipMatch[1];
+					if (/^192\.168\.|^10\.|^172\.(1[6-9]|2[0-9]|3[01])\./.test(ip)) {
+						if (/^(br-|bridge)/.test(currentIface) || currentIface === 'lan') return currentIface;
+					}
+				}
+			}
+		}
+
+		return null;
+	} catch (e) {
+		return null;
+	}
+}
+
+async function detectWanInterface() {
+	try {
+		try {
+			const nets = await network.getNetworks();
+			for (let i = 0; i < nets.length; i++) {
+				const net = nets[i];
+				if ((net.getName && net.getName() === 'wan') || (net.getName && net.getName() === 'wan6')) {
+					const dev = net.getL3Device && net.getL3Device();
+					if (dev && dev.getName && dev.getName()) return dev.getName();
+				}
+			}
+		} catch (e) {}
+
+		const routeContent = await L.resolveDefault(fs.read('/proc/net/route'), '');
+		const lines = String(routeContent).split('\n');
+		for (let i = 0; i < lines.length; i++) {
+			const fields = lines[i].split('\t');
+			if (fields[1] === '00000000' && fields[0] !== 'Iface') return fields[0];
+		}
+
+		return null;
+	} catch (e) {
+		return null;
+	}
+}
+
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, options) {
+	const opts = options || {};
+	try {
+		let detectedLan = '';
+		let detectedWan = '';
+
+		if (autoDetectLan) detectedLan = await detectLanBridge() || '';
+		if (autoDetectWan) detectedWan = await detectWanInterface() || '';
+
+		let cleanInterfaces = interfaces.slice();
+		if (mode === 'explicit' && autoDetectLan && detectedLan) {
+			cleanInterfaces = cleanInterfaces.filter((iface) => iface !== detectedLan);
+		} else if (mode === 'exclude' && autoDetectWan && detectedWan) {
+			cleanInterfaces = cleanInterfaces.filter((iface) => iface !== detectedWan);
+		}
+
+		const includedInterfaces = mode === 'explicit' ? cleanInterfaces : [];
+		const excludedInterfaces = mode === 'exclude' ? cleanInterfaces : [];
+
+		const settingsContent = [
+			'INTERFACE_MODE=' + mode,
+			'PROXY_MODE=' + proxyMode,
+			'TUN_STACK=' + tunStack,
+			'AUTO_DETECT_LAN=' + autoDetectLan,
+			'AUTO_DETECT_WAN=' + autoDetectWan,
+			'BLOCK_QUIC=' + blockQuic,
+			'USE_TMPFS_RULES=' + useTmpfsRules,
+			'DETECTED_LAN=' + detectedLan,
+			'DETECTED_WAN=' + detectedWan,
+			'INCLUDED_INTERFACES=' + includedInterfaces.join(','),
+			'EXCLUDED_INTERFACES=' + excludedInterfaces.join(','),
+			'ENABLE_HWID=' + enableHwid,
+			'HWID_USER_AGENT=' + hwidUserAgent,
+			'HWID_DEVICE_OS=' + hwidDeviceOS,
+			''
+		].join('\n');
+
+		await fs.write(SETTINGS_PATH, settingsContent);
+
+		const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
+		if (configContent) {
+			let updatedConfig = transformProxyMode(configContent, proxyMode, tunStack);
+			if (enableHwid) {
+				const hwidValues = await getHwidValues();
+				updatedConfig = addHwidToYaml(
+					updatedConfig,
+					hwidUserAgent,
+					hwidDeviceOS,
+					hwidValues.hwid,
+					hwidValues.verOs,
+					hwidValues.deviceModel
+				);
+			}
+			await fs.write(CONFIG_PATH, updatedConfig);
+		}
+
+		if (!opts.silent) {
+			notify('info', _('Settings saved. Restart Clash service to apply traffic interception changes.'));
+		}
+		return true;
+	} catch (e) {
+		notify('error', _('Failed to save settings: %s').format(e.message));
+		return false;
+	}
+}
+
+function normalizeProxyMode(mode) {
+	const normalized = String(mode || '').toLowerCase().trim();
+	if (normalized === 'tun' || normalized === 'mixed' || normalized === 'tproxy') return normalized;
+	return 'tproxy';
+}
+
+async function switchProxyModeFromHeader(targetMode) {
+	const nextMode = normalizeProxyMode(targetMode);
+	if (nextMode === appState.proxyMode) return;
+
+	const current = await loadOperationalSettings();
+	const interfaces = (current.mode === 'explicit'
+		? (current.includedInterfaces || [])
+		: (current.excludedInterfaces || [])
+	).slice();
+
+	const ok = await saveOperationalSettings(
+		current.mode || 'exclude',
+		nextMode,
+		current.tunStack || 'system',
+		!!current.autoDetectLan,
+		!!current.autoDetectWan,
+		!!current.blockQuic,
+		!!current.useTmpfsRules,
+		interfaces,
+		!!current.enableHwid,
+		current.hwidUserAgent || 'MiClash',
+		current.hwidDeviceOS || 'OpenWrt',
+		{ silent: true }
+	);
+
+	if (!ok) throw new Error(_('Cannot save proxy mode.'));
+
+	await execService('restart');
+
+	appState.settings = await loadOperationalSettings();
+	appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
+	appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
+	appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
+	appState.proxyMode = normalizeProxyMode(appState.settings.proxyMode || nextMode);
+	appState.serviceRunning = await getServiceStatus();
+
+	const freshConfig = await L.resolveDefault(fs.read(CONFIG_PATH), '');
+	appState.configContent = freshConfig;
+	if (editor) {
+		editor.setValue(String(freshConfig || ''), -1);
+		editor.clearSelection();
+	}
+
+	updateHeaderAndControlDom();
+	if (appState.activeCtrlTab === 'settings') renderSettingsPane();
+	notify('info', _('Proxy mode switched to %s. Service restarted.').format(appState.proxyMode));
+}
+
+async function loadClashLogs() {
+	try {
+		const direct = await fs.exec('/sbin/logread', ['-e', 'clash']);
+		if (direct.code === 0) return String(direct.stdout || '').trim();
+	} catch (e) {}
+
+	try {
+		const all = await fs.exec('/sbin/logread', []);
+		if (all.code === 0) {
+			return String(all.stdout || '')
+				.split('\n')
+				.filter((line) => /clash/i.test(line))
+				.join('\n')
+				.trim();
+		}
+	} catch (e) {}
+
+	return '';
+}
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+function colorizeLog(raw) {
+	if (!raw) return '<span class="sbox-log-muted">No logs yet.</span>';
+
+	return String(raw || '').split('\n').map((line) => {
+		const clean = line.replace(ANSI_RE, '');
+		const esc = safeText(clean);
+
+		if (/\b(FATAL|PANIC|ERRO|ERROR)\b/i.test(clean)) return '<span class="sbox-log-error">' + esc + '</span>';
+		if (/\b(WARN|WARNING)\b/i.test(clean)) return '<span class="sbox-log-warn">' + esc + '</span>';
+		if (/\b(INFO)\b/i.test(clean)) return '<span class="sbox-log-info">' + esc + '</span>';
+		return '<span class="sbox-log-muted">' + esc + '</span>';
+	}).join('\n');
+}
+
+function loadScript(src) {
+	return new Promise((resolve, reject) => {
+		if (document.querySelector('script[src="' + src + '"]')) {
+			resolve();
+			return;
+		}
+
+		const script = document.createElement('script');
+		script.src = src;
+		script.onload = resolve;
+		script.onerror = reject;
+		document.head.appendChild(script);
+	});
 }
 
 async function initializeAceEditor(content) {
-    await loadScript(ACE_BASE + 'ace.js');
-    ace.config.set('basePath', ACE_BASE);
-    editor = ace.edit('miclash-editor');
-    applyEditorTheme();
-    editor.session.setMode('ace/mode/yaml');
-    editor.setValue(String(content || ''), -1);
-    editor.clearSelection();
-    editor.setOptions({
-        fontSize: '12px',
-        showPrintMargin: false,
-        wrap: true
-    });
+	await loadScript(ACE_BASE + 'ace.js');
+	await loadScript(ACE_BASE + 'mode-yaml.js');
+
+	ace.config.set('basePath', ACE_BASE);
+	editor = ace.edit('miclash-editor');
+	editor.session.setMode('ace/mode/yaml');
+	editor.setValue(String(content || ''), -1);
+	editor.clearSelection();
+	editor.setOptions({
+		fontSize: '12px',
+		showPrintMargin: false,
+		wrap: true,
+		highlightActiveLine: true
+	});
+	applyEditorTheme();
+}
+
+function destroyRulesetEditors() {
+	if (rulesetMainEditor) {
+		try { rulesetMainEditor.destroy(); } catch (e) {}
+		try { if (rulesetMainEditor.container) rulesetMainEditor.container.textContent = ''; } catch (e) {}
+		rulesetMainEditor = null;
+	}
+
+	if (rulesetWhitelistEditor) {
+		try { rulesetWhitelistEditor.destroy(); } catch (e) {}
+		try { if (rulesetWhitelistEditor.container) rulesetWhitelistEditor.container.textContent = ''; } catch (e) {}
+		rulesetWhitelistEditor = null;
+	}
+}
+
+function normalizeRulesetName(rawName) {
+	const clean = String(rawName || '').trim().replace(/\.txt$/i, '');
+	if (!clean || !/^[A-Za-z0-9_-]+$/.test(clean)) return '';
+	return clean.toLowerCase();
+}
+
+function isEditableRulesetFile(fileName) {
+	return /\.txt$/i.test(fileName) && fileName !== FAKEIP_WHITELIST_FILENAME;
+}
+
+async function detectFakeIpWhitelistMode() {
+	try {
+		const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
+		if (!configContent) return false;
+
+		let inDns = false;
+		let dnsEnabled = false;
+		let fakeIpMode = false;
+		let filterMode = 'blacklist';
+
+		String(configContent).split('\n').forEach((line) => {
+			const trimmed = line.trim();
+
+			if (/^dns:\s*$/.test(trimmed)) {
+				inDns = true;
+				return;
+			}
+
+			if (inDns && trimmed && !/^\s/.test(line)) {
+				inDns = false;
+			}
+			if (!inDns) return;
+
+			if (/^enable:\s*true/i.test(trimmed)) dnsEnabled = true;
+			if (/^enhanced-mode:\s*fake-ip/i.test(trimmed)) fakeIpMode = true;
+
+			const modeMatch = trimmed.match(/^fake-ip-filter-mode:\s*(\S+)/i);
+			if (modeMatch) {
+				filterMode = String(modeMatch[1] || '').toLowerCase().replace(/['"]/g, '');
+			}
+		});
+
+		return dnsEnabled && fakeIpMode && filterMode === 'whitelist';
+	} catch (e) {
+		return false;
+	}
+}
+
+async function readRulesetsData() {
+	try {
+		await fs.exec('/bin/mkdir', ['-p', RULESET_PATH]);
+	} catch (e) {}
+
+	const files = await L.resolveDefault(fs.list(RULESET_PATH), []);
+	const rulesetNames = (files || [])
+		.filter((item) => item && isEditableRulesetFile(item.name || ''))
+		.map((item) => item.name)
+		.sort((a, b) => a.localeCompare(b));
+
+	const contentMap = {};
+	for (let i = 0; i < rulesetNames.length; i++) {
+		const name = rulesetNames[i];
+		contentMap[name] = await L.resolveDefault(fs.read(RULESET_PATH + name), '');
+	}
+
+	const whitelistMode = await detectFakeIpWhitelistMode();
+	let whitelistContent = '';
+
+	if (whitelistMode) {
+		const filePath = RULESET_PATH + FAKEIP_WHITELIST_FILENAME;
+		const existing = await L.resolveDefault(fs.read(filePath), null);
+		if (existing == null) {
+			await fs.write(filePath, '');
+		} else {
+			whitelistContent = existing;
+		}
+	}
+
+	return {
+		rulesetNames: rulesetNames,
+		contentMap: contentMap,
+		whitelistMode: whitelistMode,
+		whitelistContent: whitelistContent
+	};
+}
+
+async function openRulesetsModal() {
+	await loadScript(ACE_BASE + 'ace.js');
+	await loadScript(ACE_BASE + 'mode-text.js');
+
+	const data = await readRulesetsData();
+	let rulesetNames = data.rulesetNames.slice();
+	let currentRuleset = rulesetNames[0] || '';
+	const rulesetCache = Object.assign({}, data.contentMap || {});
+
+	const body = E('div', { 'class': 'sbox-modal-body sbox-rulesets-modal-body' });
+	body.innerHTML = '' +
+		'<div class="sbox-rulesets-layout">' +
+			'<aside class="sbox-rulesets-sidebar">' +
+				'<div class="sbox-rulesets-title">' + safeText(_('Local Rulesets')) + '</div>' +
+				'<div class="sbox-muted">' + safeText(_('Manage local .txt lists for rule-providers.')) + '</div>' +
+				'<div class="sbox-rulesets-create-row">' +
+					'<input id="sbox-ruleset-new-name" class="cbi-input-text sbox-input" type="text" placeholder="' + safeText(_('new-list-name')) + '" />' +
+					'<button id="sbox-ruleset-create" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Create')) + '</button>' +
+				'</div>' +
+				'<div id="sbox-rulesets-list" class="sbox-rulesets-list"></div>' +
+			'</aside>' +
+			'<section class="sbox-rulesets-main">' +
+				'<div class="sbox-rulesets-toolbar">' +
+					'<span id="sbox-ruleset-current" class="sbox-ruleset-current"></span>' +
+					'<div class="sbox-rulesets-toolbar-actions">' +
+						'<button id="sbox-ruleset-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
+						'<button id="sbox-ruleset-delete" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Delete')) + '</button>' +
+					'</div>' +
+				'</div>' +
+				'<div id="sbox-ruleset-empty" class="sbox-rulesets-empty">' + safeText(_('No ruleset selected. Create one to begin.')) + '</div>' +
+				'<div id="sbox-ruleset-editor-wrap" class="sbox-ruleset-editor-wrap">' +
+					'<div id="sbox-ruleset-editor" class="sbox-ruleset-editor"></div>' +
+				'</div>' +
+				'<div class="sbox-rulesets-example">' +
+					'<div class="sbox-muted" style="margin-bottom:6px;">' + safeText(_('Example usage in config.yaml')) + '</div>' +
+					'<pre>rule-providers:\n  your-list:\n    behavior: classical\n    type: file\n    format: text\n    path: ./lst/your-list.txt</pre>' +
+				'</div>' +
+				(data.whitelistMode ? '' +
+					'<div class="sbox-rulesets-whitelist">' +
+						'<div class="sbox-rulesets-whitelist-head">' + safeText(_('IP-CIDR List (fake-ip whitelist mode)')) + '</div>' +
+						'<div class="sbox-muted" style="margin-bottom:8px;">' + safeText(_('One IPv4/CIDR per line. Save applies firewall update without restarting Mihomo.')) + '</div>' +
+						'<div id="sbox-ruleset-whitelist-editor" class="sbox-ruleset-whitelist-editor"></div>' +
+						'<div class="sbox-actions" style="margin-top:8px;">' +
+							'<button id="sbox-ruleset-save-whitelist" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save IP-CIDR List')) + '</button>' +
+						'</div>' +
+					'</div>'
+					: '') +
+			'</section>' +
+		'</div>';
+
+	const listNode = body.querySelector('#sbox-rulesets-list');
+	const currentNode = body.querySelector('#sbox-ruleset-current');
+	const emptyNode = body.querySelector('#sbox-ruleset-empty');
+	const editorWrap = body.querySelector('#sbox-ruleset-editor-wrap');
+	const saveBtn = body.querySelector('#sbox-ruleset-save');
+	const deleteBtn = body.querySelector('#sbox-ruleset-delete');
+	const createBtn = body.querySelector('#sbox-ruleset-create');
+	const createInput = body.querySelector('#sbox-ruleset-new-name');
+	const saveWhitelistBtn = body.querySelector('#sbox-ruleset-save-whitelist');
+
+	function ensureRulesetEditor() {
+		if (rulesetMainEditor) return;
+		rulesetMainEditor = ace.edit('sbox-ruleset-editor');
+		rulesetMainEditor.session.setMode('ace/mode/text');
+		rulesetMainEditor.setOptions({
+			fontSize: '12px',
+			showPrintMargin: false,
+			wrap: true,
+			highlightActiveLine: true
+		});
+		applyThemeToEditor(rulesetMainEditor);
+	}
+
+	function refreshToolbarState() {
+		const hasCurrent = !!currentRuleset;
+		if (currentNode) currentNode.textContent = hasCurrent ? ('./lst/' + currentRuleset) : _('No file selected');
+		if (saveBtn) saveBtn.disabled = !hasCurrent;
+		if (deleteBtn) deleteBtn.disabled = !hasCurrent;
+		if (emptyNode) emptyNode.style.display = hasCurrent ? 'none' : '';
+		if (editorWrap) editorWrap.style.display = hasCurrent ? '' : 'none';
+	}
+
+	function renderRulesetList() {
+		if (!listNode) return;
+		listNode.innerHTML = '';
+
+		if (!rulesetNames.length) {
+			listNode.innerHTML = '<div class="sbox-muted">' + safeText(_('No rulesets yet.')) + '</div>';
+			return;
+		}
+
+		rulesetNames.forEach((name) => {
+			const button = E('button', {
+				'type': 'button',
+				'class': 'sbox-ruleset-list-item' + (name === currentRuleset ? ' active' : '')
+			}, name);
+
+			button.addEventListener('click', async () => {
+				currentRuleset = name;
+				renderRulesetList();
+				refreshToolbarState();
+				ensureRulesetEditor();
+				const content = rulesetCache[currentRuleset] != null
+					? rulesetCache[currentRuleset]
+					: await L.resolveDefault(fs.read(RULESET_PATH + currentRuleset), '');
+				rulesetCache[currentRuleset] = content;
+				rulesetMainEditor.setValue(String(content || ''), -1);
+				rulesetMainEditor.clearSelection();
+			});
+
+			listNode.appendChild(button);
+		});
+	}
+
+	const closeModal = showModal({
+		title: _('Rulesets'),
+		body: body,
+		modalClass: 'sbox-modal-wide',
+		buttons: [
+			{
+				label: _('Close'),
+				className: 'cbi-button cbi-button-neutral'
+			}
+		],
+		onClose: destroyRulesetEditors
+	});
+
+	refreshToolbarState();
+	renderRulesetList();
+
+	if (currentRuleset) {
+		ensureRulesetEditor();
+		rulesetMainEditor.setValue(String(rulesetCache[currentRuleset] || ''), -1);
+		rulesetMainEditor.clearSelection();
+	}
+
+	if (createInput && createBtn) {
+		const createAction = () => withButtons(createBtn, async () => {
+			const normalized = normalizeRulesetName(createInput.value);
+			if (!normalized) {
+				throw new Error(_('Invalid name. Use letters, numbers, "_" or "-".'));
+			}
+
+			const filename = normalized + '.txt';
+			if (filename === FAKEIP_WHITELIST_FILENAME) {
+				throw new Error(_('This name is reserved.'));
+			}
+			if (rulesetNames.includes(filename)) {
+				throw new Error(_('A ruleset with this name already exists.'));
+			}
+
+			await fs.write(RULESET_PATH + filename, '');
+			rulesetNames.push(filename);
+			rulesetNames.sort((a, b) => a.localeCompare(b));
+			rulesetCache[filename] = '';
+			currentRuleset = filename;
+			createInput.value = '';
+
+			renderRulesetList();
+			refreshToolbarState();
+			ensureRulesetEditor();
+			rulesetMainEditor.setValue('', -1);
+			rulesetMainEditor.clearSelection();
+			notify('info', _('Ruleset "%s" created.').format(filename));
+		}).catch((e) => {
+			notify('error', e.message || _('Failed to create ruleset.'));
+		});
+
+		createBtn.addEventListener('click', createAction);
+		createInput.addEventListener('keydown', (ev) => {
+			if (ev.key === 'Enter') {
+				ev.preventDefault();
+				createAction();
+			}
+		});
+	}
+
+	if (saveBtn) {
+		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
+			if (!currentRuleset || !rulesetMainEditor) return;
+			const raw = String(rulesetMainEditor.getValue() || '').replace(/\r\n/g, '\n');
+			const finalContent = raw.trim() ? raw.trimEnd() + '\n' : '';
+			await fs.write(RULESET_PATH + currentRuleset, finalContent);
+			rulesetCache[currentRuleset] = finalContent;
+			notify('info', _('Ruleset "%s" saved.').format(currentRuleset));
+		}).catch((e) => {
+			notify('error', _('Failed to save ruleset: %s').format(e.message));
+		}));
+	}
+
+	if (deleteBtn) {
+		deleteBtn.addEventListener('click', () => {
+			if (!currentRuleset) return;
+			const deletingName = currentRuleset;
+
+			showModal({
+				title: _('Delete Ruleset'),
+				body: _('Are you sure you want to delete "%s"?').format(deletingName),
+				buttons: [
+					{
+						label: _('Delete'),
+						className: 'cbi-button cbi-button-negative',
+						onClick: async function(ctx) {
+							await fs.remove(RULESET_PATH + deletingName);
+							rulesetNames = rulesetNames.filter((name) => name !== deletingName);
+							delete rulesetCache[deletingName];
+							currentRuleset = rulesetNames[0] || '';
+							renderRulesetList();
+							refreshToolbarState();
+							if (rulesetMainEditor) {
+								rulesetMainEditor.setValue(currentRuleset ? String(rulesetCache[currentRuleset] || '') : '', -1);
+								rulesetMainEditor.clearSelection();
+							}
+							notify('info', _('Ruleset "%s" deleted.').format(deletingName));
+							ctx.closeModal();
+						}
+					},
+					{
+						label: _('Cancel'),
+						className: 'cbi-button cbi-button-neutral'
+					}
+				]
+			});
+		});
+	}
+
+	if (data.whitelistMode && saveWhitelistBtn) {
+		rulesetWhitelistEditor = ace.edit('sbox-ruleset-whitelist-editor');
+		rulesetWhitelistEditor.session.setMode('ace/mode/text');
+		rulesetWhitelistEditor.setOptions({
+			fontSize: '12px',
+			showPrintMargin: false,
+			wrap: true,
+			highlightActiveLine: true
+		});
+		rulesetWhitelistEditor.setValue(String(data.whitelistContent || ''), -1);
+		rulesetWhitelistEditor.clearSelection();
+		applyThemeToEditor(rulesetWhitelistEditor);
+
+		saveWhitelistBtn.addEventListener('click', () => withButtons(saveWhitelistBtn, async () => {
+			const raw = String(rulesetWhitelistEditor.getValue() || '').replace(/\r\n/g, '\n');
+			const finalContent = raw.trim() ? raw.trimEnd() + '\n' : '';
+			await fs.write(RULESET_PATH + FAKEIP_WHITELIST_FILENAME, finalContent);
+
+			const update = await fs.exec('/opt/clash/bin/clash-rules', ['update-ip-whitelist']);
+			if (update && update.code === 0) {
+				notify('info', _('IP-CIDR list saved and firewall rules updated.'));
+			} else {
+				const errMsg = String(update?.stderr || update?.stdout || _('unknown error')).trim();
+				notify('warning', _('IP-CIDR list saved, but firewall update failed: %s').format(errMsg));
+			}
+		}).catch((e) => {
+			notify('error', _('Failed to save IP-CIDR list: %s').format(e.message));
+		}));
+	}
+
+	return closeModal;
+}
+
+function modeLabel(mode) {
+	if (mode === 'tun') return 'tun mode';
+	if (mode === 'mixed') return 'mixed mode';
+	return 'tproxy mode';
+}
+
+function buildSettingsSummary() {
+	if (!appState.settings) return '';
+
+	const s = appState.settings;
+	const lines = [];
+
+	if (s.mode === 'explicit') {
+		lines.push(_('Mode: Explicit (proxy only selected interfaces)'));
+		if (s.autoDetectLan && appState.detectedLan) lines.push(_('Auto LAN: %s').format(appState.detectedLan));
+	} else {
+		lines.push(_('Mode: Exclude (proxy all except selected interfaces)'));
+		if (s.autoDetectWan && appState.detectedWan) lines.push(_('Auto WAN: %s').format(appState.detectedWan));
+	}
+
+	const manual = (s.mode === 'explicit' ? s.includedInterfaces : s.excludedInterfaces) || [];
+	if (manual.length) {
+		lines.push(_('Manual interfaces: %s').format(manual.join(', ')));
+	}
+
+	lines.push(_('Proxy mode: %s').format(s.proxyMode || appState.proxyMode || 'tproxy'));
+	lines.push(_('Tun stack: %s').format(s.tunStack || 'system'));
+
+	return lines.map((line) => '<div>' + safeText(line) + '</div>').join('');
+}
+
+function buildInterfaceListHtml() {
+	const s = appState.settings || {};
+	const selectedSet = new Set((appState.selectedInterfaces || []).concat(
+		s.mode === 'explicit' && s.autoDetectLan && appState.detectedLan ? [appState.detectedLan] : [],
+		s.mode === 'exclude' && s.autoDetectWan && appState.detectedWan ? [appState.detectedWan] : []
+	));
+
+	const autoInterface = s.mode === 'explicit'
+		? (s.autoDetectLan ? appState.detectedLan : '')
+		: (s.autoDetectWan ? appState.detectedWan : '');
+
+	const groups = { wan: [], ethernet: [], wifi: [], vpn: [], virtual: [], other: [] };
+	(appState.interfaces || []).forEach((iface) => {
+		const cat = groups[iface.category] ? iface.category : 'other';
+		groups[cat].push(iface);
+	});
+
+	const titles = {
+		wan: _('WAN'),
+		ethernet: _('Ethernet'),
+		wifi: _('Wi-Fi'),
+		vpn: _('VPN / Tunnel'),
+		virtual: _('Virtual'),
+		other: _('Other')
+	};
+
+	const order = ['wan', 'ethernet', 'wifi', 'vpn', 'virtual', 'other'];
+	const chunks = [];
+
+	order.forEach((cat) => {
+		if (!groups[cat].length) return;
+
+		const items = groups[cat].map((iface) => {
+			const isChecked = selectedSet.has(iface.name);
+			const isAuto = autoInterface && iface.name === autoInterface;
+
+			return '' +
+				'<label class="sbox-interface-item' + (isAuto ? ' sbox-interface-auto' : '') + '">' +
+				'<input type="checkbox" class="sbox-interface-check" value="' + safeText(iface.name) + '"' + (isChecked ? ' checked' : '') + ' />' +
+				'<span>' + safeText(iface.name) + (isAuto ? ' <em>(' + safeText(_('auto')) + ')</em>' : '') + '</span>' +
+				'</label>';
+		}).join('');
+
+		chunks.push('' +
+			'<div class="sbox-interface-group">' +
+			'<div class="sbox-interface-group-title">' + safeText(titles[cat]) + '</div>' +
+			'<div class="sbox-interface-grid">' + items + '</div>' +
+			'</div>');
+	});
+
+	if (!chunks.length) {
+		return '<div class="sbox-muted">' + safeText(_('No interfaces detected.')) + '</div>';
+	}
+
+	return chunks.join('');
+}
+
+function buildSettingsPaneHtml() {
+	const s = appState.settings || {
+		mode: 'exclude',
+		proxyMode: appState.proxyMode || 'tproxy',
+		tunStack: 'system',
+		autoDetectLan: true,
+		autoDetectWan: true,
+		blockQuic: true,
+		useTmpfsRules: true,
+		enableHwid: false,
+		hwidUserAgent: 'MiClash',
+		hwidDeviceOS: 'OpenWrt'
+	};
+
+	const currentProxyMode = appState.proxyMode || s.proxyMode || 'tproxy';
+	const showTunStack = currentProxyMode === 'tun' || currentProxyMode === 'mixed';
+
+	return '' +
+		'<div class="sbox-settings-grid">' +
+			'<section class="sbox-settings-block">' +
+				'<h4>' + safeText(_('Traffic Scope')) + '</h4>' +
+				'<label class="sbox-radio-row">' +
+					'<input type="radio" name="sbox-interface-mode" value="exclude"' + (s.mode !== 'explicit' ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Exclude mode: proxy all interfaces except selected ones')) + '</span>' +
+				'</label>' +
+				'<label class="sbox-radio-row">' +
+					'<input type="radio" name="sbox-interface-mode" value="explicit"' + (s.mode === 'explicit' ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Explicit mode: proxy only selected interfaces')) + '</span>' +
+				'</label>' +
+			'</section>' +
+
+			'<section class="sbox-settings-block">' +
+				'<h4>' + safeText(_('Proxy Engine')) + '</h4>' +
+				'<div class="sbox-muted" style="margin-bottom:8px;">' + safeText(_('Current mode is switched from header: %s').format(currentProxyMode)) + '</div>' +
+				'<div id="sbox-tun-stack-row" style="margin-top:8px;' + (showTunStack ? '' : 'display:none;') + '">' +
+					'<label>' + safeText(_('Tun stack')) + '</label>' +
+					'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
+						'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
+						'<option value="gvisor"' + ((s.tunStack || 'system') === 'gvisor' ? ' selected' : '') + '>gvisor</option>' +
+						'<option value="mixed"' + ((s.tunStack || 'system') === 'mixed' ? ' selected' : '') + '>mixed</option>' +
+					'</select>' +
+				'</div>' +
+			'</section>' +
+
+			'<section class="sbox-settings-block">' +
+				'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
+				'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' style="display:none"') + '>' +
+					'<input type="checkbox" id="sbox-auto-lan"' + (s.autoDetectLan ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Auto detect LAN bridge')) + '</span>' +
+				'</label>' +
+				'<label class="sbox-checkbox-row" id="sbox-auto-wan-row"' + (s.mode !== 'explicit' ? '' : ' style="display:none"') + '>' +
+					'<input type="checkbox" id="sbox-auto-wan"' + (s.autoDetectWan ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Auto detect WAN interface')) + '</span>' +
+				'</label>' +
+				'<div class="sbox-muted">' +
+					safeText(_('Detected LAN: %s').format(appState.detectedLan || '-')) + '<br/>' +
+					safeText(_('Detected WAN: %s').format(appState.detectedWan || '-')) +
+				'</div>' +
+			'</section>' +
+
+			'<section class="sbox-settings-block sbox-settings-block-wide">' +
+				'<h4>' + safeText(_('Interfaces')) + '</h4>' +
+				'<div class="sbox-muted" style="margin-bottom:8px;">' +
+					(s.mode === 'explicit'
+						? safeText(_('Choose interfaces that should go through proxy.'))
+						: safeText(_('Choose interfaces that should bypass proxy.'))
+					) +
+				'</div>' +
+				buildInterfaceListHtml() +
+			'</section>' +
+
+			'<section class="sbox-settings-block sbox-settings-block-wide">' +
+				'<h4>' + safeText(_('Additional')) + '</h4>' +
+				'<label class="sbox-checkbox-row">' +
+					'<input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Block QUIC (UDP/443)')) + '</span>' +
+				'</label>' +
+				'<label class="sbox-checkbox-row">' +
+					'<input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Store rules/providers on tmpfs')) + '</span>' +
+				'</label>' +
+				'<label class="sbox-checkbox-row">' +
+					'<input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Inject HWID headers into proxy-providers')) + '</span>' +
+				'</label>' +
+				'<div class="sbox-form-grid">' +
+					'<div>' +
+						'<label>' + safeText(_('User-Agent')) + '</label>' +
+						'<input id="sbox-hwid-user-agent" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidUserAgent || 'MiClash') + '" />' +
+					'</div>' +
+					'<div>' +
+						'<label>' + safeText(_('Device OS')) + '</label>' +
+						'<input id="sbox-hwid-device-os" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidDeviceOS || 'OpenWrt') + '" />' +
+					'</div>' +
+				'</div>' +
+			'</section>' +
+		'</div>' +
+
+		'<div class="sbox-actions" style="margin-top:10px;">' +
+			'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save Settings')) + '</button>' +
+			'<button id="sbox-settings-clear" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Clear Interface Selection')) + '</button>' +
+			'<button id="sbox-settings-restart" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Restart Service')) + '</button>' +
+		'</div>' +
+
+		'<div id="sbox-settings-status" class="sbox-settings-status">' +
+			buildSettingsSummary() +
+		'</div>';
+}
+
+function buildPageHtml() {
+	const versionApp = safeText(appState.versions.app || 'unknown');
+	const versionKernel = safeText(appState.kernelStatus.installed
+		? (appState.kernelStatus.version || appState.versions.clash || 'installed')
+		: _('not installed'));
+
+	return '' +
+		'<div class="sbox-header">' +
+			'miclash <strong id="sbox-app-version">' + versionApp + '</strong>' +
+			'<span class="sbox-header-dot">|</span>' +
+			'mihomo <strong id="sbox-kernel-version">' + safeText(appState.versions.clash || 'unknown') + '</strong>' +
+			'<span class="sbox-header-dot">|</span>' +
+			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
+			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select">' +
+				'<option value="tproxy"' + (appState.proxyMode === 'tproxy' ? ' selected' : '') + '>tproxy</option>' +
+				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
+				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
+			'</select>' +
+			'<button id="sbox-theme-toggle" type="button" class="cbi-button cbi-button-neutral sbox-header-button sbox-theme-toggle" title="' + safeText(_('Switch theme')) + '">o</button>' +
+			'<button id="sbox-kernel-badge" type="button" class="cbi-button cbi-button-neutral sbox-header-button">' + safeText(_('Kernel: %s').format(versionKernel)) + '</button>' +
+		'</div>' +
+
+		'<div class="sbox-card">' +
+			'<div class="sbox-card-tabs">' +
+				'<button type="button" class="sbox-tab sbox-tab-active" data-ctrl-tab="control">' + safeText(_('Control')) + '</button>' +
+				'<button type="button" class="sbox-tab" data-ctrl-tab="settings">' + safeText(_('Settings')) + '</button>' +
+			'</div>' +
+
+			'<div id="sbox-pane-control">' +
+				'<div class="sbox-row">' +
+					'<span id="sbox-status" class="sbox-status sbox-status-off">' +
+						'<span class="sbox-dot sbox-dot-off"></span>' +
+						'<span id="sbox-status-label">' + safeText(_('Service stopped')) + '</span>' +
+					'</span>' +
+					'<button id="sbox-start-stop" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Start')) + '</button>' +
+					'<button id="sbox-restart" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Restart')) + '</button>' +
+					'<button id="sbox-dashboard" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Dashboard')) + '</button>' +
+				'</div>' +
+				'<div id="sbox-control-meta" class="sbox-muted" style="margin-top:8px;">' + safeText(_('Use Start/Stop for service lifecycle, and Dashboard for external UI.')) + '</div>' +
+			'</div>' +
+
+			'<div id="sbox-pane-settings" style="display:none"></div>' +
+		'</div>' +
+
+		'<div class="sbox-card">' +
+			'<div class="sbox-card-tabs">' +
+				'<button type="button" class="sbox-tab sbox-tab-active" data-cfg-tab="config">' + safeText(_('Config')) + '</button>' +
+				'<button type="button" class="sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
+			'</div>' +
+
+			'<div id="sbox-pane-config">' +
+				'<div class="sbox-config-toolbar">' +
+					'<select class="cbi-input-select sbox-select" disabled><option>' + safeText(_('Main Config')) + '</option></select>' +
+					'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
+					'<button id="sbox-save-url" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save URL')) + '</button>' +
+					'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Update')) + '</button>' +
+				'</div>' +
+				'<div id="miclash-editor" class="sbox-editor"></div>' +
+				'<div class="sbox-actions">' +
+					'<button id="sbox-validate" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Validate YAML')) + '</button>' +
+					'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
+					'<button id="sbox-save-apply" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save & Apply')) + '</button>' +
+					'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear Editor')) + '</button>' +
+				'</div>' +
+				'<div class="sbox-config-footer">' +
+					'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Rulesets')) + '</button>' +
+				'</div>' +
+			'</div>' +
+
+			'<div id="sbox-pane-logs" style="display:none">' +
+				'<div class="sbox-log-toolbar">' +
+					'<button id="sbox-log-refresh" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Refresh')) + '</button>' +
+					'<span id="sbox-log-updated" class="sbox-log-updated"></span>' +
+				'</div>' +
+				'<pre id="sbox-log-content" class="sbox-log-content"></pre>' +
+			'</div>' +
+		'</div>';
+}
+
+function updateHeaderAndControlDom() {
+	if (!pageRoot) return;
+
+	const status = pageRoot.querySelector('#sbox-status');
+	const statusLabel = pageRoot.querySelector('#sbox-status-label');
+	const dot = pageRoot.querySelector('#sbox-status .sbox-dot');
+	const startStop = pageRoot.querySelector('#sbox-start-stop');
+	const appVersion = pageRoot.querySelector('#sbox-app-version');
+	const kernelVersion = pageRoot.querySelector('#sbox-kernel-version');
+	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
+	const kernelBadge = pageRoot.querySelector('#sbox-kernel-badge');
+
+	if (status && statusLabel && dot) {
+		status.classList.toggle('sbox-status-on', appState.serviceRunning);
+		status.classList.toggle('sbox-status-off', !appState.serviceRunning);
+		dot.classList.toggle('sbox-dot-on', appState.serviceRunning);
+		dot.classList.toggle('sbox-dot-off', !appState.serviceRunning);
+		statusLabel.textContent = appState.serviceRunning ? _('Service running') : _('Service stopped');
+	}
+
+	if (startStop) {
+		startStop.textContent = appState.serviceRunning ? _('Stop') : _('Start');
+		startStop.classList.toggle('cbi-button-negative', appState.serviceRunning);
+		startStop.classList.toggle('cbi-button-apply', !appState.serviceRunning);
+	}
+
+	if (appVersion) appVersion.textContent = appState.versions.app || 'unknown';
+	if (kernelVersion) kernelVersion.textContent = appState.versions.clash || 'unknown';
+	if (modeSelect) modeSelect.value = normalizeProxyMode(appState.proxyMode);
+
+	if (kernelBadge) {
+		const kernelText = appState.kernelStatus.installed
+			? (appState.kernelStatus.version || appState.versions.clash || 'installed')
+			: _('not installed');
+		kernelBadge.textContent = _('Kernel: %s').format(kernelText);
+	}
+}
+
+async function refreshHeaderAndControl() {
+	const [running, versions, kernelStatus, proxyMode] = await Promise.all([
+		getServiceStatus(),
+		getVersions(),
+		getMihomoStatus(),
+		detectCurrentProxyMode()
+	]);
+
+	appState.serviceRunning = !!running;
+	appState.versions = versions;
+	appState.kernelStatus = kernelStatus;
+	appState.proxyMode = proxyMode || 'tproxy';
+
+	updateHeaderAndControlDom();
+}
+
+function renderSettingsPane() {
+	if (!pageRoot) return;
+	const pane = pageRoot.querySelector('#sbox-pane-settings');
+	if (!pane) return;
+
+	pane.innerHTML = buildSettingsPaneHtml();
+	bindSettingsPaneEvents();
+}
+
+async function collectSettingsFormState() {
+	const pane = pageRoot.querySelector('#sbox-pane-settings');
+	if (!pane) return null;
+
+	const mode = pane.querySelector('input[name="sbox-interface-mode"]:checked')?.value || 'exclude';
+	const proxyMode = normalizeProxyMode(appState.proxyMode || 'tproxy');
+	const tunStack = pane.querySelector('#sbox-tun-stack')?.value || 'system';
+	const autoDetectLan = !!pane.querySelector('#sbox-auto-lan')?.checked;
+	const autoDetectWan = !!pane.querySelector('#sbox-auto-wan')?.checked;
+	const blockQuic = !!pane.querySelector('#sbox-block-quic')?.checked;
+	const useTmpfsRules = !!pane.querySelector('#sbox-tmpfs')?.checked;
+	const enableHwid = !!pane.querySelector('#sbox-enable-hwid')?.checked;
+	const hwidUserAgent = String(pane.querySelector('#sbox-hwid-user-agent')?.value || 'MiClash').trim() || 'MiClash';
+	const hwidDeviceOS = String(pane.querySelector('#sbox-hwid-device-os')?.value || 'OpenWrt').trim() || 'OpenWrt';
+
+	const selected = [];
+	pane.querySelectorAll('.sbox-interface-check:checked').forEach((cb) => {
+		selected.push(cb.value);
+	});
+
+	return {
+		mode,
+		proxyMode,
+		tunStack,
+		autoDetectLan,
+		autoDetectWan,
+		blockQuic,
+		useTmpfsRules,
+		selected,
+		enableHwid,
+		hwidUserAgent,
+		hwidDeviceOS
+	};
+}
+
+function bindSettingsPaneEvents() {
+	const pane = pageRoot.querySelector('#sbox-pane-settings');
+	if (!pane) return;
+
+	pane.querySelectorAll('input[name="sbox-interface-mode"]').forEach((radio) => {
+		radio.addEventListener('change', async function() {
+			appState.settings.mode = this.value;
+			appState.selectedInterfaces = await loadInterfacesByMode(this.value);
+			renderSettingsPane();
+		});
+	});
+
+	const clearBtn = pane.querySelector('#sbox-settings-clear');
+	if (clearBtn) {
+		clearBtn.addEventListener('click', () => {
+			pane.querySelectorAll('.sbox-interface-check').forEach((cb) => {
+				cb.checked = false;
+			});
+		});
+	}
+
+	const restartBtn = pane.querySelector('#sbox-settings-restart');
+	if (restartBtn) {
+		restartBtn.addEventListener('click', () => withButtons(restartBtn, async () => {
+			await execService('restart');
+			notify('info', _('Clash service restarted successfully.'));
+			await refreshHeaderAndControl();
+		}).catch((e) => {
+			notify('error', _('Failed to restart Clash service: %s').format(e.message));
+		}));
+	}
+
+	const saveBtn = pane.querySelector('#sbox-settings-save');
+	if (saveBtn) {
+		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
+			const formState = await collectSettingsFormState();
+			if (!formState) return;
+
+			const ok = await saveOperationalSettings(
+				formState.mode,
+				formState.proxyMode,
+				formState.tunStack,
+				formState.autoDetectLan,
+				formState.autoDetectWan,
+				formState.blockQuic,
+				formState.useTmpfsRules,
+				formState.selected,
+				formState.enableHwid,
+				formState.hwidUserAgent,
+				formState.hwidDeviceOS
+			);
+
+			if (!ok) return;
+
+			appState.settings = await loadOperationalSettings();
+			appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode);
+			appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
+			appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
+			appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
+
+			const freshConfig = await L.resolveDefault(fs.read(CONFIG_PATH), '');
+			appState.configContent = freshConfig;
+			if (editor) {
+				editor.setValue(String(freshConfig || ''), -1);
+				editor.clearSelection();
+			}
+
+			renderSettingsPane();
+			updateHeaderAndControlDom();
+		}).catch((e) => {
+			notify('error', _('Failed to save settings: %s').format(e.message));
+		}));
+	}
+}
+
+async function refreshLogs() {
+	const raw = await loadClashLogs();
+	appState.logsRaw = raw;
+	appState.logsUpdatedAt = Date.now();
+
+	const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
+	const updated = pageRoot && pageRoot.querySelector('#sbox-log-updated');
+
+	if (content) content.innerHTML = colorizeLog(raw);
+	if (updated) {
+		const text = appState.logsUpdatedAt
+			? new Date(appState.logsUpdatedAt).toLocaleString()
+			: '-';
+		updated.textContent = _('Updated: %s').format(text);
+	}
+}
+
+function startLogPolling() {
+	if (logPollTimer) return;
+	logPollTimer = setInterval(() => {
+		if (appState.activeCfgTab === 'logs') refreshLogs().catch(() => {});
+	}, LOG_POLL_MS);
+}
+
+function stopLogPolling() {
+	if (logPollTimer) {
+		clearInterval(logPollTimer);
+		logPollTimer = null;
+	}
+}
+
+function startControlPolling() {
+	if (controlPollTimer) clearInterval(controlPollTimer);
+
+	controlPollTimer = setInterval(async () => {
+		try {
+			appState.serviceRunning = await getServiceStatus();
+			updateHeaderAndControlDom();
+		} catch (e) {}
+	}, STATUS_POLL_MS);
+}
+
+function bindControlAndHeaderEvents() {
+	const kernelBtn = pageRoot.querySelector('#sbox-kernel-badge');
+	if (kernelBtn) {
+		kernelBtn.addEventListener('click', () => openKernelModal());
+	}
+
+	const themeBtn = pageRoot.querySelector('#sbox-theme-toggle');
+	if (themeBtn) {
+		themeBtn.addEventListener('click', () => {
+			const nextTheme = appState.uiTheme === 'dark' ? 'light' : 'dark';
+			applyUiTheme(nextTheme);
+			saveThemePreference(nextTheme).catch((e) => {
+				notify('error', _('Failed to save theme preference: %s').format(e.message));
+			});
+		});
+	}
+
+	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
+	if (modeSelect) {
+		modeSelect.addEventListener('change', async function() {
+			const select = this;
+			const previousMode = normalizeProxyMode(appState.proxyMode);
+			const nextMode = normalizeProxyMode(select.value);
+			if (nextMode === previousMode) return;
+
+			select.disabled = true;
+			try {
+				await switchProxyModeFromHeader(nextMode);
+			} catch (e) {
+				appState.proxyMode = previousMode;
+				updateHeaderAndControlDom();
+				notify('error', _('Failed to switch proxy mode: %s').format(e.message));
+			} finally {
+				if (select && select.isConnected) select.disabled = false;
+			}
+		});
+	}
+
+	const startStop = pageRoot.querySelector('#sbox-start-stop');
+	if (startStop) {
+		startStop.addEventListener('click', () => withButtons(startStop, async () => {
+			const running = await getServiceStatus();
+			if (running) {
+				await execService('stop');
+				await execService('disable');
+			} else {
+				await execService('enable');
+				await execService('start');
+			}
+			appState.serviceRunning = await getServiceStatus();
+			updateHeaderAndControlDom();
+		}).catch((e) => {
+			notify('error', _('Unable to toggle service: %s').format(e.message));
+		}));
+	}
+
+	const restartBtn = pageRoot.querySelector('#sbox-restart');
+	if (restartBtn) {
+		restartBtn.addEventListener('click', () => withButtons(restartBtn, async () => {
+			await execService('restart');
+			notify('info', _('Clash service restarted successfully.'));
+			await refreshHeaderAndControl();
+		}).catch((e) => {
+			notify('error', _('Failed to restart Clash service: %s').format(e.message));
+		}));
+	}
+
+	const dashboardBtn = pageRoot.querySelector('#sbox-dashboard');
+	if (dashboardBtn) {
+		dashboardBtn.addEventListener('click', () => openDashboard().catch((e) => {
+			notify('error', _('Failed to open dashboard: %s').format(e.message));
+		}));
+	}
+}
+
+function bindConfigEvents() {
+	const subInput = pageRoot.querySelector('#sbox-subscription-url');
+
+	const saveUrlBtn = pageRoot.querySelector('#sbox-save-url');
+	if (saveUrlBtn) {
+		saveUrlBtn.addEventListener('click', () => withButtons(saveUrlBtn, async () => {
+			const url = String(subInput?.value || '').trim();
+			if (!url) throw new Error(_('Subscription URL is empty.'));
+			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
+
+			await saveSubscriptionUrl(url);
+			appState.subscriptionUrl = url;
+			notify('info', _('Subscription URL saved.'));
+		}).catch((e) => notify('error', e.message)));
+	}
+
+	const updateBtn = pageRoot.querySelector('#sbox-update-sub');
+	if (updateBtn) {
+		updateBtn.addEventListener('click', () => withButtons(updateBtn, async () => {
+			const url = String(subInput?.value || '').trim();
+			if (!url) throw new Error(_('Subscription URL is empty.'));
+			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
+
+			await saveSubscriptionUrl(url);
+			appState.subscriptionUrl = url;
+
+			const downloadedInfo = await fetchSubscriptionAsYaml(url);
+			const downloaded = String(downloadedInfo.content || '').trimEnd() + '\n';
+
+			const tested = await testConfigContent(downloaded, true);
+			if (!tested.ok) throw new Error(_('YAML validation failed: %s').format(tested.message));
+
+			appState.configContent = downloaded;
+			if (editor) {
+				editor.setValue(downloaded, -1);
+				editor.clearSelection();
+			}
+
+			await execService('reload');
+
+			if (downloadedInfo.mode === 'remnawave-client-path') {
+				notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
+			} else {
+				notify('info', _('Subscription downloaded and applied.'));
+			}
+
+			appState.serviceRunning = await getServiceStatus();
+			updateHeaderAndControlDom();
+		}).catch((e) => {
+			notify('error', _('Failed to apply subscription: %s').format(e.message));
+		}).finally(async () => {
+			try { await fs.remove(TMP_SUBSCRIPTION_PATH); } catch (removeErr) {}
+		}));
+	}
+
+	const validateBtn = pageRoot.querySelector('#sbox-validate');
+	if (validateBtn) {
+		validateBtn.addEventListener('click', () => withButtons(validateBtn, async () => {
+			if (!editor) return;
+			const tested = await testConfigContent(editor.getValue(), false);
+			if (!tested.ok) throw new Error(tested.message);
+			notify('info', _('YAML validation passed.'));
+		}).catch((e) => {
+			notify('error', _('YAML validation failed: %s').format(e.message));
+		}));
+	}
+
+	const saveBtn = pageRoot.querySelector('#sbox-save');
+	if (saveBtn) {
+		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
+			if (!editor) return;
+			const tested = await testConfigContent(editor.getValue(), true);
+			if (!tested.ok) throw new Error(tested.message);
+			appState.configContent = editor.getValue();
+			notify('info', _('Configuration saved.'));
+		}).catch((e) => {
+			notify('error', _('Failed to save configuration: %s').format(e.message));
+		}));
+	}
+
+	const saveApplyBtn = pageRoot.querySelector('#sbox-save-apply');
+	if (saveApplyBtn) {
+		saveApplyBtn.addEventListener('click', () => withButtons(saveApplyBtn, async () => {
+			if (!editor) return;
+			const tested = await testConfigContent(editor.getValue(), true);
+			if (!tested.ok) throw new Error(tested.message);
+
+			appState.configContent = editor.getValue();
+			await execService('reload');
+			appState.serviceRunning = await getServiceStatus();
+			updateHeaderAndControlDom();
+			notify('info', _('Configuration applied and service reloaded.'));
+		}).catch((e) => {
+			notify('error', _('Failed to apply configuration: %s').format(e.message));
+		}));
+	}
+
+	const clearBtn = pageRoot.querySelector('#sbox-clear-editor');
+	if (clearBtn) {
+		clearBtn.addEventListener('click', () => {
+			showModal({
+				title: _('Clear editor?'),
+				body: _('This will clear only editor content. File is not modified until you click Save.'),
+				buttons: [
+					{
+						label: _('Clear'),
+						className: 'cbi-button cbi-button-negative',
+						onClick: async function(ctx) {
+							if (editor) {
+								editor.setValue('', -1);
+								editor.clearSelection();
+							}
+							ctx.closeModal();
+						}
+					},
+					{
+						label: _('Cancel'),
+						className: 'cbi-button cbi-button-neutral'
+					}
+				]
+			});
+		});
+	}
+
+	const rulesetsBtn = pageRoot.querySelector('#sbox-open-rulesets');
+	if (rulesetsBtn) {
+		rulesetsBtn.addEventListener('click', () => withButtons(rulesetsBtn, async () => {
+			await openRulesetsModal();
+		}).catch((e) => {
+			notify('error', _('Failed to open rulesets: %s').format(e.message));
+		}));
+	}
+
+	const logRefreshBtn = pageRoot.querySelector('#sbox-log-refresh');
+	if (logRefreshBtn) {
+		logRefreshBtn.addEventListener('click', () => withButtons(logRefreshBtn, async () => {
+			await refreshLogs();
+		}).catch((e) => {
+			notify('error', _('Failed to refresh logs: %s').format(e.message));
+		}));
+	}
+}
+
+function bindTabEvents() {
+	const ctrlTabs = Array.from(pageRoot.querySelectorAll('[data-ctrl-tab]'));
+	const cfgTabs = Array.from(pageRoot.querySelectorAll('[data-cfg-tab]'));
+
+	const paneControl = pageRoot.querySelector('#sbox-pane-control');
+	const paneSettings = pageRoot.querySelector('#sbox-pane-settings');
+	const paneConfig = pageRoot.querySelector('#sbox-pane-config');
+	const paneLogs = pageRoot.querySelector('#sbox-pane-logs');
+
+	const setCtrlTab = (name) => {
+		appState.activeCtrlTab = name;
+		ctrlTabs.forEach((tab) => tab.classList.toggle('sbox-tab-active', tab.dataset.ctrlTab === name));
+		paneControl.style.display = name === 'control' ? '' : 'none';
+		paneSettings.style.display = name === 'settings' ? '' : 'none';
+		if (name === 'settings') renderSettingsPane();
+	};
+
+	const setCfgTab = (name) => {
+		appState.activeCfgTab = name;
+		cfgTabs.forEach((tab) => tab.classList.toggle('sbox-tab-active', tab.dataset.cfgTab === name));
+		paneConfig.style.display = name === 'config' ? '' : 'none';
+		paneLogs.style.display = name === 'logs' ? '' : 'none';
+
+		if (name === 'logs') {
+			refreshLogs().catch(() => {});
+			startLogPolling();
+		} else {
+			stopLogPolling();
+		}
+	};
+
+	ctrlTabs.forEach((tab) => {
+		tab.addEventListener('click', () => setCtrlTab(tab.dataset.ctrlTab));
+	});
+
+	cfgTabs.forEach((tab) => {
+		tab.addEventListener('click', () => setCfgTab(tab.dataset.cfgTab));
+	});
+
+	setCtrlTab(appState.activeCtrlTab || 'control');
+	setCfgTab(appState.activeCfgTab || 'config');
 }
 
 const PAGE_CSS = `
 #tabmenu, .cbi-tabmenu { display: none !important; }
-.miclash-page {
-    width: 100%;
-    box-sizing: border-box;
-    --miclash-bg: #f4f7fb;
-    --miclash-card-bg: #ffffff;
-    --miclash-border: #d7e0ea;
-    --miclash-text: #17202a;
-    --miclash-muted: #5f6f82;
-    --miclash-pill-bg: #f2f5ff;
-    --miclash-pill-border: #cfd8ff;
-    --miclash-pill-text: #2c3c56;
+.sbox-page {
+	--sbox-bg: linear-gradient(180deg, #111214 0%, #0f1012 100%);
+	--sbox-card: #17191d;
+	--sbox-border: #2a2d33;
+	--sbox-text: #e3e6eb;
+	--sbox-muted: #8f97a3;
+	--sbox-accent: #5c7088;
+	--sbox-success: #2ecc71;
+	--sbox-danger: #f85149;
+	--sbox-warn: #d29922;
+	--sbox-log-bg: #0b0c0f;
+	--sbox-panel-bg: rgba(255, 255, 255, 0.02);
+	--sbox-modal-bg: #171a1f;
+	color: var(--sbox-text);
 }
-.miclash-page.miclash-theme-dark {
-    --miclash-bg: #101722;
-    --miclash-card-bg: #141e2b;
-    --miclash-border: #273447;
-    --miclash-text: #e7eef9;
-    --miclash-muted: #94a6bf;
-    --miclash-pill-bg: #1a2738;
-    --miclash-pill-border: #344a67;
-    --miclash-pill-text: #d4e0f2;
+.sbox-page.sbox-theme-light {
+	--sbox-bg: linear-gradient(180deg, #f5f7fb 0%, #eef2f8 100%);
+	--sbox-card: #ffffff;
+	--sbox-border: #d8deea;
+	--sbox-text: #1d2634;
+	--sbox-muted: #5f6f86;
+	--sbox-accent: #2a78ff;
+	--sbox-success: #1f9c57;
+	--sbox-danger: #cc3b34;
+	--sbox-warn: #b8801d;
+	--sbox-log-bg: #f7f9fc;
+	--sbox-panel-bg: #f8fbff;
+	--sbox-modal-bg: #ffffff;
 }
-.miclash-page.miclash-theme-light {
-    --miclash-bg: #f4f7fb;
-    --miclash-card-bg: #ffffff;
-    --miclash-border: #d7e0ea;
-    --miclash-text: #17202a;
-    --miclash-muted: #5f6f82;
-    --miclash-pill-bg: #f2f5ff;
-    --miclash-pill-border: #cfd8ff;
-    --miclash-pill-text: #2c3c56;
+.sbox-page.sbox-theme-light .sbox-log-muted { color: #4f627a; }
+.sbox-page.sbox-theme-light .sbox-log-info { color: #1f9c57; }
+.sbox-page.sbox-theme-light .sbox-log-warn { color: #b8801d; }
+.sbox-page.sbox-theme-light .sbox-log-error { color: #cc3b34; }
+.sbox-page .main {
+	background: var(--sbox-bg);
 }
-.miclash-card {
-    background: var(--miclash-card-bg);
-    border: 1px solid var(--miclash-border);
-    border-radius: 10px;
-    padding: 16px;
-    margin-bottom: 12px;
-    box-sizing: border-box;
-    color: var(--miclash-text);
+.sbox-header {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 12px;
+	font-size: 13px;
+	color: var(--sbox-muted);
 }
-.miclash-topbar {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
+.sbox-header strong {
+	color: var(--sbox-text);
+	font-weight: 700;
 }
-.miclash-topbar-right {
-    justify-self: end;
+.sbox-header-dot {
+	opacity: 0.55;
 }
-.miclash-version-center {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 8px;
+.sbox-header-button {
+	font-size: 11px;
+	padding: 2px 8px;
+	min-height: 24px;
 }
-.miclash-pill {
-    display: inline-flex;
-    align-items: center;
-    border: 1px solid var(--miclash-pill-border);
-    background: var(--miclash-pill-bg);
-    color: var(--miclash-pill-text);
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 12px;
-    font-weight: 600;
-    line-height: 1.3;
+.sbox-theme-toggle {
+	width: 24px;
+	min-width: 24px;
+	padding: 0;
+	font-size: 12px;
+	line-height: 1;
 }
-.miclash-pill-btn {
-    cursor: pointer;
-    transition: border-color 0.15s ease, transform 0.15s ease;
+.sbox-card {
+	background: var(--sbox-card);
+	border: 1px solid var(--sbox-border);
+	border-radius: 10px;
+	padding: 14px;
+	margin-bottom: 10px;
 }
-.miclash-pill-btn:hover {
-    border-color: #4f8cff;
-    transform: translateY(-1px);
+.sbox-card-tabs {
+	display: flex;
+	gap: 2px;
+	border-bottom: 1px solid var(--sbox-border);
+	margin-bottom: 12px;
 }
-.miclash-pill-warn {
-    border-color: #f59e0b;
-    color: #b45309;
-    background: rgba(245, 158, 11, 0.12);
+.sbox-tab {
+	appearance: none;
+	border: none;
+	background: transparent;
+	color: var(--sbox-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	font-size: 11px;
+	font-weight: 700;
+	padding: 6px 10px;
+	border-bottom: 2px solid transparent;
+	cursor: pointer;
 }
-.miclash-theme-btn {
-    min-width: 115px;
+.sbox-tab:hover { color: var(--sbox-text); }
+.sbox-tab-active {
+	color: var(--sbox-text);
+	border-bottom-color: var(--sbox-accent);
 }
-.miclash-title {
-    margin: 0 0 8px;
-    font-size: 15px;
-    font-weight: 700;
+.sbox-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
 }
-.miclash-meta {
-    font-size: 12px;
-    color: var(--miclash-muted);
+.sbox-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	border: 1px solid transparent;
+	font-size: 12px;
+	font-weight: 700;
 }
-.miclash-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 10px;
+.sbox-status-on {
+	background: rgba(46, 204, 113, 0.12);
+	border-color: rgba(46, 204, 113, 0.4);
+	color: #63d996;
 }
-.miclash-status {
-    display: inline-flex;
-    align-items: center;
-    font-size: 12px;
-    font-weight: 600;
-    border-radius: 999px;
-    padding: 4px 10px;
-    border: 1px solid transparent;
+.sbox-status-off {
+	background: rgba(248, 81, 73, 0.12);
+	border-color: rgba(248, 81, 73, 0.35);
+	color: #ff8f89;
 }
-.miclash-status-on {
-    background: rgba(46, 204, 113, 0.15);
-    color: #1f8b4c;
-    border-color: rgba(46, 204, 113, 0.45);
+.sbox-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
 }
-.miclash-status-off {
-    background: rgba(231, 76, 60, 0.15);
-    color: #b83b30;
-    border-color: rgba(231, 76, 60, 0.45);
+.sbox-dot-on {
+	background: var(--sbox-success);
+	box-shadow: 0 0 8px rgba(46, 204, 113, 0.5);
 }
-.miclash-editor {
-    width: 100%;
-    height: 620px;
-    border: 1px solid var(--miclash-border);
-    border-radius: 8px;
-    margin-top: 10px;
+.sbox-dot-off {
+	background: var(--sbox-danger);
 }
-.miclash-grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 12px;
+.sbox-proxy-mode-inline {
+	font-size: 11px;
+	color: var(--sbox-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
 }
-@media (min-width: 960px) {
-    .miclash-grid {
-        grid-template-columns: 1fr 1fr;
-    }
+.sbox-mode-select {
+	min-width: 96px;
+	height: 24px;
+	padding: 0 6px;
+	font-size: 11px;
+	background: var(--sbox-card);
+	color: var(--sbox-text);
+	border: 1px solid var(--sbox-border);
+	border-radius: 6px;
 }
-.miclash-url {
-    width: 100%;
-    box-sizing: border-box;
+.sbox-mode-select:disabled {
+	opacity: 0.75;
 }
-.miclash-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+.sbox-config-toolbar {
+	display: grid;
+	grid-template-columns: minmax(140px, 180px) minmax(220px, 1fr) auto auto;
+	gap: 8px;
+	align-items: center;
+	margin-bottom: 10px;
 }
-.miclash-modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(4, 10, 18, 0.7);
-    z-index: 10000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+.sbox-select,
+.sbox-input {
+	width: 100%;
+	box-sizing: border-box;
 }
-.miclash-modal {
-    width: min(92vw, 420px);
-    border-radius: 10px;
-    border: 1px solid var(--miclash-border);
-    background: var(--miclash-card-bg);
-    color: var(--miclash-text);
-    padding: 16px;
-    box-sizing: border-box;
+.sbox-editor {
+	width: 100%;
+	height: 560px;
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
 }
-.miclash-modal-title {
-    font-size: 14px;
-    font-weight: 700;
-    margin-bottom: 8px;
+.sbox-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 10px;
 }
-.miclash-modal-body {
-    font-size: 12px;
-    color: var(--miclash-muted);
-    line-height: 1.5;
+.sbox-config-footer {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 8px;
 }
-.miclash-kernel-info {
-    display: grid;
-    gap: 6px;
+.sbox-muted {
+	color: var(--sbox-muted);
+	font-size: 12px;
+	line-height: 1.5;
 }
-.miclash-modal-actions {
-    margin-top: 14px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+.sbox-log-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+.sbox-log-updated {
+	margin-left: auto;
+	color: var(--sbox-muted);
+	font-size: 12px;
+}
+.sbox-log-content {
+	width: 100%;
+	height: 520px;
+	overflow: auto;
+	background: var(--sbox-log-bg);
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+	padding: 10px;
+	box-sizing: border-box;
+	margin: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	font-size: 11.5px;
+	line-height: 1.45;
+	white-space: pre;
+}
+.sbox-log-info { color: #4dd58a; }
+.sbox-log-warn { color: #e6b450; }
+.sbox-log-error { color: #ff7b72; }
+.sbox-log-muted { color: #93a4be; }
+.sbox-settings-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(220px, 1fr));
+	gap: 10px;
+}
+.sbox-settings-block {
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+	padding: 10px;
+	background: var(--sbox-panel-bg);
+}
+.sbox-settings-block h4 {
+	margin: 0 0 8px;
+	font-size: 13px;
+	color: var(--sbox-text);
+}
+.sbox-settings-block-wide {
+	grid-column: 1 / -1;
+}
+.sbox-radio-row,
+.sbox-checkbox-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 6px 0;
+	font-size: 12px;
+}
+.sbox-form-grid {
+	margin-top: 8px;
+	display: grid;
+	grid-template-columns: repeat(2, minmax(180px, 1fr));
+	gap: 8px;
+}
+.sbox-form-grid label {
+	display: block;
+	margin-bottom: 4px;
+	font-size: 12px;
+	color: var(--sbox-muted);
+}
+.sbox-interface-group {
+	margin-bottom: 8px;
+}
+.sbox-interface-group-title {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--sbox-muted);
+	margin-bottom: 4px;
+}
+.sbox-interface-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: 6px;
+}
+.sbox-interface-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	border: 1px solid var(--sbox-border);
+	border-radius: 6px;
+	padding: 5px 8px;
+	background: rgba(255, 255, 255, 0.02);
+}
+.sbox-interface-item em {
+	color: #63d996;
+	font-style: normal;
+	font-size: 11px;
+}
+.sbox-interface-auto {
+	border-color: rgba(46, 204, 113, 0.55);
+	background: rgba(46, 204, 113, 0.08);
+}
+.sbox-settings-status {
+	margin-top: 10px;
+	border-left: 3px solid var(--sbox-accent);
+	padding: 8px 10px;
+	border-radius: 0 6px 6px 0;
+	background: rgba(255, 255, 255, 0.04);
+	font-size: 12px;
+	color: var(--sbox-text);
+	line-height: 1.5;
+}
+@keyframes sbox-spin { to { transform: rotate(360deg); } }
+.sbox-spinner {
+	display: inline-block;
+	width: 0.75em;
+	height: 0.75em;
+	border: 2px solid currentColor;
+	border-top-color: transparent;
+	border-radius: 50%;
+	animation: sbox-spin 0.65s linear infinite;
+	vertical-align: -0.1em;
+}
+.sbox-modal-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.7);
+	z-index: 10000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.sbox-modal {
+	width: min(92vw, 420px);
+	border: 1px solid var(--sbox-border, #2a2d33);
+	border-radius: 10px;
+	background: var(--sbox-modal-bg, #171a1f);
+	color: var(--sbox-text, #e3e6eb);
+	padding: 14px;
+	box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+.sbox-modal-title {
+	font-size: 14px;
+	font-weight: 700;
+	margin-bottom: 8px;
+}
+.sbox-modal-body {
+	color: var(--sbox-muted, #8f97a3);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.sbox-modal-actions {
+	margin-top: 12px;
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+.sbox-modal-wide {
+	width: min(96vw, 1180px);
+	max-height: 92vh;
+}
+.sbox-modal-wide .sbox-modal-body {
+	max-height: calc(92vh - 104px);
+	overflow: hidden;
+}
+.sbox-rulesets-modal-body {
+	color: var(--sbox-text);
+}
+.sbox-rulesets-layout {
+	display: grid;
+	grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
+	gap: 12px;
+}
+.sbox-rulesets-sidebar,
+.sbox-rulesets-main {
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+	background: var(--sbox-panel-bg);
+	padding: 10px;
+}
+.sbox-rulesets-title {
+	font-size: 13px;
+	font-weight: 700;
+	margin-bottom: 6px;
+}
+.sbox-rulesets-create-row {
+	margin-top: 8px;
+	display: grid;
+	grid-template-columns: 1fr auto;
+	gap: 8px;
+}
+.sbox-rulesets-list {
+	margin-top: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 55vh;
+	overflow: auto;
+}
+.sbox-ruleset-list-item {
+	width: 100%;
+	text-align: left;
+	border: 1px solid var(--sbox-border);
+	border-radius: 6px;
+	background: rgba(255, 255, 255, 0.02);
+	color: var(--sbox-text);
+	padding: 6px 8px;
+	cursor: pointer;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	font-size: 12px;
+}
+.sbox-ruleset-list-item:hover {
+	border-color: var(--sbox-accent);
+}
+.sbox-ruleset-list-item.active {
+	border-color: var(--sbox-accent);
+	background: rgba(92, 112, 136, 0.2);
+}
+.sbox-rulesets-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+.sbox-ruleset-current {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	font-size: 12px;
+	color: var(--sbox-muted);
+}
+.sbox-rulesets-toolbar-actions {
+	margin-left: auto;
+	display: flex;
+	gap: 8px;
+}
+.sbox-ruleset-editor-wrap {
+	display: none;
+}
+.sbox-ruleset-editor {
+	height: 48vh;
+	min-height: 320px;
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+}
+.sbox-rulesets-empty {
+	border: 1px dashed var(--sbox-border);
+	border-radius: 8px;
+	padding: 16px;
+	color: var(--sbox-muted);
+	font-size: 12px;
+}
+.sbox-rulesets-example {
+	margin-top: 8px;
+}
+.sbox-rulesets-example pre {
+	margin: 0;
+	border: 1px solid var(--sbox-border);
+	border-radius: 6px;
+	padding: 8px;
+	background: var(--sbox-log-bg);
+	font-size: 11px;
+	line-height: 1.45;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+.sbox-rulesets-whitelist {
+	margin-top: 10px;
+	border: 1px solid rgba(46, 204, 113, 0.35);
+	border-radius: 8px;
+	padding: 10px;
+	background: rgba(46, 204, 113, 0.06);
+}
+.sbox-rulesets-whitelist-head {
+	font-size: 13px;
+	font-weight: 700;
+	margin-bottom: 4px;
+}
+.sbox-ruleset-whitelist-editor {
+	height: 240px;
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+}
+.sbox-page.sbox-theme-light .sbox-ruleset-list-item {
+	background: #f3f6fb;
+}
+.sbox-page.sbox-theme-light .sbox-ruleset-list-item.active {
+	background: #dde9ff;
+}
+.sbox-page.sbox-theme-light .sbox-rulesets-whitelist {
+	background: #eefbf3;
+}
+@media (max-width: 980px) {
+	.sbox-config-toolbar {
+		grid-template-columns: 1fr;
+	}
+	.sbox-settings-grid {
+		grid-template-columns: 1fr;
+	}
+	.sbox-form-grid {
+		grid-template-columns: 1fr;
+	}
+	.sbox-modal-wide {
+		width: min(98vw, 980px);
+	}
+	.sbox-rulesets-layout {
+		grid-template-columns: 1fr;
+	}
+	.sbox-rulesets-list {
+		max-height: 220px;
+	}
+	.sbox-ruleset-editor {
+		height: 42vh;
+		min-height: 280px;
+	}
 }
 `;
 
 return view.extend({
-    handleSave: null,
-    handleSaveApply: null,
-    handleReset: null,
+	handleSave: null,
+	handleSaveApply: null,
+	handleReset: null,
 
-    load: function() {
-        return Promise.all([
-            L.resolveDefault(fs.read(CONFIG_PATH), ''),
-            readSubscriptionUrl()
-        ]);
-    },
+	load: function() {
+		return Promise.all([
+			L.resolveDefault(fs.read(CONFIG_PATH), ''),
+			readSubscriptionUrl(),
+			readThemePreference(),
+			loadOperationalSettings(),
+			getNetworkInterfaces(),
+			getVersions(),
+			getMihomoStatus(),
+			getServiceStatus(),
+			detectCurrentProxyMode()
+		]);
+	},
 
-    render: function(data) {
-        const configContent = data[0] || '';
-        const subscriptionUrl = data[1] || '';
+	render: async function(data) {
+		appState.configContent = data[0] || '';
+		appState.subscriptionUrl = data[1] || '';
+		appState.uiTheme = normalizeTheme(data[2] || 'dark');
+		appState.settings = data[3] || await loadOperationalSettings();
+		appState.interfaces = data[4] || [];
+		appState.versions = data[5] || { app: 'unknown', clash: 'unknown' };
+		appState.kernelStatus = data[6] || { installed: false, version: null };
+		appState.serviceRunning = !!data[7];
+		appState.proxyMode = data[8] || 'tproxy';
 
-        const styleNode = E('style', {}, PAGE_CSS);
+		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
+		appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
+		appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
 
-        appVersionBadge = E('span', { 'class': 'miclash-pill' }, _('MiClash ...'));
-        kernelBadge = E('button', {
-            'class': 'miclash-pill miclash-pill-btn',
-            'click': openKernelModal
-        }, _('Kernel ...'));
-        themeToggleButton = E('button', {
-            'class': 'btn miclash-theme-btn',
-            'click': async function() {
-                const nextTheme = currentUiTheme === 'dark' ? 'light' : 'dark';
-                applyUiTheme(nextTheme);
-                try {
-                    await saveThemePreference(nextTheme);
-                } catch (e) {
-                    notify('error', _('Failed to save theme preference: %s').format(e.message));
-                }
-            }
-        }, _('Theme: Light'));
-        statusBadge = E('span', { 'class': 'miclash-status miclash-status-off' }, _('Checking service...'));
+		pageRoot = E('div', { 'class': 'sbox-page' }, [
+			E('style', {}, PAGE_CSS),
+			E('div', { 'id': 'sbox-root' })
+		]);
 
-        startStopButton = E('button', {
-            'class': 'btn',
-            'click': async function() {
-                this.disabled = true;
-                try {
-                    const running = await getServiceStatus();
-                    if (running) {
-                        await execService('stop');
-                        await execService('disable');
-                    } else {
-                        await execService('enable');
-                        await execService('start');
-                    }
-                    await refreshHeaderState();
-                } catch (e) {
-                    notify('error', _('Unable to toggle service: %s').format(e.message));
-                } finally {
-                    this.disabled = false;
-                }
-            }
-        }, _('Start'));
+		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
+		applyUiTheme(appState.uiTheme);
 
-        const restartButton = E('button', {
-            'class': 'btn',
-            'click': async function() {
-                this.disabled = true;
-                try {
-                    await execService('restart');
-                    notify('info', _('Clash service restarted successfully.'));
-                    await refreshHeaderState();
-                } catch (e) {
-                    notify('error', _('Failed to restart Clash service: %s').format(e.message));
-                } finally {
-                    this.disabled = false;
-                }
-            }
-        }, _('Restart'));
+		try {
+			await initializeAceEditor(appState.configContent);
+		} catch (e) {
+			notify('error', _('Failed to initialize editor: %s').format(e.message));
+		}
 
-        const dashboardButton = E('button', {
-            'class': 'btn',
-            'click': openDashboard
-        }, _('Open Dashboard'));
+		bindControlAndHeaderEvents();
+		bindConfigEvents();
+		bindTabEvents();
+		renderSettingsPane();
+		updateHeaderAndControlDom();
 
-        subscriptionInput = E('input', {
-            'class': 'cbi-input-text miclash-url',
-            'type': 'text',
-            'placeholder': 'https://example.com/subscription.yaml',
-            'value': subscriptionUrl
-        });
+		startControlPolling();
 
-        const saveSubscriptionUrlButton = E('button', {
-            'class': 'btn',
-            'click': async function() {
-                const url = String(subscriptionInput.value || '').trim();
-                if (!url) {
-                    notify('error', _('Subscription URL is empty.'));
-                    return;
-                }
-                if (!isValidUrl(url)) {
-                    notify('error', _('Invalid subscription URL.'));
-                    return;
-                }
+		document.addEventListener('visibilitychange', () => {
+			if (document.hidden) {
+				stopLogPolling();
+			} else if (appState.activeCfgTab === 'logs') {
+				refreshLogs().catch(() => {});
+				startLogPolling();
+			}
+		});
 
-                this.disabled = true;
-                try {
-                    await saveSubscriptionUrl(url);
-                    notify('info', _('Subscription URL saved.'));
-                } catch (e) {
-                    notify('error', _('Failed to save URL: %s').format(e.message));
-                } finally {
-                    this.disabled = false;
-                }
-            }
-        }, _('Save URL'));
-
-        const downloadSubscriptionButton = E('button', {
-            'class': 'btn',
-            'click': async function() {
-                const url = String(subscriptionInput.value || '').trim();
-                if (!url) {
-                    notify('error', _('Subscription URL is empty.'));
-                    return;
-                }
-                if (!isValidUrl(url)) {
-                    notify('error', _('Invalid subscription URL.'));
-                    return;
-                }
-
-                this.disabled = true;
-                try {
-                    await saveSubscriptionUrl(url);
-                    const downloadedInfo = await fetchSubscriptionAsYaml(url);
-                    const downloaded = downloadedInfo.content;
-
-                    const tested = await testConfigContent(downloaded, true);
-                    if (!tested.ok) {
-                        throw new Error(_('YAML validation failed: %s').format(tested.message));
-                    }
-
-                    if (editor) {
-                        editor.setValue(String(downloaded || '').trimEnd() + '\n', -1);
-                        editor.clearSelection();
-                    }
-
-                    await execService('reload');
-                    if (downloadedInfo.mode === 'remnawave-client-path') {
-                        notify('info', _('Subscription downloaded, validated and applied (Remnawave /mihomo mode).'));
-                    } else {
-                        notify('info', _('Subscription downloaded, validated and applied.'));
-                    }
-                } catch (e) {
-                    notify('error', _('Failed to apply subscription: %s').format(e.message));
-                } finally {
-                    try {
-                        await fs.remove(TMP_SUBSCRIPTION_PATH);
-                    } catch (removeErr) {}
-                    this.disabled = false;
-                }
-            }
-        }, _('Download Subscription'));
-
-        const validateButton = E('button', {
-            'class': 'btn',
-            'click': async function() {
-                if (!editor) return;
-                this.disabled = true;
-                try {
-                    const tested = await testConfigContent(editor.getValue(), false);
-                    if (!tested.ok) {
-                        throw new Error(tested.message);
-                    }
-                    notify('info', _('YAML validation passed.'));
-                } catch (e) {
-                    notify('error', _('YAML validation failed: %s').format(e.message));
-                } finally {
-                    this.disabled = false;
-                }
-            }
-        }, _('Validate YAML'));
-
-        const saveButton = E('button', {
-            'class': 'btn',
-            'click': async function() {
-                if (!editor) return;
-                this.disabled = true;
-                try {
-                    const tested = await testConfigContent(editor.getValue(), true);
-                    if (!tested.ok) {
-                        throw new Error(tested.message);
-                    }
-                    notify('info', _('Configuration saved.'));
-                } catch (e) {
-                    notify('error', _('Failed to save configuration: %s').format(e.message));
-                } finally {
-                    this.disabled = false;
-                }
-            }
-        }, _('Save'));
-
-        const saveApplyButton = E('button', {
-            'class': 'btn cbi-button-apply',
-            'click': async function() {
-                if (!editor) return;
-                this.disabled = true;
-                try {
-                    const tested = await testConfigContent(editor.getValue(), true);
-                    if (!tested.ok) {
-                        throw new Error(tested.message);
-                    }
-
-                    await execService('reload');
-                    notify('info', _('Configuration applied and service reloaded.'));
-                    await refreshHeaderState();
-                } catch (e) {
-                    notify('error', _('Failed to apply configuration: %s').format(e.message));
-                } finally {
-                    this.disabled = false;
-                }
-            }
-        }, _('Save & Apply'));
-
-        const openSettings = () => { window.location.href = L.url('admin/services/miclash/settings'); };
-        const openRulesets = () => { window.location.href = L.url('admin/services/miclash/rulesets'); };
-        const openLog = () => { window.location.href = L.url('admin/services/miclash/log'); };
-
-        const page = E('div', { 'class': 'miclash-page' }, [
-            styleNode,
-
-            E('div', { 'class': 'miclash-card' }, [
-                E('div', { 'class': 'miclash-topbar' }, [
-                    E('div'),
-                    E('div', { 'class': 'miclash-version-center' }, [
-                        appVersionBadge,
-                        kernelBadge
-                    ]),
-                    E('div', { 'class': 'miclash-topbar-right' }, [themeToggleButton])
-                ]),
-                E('h2', { 'class': 'miclash-title' }, _('MiClash Control Center')),
-                E('div', { 'style': 'margin-top: 10px;' }, [statusBadge]),
-                E('div', { 'class': 'miclash-actions' }, [
-                    startStopButton,
-                    restartButton,
-                    dashboardButton
-                ])
-            ]),
-
-            E('div', { 'class': 'miclash-grid' }, [
-                E('div', { 'class': 'miclash-card' }, [
-                    E('h3', { 'class': 'miclash-title' }, _('Subscription URL')),
-                    E('p', { 'class': 'miclash-meta' }, _('Save your subscription URL and download config directly to /opt/clash/config.yaml with automatic YAML validation.')),
-                    subscriptionInput,
-                    E('div', { 'class': 'miclash-actions' }, [
-                        saveSubscriptionUrlButton,
-                        downloadSubscriptionButton
-                    ])
-                ]),
-                E('div', { 'class': 'miclash-card' }, [
-                    E('h3', { 'class': 'miclash-title' }, _('Quick Navigation')),
-                    E('p', { 'class': 'miclash-meta' }, _('Open the remaining MiClash sections.')),
-                    E('div', { 'class': 'miclash-links' }, [
-                        E('button', { 'class': 'btn', 'click': openSettings }, _('Settings')),
-                        E('button', { 'class': 'btn', 'click': openRulesets }, _('Rulesets')),
-                        E('button', { 'class': 'btn', 'click': openLog }, _('Log'))
-                    ])
-                ])
-            ]),
-
-            E('div', { 'class': 'miclash-card' }, [
-                E('h3', { 'class': 'miclash-title' }, _('YAML Configuration')),
-                E('p', { 'class': 'miclash-meta' }, _('Editor with safe YAML validation: invalid changes are automatically rolled back.')),
-                E('div', { 'id': 'miclash-editor', 'class': 'miclash-editor' }),
-                E('div', { 'class': 'miclash-actions' }, [
-                    validateButton,
-                    saveButton,
-                    saveApplyButton
-                ])
-            ])
-        ]);
-
-        pageRoot = page;
-
-        setTimeout(async () => {
-            try {
-                applyUiTheme(await readThemePreference());
-                await initializeAceEditor(configContent);
-                await refreshHeaderState();
-
-                if (servicePollTimer) clearInterval(servicePollTimer);
-                servicePollTimer = setInterval(() => {
-                    refreshHeaderState().catch(() => {});
-                }, 5000);
-            } catch (e) {
-                notify('error', _('Failed to initialize editor: %s').format(e.message));
-            }
-        }, 30);
-
-        return page;
-    }
+		return pageRoot;
+	}
 });
