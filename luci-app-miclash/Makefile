@@ -1,4 +1,4 @@
-# Copyright 2024-2026 ZeroChaos (https://github.com/zerolabnet/MiClash)
+# Copyright 2024-2026 ZeroChaos (https://github.com/zerolabnet/SSClash)
 # This is free software, licensed under the GNU General Public License v2.
 
 include $(TOPDIR)/rules.mk
