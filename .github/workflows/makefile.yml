@@ -191,6 +191,8 @@ jobs:
 
       - name: Build Package
         shell: bash
+        env:
+          TAG_VERSION: ${{ needs.sync-version.outputs.tag_version }}
         run: |
           set -euo pipefail
           cd "$SDK_HOME"
@@ -200,39 +202,28 @@ jobs:
           make defconfig > /dev/null 2>&1
           make package/${PACKAGE_NAME}/compile V=s
 
-          find "$SDK_HOME/bin" -type f \( -name "${PACKAGE_NAME}_*.${{ matrix.pkg_type }}" -o -name "${PACKAGE_NAME}-*.${{ matrix.pkg_type }}" \) \
-            -exec cp -v -f {} "${{ github.workspace }}" \;
+          case "${{ matrix.pkg_type }}" in
+            ipk)
+              src="$(find "$SDK_HOME/bin" -type f -name "${PACKAGE_NAME}_*.ipk" | head -n 1)"
+              dst="${{ github.workspace }}/${PACKAGE_NAME}_${TAG_VERSION}_all.ipk"
+              ;;
+            apk)
+              src="$(find "$SDK_HOME/bin" -type f -name "${PACKAGE_NAME}-*.apk" | head -n 1)"
+              dst="${{ github.workspace }}/${PACKAGE_NAME}-${TAG_VERSION}.apk"
+              ;;
+            *)
+              echo "Unsupported package type: ${{ matrix.pkg_type }}" >&2
+              exit 1
+              ;;
+          esac
 
-      - name: Normalize Package Filenames
-        shell: bash
-        env:
-          TAG_VERSION: ${{ needs.sync-version.outputs.tag_version }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          files=( "${{ github.workspace }}"/*.${{ matrix.pkg_type }} )
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "No package files found for extension .${{ matrix.pkg_type }}"
-            exit 0
+          if [ -z "${src:-}" ] || [ ! -f "$src" ]; then
+            echo "Built package not found for type ${{ matrix.pkg_type }}" >&2
+            exit 1
           fi
 
-          for f in "${files[@]}"; do
-            base="$(basename "$f")"
-            normalized="$base"
-
-            if [[ "$base" == *.apk ]]; then
-              normalized="$(echo "$base" | sed -E 's/-r[0-9]+(\.apk)$/\1/')"
-            elif [[ "$base" == *.ipk ]]; then
-              normalized="$(echo "$base" | sed -E 's/-r[0-9]+(_[^/]+\.ipk)$/\1/')"
-            fi
-
-            if [[ "$normalized" != "$base" ]]; then
-              mv -v "$f" "${{ github.workspace }}/$normalized"
-            fi
-          done
-
-          ls -lah "${{ github.workspace }}"/*.${{ matrix.pkg_type }}
+          cp -v -f "$src" "$dst"
+          ls -lah "$dst"
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
@@ -259,22 +250,6 @@ jobs:
           set -euo pipefail
           mkdir -p release_files
           find artifacts -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} release_files/ \;
-
-          for f in release_files/*; do
-            [ -f "$f" ] || continue
-            base="$(basename "$f")"
-            normalized="$base"
-
-            if [[ "$base" == *.apk ]]; then
-              normalized="$(echo "$base" | sed -E 's/-r[0-9]+(\.apk)$/\1/')"
-            elif [[ "$base" == *.ipk ]]; then
-              normalized="$(echo "$base" | sed -E 's/-r[0-9]+(_[^/]+\.ipk)$/\1/')"
-            fi
-
-            if [[ "$normalized" != "$base" ]]; then
-              mv -f "$f" "release_files/$normalized"
-            fi
-          done
 
           ls -lah release_files
 
