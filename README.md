@@ -1,178 +1,80 @@
-📖 Read this in other languages:
-- [Русский](README.ru.md)
+# Установка SSClash на OpenWrt
 
-<p align="center">
- <img src=".github/assets/images/logos/MiClash.png" width="200">
-</p>
+Super Simple Clash от [Zerolab.net](http://Zerolab.net)
 
-<h3 align="center">Here's the step-by-step process for installing and configuring MiClash on your OpenWrt router</h3>
+1. Скачать свежую https://github.com/zerolabnet/SSClash/releases
+2. Веб интерфейс -> `Software` -> `Update lists` -> `Upload Package` установить скачанный файл `.ipk`
+3. Там же в фильтре ищем `kmod-nft-tproxy` для OpenWrt 23-24 или `iptables-mod-tproxy` для древних OpenWrt и ставим его.
+4. Выходим из админки `Log out` и заходим снова, появляется меню `Services` -> `SSClash`
+5. `SSClash` -> `Settings` -> внизу скачать ядро Mihomo `Download Core`
+6. Вместо `TPROXY` лучше выбрать `Mixed (TCP+UDP)`
+7. Если используете подписки с модемом на белых списках, лучше отключить `Store rules and proxy providers in RAM (tmpfs)`
+8. По [мануалу](https://www.notion.so/Mihomo-15989188f6b480c2a883ece08af50ae1?pvs=21) настраиваем, а всё, что ниже, можно не читать.
 
-# Setup Guide
+# Если не сработало, работаем клавиатурой:
 
-## Step 1: Update Package List
+Для выполнения команд, подключитесь к вашему роутеру по SSH (например, через [Termius](https://termius.com/), [Putty](https://www.putty.org/) или командную строку Windows). Установите ваш часовой пояс и синхронизируйте время на роутере.
 
-Update the package list to ensure you have the latest available versions.
+[Что такое SSH?](https://www.notion.so/SSH-15f89188f6b480bcb64aea8cdc941d67?pvs=21)
 
-```bash
-opkg update
-```
-
-## Step 2: Install Required Packages
-
-In most cases you **do not need to install anything manually**: when you install `luci-app-miclash` from a configured OpenWrt feed, `opkg` will automatically pull in:
-
-- `coreutils-base64` – for scripts that use Base64;
-- `kmod-tun` – for TUN mode;
-- the appropriate transparent proxy module depending on your firewall stack:
-  - `kmod-nft-tproxy` for **firewall4 / nftables**;
-  - `iptables-mod-tproxy` for **firewall3 / iptables**.
-
-Only if you are installing the `.ipk` offline or building a custom image and dependencies are missing, you can install the transparent proxy modules manually:
+# OpenWrt 25.12.x
 
 ```bash
-# For nftables (firewall4)
-opkg install kmod-nft-tproxy
-
-# For iptables (firewall3, OpenWrt < 22.03.x)
-opkg install iptables-mod-tproxy
+apk update
+apk add curl kmod-nft-tproxy kmod-tun coreutils-base64
+release=$(curl -s https://api.github.com/repos/zerolabnet/SSClash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
+curl -L "https://github.com/zerolabnet/SSClash/releases/download/${release}/luci-app-ssclash-${release#v}-r1.apk" -o /tmp/luci-app-ssclash.apk
+apk add /tmp/luci-app-ssclash.apk --allow-untrusted && rm -rf /tmp/*.apk
 ```
 
-## Step 3: Download and Install `luci-app-miclash` Package
-
-Download the MiClash package and install it.
+# OpenWRT 23.05.x - 24.10.x
 
 ```bash
-curl -L https://github.com/ang3el7z/luci-app-miclash/releases/download/v3.9.0/luci-app-miclash_3.9.0-r1_all.ipk -o /tmp/luci-app-miclash_3.9.0-r1_all.ipk
-opkg install /tmp/luci-app-miclash_3.9.0-r1_all.ipk
-rm /tmp/*.ipk
+opkg update && opkg install curl kmod-nft-tproxy kmod-tun coreutils-base64
+release=$(curl -s https://api.github.com/repos/zerolabnet/SSClash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
+curl -L "https://github.com/zerolabnet/SSClash/releases/download/${release}/luci-app-ssclash_${release#v}-r1_all.ipk" -o /tmp/luci-app-ssclash.ipk && opkg install /tmp/luci-app-ssclash.ipk && rm -rf /tmp/*.ipk
 ```
 
-## Step 4: Automatic Mihomo Kernel Management
+*Для OpenWrt 21.x вместо `kmod-nft-tproxy` нужен `iptables-mod-tproxy`*
 
-Go to **Settings** → **Mihomo Kernel Management** and click **Download Latest Kernel**. The system will:
+# Ядро [Mihomo](https://github.com/MetaCubeX/mihomo)
 
-- Automatically detect your router's architecture
-- Download the latest compatible Mihomo kernel
-- Install and configure it properly
-- Show kernel status and version information
-
-**Important:** Restart the Clash service after kernel installation.
-
-### Manual Kernel Installation (Optional)
-
-If you prefer manual installation, navigate to the `bin` directory and download the Clash.Meta Kernel:
+**ARM64** (Mediatek Filogic: Xiaomi AX3000T, Routerich AX3000, RAX3000Me, Cudy TR3000, gl.inet GL-MT3000, MT6000 и др):
 
 ```bash
-cd /opt/clash/bin
+releasemihomo=$(curl -s -L https://github.com/MetaCubeX/mihomo/releases/latest | grep "title>Release" | cut -d " " -f 4)
+curl -L https://github.com/MetaCubeX/mihomo/releases/download/$releasemihomo/mihomo-linux-arm64-$releasemihomo.gz -o /tmp/clash.gz
+gunzip -c /tmp/clash.gz > /opt/clash/bin/clash
+chmod +x /opt/clash/bin/clash
+rm -rf /tmp/clash.gz
 ```
 
-For **amd64** architecture:
+**mipsel_24kc** (Almond 3S, Netis N6 и подобные):
 
 ```bash
-curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.22/mihomo-linux-amd64-compatible-v1.19.22.gz -o clash.gz
+releasemihomo=$(curl -s -L https://github.com/MetaCubeX/mihomo/releases/latest | grep "title>Release" | cut -d " " -f 4)
+curl -L https://github.com/MetaCubeX/mihomo/releases/download/$releasemihomo/mihomo-linux-mipsle-softfloat-$releasemihomo.gz -o /tmp/clash.gz
+gunzip -c /tmp/clash.gz > /opt/clash/bin/clash
+chmod +x /opt/clash/bin/clash
+rm -rf /tmp/clash.gz
 ```
 
-For **arm64** architecture:
+**AMD64** (x86 сборки OpenWrt для мини ПК):
 
 ```bash
-curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.22/mihomo-linux-arm64-v1.19.22.gz -o clash.gz
+releasemihomo=$(curl -s -L https://github.com/MetaCubeX/mihomo/releases/latest | grep "title>Release" | cut -d " " -f 4)
+curl -L https://github.com/MetaCubeX/mihomo/releases/download/$releasemihomo/mihomo-linux-amd64-compatible-$releasemihomo.gz -o /tmp/clash.gz
+gunzip -c /tmp/clash.gz > /opt/clash/bin/clash
+chmod +x /opt/clash/bin/clash
+rm -rf /tmp/clash.gz
 ```
 
-For **mipsel_24kc** architecture:
+**Ядра для других архитектур:** [https://github.com/MetaCubeX/mihomo/releases](https://4pda.to/stat/go?u=https%3A%2F%2Fgithub.com%2FMetaCubeX%2Fmihomo%2Freleases&e=132278268)
+
+*Чтобы в админке вашего роутера появилась новая менюшка с Super Simple Clash, после установки нужно один раз из админки выйти (log out), если вы сейчас в ней, и зайти заново (log in).*
+
+Стандартный конфиг Clash нужно отредактировать, прописав хотя бы один рабочий сервер, а затем применить **`Save & Apply`**. Если в конфиге нет ошибок, Clash запустится и загорится зелёная надпись Clash is running, если есть ошибки, останется красная надпись Clash stopped, а в соседней вкладке `Log` можно почитать, что ему не нравится и попробовать исправить. Чтобы увидеть больше информации в логах, стартуйте Clash из консоли:
 
 ```bash
-curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.22/mihomo-linux-mipsle-softfloat-v1.19.22.gz -o clash.gz
+service clash start
 ```
-
-Need a different architecture? Visit the [MetaCubeX Release Page](https://github.com/MetaCubeX/mihomo/releases) and choose the one that matches your device.
-
-Decompress and make executable:
-
-```bash
-gunzip clash.gz
-chmod +x clash
-```
-
-## Step 5: Configure Interface Processing Mode
-
-MiClash offers two interface processing modes:
-
-### Exclude Mode (Universal approach) - **Recommended for most users**
-
-- **Default mode** that processes traffic from ALL interfaces except selected ones
-- Automatically detects and excludes WAN interface
-- Simple to configure - just select interfaces to bypass proxy
-- Best for typical home router setups
-
-### Explicit Mode (Precise control) - **For advanced users**
-
-- Processes traffic ONLY from selected interfaces
-- More secure but requires manual configuration
-- Automatically detects LAN bridge when enabled
-- Ideal for complex network setups requiring precise control
-
-### Additional Settings:
-
-- **Block QUIC traffic**: Blocks UDP port 443 to improve proxy effectiveness for services like YouTube
-
-<p align="center">
- <img src=".github/assets/images/screenshots/scr-01.png" width="100%">
-</p>
-
-## Step 6: Clash Configuration Management
-
-Edit your Clash configuration with the built-in editor featuring:
-
-- **Syntax highlighting** for YAML files
-- **Live service control** (Start/Stop/Restart)
-- **Service status indicator**
-- **Save & Apply** functionality with automatic service reload
-
-<p align="center">
- <img src=".github/assets/images/screenshots/scr-02.png" width="100%">
-</p>
-
-## Step 7: Local Rulesets Management
-
-Create and manage local rule files for use with `rule-providers`:
-
-- **Create custom rule lists** with validation
-- **Edit existing rulesets** with syntax highlighting
-- **Organized file management** with collapsible sections
-- **Usage**: Reference in config as `type: file, format: text, path: ./lst/your_list.txt`
-
-<p align="center">
- <img src=".github/assets/images/screenshots/scr-03.png" width="100%">
-</p>
-
-## Step 8: Real-time Log Monitoring
-
-Monitor Clash activity with the integrated log viewer:
-
-- **Real-time log streaming** with automatic updates
-- **Filtered display** showing only Clash-related entries
-- **Color-coded log levels** and daemon identification
-- **Auto-scroll** to latest entries
-
-<p align="center">
- <img src=".github/assets/images/screenshots/scr-04.png" width="100%">
-</p>
-
-## Step 9: Dashboard Access
-
-Access the Clash dashboard directly from the LuCI interface with automatic configuration detection.
-
-<p align="center">
- <img src=".github/assets/images/screenshots/scr-05.png" width="100%">
-</p>
-
-# Remove Clash
-
-To remove Clash completely:
-
-```bash
-opkg remove luci-app-miclash
-rm -rf /opt/clash
-```
-
-

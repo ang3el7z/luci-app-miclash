@@ -141,7 +141,7 @@ async function getVersions() {
     try {
         const opkgMiclash = await fs.exec('/bin/sh', ['-c', 'opkg list-installed luci-app-miclash 2>/dev/null']);
         const opkgSsc = await fs.exec('/bin/sh', ['-c', 'opkg list-installed luci-app-ssclash 2>/dev/null']);
-        const apkMiclash = await fs.exec('/bin/sh', ['-c', 'apk info -e luci-app-miclash 2>/dev/null']);
+        const apkMiclash = await fs.exec('/bin/sh', ['-c', 'apk info -v luci-app-miclash 2>/dev/null']);
         const raw = String(opkgMiclash.stdout || opkgSsc.stdout || apkMiclash.stdout || '').trim();
         if (raw) {
             info.app = parseVersion(raw, 'installed');
