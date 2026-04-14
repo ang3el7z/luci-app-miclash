@@ -136,6 +136,7 @@ return view.extend({
 
     render: function () {
         const css = `
+            #tabmenu, .cbi-tabmenu { display: none !important; }
             .miclash-log-card {
                 background: var(--card-bg-color, var(--background-color, #fff));
                 border: 1px solid var(--border-color-medium, var(--border-color, #ddd));

@@ -1591,74 +1591,6 @@ return view.extend({
             settings.hwidUserAgent,
             settings.hwidDeviceOS
         );
-        const kernelDownloadSection = createKernelDownloadSection();
-
-        const downloadButton = E('button', {
-            'id': 'download-kernel-btn',
-            'class': 'btn',
-            'click': async function() {
-                this.disabled = true;
-                this.textContent = _('Downloading...');
-
-                try {
-                    const arch = await detectSystemArchitecture();
-                    const release = await getLatestMihomoRelease();
-
-                    if (!release) throw new Error(_('Failed to get release information'));
-
-                    const assetName = `mihomo-linux-${arch}-${release.version}.gz`;
-                    const asset = release.assets.find(a => a.name === assetName);
-
-                    if (!asset) throw new Error(_('No binary found for architecture: %s').format(arch));
-
-                    const success = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
-
-                    if (success && updateKernelStatusFn) {
-                        updateKernelStatusFn();
-                    }
-                } catch (e) {
-                    ui.addNotification(null, E('p', _('Download failed: %s').format(e.message)), 'error');
-                } finally {
-                    this.disabled = false;
-                    this.textContent = _('Download Latest Kernel');
-                }
-            }
-        }, _('Download Latest Kernel'));
-
-        const refreshButton = E('button', {
-            'class': 'btn',
-            'style': 'margin-left: 10px;',
-            'click': function() {
-                if (updateKernelStatusFn) {
-                    updateKernelStatusFn();
-                }
-            }
-        }, _('Refresh Status'));
-
-        const restartKernelButton = E('button', {
-            'class': 'btn',
-            'style': 'margin-left: 10px;',
-            'click': async function() {
-                try {
-                    await fs.exec('/etc/init.d/clash', ['restart']);
-                    ui.addNotification(null, E('p', _('Clash service restarted successfully.')), 'info');
-                    if (updateKernelStatusFn) {
-                        updateKernelStatusFn();
-                    }
-                } catch (e) {
-                    ui.addNotification(null, E('p', _('Failed to restart Clash service: %s').format(e.message)), 'error');
-                }
-            }
-        }, _('Restart Service'));
-        const kernelButtonContainer = E('div', { 'style': 'margin: 20px 0; text-align: center;' }, [
-            downloadButton, refreshButton, restartKernelButton
-        ]);
-
-        const kernelInfoSection = E('div', {
-            'style': 'margin: 10px 0 20px 0; padding: 8px 12px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px; font-size: 12px;'
-        }, [
-            E('span', { 'style': 'color: #856404; font-weight: bold;' }, '⚠️ ' + _('Restart Clash service after installing or updating the kernel'))
-        ]);
 
         const modeRadios = modeSelector.querySelectorAll('input[name="interface_mode"]');
         modeRadios.forEach(radio => {
@@ -1932,6 +1864,7 @@ return view.extend({
         }, 100);
 
         const view = E([
+            E('style', {}, '#tabmenu, .cbi-tabmenu { display: none !important; }'),
             modeSelector,
             proxyModeSection,
             tunStackSection,
@@ -1939,10 +1872,7 @@ return view.extend({
             interfaceSelector,
             additionalSettings,
             buttonContainer,
-            statusSection,
-            kernelDownloadSection,
-            kernelButtonContainer,
-            kernelInfoSection
+            statusSection
         ]);
 
         return view;

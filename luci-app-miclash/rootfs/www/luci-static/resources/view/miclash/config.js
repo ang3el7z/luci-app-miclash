@@ -12,9 +12,15 @@ const TMP_SUBSCRIPTION_PATH = '/tmp/miclash-subscription.yaml';
 let editor = null;
 let startStopButton = null;
 let statusBadge = null;
-let versionBar = null;
+let appVersionBadge = null;
+let kernelBadge = null;
+let themeToggleButton = null;
+let pageRoot = null;
 let subscriptionInput = null;
 let servicePollTimer = null;
+let currentUiTheme = 'light';
+
+const UI_THEME_KEY = 'UI_THEME';
 
 const callServiceList = rpc.declare({
     object: 'service',
@@ -27,29 +33,75 @@ function notify(type, message) {
     ui.addNotification(null, E('p', message), type);
 }
 
-function isDarkTheme() {
-    try {
-        const bg = getComputedStyle(document.body).backgroundColor || '';
-        const match = bg.match(/(\d+),\s*(\d+),\s*(\d+)/);
-        if (!match) return true;
-        const r = Number(match[1]);
-        const g = Number(match[2]);
-        const b = Number(match[3]);
-        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-        return brightness < 140;
-    } catch (e) {
-        return true;
-    }
+function normalizeTheme(theme) {
+    return theme === 'dark' ? 'dark' : 'light';
 }
 
 function applyEditorTheme() {
     if (!editor) return;
-    const preferredTheme = isDarkTheme() ? 'ace/theme/tomorrow_night_bright' : 'ace/theme/textmate';
+    const preferredTheme = currentUiTheme === 'dark' ? 'ace/theme/tomorrow_night_bright' : 'ace/theme/textmate';
     try {
         editor.setTheme(preferredTheme);
     } catch (e) {
         editor.setTheme('ace/theme/tomorrow_night_bright');
     }
+}
+
+function parseSettingsToMap(raw) {
+    const map = {};
+    String(raw || '').split('\n').forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.charAt(0) === '#') return;
+        const equalIndex = trimmed.indexOf('=');
+        if (equalIndex <= 0) return;
+        const key = trimmed.slice(0, equalIndex).trim();
+        const value = trimmed.slice(equalIndex + 1).trim();
+        if (key) map[key] = value;
+    });
+    return map;
+}
+
+function mapToSettingsContent(map) {
+    const lines = Object.keys(map).map((key) => key + '=' + map[key]);
+    return lines.length ? lines.join('\n') + '\n' : '';
+}
+
+async function readSettingsMap() {
+    try {
+        return parseSettingsToMap(await fs.read(SETTINGS_PATH));
+    } catch (e) {
+        return {};
+    }
+}
+
+async function writeSettingsMap(map) {
+    await fs.write(SETTINGS_PATH, mapToSettingsContent(map));
+}
+
+async function readThemePreference() {
+    const settings = await readSettingsMap();
+    return normalizeTheme(settings[UI_THEME_KEY] || 'light');
+}
+
+async function saveThemePreference(theme) {
+    const settings = await readSettingsMap();
+    settings[UI_THEME_KEY] = normalizeTheme(theme);
+    await writeSettingsMap(settings);
+}
+
+function applyUiTheme(theme) {
+    currentUiTheme = normalizeTheme(theme);
+
+    if (pageRoot) {
+        pageRoot.classList.toggle('miclash-theme-dark', currentUiTheme === 'dark');
+        pageRoot.classList.toggle('miclash-theme-light', currentUiTheme === 'light');
+    }
+
+    if (themeToggleButton) {
+        themeToggleButton.textContent = currentUiTheme === 'dark' ? _('Theme: Dark') : _('Theme: Light');
+    }
+
+    applyEditorTheme();
 }
 
 function isValidUrl(url) {
@@ -59,6 +111,45 @@ function isValidUrl(url) {
     } catch (e) {
         return false;
     }
+}
+
+function looksLikeBase64Text(value) {
+    const cleaned = String(value || '').replace(/\s+/g, '');
+    if (cleaned.length < 64 || cleaned.length % 4 !== 0) return false;
+    return /^[A-Za-z0-9+/=]+$/.test(cleaned);
+}
+
+function tryDecodeBase64(value) {
+    try {
+        if (typeof atob !== 'function') return null;
+        const cleaned = String(value || '').replace(/\s+/g, '');
+        return atob(cleaned);
+    } catch (e) {
+        return null;
+    }
+}
+
+function looksLikeUriSubscription(value) {
+    const content = String(value || '');
+    return /(?:^|\n)\s*(vmess|vless|trojan|ss|ssr|hysteria|hysteria2|tuic):\/\/[^\s]+/i.test(content);
+}
+
+function normalizeSubscriptionContent(raw) {
+    let content = String(raw || '').trim();
+    let decodedFromBase64 = false;
+
+    if (content && looksLikeBase64Text(content) && content.indexOf(':') === -1) {
+        const decoded = tryDecodeBase64(content);
+        if (decoded && decoded.trim()) {
+            content = decoded.trim();
+            decodedFromBase64 = true;
+        }
+    }
+
+    return {
+        content: content ? content + '\n' : '',
+        decodedFromBase64: decodedFromBase64
+    };
 }
 
 async function loadScript(src) {
@@ -131,11 +222,14 @@ function parseVersion(raw, fallback) {
     return matched ? matched[1] : str.split('\n')[0];
 }
 
+function sanitizeAppVersion(version) {
+    return String(version || '').replace(/-r\d+$/i, '');
+}
+
 async function getVersions() {
     const info = {
         app: 'unknown',
-        clash: 'unknown',
-        openwrt: 'unknown'
+        clash: 'unknown'
     };
 
     try {
@@ -144,7 +238,7 @@ async function getVersions() {
         const apkMiclash = await fs.exec('/bin/sh', ['-c', 'apk info -v luci-app-miclash 2>/dev/null']);
         const raw = String(opkgMiclash.stdout || opkgSsc.stdout || apkMiclash.stdout || '').trim();
         if (raw) {
-            info.app = parseVersion(raw, 'installed');
+            info.app = sanitizeAppVersion(parseVersion(raw, 'installed'));
         }
     } catch (e) {}
 
@@ -159,54 +253,488 @@ async function getVersions() {
         }
     } catch (e) {}
 
-    try {
-        const release = await fs.read('/etc/openwrt_release');
-        const line = String(release || '').split('\n').find((x) => x.indexOf('DISTRIB_RELEASE=') === 0);
-        if (line) {
-            info.openwrt = line.split('=')[1].replace(/['"]/g, '').trim();
-        }
-    } catch (e) {}
-
     return info;
 }
 
-async function readSubscriptionUrl() {
+async function detectSystemArchitecture() {
     try {
-        const raw = await fs.read(SETTINGS_PATH);
-        const lines = String(raw || '').split('\n');
-        const line = lines.find((item) => item.indexOf('SUBSCRIPTION_URL=') === 0);
-        return line ? line.slice('SUBSCRIPTION_URL='.length).trim() : '';
+        const releaseInfo = await L.resolveDefault(fs.read('/etc/openwrt_release'), null);
+        const match = String(releaseInfo || '').match(/^DISTRIB_ARCH=['"]?([^'"\n]+)['"]?/m);
+        const distribArch = match ? match[1] : '';
+
+        if (!distribArch) return 'amd64';
+        if (distribArch.startsWith('aarch64_')) return 'arm64';
+        if (distribArch === 'x86_64') return 'amd64';
+        if (distribArch.startsWith('i386_')) return '386';
+        if (distribArch.startsWith('riscv64_')) return 'riscv64';
+        if (distribArch.startsWith('loongarch64_')) return 'loong64';
+        if (distribArch.includes('_neon-vfp')) return 'armv7';
+        if (distribArch.includes('_neon') || distribArch.includes('_vfp')) return 'armv6';
+        if (distribArch.startsWith('arm_')) return 'armv5';
+        if (distribArch.startsWith('mips64el_')) return 'mips64le';
+        if (distribArch.startsWith('mips64_')) return 'mips64';
+        if (distribArch.startsWith('mipsel_')) return distribArch.includes('hardfloat') ? 'mipsle-hardfloat' : 'mipsle-softfloat';
+        if (distribArch.startsWith('mips_')) return distribArch.includes('hardfloat') ? 'mips-hardfloat' : 'mips-softfloat';
+    } catch (e) {}
+
+    return 'amd64';
+}
+
+function normalizeVersion(str) {
+    if (!str) return '';
+    const match = String(str).match(/v?(\d+\.\d+\.\d+)/i);
+    return match ? match[1] : String(str).trim();
+}
+
+async function getMihomoStatus() {
+    const binPath = '/opt/clash/bin/clash';
+
+    try {
+        const stat = await L.resolveDefault(fs.stat(binPath), null);
+        if (!stat) {
+            return { installed: false, version: null };
+        }
     } catch (e) {
-        return '';
+        return { installed: false, version: null };
     }
+
+    try {
+        const result = await fs.exec(binPath, ['-v']);
+        const output = String(result?.stdout || result?.stderr || '').trim();
+        if (output) {
+            return { installed: true, version: parseVersion(output, _('Installed')) };
+        }
+    } catch (e) {}
+
+    try {
+        const result = await fs.exec(binPath, ['version']);
+        const output = String(result?.stdout || result?.stderr || '').trim();
+        if (output) {
+            return { installed: true, version: parseVersion(output, _('Installed')) };
+        }
+    } catch (e) {}
+
+    return { installed: true, version: _('Installed') };
+}
+
+async function getLatestMihomoRelease() {
+    try {
+        const response = await fetch('https://api.github.com/repos/MetaCubeX/mihomo/releases/latest');
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        if (!data || data.prerelease || !data.tag_name || !Array.isArray(data.assets)) {
+            return null;
+        }
+
+        return {
+            version: data.tag_name,
+            assets: data.assets
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+function findKernelAsset(release, arch) {
+    if (!release || !Array.isArray(release.assets)) return null;
+
+    const tag = String(release.version || '');
+    const cleanTag = tag.replace(/^v/i, '');
+    const exactNames = [
+        'mihomo-linux-' + arch + '-' + tag + '.gz',
+        'mihomo-linux-' + arch + '-' + cleanTag + '.gz'
+    ];
+
+    for (let i = 0; i < exactNames.length; i++) {
+        const asset = release.assets.find((item) => item.name === exactNames[i]);
+        if (asset) return asset;
+    }
+
+    return release.assets.find((item) => item.name && item.name.indexOf('mihomo-linux-' + arch + '-') === 0 && item.name.endsWith('.gz')) || null;
+}
+
+async function downloadMihomoKernel(downloadUrl, version, arch) {
+    const safeVersion = String(version || '').replace(/[^\w.-]/g, '');
+    const fileName = 'mihomo-linux-' + arch + '-' + safeVersion + '.gz';
+    const downloadPath = '/tmp/' + fileName;
+    const extractedFile = downloadPath.replace(/\.gz$/, '');
+    const targetFile = '/opt/clash/bin/clash';
+
+    try {
+        notify('info', _('Downloading Mihomo kernel...'));
+        const curlResult = await fs.exec('/usr/bin/curl', ['-L', '-fsS', downloadUrl, '-o', downloadPath]);
+        if (curlResult.code !== 0) {
+            throw new Error(String(curlResult.stderr || curlResult.stdout || _('Download failed')).trim());
+        }
+
+        const extractResult = await fs.exec('/bin/gzip', ['-df', downloadPath]);
+        if (extractResult.code !== 0) {
+            throw new Error(String(extractResult.stderr || extractResult.stdout || _('Extraction failed')).trim());
+        }
+
+        await fs.exec('/bin/mv', [extractedFile, targetFile]);
+        await fs.exec('/bin/chmod', ['+x', targetFile]);
+
+        notify('info', _('Mihomo kernel downloaded and installed.'));
+        return true;
+    } catch (e) {
+        notify('error', _('Kernel download failed: %s').format(e.message));
+        return false;
+    } finally {
+        try { await fs.remove(downloadPath); } catch (removeErr) {}
+    }
+}
+
+function showModal(options) {
+    const overlay = E('div', { 'class': 'miclash-modal-overlay' });
+    const modal = E('div', { 'class': 'miclash-modal' });
+    const titleNode = E('div', { 'class': 'miclash-modal-title' }, String(options.title || ''));
+    const bodyNode = options.body && options.body.nodeType
+        ? options.body
+        : E('div', { 'class': 'miclash-modal-body' }, String(options.body || ''));
+    const actionsNode = E('div', { 'class': 'miclash-modal-actions' });
+
+    function closeModal() {
+        overlay.remove();
+    }
+
+    (options.buttons || []).forEach((item) => {
+        const button = E('button', { 'class': item.className || 'btn' }, String(item.label || ''));
+        button.addEventListener('click', async function(ev) {
+            ev.preventDefault();
+            if (item.onClick) {
+                const prevText = button.textContent;
+                button.disabled = true;
+                try {
+                    await item.onClick({ closeModal: closeModal, button: button });
+                } finally {
+                    if (button.isConnected) {
+                        button.disabled = false;
+                        button.textContent = prevText;
+                    }
+                }
+            } else {
+                closeModal();
+            }
+        });
+        actionsNode.appendChild(button);
+    });
+
+    modal.appendChild(titleNode);
+    modal.appendChild(bodyNode);
+    modal.appendChild(actionsNode);
+    overlay.appendChild(modal);
+
+    overlay.addEventListener('click', function(ev) {
+        if (ev.target === overlay) closeModal();
+    });
+
+    document.body.appendChild(overlay);
+    return closeModal;
+}
+
+async function openKernelModal() {
+    try {
+        const [status, arch, release] = await Promise.all([
+            getMihomoStatus(),
+            detectSystemArchitecture(),
+            getLatestMihomoRelease()
+        ]);
+
+        const asset = findKernelAsset(release, arch);
+        const localVersion = normalizeVersion(status.version);
+        const latestVersion = normalizeVersion(release ? release.version : '');
+
+        let downloadLabel = _('Download Kernel');
+        if (status.installed && release && localVersion && latestVersion && localVersion === latestVersion) {
+            downloadLabel = _('Reinstall Kernel');
+        } else if (status.installed && release) {
+            downloadLabel = _('Download Update');
+        }
+
+        const info = E('div', { 'class': 'miclash-modal-body miclash-kernel-info' }, [
+            E('div', {}, _('Status: %s').format(status.installed ? _('Installed') : _('Not installed'))),
+            E('div', {}, _('Installed version: %s').format(status.installed ? status.version : _('Not installed'))),
+            E('div', {}, _('Architecture: %s').format(arch)),
+            E('div', {}, _('Latest release: %s').format(release ? release.version : _('Unavailable')))
+        ]);
+
+        const buttons = [];
+
+        if (release && asset) {
+            buttons.push({
+                label: downloadLabel,
+                className: 'btn cbi-button-apply',
+                onClick: async function(ctx) {
+                    ctx.button.textContent = _('Downloading...');
+                    const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
+                    if (ok) {
+                        await refreshHeaderState();
+                        ctx.closeModal();
+                    }
+                }
+            });
+        }
+
+        buttons.push({
+            label: _('Restart Service'),
+            className: 'btn',
+            onClick: async function(ctx) {
+                ctx.button.textContent = _('Restarting...');
+                try {
+                    await execService('restart');
+                    notify('info', _('Clash service restarted successfully.'));
+                    await refreshHeaderState();
+                    ctx.closeModal();
+                } catch (e) {
+                    notify('error', _('Failed to restart Clash service: %s').format(e.message));
+                }
+            }
+        });
+
+        buttons.push({
+            label: _('Close'),
+            className: 'btn'
+        });
+
+        showModal({
+            title: _('Mihomo Kernel'),
+            body: info,
+            buttons: buttons
+        });
+    } catch (e) {
+        notify('error', _('Failed to load kernel information: %s').format(e.message));
+    }
+}
+
+async function readSubscriptionUrl() {
+    const settings = await readSettingsMap();
+    return String(settings.SUBSCRIPTION_URL || '').trim();
 }
 
 async function saveSubscriptionUrl(url) {
     const clean = String(url || '').trim();
     const value = clean.replace(/\r?\n/g, '');
+    const settings = await readSettingsMap();
+    settings.SUBSCRIPTION_URL = value;
+    await writeSettingsMap(settings);
+}
 
-    let raw = '';
+function looksLikeBase64Blob(text) {
+    const compact = String(text || '').replace(/\s+/g, '');
+    if (compact.length < 48) return false;
+    if (String(text || '').indexOf(':') !== -1) return false;
+    return /^[A-Za-z0-9+/=]+$/.test(compact);
+}
+
+const REMNAWAVE_CLIENT_TYPES = {
+    mihomo: true,
+    clash: true,
+    singbox: true,
+    stash: true,
+    json: true,
+    'v2ray-json': true
+};
+
+async function getOpenWrtReleaseVersion() {
     try {
-        raw = await fs.read(SETTINGS_PATH);
+        const release = await fs.read('/etc/openwrt_release');
+        const line = String(release || '').split('\n').find((item) => item.indexOf('DISTRIB_RELEASE=') === 0);
+        return line ? line.split('=')[1].replace(/['"]/g, '').trim() : '';
     } catch (e) {
-        raw = '';
+        return '';
+    }
+}
+
+async function getSystemModel() {
+    try {
+        return String(await fs.read('/tmp/sysinfo/model') || '').trim();
+    } catch (e) {
+        return '';
+    }
+}
+
+async function getHwidHash() {
+    const probes = [
+        "cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | md5sum | cut -c1-14",
+        "for i in /sys/class/net/*/address; do n=\"${i%/address}\"; n=\"${n##*/}\"; [ \"$n\" = \"lo\" ] && continue; cat \"$i\" 2>/dev/null | tr -d ':' | md5sum | cut -c1-14 && break; done"
+    ];
+
+    for (let i = 0; i < probes.length; i++) {
+        try {
+            const r = await fs.exec('/bin/sh', ['-c', probes[i]]);
+            if (r.code === 0) {
+                const hwid = String(r.stdout || '').trim();
+                if (hwid && hwid !== 'unknown') return hwid;
+            }
+        } catch (e) {}
     }
 
-    const lines = String(raw || '').split('\n').filter((line) => line !== '');
-    let replaced = false;
-    const out = lines.map((line) => {
-        if (line.indexOf('SUBSCRIPTION_URL=') === 0) {
-            replaced = true;
-            return 'SUBSCRIPTION_URL=' + value;
-        }
-        return line;
+    return '';
+}
+
+function buildSubscriptionClientProfile(settings, appVersion) {
+    const safeVersion = /^\d+\.\d+\.\d+/.test(String(appVersion || '')) ? String(appVersion) : '1.0.0';
+    const settingsUa = String(settings.HWID_USER_AGENT || '').trim();
+    const userAgent = settingsUa || ('MiClash/' + safeVersion);
+
+    return {
+        ua: userAgent
+    };
+}
+
+function normalizeSubscriptionDownloadUrl(rawUrl) {
+    let parsed = null;
+    try {
+        parsed = new URL(rawUrl);
+    } catch (e) {
+        return {
+            url: rawUrl,
+            mode: 'direct',
+            remnawaveCandidateUrl: null
+        };
+    }
+
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const subIndex = segments.indexOf('sub');
+    if (subIndex < 0 || !segments[subIndex + 1]) {
+        return {
+            url: parsed.toString(),
+            mode: 'direct',
+            remnawaveCandidateUrl: null
+        };
+    }
+
+    const clientType = String(segments[subIndex + 2] || '').toLowerCase();
+
+    if (clientType && REMNAWAVE_CLIENT_TYPES[clientType]) {
+        return {
+            url: parsed.toString(),
+            mode: 'remnawave-client-path',
+            remnawaveCandidateUrl: null
+        };
+    }
+
+    if (clientType && clientType !== 'info') {
+        return {
+            url: parsed.toString(),
+            mode: 'direct',
+            remnawaveCandidateUrl: null
+        };
+    }
+
+    const candidateSegments = segments.slice();
+    if (clientType === 'info') {
+        candidateSegments[subIndex + 2] = 'mihomo';
+    } else {
+        candidateSegments.push('mihomo');
+    }
+
+    const candidate = new URL(parsed.toString());
+    candidate.pathname = '/' + candidateSegments.join('/');
+
+    parsed.pathname = '/' + segments.join('/');
+
+    return {
+        url: parsed.toString(),
+        mode: 'direct',
+        remnawaveCandidateUrl: candidate.toString()
+    };
+}
+
+async function buildSubscriptionDeviceHeaders(settings) {
+    const headers = {};
+    const deviceOs = String(settings.HWID_DEVICE_OS || 'OpenWrt').trim() || 'OpenWrt';
+    headers['x-device-os'] = deviceOs;
+
+    const release = await getOpenWrtReleaseVersion();
+    if (release) headers['x-ver-os'] = release;
+
+    const model = await getSystemModel();
+    if (model) headers['x-device-model'] = model;
+
+    if (String(settings.ENABLE_HWID || '').toLowerCase() === 'true') {
+        const hwid = await getHwidHash();
+        if (hwid) headers['x-hwid'] = hwid;
+    }
+
+    return headers;
+}
+
+async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode) {
+    const args = [
+        '-L', '-fsS',
+        '-A', profile.ua,
+        '-H', 'Accept: application/yaml, text/yaml, text/plain, */*',
+        '-H', 'Cache-Control: no-cache',
+        '-H', 'Pragma: no-cache'
+    ];
+
+    Object.keys(deviceHeaders || {}).forEach((key) => {
+        const value = String(deviceHeaders[key] || '').trim();
+        if (!value) return;
+        args.push('-H');
+        args.push(key + ': ' + value);
     });
 
-    if (!replaced) {
-        out.push('SUBSCRIPTION_URL=' + value);
+    args.push(url);
+    args.push('-o');
+    args.push(TMP_SUBSCRIPTION_PATH);
+
+    const dl = await fs.exec('/usr/bin/curl', args);
+    if (dl.code !== 0) {
+        const msg = String(dl.stderr || dl.stdout || _('Download failed')).trim();
+        if (mode === 'remnawave-client-path' && /403/.test(msg)) {
+            throw new Error(_('Remnawave blocked /mihomo path (HTTP 403). Disable "Disable Subscription Access by Path" in Remnawave response-rules settings.'));
+        }
+        throw new Error(msg);
     }
 
-    await fs.write(SETTINGS_PATH, out.join('\n') + '\n');
+    const catResult = await fs.exec('/bin/cat', [TMP_SUBSCRIPTION_PATH]);
+    if (catResult.code !== 0) {
+        throw new Error(String(catResult.stderr || catResult.stdout || _('Unable to read downloaded file')).trim());
+    }
+
+    return String(catResult.stdout || '');
+}
+
+async function fetchSubscriptionAsYaml(url) {
+    const settings = await readSettingsMap();
+    const versions = await getVersions();
+    const profile = buildSubscriptionClientProfile(settings, versions.app);
+    const deviceHeaders = await buildSubscriptionDeviceHeaders(settings);
+    const resolved = normalizeSubscriptionDownloadUrl(url);
+    let mode = resolved.mode;
+
+    let payload = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, resolved.mode);
+    if (!payload.trim()) {
+        throw new Error(_('Downloaded file is empty.'));
+    }
+
+    if (looksLikeBase64Blob(payload) && resolved.remnawaveCandidateUrl) {
+        payload = await downloadSubscriptionWithProfile(
+            resolved.remnawaveCandidateUrl,
+            profile,
+            deviceHeaders,
+            'remnawave-client-path'
+        );
+        mode = 'remnawave-client-path';
+    }
+
+    if (looksLikeBase64Blob(payload)) {
+        throw new Error(_('The subscription server returned non-YAML data (likely base64 links). Ask your provider for Clash/Mihomo YAML output.'));
+    }
+
+    const tested = await testConfigContent(payload, false);
+    if (!tested.ok) {
+        throw new Error(tested.message || _('YAML validation failed.'));
+    }
+
+    return {
+        content: payload,
+        mode: mode
+    };
 }
 
 function extractTestError(testResult) {
@@ -260,9 +788,10 @@ async function testConfigContent(content, keepOnSuccess) {
 }
 
 async function refreshHeaderState() {
-    const [running, versions] = await Promise.all([
+    const [running, versions, kernelStatus] = await Promise.all([
         getServiceStatus(),
-        getVersions()
+        getVersions(),
+        getMihomoStatus()
     ]);
 
     if (startStopButton) {
@@ -275,9 +804,18 @@ async function refreshHeaderState() {
         statusBadge.textContent = running ? _('Service running') : _('Service stopped');
     }
 
-    if (versionBar) {
-        versionBar.textContent = _('MiClash: %s  |  Mihomo: %s  |  OpenWrt: %s')
-            .format(versions.app, versions.clash, versions.openwrt);
+    if (appVersionBadge) {
+        appVersionBadge.textContent = _('MiClash %s').format(versions.app);
+    }
+
+    if (kernelBadge) {
+        if (kernelStatus.installed) {
+            kernelBadge.textContent = _('Kernel %s').format(kernelStatus.version || versions.clash);
+            kernelBadge.classList.remove('miclash-pill-warn');
+        } else {
+            kernelBadge.textContent = _('Kernel not installed');
+            kernelBadge.classList.add('miclash-pill-warn');
+        }
     }
 }
 
@@ -334,14 +872,92 @@ async function initializeAceEditor(content) {
 }
 
 const PAGE_CSS = `
-.miclash-page { width: 100%; box-sizing: border-box; }
+#tabmenu, .cbi-tabmenu { display: none !important; }
+.miclash-page {
+    width: 100%;
+    box-sizing: border-box;
+    --miclash-bg: #f4f7fb;
+    --miclash-card-bg: #ffffff;
+    --miclash-border: #d7e0ea;
+    --miclash-text: #17202a;
+    --miclash-muted: #5f6f82;
+    --miclash-pill-bg: #f2f5ff;
+    --miclash-pill-border: #cfd8ff;
+    --miclash-pill-text: #2c3c56;
+}
+.miclash-page.miclash-theme-dark {
+    --miclash-bg: #101722;
+    --miclash-card-bg: #141e2b;
+    --miclash-border: #273447;
+    --miclash-text: #e7eef9;
+    --miclash-muted: #94a6bf;
+    --miclash-pill-bg: #1a2738;
+    --miclash-pill-border: #344a67;
+    --miclash-pill-text: #d4e0f2;
+}
+.miclash-page.miclash-theme-light {
+    --miclash-bg: #f4f7fb;
+    --miclash-card-bg: #ffffff;
+    --miclash-border: #d7e0ea;
+    --miclash-text: #17202a;
+    --miclash-muted: #5f6f82;
+    --miclash-pill-bg: #f2f5ff;
+    --miclash-pill-border: #cfd8ff;
+    --miclash-pill-text: #2c3c56;
+}
 .miclash-card {
-    background: var(--card-bg-color, var(--background-color, #fff));
-    border: 1px solid var(--border-color-medium, var(--border-color, #ddd));
+    background: var(--miclash-card-bg);
+    border: 1px solid var(--miclash-border);
     border-radius: 10px;
     padding: 16px;
     margin-bottom: 12px;
     box-sizing: border-box;
+    color: var(--miclash-text);
+}
+.miclash-topbar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.miclash-topbar-right {
+    justify-self: end;
+}
+.miclash-version-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.miclash-pill {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--miclash-pill-border);
+    background: var(--miclash-pill-bg);
+    color: var(--miclash-pill-text);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
+}
+.miclash-pill-btn {
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.miclash-pill-btn:hover {
+    border-color: #4f8cff;
+    transform: translateY(-1px);
+}
+.miclash-pill-warn {
+    border-color: #f59e0b;
+    color: #b45309;
+    background: rgba(245, 158, 11, 0.12);
+}
+.miclash-theme-btn {
+    min-width: 115px;
 }
 .miclash-title {
     margin: 0 0 8px;
@@ -350,7 +966,7 @@ const PAGE_CSS = `
 }
 .miclash-meta {
     font-size: 12px;
-    color: var(--text-color-high, #666);
+    color: var(--miclash-muted);
 }
 .miclash-actions {
     display: flex;
@@ -380,7 +996,7 @@ const PAGE_CSS = `
 .miclash-editor {
     width: 100%;
     height: 620px;
-    border: 1px solid var(--border-color-medium, var(--border-color, #ddd));
+    border: 1px solid var(--miclash-border);
     border-radius: 8px;
     margin-top: 10px;
 }
@@ -399,6 +1015,44 @@ const PAGE_CSS = `
     box-sizing: border-box;
 }
 .miclash-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.miclash-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 10, 18, 0.7);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.miclash-modal {
+    width: min(92vw, 420px);
+    border-radius: 10px;
+    border: 1px solid var(--miclash-border);
+    background: var(--miclash-card-bg);
+    color: var(--miclash-text);
+    padding: 16px;
+    box-sizing: border-box;
+}
+.miclash-modal-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+.miclash-modal-body {
+    font-size: 12px;
+    color: var(--miclash-muted);
+    line-height: 1.5;
+}
+.miclash-kernel-info {
+    display: grid;
+    gap: 6px;
+}
+.miclash-modal-actions {
+    margin-top: 14px;
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
@@ -423,7 +1077,23 @@ return view.extend({
 
         const styleNode = E('style', {}, PAGE_CSS);
 
-        versionBar = E('div', { 'class': 'miclash-meta' }, _('Loading versions...'));
+        appVersionBadge = E('span', { 'class': 'miclash-pill' }, _('MiClash ...'));
+        kernelBadge = E('button', {
+            'class': 'miclash-pill miclash-pill-btn',
+            'click': openKernelModal
+        }, _('Kernel ...'));
+        themeToggleButton = E('button', {
+            'class': 'btn miclash-theme-btn',
+            'click': async function() {
+                const nextTheme = currentUiTheme === 'dark' ? 'light' : 'dark';
+                applyUiTheme(nextTheme);
+                try {
+                    await saveThemePreference(nextTheme);
+                } catch (e) {
+                    notify('error', _('Failed to save theme preference: %s').format(e.message));
+                }
+            }
+        }, _('Theme: Light'));
         statusBadge = E('span', { 'class': 'miclash-status miclash-status-off' }, _('Checking service...'));
 
         startStopButton = E('button', {
@@ -517,16 +1187,8 @@ return view.extend({
                 this.disabled = true;
                 try {
                     await saveSubscriptionUrl(url);
-
-                    const dl = await fs.exec('/usr/bin/curl', ['-L', '-fsS', url, '-o', TMP_SUBSCRIPTION_PATH]);
-                    if (dl.code !== 0) {
-                        throw new Error(String(dl.stderr || dl.stdout || _('Download failed')).trim());
-                    }
-
-                    const downloaded = await fs.read(TMP_SUBSCRIPTION_PATH);
-                    if (!String(downloaded || '').trim()) {
-                        throw new Error(_('Downloaded file is empty.'));
-                    }
+                    const downloadedInfo = await fetchSubscriptionAsYaml(url);
+                    const downloaded = downloadedInfo.content;
 
                     const tested = await testConfigContent(downloaded, true);
                     if (!tested.ok) {
@@ -539,7 +1201,11 @@ return view.extend({
                     }
 
                     await execService('reload');
-                    notify('info', _('Subscription downloaded, validated and applied.'));
+                    if (downloadedInfo.mode === 'remnawave-client-path') {
+                        notify('info', _('Subscription downloaded, validated and applied (Remnawave /mihomo mode).'));
+                    } else {
+                        notify('info', _('Subscription downloaded, validated and applied.'));
+                    }
                 } catch (e) {
                     notify('error', _('Failed to apply subscription: %s').format(e.message));
                 } finally {
@@ -619,8 +1285,15 @@ return view.extend({
             styleNode,
 
             E('div', { 'class': 'miclash-card' }, [
+                E('div', { 'class': 'miclash-topbar' }, [
+                    E('div'),
+                    E('div', { 'class': 'miclash-version-center' }, [
+                        appVersionBadge,
+                        kernelBadge
+                    ]),
+                    E('div', { 'class': 'miclash-topbar-right' }, [themeToggleButton])
+                ]),
                 E('h2', { 'class': 'miclash-title' }, _('MiClash Control Center')),
-                versionBar,
                 E('div', { 'style': 'margin-top: 10px;' }, [statusBadge]),
                 E('div', { 'class': 'miclash-actions' }, [
                     startStopButton,
@@ -662,25 +1335,16 @@ return view.extend({
             ])
         ]);
 
+        pageRoot = page;
+
         setTimeout(async () => {
             try {
+                applyUiTheme(await readThemePreference());
                 await initializeAceEditor(configContent);
-                applyEditorTheme();
                 await refreshHeaderState();
-
-                try {
-                    const media = window.matchMedia('(prefers-color-scheme: dark)');
-                    const listener = function() { applyEditorTheme(); };
-                    if (typeof media.addEventListener === 'function') {
-                        media.addEventListener('change', listener);
-                    } else if (typeof media.addListener === 'function') {
-                        media.addListener(listener);
-                    }
-                } catch (e) {}
 
                 if (servicePollTimer) clearInterval(servicePollTimer);
                 servicePollTimer = setInterval(() => {
-                    applyEditorTheme();
                     refreshHeaderState().catch(() => {});
                 }, 5000);
             } catch (e) {

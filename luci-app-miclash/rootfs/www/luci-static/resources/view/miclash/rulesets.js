@@ -268,6 +268,7 @@ return view.extend({
         });
 
         const style = E('style', {}, `
+            #tabmenu, .cbi-tabmenu { display: none !important; }
             .cbi-section-title::before { content: '▶'; display: inline-block; margin-right: 10px; font-size: 0.8em; transition: transform 0.2s ease-in-out; }
             .cbi-section-title.active::before { transform: rotate(90deg); }
         `);
