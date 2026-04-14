@@ -7,7 +7,6 @@
 5. `miclash` -> `Settings` -> внизу скачать ядро Mihomo `Download Core`
 6. Вместо `TPROXY` лучше выбрать `Mixed (TCP+UDP)`
 7. Если используете подписки с модемом на белых списках, лучше отключить `Store rules and proxy providers in RAM (tmpfs)`
-8. По [мануалу](https://www.notion.so/Mihomo-15989188f6b480c2a883ece08af50ae1?pvs=21) настраиваем, а всё, что ниже, можно не читать.
 
 # Если не сработало, работаем клавиатурой:
 
