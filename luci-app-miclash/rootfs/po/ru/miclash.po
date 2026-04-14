@@ -662,3 +662,140 @@ msgstr "Проверка YAML не пройдена: %s"
 
 msgid "YAML validation passed."
 msgstr "Проверка YAML пройдена."
+
+### Missing UI translations (config.js) ###
+
+msgid "unknown"
+msgstr "неизвестно"
+
+msgid "Control"
+msgstr "Управление"
+
+msgid "Dashboard"
+msgstr "Панель"
+
+msgid "Mode"
+msgstr "Режим"
+
+msgid "Switch theme"
+msgstr "Сменить тему"
+
+msgid "Switch to dark theme"
+msgstr "Переключить на тёмную тему"
+
+msgid "Switch to light theme"
+msgstr "Переключить на светлую тему"
+
+msgid "Config"
+msgstr "Конфиг"
+
+msgid "Logs"
+msgstr "Логи"
+
+msgid "Main Config"
+msgstr "Основной конфиг"
+
+msgid "Traffic Scope"
+msgstr "Область трафика"
+
+msgid "Exclude mode: proxy all interfaces except selected ones"
+msgstr "Режим исключений: проксировать все интерфейсы, кроме выбранных"
+
+msgid "Explicit mode: proxy only selected interfaces"
+msgstr "Явный режим: проксировать только выбранные интерфейсы"
+
+msgid "Auto Detection"
+msgstr "Автоопределение"
+
+msgid "Auto detect LAN bridge"
+msgstr "Автоопределение LAN-моста"
+
+msgid "Auto detect WAN interface"
+msgstr "Автоопределение WAN-интерфейса"
+
+msgid "Detected LAN: %s"
+msgstr "Обнаружен LAN: %s"
+
+msgid "Detected WAN: %s"
+msgstr "Обнаружен WAN: %s"
+
+msgid "Interfaces"
+msgstr "Интерфейсы"
+
+msgid "Choose interfaces that should bypass proxy."
+msgstr "Выберите интерфейсы, которые должны обходить прокси."
+
+msgid "Choose interfaces that should go through proxy."
+msgstr "Выберите интерфейсы, трафик которых должен идти через прокси."
+
+msgid "WAN"
+msgstr "WAN"
+
+msgid "Ethernet"
+msgstr "Ethernet"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Other"
+msgstr "Прочее"
+
+msgid "Additional"
+msgstr "Дополнительно"
+
+msgid "Block QUIC (UDP/443)"
+msgstr "Блокировать QUIC (UDP/443)"
+
+msgid "Store rules/providers on tmpfs"
+msgstr "Хранить rules/providers в tmpfs"
+
+msgid "Inject HWID headers into proxy-providers"
+msgstr "Добавлять HWID-заголовки в proxy-providers"
+
+msgid "Clear Interface Selection"
+msgstr "Очистить выбор интерфейсов"
+
+msgid "Mode: Exclude (proxy all except selected interfaces)"
+msgstr "Режим: исключения (проксировать всё, кроме выбранных интерфейсов)"
+
+msgid "Auto WAN: %s"
+msgstr "Авто WAN: %s"
+
+msgid "Proxy mode: %s"
+msgstr "Режим прокси: %s"
+
+msgid "Tun stack: %s"
+msgstr "Стек TUN: %s"
+
+msgid "Refresh"
+msgstr "Обновить"
+
+msgid "Kernel"
+msgstr "Ядро"
+
+msgid "Status: %s"
+msgstr "Статус: %s"
+
+msgid "Installed version: %s"
+msgstr "Установленная версия: %s"
+
+msgid "Not installed"
+msgstr "Не установлено"
+
+msgid "Install Kernel"
+msgstr "Установить ядро"
+
+msgid "Settings saved."
+msgstr "Настройки сохранены."
+
+msgid "Settings saved and Clash service restarted."
+msgstr "Настройки сохранены, служба Clash перезапущена."
+
+msgid "Settings saved, but failed to restart Clash service: %s"
+msgstr "Настройки сохранены, но перезапустить службу Clash не удалось: %s"
+
+msgid "Kernel installed and service restarted."
+msgstr "Ядро установлено, служба перезапущена."
+
+msgid "Kernel installed, but failed to restart service: %s"
+msgstr "Ядро установлено, но перезапустить службу не удалось: %s"

@@ -189,20 +189,45 @@ function parseVersion(raw, fallback) {
 	return matched ? matched[1] : str.split('\n')[0];
 }
 
+function parsePackageVersion(raw, packageName) {
+	const text = String(raw || '').trim();
+	if (!text) return '';
+
+	const escaped = String(packageName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const patterns = [
+		new RegExp('^\\s*Version\\s*:\\s*([^\\s]+)', 'im'),
+		new RegExp(escaped + '\\s*-\\s*([^\\s]+)', 'i'),
+		new RegExp(escaped + '-([\\w.+~:-]+)', 'i'),
+		new RegExp('(\\d+\\.\\d+\\.\\d+(?:[-+][\\w.-]+)?)', 'i')
+	];
+
+	for (let i = 0; i < patterns.length; i++) {
+		const match = text.match(patterns[i]);
+		if (match && match[1]) return match[1].trim();
+	}
+
+	return '';
+}
+
 async function getVersions() {
 	const info = { app: 'unknown', clash: 'unknown' };
 
-	try {
-		const opkgMiclash = await fs.exec('/bin/opkg', ['list-installed', 'luci-app-miclash']);
-		const raw = String(opkgMiclash.stdout || '').trim();
-		const matched = raw.match(/luci-app-miclash[^\d]*([\d.]+(?:-\d+)?)/);
-		if (matched && matched[1]) info.app = matched[1];
-	} catch (e) {
+	const packageName = 'luci-app-miclash';
+	const packageQueries = [
+		['/bin/opkg', ['list-installed', packageName]],
+		['/bin/opkg', ['status', packageName]],
+		['/usr/bin/apk', ['info', '-v', packageName]],
+		['/usr/bin/apk', ['list', '--installed', packageName]],
+		['/usr/bin/apk', ['policy', packageName]]
+	];
+
+	for (let i = 0; i < packageQueries.length && info.app === 'unknown'; i++) {
+		const query = packageQueries[i];
 		try {
-			const apkMiclash = await fs.exec('/usr/bin/apk', ['info', '-e', 'luci-app-miclash']);
-			const raw = String(apkMiclash.stdout || '').trim();
-			const matched = raw.match(/luci-app-miclash-([\d.]+(?:-r\d+)?)/);
-			if (matched && matched[1]) info.app = matched[1];
+			const result = await fs.exec(query[0], query[1]);
+			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
+			const parsed = parsePackageVersion(raw, packageName);
+			if (parsed) info.app = parsed;
 		} catch (_) {}
 	}
 
@@ -339,6 +364,30 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 	}
 }
 
+async function installKernelFromSettings() {
+	const arch = await detectSystemArchitecture();
+	const release = await getLatestMihomoRelease();
+	const asset = findKernelAsset(release, arch);
+
+	if (!release) throw new Error(_('Failed to load kernel information: %s').format(_('Unavailable')));
+	if (!asset || !asset.browser_download_url) throw new Error(_('Failed to load kernel information: %s').format(_('Download failed')));
+
+	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
+	if (!ok) return false;
+
+	try {
+		await execService('restart');
+		notify('info', _('Kernel installed and service restarted.'));
+	} catch (e) {
+		notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
+	}
+
+	appState.kernelStatus = await getMihomoStatus();
+	appState.versions.clash = (appState.kernelStatus && appState.kernelStatus.version) || appState.versions.clash;
+	await refreshHeaderAndControl();
+	return true;
+}
+
 function showModal(options) {
 	const overlayClass = 'sbox-modal-overlay' + (options.overlayClass ? ' ' + options.overlayClass : '');
 	const modalClass = 'sbox-modal' + (options.modalClass ? ' ' + options.modalClass : '');
@@ -444,28 +493,18 @@ async function openKernelModal() {
 					ctx.button.textContent = _('Downloading...');
 					const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
 					if (ok) {
+						try {
+							await execService('restart');
+							notify('info', _('Kernel installed and service restarted.'));
+						} catch (e) {
+							notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
+						}
 						await refreshHeaderAndControl();
 						ctx.closeModal();
 					}
 				}
 			});
 		}
-
-		buttons.push({
-			label: _('Restart Service'),
-			className: 'cbi-button cbi-button-neutral',
-			onClick: async function(ctx) {
-				ctx.button.textContent = _('Restarting...');
-				try {
-					await execService('restart');
-					notify('info', _('Clash service restarted successfully.'));
-					await refreshHeaderAndControl();
-					ctx.closeModal();
-				} catch (e) {
-					notify('error', _('Failed to restart Clash service: %s').format(e.message));
-				}
-			}
-		});
 
 		buttons.push({
 			label: _('Close'),
@@ -1348,10 +1387,10 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			await fs.write(CONFIG_PATH, updatedConfig);
 		}
 
-		if (!opts.silent) {
-			notify('info', _('Settings saved. Restart Clash service to apply traffic interception changes.'));
-		}
-		return true;
+			if (!opts.silent) {
+				notify('info', _('Settings saved.'));
+			}
+			return true;
 	} catch (e) {
 		notify('error', _('Failed to save settings: %s').format(e.message));
 		return false;
@@ -1468,7 +1507,9 @@ async function initializeAceEditor(content) {
 	await loadScript(ACE_BASE + 'mode-yaml.js');
 
 	ace.config.set('basePath', ACE_BASE);
-	editor = ace.edit('miclash-editor');
+	const editorHost = (pageRoot && pageRoot.querySelector('#miclash-editor')) || document.getElementById('miclash-editor');
+	if (!editorHost) throw new Error('editor container #miclash-editor not found');
+	editor = ace.edit(editorHost);
 	editor.session.setMode('ace/mode/yaml');
 	editor.setValue(String(content || ''), -1);
 	editor.clearSelection();
@@ -1944,6 +1985,11 @@ function buildSettingsPaneHtml() {
 
 	const currentProxyMode = appState.proxyMode || s.proxyMode || 'tproxy';
 	const showTunStack = currentProxyMode === 'tun' || currentProxyMode === 'mixed';
+	const kernelInstalled = !!appState.kernelStatus.installed;
+	const kernelVersion = kernelInstalled
+		? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
+		: _('Not installed');
+	const kernelActionLabel = kernelInstalled ? _('Reinstall Kernel') : _('Install Kernel');
 
 	return '' +
 		'<div class="sbox-settings-grid">' +
@@ -1953,28 +1999,27 @@ function buildSettingsPaneHtml() {
 					'<input type="radio" name="sbox-interface-mode" value="exclude"' + (s.mode !== 'explicit' ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Exclude mode: proxy all interfaces except selected ones')) + '</span>' +
 				'</label>' +
-				'<label class="sbox-radio-row">' +
-					'<input type="radio" name="sbox-interface-mode" value="explicit"' + (s.mode === 'explicit' ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Explicit mode: proxy only selected interfaces')) + '</span>' +
-				'</label>' +
-			'</section>' +
+					'<label class="sbox-radio-row">' +
+						'<input type="radio" name="sbox-interface-mode" value="explicit"' + (s.mode === 'explicit' ? ' checked' : '') + ' />' +
+						'<span>' + safeText(_('Explicit mode: proxy only selected interfaces')) + '</span>' +
+					'</label>' +
+				'</section>' +
 
-			'<section class="sbox-settings-block">' +
-				'<h4>' + safeText(_('Proxy Engine')) + '</h4>' +
-				'<div class="sbox-muted" style="margin-bottom:8px;">' + safeText(_('Current mode is switched from header: %s').format(currentProxyMode)) + '</div>' +
-				'<div id="sbox-tun-stack-row" style="margin-top:8px;' + (showTunStack ? '' : 'display:none;') + '">' +
-					'<label>' + safeText(_('Tun stack')) + '</label>' +
-					'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
-						'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
-						'<option value="gvisor"' + ((s.tunStack || 'system') === 'gvisor' ? ' selected' : '') + '>gvisor</option>' +
-						'<option value="mixed"' + ((s.tunStack || 'system') === 'mixed' ? ' selected' : '') + '>mixed</option>' +
-					'</select>' +
-				'</div>' +
-			'</section>' +
+				'<section class="sbox-settings-block sbox-settings-block-kernel">' +
+					'<h4>' + safeText(_('Kernel')) + '</h4>' +
+					'<div class="sbox-kernel-meta">' +
+						'<div class="sbox-muted">' + safeText(_('Status: %s').format(kernelInstalled ? _('Installed') : _('Not installed'))) + '</div>' +
+						'<div class="sbox-muted">' + safeText(_('Installed version: %s').format(kernelVersion)) + '</div>' +
+					'</div>' +
+					'<div class="sbox-actions" style="margin-top:10px;">' +
+						'<button id="sbox-kernel-install" type="button" class="cbi-button cbi-button-apply">' + safeText(kernelActionLabel) + '</button>' +
+						'<button id="sbox-kernel-refresh" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Refresh')) + '</button>' +
+					'</div>' +
+				'</section>' +
 
-			'<section class="sbox-settings-block">' +
-				'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
-				'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' style="display:none"') + '>' +
+				'<section class="sbox-settings-block">' +
+					'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
+					'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' style="display:none"') + '>' +
 					'<input type="checkbox" id="sbox-auto-lan"' + (s.autoDetectLan ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Auto detect LAN bridge')) + '</span>' +
 				'</label>' +
@@ -1997,14 +2042,22 @@ function buildSettingsPaneHtml() {
 					) +
 				'</div>' +
 				buildInterfaceListHtml() +
-			'</section>' +
+				'</section>' +
 
-			'<section class="sbox-settings-block sbox-settings-block-wide">' +
-				'<h4>' + safeText(_('Additional')) + '</h4>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Block QUIC (UDP/443)')) + '</span>' +
-				'</label>' +
+				'<section class="sbox-settings-block sbox-settings-block-wide">' +
+					'<h4>' + safeText(_('Additional')) + '</h4>' +
+					'<div id="sbox-tun-stack-row" style="margin-bottom:10px;' + (showTunStack ? '' : 'display:none;') + '">' +
+						'<label>' + safeText(_('Tun stack')) + '</label>' +
+						'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
+							'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
+							'<option value="gvisor"' + ((s.tunStack || 'system') === 'gvisor' ? ' selected' : '') + '>gvisor</option>' +
+							'<option value="mixed"' + ((s.tunStack || 'system') === 'mixed' ? ' selected' : '') + '>mixed</option>' +
+						'</select>' +
+					'</div>' +
+					'<label class="sbox-checkbox-row">' +
+						'<input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' />' +
+						'<span>' + safeText(_('Block QUIC (UDP/443)')) + '</span>' +
+					'</label>' +
 				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Store rules/providers on tmpfs')) + '</span>' +
@@ -2024,13 +2077,12 @@ function buildSettingsPaneHtml() {
 					'</div>' +
 				'</div>' +
 			'</section>' +
-		'</div>' +
+			'</div>' +
 
-		'<div class="sbox-actions" style="margin-top:10px;">' +
-			'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save Settings')) + '</button>' +
-			'<button id="sbox-settings-clear" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Clear Interface Selection')) + '</button>' +
-			'<button id="sbox-settings-restart" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Restart Service')) + '</button>' +
-		'</div>' +
+			'<div class="sbox-actions" style="margin-top:10px;">' +
+				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save Settings')) + '</button>' +
+				'<button id="sbox-settings-clear" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Clear Interface Selection')) + '</button>' +
+			'</div>' +
 
 		'<div id="sbox-settings-status" class="sbox-settings-status">' +
 			buildSettingsSummary() +
@@ -2038,16 +2090,14 @@ function buildSettingsPaneHtml() {
 }
 
 function buildPageHtml() {
-	const versionApp = safeText(appState.versions.app || 'unknown');
-	const versionKernel = safeText(appState.kernelStatus.installed
-		? (appState.kernelStatus.version || appState.versions.clash || 'installed')
-		: _('not installed'));
+	const versionApp = safeText(appState.versions.app || _('unknown'));
+	const versionKernel = safeText(appState.versions.clash || _('unknown'));
 
 	return '' +
 		'<div class="sbox-header">' +
 			'MiClash <strong id="sbox-app-version">' + versionApp + '</strong>' +
 			'<span class="sbox-header-dot">|</span>' +
-			'mihomo <strong id="sbox-kernel-version">' + safeText(appState.versions.clash || 'unknown') + '</strong>' +
+			'mihomo <strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
 			'<span class="sbox-header-dot">|</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
 			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select">' +
@@ -2056,7 +2106,7 @@ function buildPageHtml() {
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
 			'<button id="sbox-theme-toggle" type="button" class="cbi-button cbi-button-neutral sbox-header-button sbox-theme-toggle" title="' + safeText(_('Switch theme')) + '">o</button>' +
-			'<button id="sbox-kernel-badge" type="button" class="cbi-button cbi-button-neutral sbox-header-button">' + safeText(_('Kernel: %s').format(versionKernel)) + '</button>' +
+			'<button id="sbox-dashboard" type="button" class="cbi-button cbi-button-neutral sbox-header-button">' + safeText(_('Dashboard')) + '</button>' +
 		'</div>' +
 
 		'<div class="sbox-card">' +
@@ -2065,18 +2115,16 @@ function buildPageHtml() {
 				'<button type="button" class="sbox-tab" data-ctrl-tab="settings">' + safeText(_('Settings')) + '</button>' +
 			'</div>' +
 
-			'<div id="sbox-pane-control">' +
-				'<div class="sbox-row">' +
-					'<span id="sbox-status" class="sbox-status sbox-status-off">' +
-						'<span class="sbox-dot sbox-dot-off"></span>' +
-						'<span id="sbox-status-label">' + safeText(_('Service stopped')) + '</span>' +
-					'</span>' +
-					'<button id="sbox-start-stop" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Start')) + '</button>' +
-					'<button id="sbox-restart" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Restart')) + '</button>' +
-					'<button id="sbox-dashboard" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Dashboard')) + '</button>' +
+				'<div id="sbox-pane-control">' +
+					'<div class="sbox-row">' +
+						'<span id="sbox-status" class="sbox-status sbox-status-off">' +
+							'<span class="sbox-dot sbox-dot-off"></span>' +
+							'<span id="sbox-status-label">' + safeText(_('Service stopped')) + '</span>' +
+						'</span>' +
+						'<button id="sbox-start-stop" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Start')) + '</button>' +
+						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Restart')) + '</button>' +
+					'</div>' +
 				'</div>' +
-				'<div id="sbox-control-meta" class="sbox-muted" style="margin-top:8px;">' + safeText(_('Use Start/Stop for service lifecycle, and Dashboard for external UI.')) + '</div>' +
-			'</div>' +
 
 			'<div id="sbox-pane-settings" style="display:none"></div>' +
 		'</div>' +
@@ -2126,7 +2174,6 @@ function updateHeaderAndControlDom() {
 	const appVersion = pageRoot.querySelector('#sbox-app-version');
 	const kernelVersion = pageRoot.querySelector('#sbox-kernel-version');
 	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
-	const kernelBadge = pageRoot.querySelector('#sbox-kernel-badge');
 
 	if (status && statusLabel && dot) {
 		status.classList.toggle('sbox-status-on', appState.serviceRunning);
@@ -2142,16 +2189,9 @@ function updateHeaderAndControlDom() {
 		startStop.classList.toggle('cbi-button-apply', !appState.serviceRunning);
 	}
 
-	if (appVersion) appVersion.textContent = appState.versions.app || 'unknown';
-	if (kernelVersion) kernelVersion.textContent = appState.versions.clash || 'unknown';
+	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
+	if (kernelVersion) kernelVersion.textContent = appState.versions.clash || _('unknown');
 	if (modeSelect) modeSelect.value = normalizeProxyMode(appState.proxyMode);
-
-	if (kernelBadge) {
-		const kernelText = appState.kernelStatus.installed
-			? (appState.kernelStatus.version || appState.versions.clash || 'installed')
-			: _('not installed');
-		kernelBadge.textContent = _('Kernel: %s').format(kernelText);
-	}
 }
 
 async function refreshHeaderAndControl() {
@@ -2235,14 +2275,23 @@ function bindSettingsPaneEvents() {
 		});
 	}
 
-	const restartBtn = pane.querySelector('#sbox-settings-restart');
-	if (restartBtn) {
-		restartBtn.addEventListener('click', () => withButtons(restartBtn, async () => {
-			await execService('restart');
-			notify('info', _('Clash service restarted successfully.'));
-			await refreshHeaderAndControl();
+	const kernelInstallBtn = pane.querySelector('#sbox-kernel-install');
+	if (kernelInstallBtn) {
+		kernelInstallBtn.addEventListener('click', () => withButtons(kernelInstallBtn, async () => {
+			await installKernelFromSettings();
+			renderSettingsPane();
 		}).catch((e) => {
-			notify('error', _('Failed to restart Clash service: %s').format(e.message));
+			notify('error', _('Failed to load kernel information: %s').format(e.message));
+		}));
+	}
+
+	const kernelRefreshBtn = pane.querySelector('#sbox-kernel-refresh');
+	if (kernelRefreshBtn) {
+		kernelRefreshBtn.addEventListener('click', () => withButtons(kernelRefreshBtn, async () => {
+			await refreshHeaderAndControl();
+			renderSettingsPane();
+		}).catch((e) => {
+			notify('error', _('Failed to load kernel information: %s').format(e.message));
 		}));
 	}
 
@@ -2259,33 +2308,42 @@ function bindSettingsPaneEvents() {
 				formState.autoDetectLan,
 				formState.autoDetectWan,
 				formState.blockQuic,
-				formState.useTmpfsRules,
-				formState.selected,
-				formState.enableHwid,
-				formState.hwidUserAgent,
-				formState.hwidDeviceOS
-			);
+					formState.useTmpfsRules,
+					formState.selected,
+					formState.enableHwid,
+					formState.hwidUserAgent,
+					formState.hwidDeviceOS,
+					{ silent: true }
+				);
 
-			if (!ok) return;
+				if (!ok) return;
+				try {
+					await execService('restart');
+					notify('info', _('Settings saved and Clash service restarted.'));
+				} catch (e) {
+					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
+				}
 
-			appState.settings = await loadOperationalSettings();
-			appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode);
-			appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
-			appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
-			appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
+				appState.settings = await loadOperationalSettings();
+				appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode);
+				appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
+				appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
+				appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
+				appState.serviceRunning = await getServiceStatus();
 
-			const freshConfig = await L.resolveDefault(fs.read(CONFIG_PATH), '');
-			appState.configContent = freshConfig;
-			if (editor) {
-				editor.setValue(String(freshConfig || ''), -1);
-				editor.clearSelection();
-			}
+				const freshConfig = await L.resolveDefault(fs.read(CONFIG_PATH), '');
+				appState.configContent = freshConfig;
+				if (editor) {
+					editor.setValue(String(freshConfig || ''), -1);
+					editor.clearSelection();
+				}
 
-			renderSettingsPane();
-			updateHeaderAndControlDom();
-		}).catch((e) => {
-			notify('error', _('Failed to save settings: %s').format(e.message));
-		}));
+				await refreshHeaderAndControl();
+				renderSettingsPane();
+				updateHeaderAndControlDom();
+			}).catch((e) => {
+				notify('error', _('Failed to save settings: %s').format(e.message));
+			}));
 	}
 }
 
@@ -2332,11 +2390,6 @@ function startControlPolling() {
 }
 
 function bindControlAndHeaderEvents() {
-	const kernelBtn = pageRoot.querySelector('#sbox-kernel-badge');
-	if (kernelBtn) {
-		kernelBtn.addEventListener('click', () => openKernelModal());
-	}
-
 	const themeBtn = pageRoot.querySelector('#sbox-theme-toggle');
 	if (themeBtn) {
 		themeBtn.addEventListener('click', () => {
@@ -2828,6 +2881,13 @@ const PAGE_CSS = `
 	font-size: 13px;
 	color: var(--sbox-text);
 }
+.sbox-settings-block-kernel {
+	grid-row: span 2;
+}
+.sbox-kernel-meta {
+	display: grid;
+	gap: 4px;
+}
 .sbox-settings-block-wide {
 	grid-column: 1 / -1;
 }
@@ -3079,6 +3139,9 @@ const PAGE_CSS = `
 	}
 	.sbox-settings-grid {
 		grid-template-columns: 1fr;
+	}
+	.sbox-settings-block-kernel {
+		grid-row: auto;
 	}
 	.sbox-form-grid {
 		grid-template-columns: 1fr;
