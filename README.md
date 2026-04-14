@@ -1,6 +1,4 @@
-# Установка SSClash на OpenWrt
-
-Super Simple Clash от [Zerolab.net](http://Zerolab.net)
+# Установка miclash на OpenWrt
 
 1. Скачать свежую https://github.com/ang3el7z/luci-app-miclash/releases
 2. Веб интерфейс -> `Software` -> `Update lists` -> `Upload Package` установить скачанный файл `.ipk`
