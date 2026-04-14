@@ -193,6 +193,19 @@ function sanitizeAppVersion(version) {
 	return String(version || '').replace(/-r\d+$/i, '');
 }
 
+function parseInstalledAppVersion(raw) {
+	const text = String(raw || '').trim();
+	if (!text) return '';
+
+	const opkgLine = text.match(/(?:^|\n)\s*luci-app-miclash\s*-\s*([^\s]+)\s*$/im);
+	if (opkgLine && opkgLine[1]) return String(opkgLine[1]).replace(/-\d+$/, '');
+
+	const apkLine = text.match(/(?:^|\n)\s*luci-app-miclash-([^\s]+)\s*$/im);
+	if (apkLine && apkLine[1]) return String(apkLine[1]).replace(/-r\d+$/i, '');
+
+	return '';
+}
+
 async function getVersions() {
 	const info = { app: 'unknown', clash: 'unknown' };
 
@@ -200,7 +213,9 @@ async function getVersions() {
 		const opkgMiclash = await fs.exec('/bin/sh', ['-c', 'opkg list-installed luci-app-miclash 2>/dev/null']);
 		const apkMiclash = await fs.exec('/bin/sh', ['-c', 'apk info -v luci-app-miclash 2>/dev/null']);
 		const raw = String(opkgMiclash.stdout || apkMiclash.stdout || '').trim();
-		if (raw) info.app = sanitizeAppVersion(parseVersion(raw, 'installed'));
+		const detected = parseInstalledAppVersion(raw);
+		if (detected) info.app = sanitizeAppVersion(detected);
+		else if (raw) info.app = sanitizeAppVersion(parseVersion(raw, 'installed'));
 	} catch (e) {}
 
 	try {
