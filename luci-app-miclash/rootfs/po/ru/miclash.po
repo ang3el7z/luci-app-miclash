@@ -954,6 +954,9 @@ msgstr "Пакет MiClash загружен и установлен."
 msgid "MiClash package installed. Reloading interface..."
 msgstr "Пакет MiClash установлен. Перезагрузка интерфейса..."
 
+msgid "Connection interrupted while finalizing MiClash update. Reloading interface..."
+msgstr "Соединение прервалось во время завершения обновления MiClash. Перезагрузка интерфейса..."
+
 msgid "Failed to update MiClash: %s"
 msgstr "Не удалось обновить MiClash: %s"
 

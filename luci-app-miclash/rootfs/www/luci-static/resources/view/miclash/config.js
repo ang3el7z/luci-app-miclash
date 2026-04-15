@@ -545,16 +545,36 @@ function resolveKernelActionState() {
 	};
 }
 
-async function refreshReleaseMeta() {
+function shouldCheckAppRelease(force) {
+	return !!force || resolveAppActionState().kind !== 'update';
+}
+
+function shouldCheckKernelRelease(force) {
+	return !!force || resolveKernelActionState().kind !== 'update';
+}
+
+async function refreshReleaseMeta(options) {
+	const opts = options || {};
+	const force = !!opts.force;
+	const checkApp = shouldCheckAppRelease(force);
+	const checkKernel = shouldCheckKernelRelease(force);
+
+	if (!checkApp && !checkKernel) return false;
+
 	const [appRelease, kernelRelease] = await Promise.all([
-		getLatestMiClashRelease(),
-		getLatestMihomoRelease()
+		checkApp ? getLatestMiClashRelease() : Promise.resolve(null),
+		checkKernel ? getLatestMihomoRelease() : Promise.resolve(null)
 	]);
 
-	appState.releaseMeta.appVersion = appRelease ? normalizeAppVersion(appRelease.version || '') : '';
-	appState.releaseMeta.kernelVersion = kernelRelease ? normalizeVersion(kernelRelease.version || '') : '';
+	if (checkApp) {
+		appState.releaseMeta.appVersion = appRelease ? normalizeAppVersion(appRelease.version || '') : '';
+	}
+	if (checkKernel) {
+		appState.releaseMeta.kernelVersion = kernelRelease ? normalizeVersion(kernelRelease.version || '') : '';
+	}
 	appState.releaseMeta.checkedAt = Date.now();
 	updateHeaderAndControlDom();
+	return true;
 }
 
 function findKernelAsset(release, arch) {
@@ -630,6 +650,17 @@ async function execOrThrow(bin, args, fallbackMessage) {
 	throw new Error(String(result.stderr || result.stdout || fallbackMessage || _('Command failed')).trim());
 }
 
+function isRpcReconnectLikeError(message) {
+	const text = String(message || '').toLowerCase();
+	if (!text) return false;
+	if (text.indexOf('xhr') !== -1 && text.indexOf('timeout') !== -1) return true;
+	if (text.indexOf('request timed out') !== -1) return true;
+	if (text.indexOf('networkerror') !== -1) return true;
+	if (text.indexOf('failed to fetch') !== -1) return true;
+	if (text.indexOf('connection') !== -1 && (text.indexOf('closed') !== -1 || text.indexOf('reset') !== -1 || text.indexOf('refused') !== -1)) return true;
+	return false;
+}
+
 async function installMiClashDependencies(manager) {
 	await execOrThrow(manager.bin, ['update'], _('Failed to update package index.'));
 
@@ -673,10 +704,19 @@ async function installMiClashFromSettings() {
 		await installMiClashDependencies(manager);
 		await execOrThrow('/usr/bin/curl', ['-L', '-fsS', asset.browser_download_url, '-o', tmpPath], _('Download failed'));
 
-		if (manager.type === 'apk') {
-			await execOrThrow(manager.bin, ['add', tmpPath, '--allow-untrusted'], _('Failed to install MiClash package.'));
-		} else {
-			await execOrThrow(manager.bin, ['install', tmpPath], _('Failed to install MiClash package.'));
+		try {
+			if (manager.type === 'apk') {
+				await execOrThrow(manager.bin, ['add', tmpPath, '--allow-untrusted'], _('Failed to install MiClash package.'));
+			} else {
+				await execOrThrow(manager.bin, ['install', tmpPath], _('Failed to install MiClash package.'));
+			}
+		} catch (e) {
+			if (!isRpcReconnectLikeError(e.message)) throw e;
+			notify('info', _('Connection interrupted while finalizing MiClash update. Reloading interface...'));
+			setTimeout(() => {
+				window.location.reload();
+			}, 3000);
+			return true;
 		}
 
 		notify('info', _('MiClash package downloaded and installed.'));
@@ -698,7 +738,7 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 	const targetFile = '/opt/clash/bin/clash';
 
 	try {
-		notify('info', _('Downloading Mihomo kernel...'));
+		notify('info', _('Downloading mihomo kernel...'));
 
 		const curlResult = await fs.exec('/usr/bin/curl', ['-L', '-fsS', downloadUrl, '-o', downloadPath]);
 		if (curlResult.code !== 0) {
@@ -744,7 +784,7 @@ async function installKernelFromSettings() {
 	appState.kernelStatus = await getMihomoStatus();
 	appState.versions.clash = (appState.kernelStatus && appState.kernelStatus.version) || appState.versions.clash;
 	await refreshHeaderAndControl();
-	await refreshReleaseMeta();
+	await refreshReleaseMeta({ force: true });
 	return true;
 }
 
@@ -2852,7 +2892,7 @@ function startUpdatePolling() {
 
 	updatePollTimer = setInterval(() => {
 		if (document.hidden) return;
-		refreshReleaseMeta().catch(() => {});
+		refreshReleaseMeta({ force: false }).catch(() => {});
 	}, UPDATE_CHECK_MS);
 }
 
@@ -2882,7 +2922,9 @@ function bindControlAndHeaderEvents() {
 			}).finally(async () => {
 				if (appAction && appAction.isConnected) {
 					appAction.classList.remove('sbox-version-action-busy');
-					await refreshHeaderAndControl();
+					try {
+						await refreshHeaderAndControl();
+					} catch (refreshError) {}
 					updateHeaderAndControlDom();
 				}
 			});
@@ -3881,7 +3923,7 @@ return view.extend({
 		bindTabEvents();
 		renderSettingsPane();
 		updateHeaderAndControlDom();
-		refreshReleaseMeta().catch(() => {});
+		refreshReleaseMeta({ force: true }).catch(() => {});
 
 		startControlPolling();
 		startUpdatePolling();
@@ -3894,7 +3936,7 @@ return view.extend({
 				startLogPolling();
 			}
 			if (!document.hidden) {
-				refreshReleaseMeta().catch(() => {});
+				refreshReleaseMeta({ force: false }).catch(() => {});
 			}
 		});
 
