@@ -831,3 +831,182 @@ msgstr "%s загружен и сохранён."
 
 msgid "%s saved."
 msgstr "%s сохранён."
+
+### Added missing strings ###
+
+msgid "A ruleset with this name already exists."
+msgstr "Список с таким именем уже существует."
+
+msgid "Architecture: %s"
+msgstr "Архитектура: %s"
+
+msgid "Are you sure you want to delete \"%s\"?"
+msgstr "Вы уверены, что хотите удалить \"%s\"?"
+
+msgid "Are you sure you want to delete the list \"%s\"? This action cannot be undone."
+msgstr "Вы уверены, что хотите удалить список \"%s\"? Это действие необратимо."
+
+msgid "Auto LAN: %s"
+msgstr "Авто LAN: %s"
+
+msgid "Cannot save proxy mode."
+msgstr "Не удалось сохранить режим прокси."
+
+msgid "Clear"
+msgstr "Очистить"
+
+msgid "Clear Editor"
+msgstr "Очистить редактор"
+
+msgid "Clear editor?"
+msgstr "Очистить редактор?"
+
+msgid "Close"
+msgstr "Закрыть"
+
+msgid "Download Kernel"
+msgstr "Скачать ядро"
+
+msgid "Example usage in config.yaml"
+msgstr "Пример использования в config.yaml"
+
+msgid "Failed to create ruleset."
+msgstr "Не удалось создать список правил."
+
+msgid "Failed to delete list \"%s\": %s"
+msgstr "Не удалось удалить список \"%s\": %s"
+
+msgid "Failed to load kernel information: %s"
+msgstr "Не удалось загрузить информацию о ядре: %s"
+
+msgid "Failed to open rulesets: %s"
+msgstr "Не удалось открыть списки правил: %s"
+
+msgid "Failed to refresh logs: %s"
+msgstr "Не удалось обновить журналы: %s"
+
+msgid "Failed to save IP-CIDR list: %s"
+msgstr "Не удалось сохранить список IP-CIDR: %s"
+
+msgid "Failed to save list \"%s\": %s"
+msgstr "Не удалось сохранить список \"%s\": %s"
+
+msgid "Failed to save ruleset: %s"
+msgstr "Не удалось сохранить список правил: %s"
+
+msgid "Failed to save theme preference: %s"
+msgstr "Не удалось сохранить предпочтение темы: %s"
+
+msgid "Failed to switch proxy mode: %s"
+msgstr "Не удалось переключить режим прокси: %s"
+
+msgid "Invalid name. Use letters, numbers, \"_\" or \"-\"."
+msgstr "Некорректное имя. Используйте буквы, цифры, \"_\" или \"-\"."
+
+msgid "IP-CIDR list saved and firewall rules updated."
+msgstr "Список IP-CIDR сохранён, правила файрвола обновлены."
+
+msgid "IP-CIDR list saved, but firewall update failed: %s"
+msgstr "Список IP-CIDR сохранён, но обновление файрвола не удалось: %s"
+
+msgid "Kernel download failed: %s"
+msgstr "Ошибка загрузки ядра: %s"
+
+msgid "Kernel Settings"
+msgstr "Настройки ядра"
+
+msgid "Latest release: %s"
+msgstr "Последний релиз: %s"
+
+msgid "List \"%s\" has been deleted."
+msgstr "Список \"%s\" удалён."
+
+msgid "List \"%s\" saved successfully."
+msgstr "Список \"%s\" успешно сохранён."
+
+msgid "Manage local .txt lists for rule-providers."
+msgstr "Управление локальными .txt списками для rule-providers."
+
+msgid "Manual interfaces: %s"
+msgstr "Интерфейсы вручную: %s"
+
+msgid "Mihomo kernel downloaded and installed."
+msgstr "Ядро Mihomo загружено и установлено."
+
+msgid "Mode: Explicit (proxy only selected interfaces)"
+msgstr "Режим: Явный (прокси только для выбранных интерфейсов)"
+
+msgid "New list \"%s\" created."
+msgstr "Новый список \"%s\" создан."
+
+msgid "new-list-name"
+msgstr "новый-список"
+
+msgid "No file selected"
+msgstr "Файл не выбран"
+
+msgid "No interfaces detected."
+msgstr "Интерфейсы не обнаружены."
+
+msgid "No ruleset selected. Create one to begin."
+msgstr "Список правил не выбран. Создайте его для начала."
+
+msgid "No rulesets yet."
+msgstr "Списков правил пока нет."
+
+msgid "One IPv4/CIDR per line. Save applies firewall update without restarting Mihomo."
+msgstr "По одному IPv4/CIDR в строке. Сохранение обновляет файрвол без перезапуска Mihomo."
+
+msgid "Proxy mode switched to %s. Service restarted."
+msgstr "Режим прокси переключён на %s. Служба перезапущена."
+
+msgid "Remnawave blocked /mihomo path (HTTP 403). Disable \"Disable Subscription Access by Path\" in Remnawave response-rules settings."
+msgstr "Remnawave заблокировал путь /mihomo (HTTP 403). Отключите \"Disable Subscription Access by Path\" в настройках response-rules Remnawave."
+
+msgid "Ruleset \"%s\" created."
+msgstr "Список правил \"%s\" создан."
+
+msgid "Ruleset \"%s\" deleted."
+msgstr "Список правил \"%s\" удалён."
+
+msgid "Ruleset \"%s\" saved."
+msgstr "Список правил \"%s\" сохранён."
+
+msgid "Save IP-CIDR List"
+msgstr "Сохранить список IP-CIDR"
+
+msgid "Save URL / Update Config"
+msgstr "Сохранить URL / Обновить конфиг"
+
+msgid "Subscription downloaded and applied (Remnawave /mihomo fallback)."
+msgstr "Подписка загружена и применена (fallback Remnawave /mihomo)."
+
+msgid "Subscription downloaded and applied."
+msgstr "Подписка загружена и применена."
+
+msgid "The subscription server returned links/base64 instead of Clash YAML. For Remnawave use the /mihomo subscription path."
+msgstr "Сервер подписки вернул links/base64 вместо Clash YAML. Для Remnawave используйте путь подписки /mihomo."
+
+msgid "This name is reserved."
+msgstr "Это имя зарезервировано."
+
+msgid "This will clear only editor content. File is not modified until you click Save."
+msgstr "Это очистит только содержимое редактора. Файл не изменится, пока вы не нажмёте \"Сохранить\"."
+
+msgid "Unable to read downloaded file"
+msgstr "Не удалось прочитать загруженный файл"
+
+msgid "Unavailable"
+msgstr "Недоступно"
+
+msgid "Updated: %s"
+msgstr "Обновлено: %s"
+
+msgid "Virtual"
+msgstr "Виртуальные"
+
+msgid "VPN / Tunnel"
+msgstr "VPN / Туннель"
+
+msgid "YAML validation failed."
+msgstr "Проверка YAML завершилась ошибкой."

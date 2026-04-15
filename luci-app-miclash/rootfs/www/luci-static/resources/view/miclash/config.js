@@ -206,7 +206,8 @@ function applyThemeToEditor(editorInstance) {
 
 async function readThemePreference() {
 	const settings = await readSettingsMap();
-	return normalizeTheme(settings[UI_THEME_KEY] || 'dark');
+	const saved = String(settings[UI_THEME_KEY] || '').trim();
+	return saved ? normalizeTheme(saved) : '';
 }
 
 async function saveThemePreference(theme) {
@@ -219,6 +220,24 @@ function applyEditorTheme() {
 	applyThemeToEditor(editor);
 	applyThemeToEditor(rulesetMainEditor);
 	applyThemeToEditor(rulesetWhitelistEditor);
+}
+
+function detectInitialTheme() {
+	const root = document.documentElement;
+	const body = document.body;
+	const signal = [
+		root ? root.className : '',
+		body ? body.className : '',
+		root ? root.getAttribute('data-theme') : '',
+		root ? root.getAttribute('theme') : '',
+		body ? body.getAttribute('data-theme') : '',
+		body ? body.getAttribute('theme') : ''
+	].join(' ').toLowerCase();
+
+	if (/(^|\s)(dark|night)(\s|$)/.test(signal)) return 'dark';
+	if (/(^|\s)(light|bright)(\s|$)/.test(signal)) return 'light';
+	if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+	return 'light';
 }
 
 function applyUiTheme(theme) {
@@ -308,75 +327,17 @@ function parseVersionFromOpkgStatus(raw, packageNames) {
 	return '';
 }
 
-function parseVersionFromApkDb(raw, packageNames) {
-	const text = String(raw || '');
-	if (!text) return '';
-
-	for (let i = 0; i < packageNames.length; i++) {
-		const escaped = String(packageNames[i] || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		const pattern = new RegExp('(^|\\n)P:' + escaped + '\\n[\\s\\S]*?\\nV:([^\\s\\n]+)', 'i');
-		const match = text.match(pattern);
-		if (match && match[2]) return match[2].trim();
-	}
-
-	return '';
+function normalizeAppVersion(version) {
+	const str = String(version || '').trim();
+	if (!str) return '';
+	const numeric = str.match(/^\d+(?:\.\d+)+/);
+	if (numeric && numeric[0]) return numeric[0];
+	return str.replace(/-r\d+$/i, '').replace(/-\d+$/, '');
 }
 
 async function getVersions() {
 	const info = { app: 'unknown', clash: 'unknown' };
-
 	const packageName = 'luci-app-miclash';
-	const packageNames = [
-		'luci-app-miclash',
-		'luci-app-miclash_git',
-		'luci-i18n-miclash-ru',
-		'miclash'
-	];
-	const parseAnyPackageVersion = (raw) => {
-		for (let i = 0; i < packageNames.length; i++) {
-			const parsed = parsePackageVersion(raw, packageNames[i]);
-			if (parsed) return parsed;
-		}
-		return '';
-	};
-
-	const packageQueries = [
-		['/bin/opkg', ['list-installed', packageName]],
-		['/bin/opkg', ['list-installed']],
-		['/bin/opkg', ['status', packageName]],
-		['/bin/opkg', ['status']],
-		['/usr/bin/apk', ['info', '-v', packageName]],
-		['/usr/bin/apk', ['info', '-v']],
-		['/usr/bin/apk', ['list', '--installed', packageName]],
-		['/usr/bin/apk', ['list', '--installed']],
-		['/usr/bin/apk', ['policy', packageName]]
-	];
-
-	for (let i = 0; i < packageQueries.length && info.app === 'unknown'; i++) {
-		const query = packageQueries[i];
-		try {
-			const result = await fs.exec(query[0], query[1]);
-			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-			const parsed = parseAnyPackageVersion(raw);
-			if (parsed) info.app = parsed;
-		} catch (_) {}
-	}
-
-	if (info.app === 'unknown') {
-		try {
-			const opkgStatusRaw = await fs.read('/usr/lib/opkg/status');
-			const parsed = parseVersionFromOpkgStatus(opkgStatusRaw, packageNames);
-			if (parsed) info.app = parsed;
-		} catch (_) {}
-	}
-
-	if (info.app === 'unknown') {
-		try {
-			const apkDbRaw = await fs.read('/lib/apk/db/installed');
-			const parsed = parseVersionFromApkDb(apkDbRaw, packageNames);
-			if (parsed) info.app = parsed;
-		} catch (_) {}
-	}
 
 	try {
 		const clashV = await fs.exec('/opt/clash/bin/clash', ['-v']);
@@ -389,9 +350,30 @@ async function getVersions() {
 		}
 	} catch (e) {}
 
+	try {
+		const result = await fs.exec('/bin/opkg', ['list-installed', packageName]);
+		const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
+		const parsed = parsePackageVersion(raw, packageName);
+		if (parsed) info.app = normalizeAppVersion(parsed);
+	} catch (_) {
+		try {
+			const result = await fs.exec('/usr/bin/apk', ['info', '-v', packageName]);
+			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
+			const parsed = parsePackageVersion(raw, packageName);
+			if (parsed) info.app = normalizeAppVersion(parsed);
+		} catch (_) {}
+	}
+
+	if (info.app === 'unknown') {
+		try {
+			const opkgStatusRaw = await fs.read('/usr/lib/opkg/status');
+			const parsed = parseVersionFromOpkgStatus(opkgStatusRaw, [packageName]);
+			if (parsed) info.app = normalizeAppVersion(parsed);
+		} catch (_) {}
+	}
+
 	return info;
 }
-
 function normalizeVersion(str) {
 	if (!str) return '';
 	const match = String(str).match(/v?(\d+\.\d+\.\d+)/i);
@@ -659,7 +641,7 @@ async function openKernelModal() {
 		});
 
 		showModal({
-			title: _('Mihomo Kernel'),
+			title: _('Kernel Settings'),
 			body: info,
 			buttons: buttons
 		});
@@ -2206,11 +2188,6 @@ function buildSettingsPaneHtml() {
 
 	const currentProxyMode = appState.proxyMode || s.proxyMode || 'tproxy';
 	const showTunStack = currentProxyMode === 'tun' || currentProxyMode === 'mixed';
-	const kernelInstalled = !!appState.kernelStatus.installed;
-	const kernelVersion = kernelInstalled
-		? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
-		: _('Not installed');
-	const kernelActionLabel = kernelInstalled ? _('Reinstall Kernel') : _('Install Kernel');
 
 	return '' +
 		'<div class="sbox-settings-grid">' +
@@ -2224,18 +2201,6 @@ function buildSettingsPaneHtml() {
 						'<input type="radio" name="sbox-interface-mode" value="explicit"' + (s.mode === 'explicit' ? ' checked' : '') + ' />' +
 						'<span>' + safeText(_('Explicit mode: proxy only selected interfaces')) + '</span>' +
 					'</label>' +
-				'</section>' +
-
-				'<section class="sbox-settings-block sbox-settings-block-kernel">' +
-					'<h4>' + safeText(_('Kernel')) + '</h4>' +
-					'<div class="sbox-kernel-meta">' +
-						'<div class="sbox-muted">' + safeText(_('Status: %s').format(kernelInstalled ? _('Installed') : _('Not installed'))) + '</div>' +
-						'<div class="sbox-muted">' + safeText(_('Installed version: %s').format(kernelVersion)) + '</div>' +
-					'</div>' +
-					'<div class="sbox-actions" style="margin-top:10px;">' +
-						'<button id="sbox-kernel-install" type="button" class="cbi-button cbi-button-apply">' + safeText(kernelActionLabel) + '</button>' +
-						'<button id="sbox-kernel-refresh" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Refresh')) + '</button>' +
-					'</div>' +
 				'</section>' +
 
 				'<section class="sbox-settings-block">' +
@@ -2302,7 +2267,6 @@ function buildSettingsPaneHtml() {
 
 			'<div class="sbox-actions" style="margin-top:10px;">' +
 				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save Settings')) + '</button>' +
-				'<button id="sbox-settings-clear" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Clear Interface Selection')) + '</button>' +
 			'</div>' +
 
 		'<div id="sbox-settings-status" class="sbox-settings-status">' +
@@ -2330,7 +2294,10 @@ function buildPageHtml() {
 		'<div class="sbox-header">' +
 			'MiClash <strong id="sbox-app-version">' + versionApp + '</strong>' +
 			'<span class="sbox-header-dot">|</span>' +
-			'mihomo <strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
+			'mihomo <span class="sbox-kernel-inline">' +
+				'<strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
+				'<span id="sbox-kernel-action" class="sbox-kernel-action-icon" role="button" tabindex="0" title="' + safeText(_('Install Kernel')) + '" aria-label="' + safeText(_('Install Kernel')) + '"></span>' +
+			'</span>' +
 			'<span class="sbox-header-dot">|</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
 			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select">' +
@@ -2372,8 +2339,7 @@ function buildPageHtml() {
 					'<div class="sbox-config-toolbar">' +
 						'<select id="sbox-config-select" class="cbi-input-select sbox-select">' + buildConfigOptionsHtml() + '</select>' +
 						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
-						'<button id="sbox-save-url" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save URL')) + '</button>' +
-						'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Update')) + '</button>' +
+						'<button id="sbox-save-update-sub" type="button" class="cbi-button cbi-button-apply sbox-save-update-sub">' + safeText(_('Save URL / Update Config')) + '</button>' +
 					'</div>' +
 				'<div id="miclash-editor" class="sbox-editor"></div>' +
 				'<div class="sbox-actions">' +
@@ -2410,6 +2376,7 @@ function updateHeaderAndControlDom() {
 	const dashboardBtn = pageRoot.querySelector('#sbox-dashboard');
 	const appVersion = pageRoot.querySelector('#sbox-app-version');
 	const kernelVersion = pageRoot.querySelector('#sbox-kernel-version');
+	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
 	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
 
 	if (status && statusLabel && dot) {
@@ -2440,6 +2407,21 @@ function updateHeaderAndControlDom() {
 		kernelVersion.textContent = appState.kernelStatus && appState.kernelStatus.installed
 			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
 			: _('Not installed');
+	}
+	if (kernelAction && !kernelAction.classList.contains('sbox-kernel-action-busy')) {
+		const installed = !!(appState.kernelStatus && appState.kernelStatus.installed);
+		kernelAction.classList.remove('sbox-kernel-action-install', 'sbox-kernel-action-reinstall');
+		if (installed) {
+			kernelAction.classList.add('sbox-kernel-action-reinstall');
+			kernelAction.textContent = '\u21bb';
+			kernelAction.title = _('Reinstall Kernel');
+			kernelAction.setAttribute('aria-label', _('Reinstall Kernel'));
+		} else {
+			kernelAction.classList.add('sbox-kernel-action-install');
+			kernelAction.textContent = '\u2b07';
+			kernelAction.title = _('Install Kernel');
+			kernelAction.setAttribute('aria-label', _('Install Kernel'));
+		}
 	}
 	if (modeSelect) modeSelect.value = normalizeProxyMode(appState.proxyMode);
 }
@@ -2515,35 +2497,6 @@ function bindSettingsPaneEvents() {
 			renderSettingsPane();
 		});
 	});
-
-	const clearBtn = pane.querySelector('#sbox-settings-clear');
-	if (clearBtn) {
-		clearBtn.addEventListener('click', () => {
-			pane.querySelectorAll('.sbox-interface-check').forEach((cb) => {
-				cb.checked = false;
-			});
-		});
-	}
-
-	const kernelInstallBtn = pane.querySelector('#sbox-kernel-install');
-	if (kernelInstallBtn) {
-		kernelInstallBtn.addEventListener('click', () => withButtons(kernelInstallBtn, async () => {
-			await installKernelFromSettings();
-			renderSettingsPane();
-		}).catch((e) => {
-			notify('error', _('Failed to load kernel information: %s').format(e.message));
-		}));
-	}
-
-	const kernelRefreshBtn = pane.querySelector('#sbox-kernel-refresh');
-	if (kernelRefreshBtn) {
-		kernelRefreshBtn.addEventListener('click', () => withButtons(kernelRefreshBtn, async () => {
-			await refreshHeaderAndControl();
-			renderSettingsPane();
-		}).catch((e) => {
-			notify('error', _('Failed to load kernel information: %s').format(e.message));
-		}));
-	}
 
 	const saveBtn = pane.querySelector('#sbox-settings-save');
 	if (saveBtn) {
@@ -2651,6 +2604,35 @@ function bindControlAndHeaderEvents() {
 			saveThemePreference(nextTheme).catch((e) => {
 				notify('error', _('Failed to save theme preference: %s').format(e.message));
 			});
+		});
+	}
+
+	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
+	if (kernelAction) {
+		const runKernelAction = () => {
+			if (kernelAction.classList.contains('sbox-kernel-action-busy')) return;
+
+			kernelAction.classList.add('sbox-kernel-action-busy');
+			kernelAction.innerHTML = '<span class="sbox-spinner"></span>';
+
+			installKernelFromSettings().then(() => {
+				renderSettingsPane();
+			}).catch((e) => {
+				notify('error', _('Failed to load kernel information: %s').format(e.message));
+			}).finally(() => {
+				if (kernelAction && kernelAction.isConnected) {
+					kernelAction.classList.remove('sbox-kernel-action-busy');
+					updateHeaderAndControlDom();
+				}
+			});
+		};
+
+		kernelAction.addEventListener('click', runKernelAction);
+		kernelAction.addEventListener('keydown', (ev) => {
+			if (ev.key === 'Enter' || ev.key === ' ') {
+				ev.preventDefault();
+				runKernelAction();
+			}
 		});
 	}
 
@@ -2812,22 +2794,9 @@ function bindConfigEvents() {
 		}));
 	}
 
-	const saveUrlBtn = pageRoot.querySelector('#sbox-save-url');
-	if (saveUrlBtn) {
-		saveUrlBtn.addEventListener('click', () => withButtons(saveUrlBtn, async () => {
-			const url = String(subInput?.value || '').trim();
-			if (!url) throw new Error(_('Subscription URL is empty.'));
-			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
-
-			await saveSubscriptionUrl(url, appState.selectedConfigName);
-			appState.subscriptionUrl = url;
-			notify('info', _('Subscription URL saved.'));
-		}).catch((e) => notify('error', e.message)));
-	}
-
-	const updateBtn = pageRoot.querySelector('#sbox-update-sub');
-		if (updateBtn) {
-			updateBtn.addEventListener('click', () => withButtons(updateBtn, async () => {
+	const saveUpdateBtn = pageRoot.querySelector('#sbox-save-update-sub');
+	if (saveUpdateBtn) {
+		saveUpdateBtn.addEventListener('click', () => withButtons(saveUpdateBtn, async () => {
 				const url = String(subInput?.value || '').trim();
 				if (!url) throw new Error(_('Subscription URL is empty.'));
 				if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
@@ -2865,8 +2834,9 @@ function bindConfigEvents() {
 			}).catch((e) => {
 				notify('error', _('Failed to apply subscription: %s').format(e.message));
 			}).finally(async () => {
-			try { await fs.remove(TMP_SUBSCRIPTION_PATH); } catch (removeErr) {}
-		}));
+				try { await fs.remove(TMP_SUBSCRIPTION_PATH); } catch (removeErr) {}
+			})
+		);
 	}
 
 	const validateBtn = pageRoot.querySelector('#sbox-validate');
@@ -3049,6 +3019,35 @@ const PAGE_CSS = `
 	color: var(--sbox-text);
 	font-weight: 700;
 }
+.sbox-kernel-inline {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.sbox-kernel-action-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	font-size: 14px;
+	line-height: 1;
+	cursor: pointer;
+	user-select: none;
+	opacity: 0.95;
+	transition: transform 0.16s ease, opacity 0.16s ease;
+}
+.sbox-kernel-action-icon:hover,
+.sbox-kernel-action-icon:focus {
+	transform: scale(1.08);
+	opacity: 1;
+	outline: none;
+}
+.sbox-kernel-action-install { color: #29a55a; }
+.sbox-kernel-action-reinstall { color: #2a78ff; }
+.sbox-kernel-action-busy {
+	pointer-events: none;
+}
 .sbox-header-dot {
 	opacity: 0.55;
 }
@@ -3177,10 +3176,15 @@ const PAGE_CSS = `
 }
 .sbox-config-toolbar {
 	display: grid;
-	grid-template-columns: minmax(140px, 180px) minmax(220px, 1fr) auto auto;
+	grid-template-columns: minmax(140px, 180px) minmax(220px, 1fr) minmax(240px, auto);
 	gap: 8px;
 	align-items: center;
 	margin-bottom: 10px;
+}
+.sbox-save-update-sub {
+	width: 100%;
+	min-height: 32px;
+	font-weight: 700;
 }
 .sbox-select,
 .sbox-input {
@@ -3256,13 +3260,6 @@ const PAGE_CSS = `
 	margin: 0 0 8px;
 	font-size: 13px;
 	color: var(--sbox-text);
-}
-.sbox-settings-block-kernel {
-	grid-row: span 2;
-}
-.sbox-kernel-meta {
-	display: grid;
-	gap: 4px;
 }
 .sbox-settings-block-wide {
 	grid-column: 1 / -1;
@@ -3516,9 +3513,6 @@ const PAGE_CSS = `
 	.sbox-settings-grid {
 		grid-template-columns: 1fr;
 	}
-	.sbox-settings-block-kernel {
-		grid-row: auto;
-	}
 	.sbox-form-grid {
 		grid-template-columns: 1fr;
 	}
@@ -3563,7 +3557,8 @@ return view.extend({
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
 		appState.configContent = await readConfigFileByName(MAIN_CONFIG_NAME);
 		appState.subscriptionUrl = await readSubscriptionUrl(MAIN_CONFIG_NAME);
-		appState.uiTheme = normalizeTheme(data[2] || 'dark');
+		const savedTheme = String(data[2] || '').trim();
+		appState.uiTheme = savedTheme ? normalizeTheme(savedTheme) : detectInitialTheme();
 		appState.settings = data[3] || await loadOperationalSettings();
 		appState.interfaces = data[4] || [];
 		appState.versions = data[5] || { app: 'unknown', clash: 'unknown' };
@@ -3582,6 +3577,9 @@ return view.extend({
 
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
 		applyUiTheme(appState.uiTheme);
+		if (!savedTheme) {
+			saveThemePreference(appState.uiTheme).catch(() => {});
+		}
 
 		try {
 			await initializeAceEditor(appState.configContent);
@@ -3609,3 +3607,5 @@ return view.extend({
 		return pageRoot;
 	}
 });
+
+
