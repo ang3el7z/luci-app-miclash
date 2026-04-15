@@ -304,6 +304,13 @@ reload_service() {
 	msg "Clash service reloaded"
 }
 
+# Called by package manager during removal (`/etc/init.d/clash delete`).
+# Make it idempotent: service may already be gone, so ignore "Not found".
+delete() {
+	ubus call service delete '{ "name": "clash" }' >/dev/null 2>&1 || true
+	return 0
+}
+
 service_started() {
 	# Called by procd every time the service process (re)starts, including respawns.
 	# The package-installed /etc/hotplug.d/net/99-clash-tun handles the normal
