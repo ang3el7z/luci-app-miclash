@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=0.1.3
+PKG_VERSION:=0.2.0
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
@@ -139,6 +139,20 @@ endef
 define Package/$(PKG_NAME)/postrm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
+	is_pkg_installed() {
+		if [ -x /usr/bin/apk ] || [ -x /bin/apk ]; then
+			APK_BIN="/usr/bin/apk"
+			[ -x "$$APK_BIN" ] || APK_BIN="/bin/apk"
+			"$$APK_BIN" info -e luci-app-miclash >/dev/null 2>&1 && return 0
+		fi
+		if [ -x /bin/opkg ] || [ -x /usr/bin/opkg ]; then
+			OPKG_BIN="/bin/opkg"
+			[ -x "$$OPKG_BIN" ] || OPKG_BIN="/usr/bin/opkg"
+			"$$OPKG_BIN" list-installed luci-app-miclash >/dev/null 2>&1 && return 0
+		fi
+		return 1
+	}
+
 	# Clean up cron job for clash-rules update, if present
 	CRON_FILE="/etc/crontabs/root"
 	if [ -f "$$CRON_FILE" ]; then
@@ -154,6 +168,17 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
 	rm -f /etc/apk/protected_paths.d/miclash.list
+
+	# Remove manually installed Mihomo core only on full package removal.
+	case "$$1" in
+		upgrade|update)
+			;;
+		*)
+			if ! is_pkg_installed; then
+				rm -f /opt/clash/bin/clash
+			fi
+			;;
+	esac
 }
 endef
 

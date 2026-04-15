@@ -19,6 +19,9 @@ const FAKEIP_WHITELIST_FILENAME = 'fakeip-whitelist-ipcidr.txt';
 const ACE_BASE = '/luci-static/resources/view/miclash/ace/';
 const TMP_SUBSCRIPTION_PATH = '/tmp/miclash-subscription.yaml';
 const UI_THEME_KEY = 'UI_THEME';
+const MIHOMO_RELEASE_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest';
+const MICLASH_RELEASE_API = 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest';
+const UPDATE_CHECK_MS = 10 * 60 * 1000;
 
 const callServiceList = rpc.declare({
 	object: 'service',
@@ -34,6 +37,7 @@ let editor = null;
 let pageRoot = null;
 let controlPollTimer = null;
 let logPollTimer = null;
+let updatePollTimer = null;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
 
@@ -55,7 +59,12 @@ const appState = {
 	activeCfgTab: 'config',
 	logsRaw: '',
 	logsUpdatedAt: 0,
-	uiTheme: 'dark'
+	uiTheme: 'dark',
+	releaseMeta: {
+		appVersion: '',
+		kernelVersion: '',
+		checkedAt: 0
+	}
 };
 
 function notify(type, message) {
@@ -422,7 +431,7 @@ async function getMihomoStatus() {
 
 async function getLatestMihomoRelease() {
 	try {
-		const response = await fetch('https://api.github.com/repos/MetaCubeX/mihomo/releases/latest');
+		const response = await fetch(MIHOMO_RELEASE_API);
 		if (!response.ok) return null;
 		const data = await response.json();
 		if (!data || data.prerelease || !data.tag_name || !Array.isArray(data.assets)) return null;
@@ -430,6 +439,122 @@ async function getLatestMihomoRelease() {
 	} catch (e) {
 		return null;
 	}
+}
+
+async function getLatestMiClashRelease() {
+	try {
+		const response = await fetch(MICLASH_RELEASE_API);
+		if (!response.ok) return null;
+		const data = await response.json();
+		if (!data || !data.tag_name || !Array.isArray(data.assets)) return null;
+		return { version: data.tag_name, assets: data.assets };
+	} catch (e) {
+		return null;
+	}
+}
+
+function compareNumericVersions(left, right) {
+	const normalize = (value) => {
+		const matched = String(value || '').trim().match(/\d+(?:\.\d+)+/);
+		if (!matched || !matched[0]) return null;
+		return matched[0].split('.').map((item) => parseInt(item, 10));
+	};
+
+	const l = normalize(left);
+	const r = normalize(right);
+	if (!l || !r) return null;
+
+	const len = Math.max(l.length, r.length);
+	for (let i = 0; i < len; i++) {
+		const a = i < l.length ? l[i] : 0;
+		const b = i < r.length ? r[i] : 0;
+		if (a < b) return -1;
+		if (a > b) return 1;
+	}
+
+	return 0;
+}
+
+function resolveAppActionState() {
+	const local = normalizeAppVersion(appState.versions?.app || '');
+	const latest = normalizeAppVersion(appState.releaseMeta?.appVersion || '');
+	const hasLocal = !!local && local !== 'unknown';
+	const cmp = compareNumericVersions(local, latest);
+	const hasUpdate = !!latest && (!hasLocal || cmp === -1 || (cmp === null && local !== latest));
+
+	if (!hasLocal) {
+		return {
+			kind: 'install',
+			icon: '\u2b07',
+			className: 'sbox-version-action-install',
+			title: _('Install MiClash')
+		};
+	}
+
+	if (hasUpdate) {
+		return {
+			kind: 'update',
+			icon: '\u2b07',
+			className: 'sbox-version-action-install',
+			title: _('Update MiClash')
+		};
+	}
+
+	return {
+		kind: 'reinstall',
+		icon: '\u21bb',
+		className: 'sbox-version-action-reinstall',
+		title: _('Reinstall MiClash')
+	};
+}
+
+function resolveKernelActionState() {
+	const installed = !!(appState.kernelStatus && appState.kernelStatus.installed);
+	const local = normalizeVersion(
+		(appState.kernelStatus && appState.kernelStatus.version) ||
+		appState.versions?.clash ||
+		''
+	);
+	const latest = normalizeVersion(appState.releaseMeta?.kernelVersion || '');
+	const cmp = compareNumericVersions(local, latest);
+	const hasUpdate = installed && !!latest && (!local || cmp === -1 || (cmp === null && local !== latest));
+
+	if (!installed) {
+		return {
+			kind: 'install',
+			icon: '\u2b07',
+			className: 'sbox-version-action-install',
+			title: _('Install Kernel')
+		};
+	}
+
+	if (hasUpdate) {
+		return {
+			kind: 'update',
+			icon: '\u2b07',
+			className: 'sbox-version-action-install',
+			title: _('Update Kernel')
+		};
+	}
+
+	return {
+		kind: 'reinstall',
+		icon: '\u21bb',
+		className: 'sbox-version-action-reinstall',
+		title: _('Reinstall Kernel')
+	};
+}
+
+async function refreshReleaseMeta() {
+	const [appRelease, kernelRelease] = await Promise.all([
+		getLatestMiClashRelease(),
+		getLatestMihomoRelease()
+	]);
+
+	appState.releaseMeta.appVersion = appRelease ? normalizeAppVersion(appRelease.version || '') : '';
+	appState.releaseMeta.kernelVersion = kernelRelease ? normalizeVersion(kernelRelease.version || '') : '';
+	appState.releaseMeta.checkedAt = Date.now();
+	updateHeaderAndControlDom();
 }
 
 function findKernelAsset(release, arch) {
@@ -449,6 +574,120 @@ function findKernelAsset(release, arch) {
 
 	return release.assets.find((item) =>
 		item.name && item.name.indexOf('mihomo-linux-' + arch + '-') === 0 && item.name.endsWith('.gz')) || null;
+}
+
+function findMiClashAsset(release, managerType) {
+	if (!release || !Array.isArray(release.assets)) return null;
+
+	const rawTag = String(release.version || '');
+	const cleanTag = rawTag.replace(/^v/i, '');
+	const normalized = normalizeAppVersion(cleanTag);
+	const ext = managerType === 'apk' ? '.apk' : '.ipk';
+	const expectedNames = managerType === 'apk'
+		? [
+			'luci-app-miclash-' + cleanTag + '.apk',
+			'luci-app-miclash-' + normalized + '.apk'
+		]
+		: [
+			'luci-app-miclash_' + cleanTag + '_all.ipk',
+			'luci-app-miclash_' + normalized + '_all.ipk'
+		];
+
+	for (let i = 0; i < expectedNames.length; i++) {
+		const asset = release.assets.find((item) => item.name === expectedNames[i]);
+		if (asset) return asset;
+	}
+
+	return release.assets.find((item) =>
+		item &&
+		item.name &&
+		item.name.indexOf('luci-app-miclash') !== -1 &&
+		item.name.endsWith(ext)
+	) || null;
+}
+
+async function detectPackageManager() {
+	const checks = [
+		{ type: 'apk', bin: '/usr/bin/apk' },
+		{ type: 'apk', bin: '/bin/apk' },
+		{ type: 'opkg', bin: '/bin/opkg' },
+		{ type: 'opkg', bin: '/usr/bin/opkg' }
+	];
+
+	for (let i = 0; i < checks.length; i++) {
+		try {
+			const probe = await fs.exec(checks[i].bin, ['--version']);
+			if (probe && typeof probe.code === 'number') return checks[i];
+		} catch (e) {}
+	}
+
+	return null;
+}
+
+async function execOrThrow(bin, args, fallbackMessage) {
+	const result = await fs.exec(bin, args);
+	if (result.code === 0) return result;
+	throw new Error(String(result.stderr || result.stdout || fallbackMessage || _('Command failed')).trim());
+}
+
+async function installMiClashDependencies(manager) {
+	await execOrThrow(manager.bin, ['update'], _('Failed to update package index.'));
+
+	if (manager.type === 'apk') {
+		await execOrThrow(
+			manager.bin,
+			['add', 'curl', 'kmod-nft-tproxy', 'kmod-tun', 'coreutils-base64'],
+			_('Failed to install MiClash dependencies.')
+		);
+		return;
+	}
+
+	const release = await getOpenWrtReleaseVersion();
+	const majorMatch = String(release || '').match(/^(\d+)/);
+	const major = majorMatch ? parseInt(majorMatch[1], 10) : 0;
+	const tproxyPkg = major > 0 && major < 23 ? 'iptables-mod-tproxy' : 'kmod-nft-tproxy';
+
+	await execOrThrow(
+		manager.bin,
+		['install', 'curl', tproxyPkg, 'kmod-tun', 'coreutils-base64'],
+		_('Failed to install MiClash dependencies.')
+	);
+}
+
+async function installMiClashFromSettings() {
+	const manager = await detectPackageManager();
+	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
+
+	const release = await getLatestMiClashRelease();
+	if (!release) throw new Error(_('Failed to load MiClash release information: %s').format(_('Unavailable')));
+
+	const asset = findMiClashAsset(release, manager.type);
+	if (!asset || !asset.browser_download_url) {
+		throw new Error(_('Failed to load MiClash release information: %s').format(_('Download failed')));
+	}
+
+	const tmpPath = manager.type === 'apk' ? '/tmp/miclash-update.apk' : '/tmp/miclash-update.ipk';
+
+	try {
+		notify('info', _('Downloading MiClash package...'));
+		await installMiClashDependencies(manager);
+		await execOrThrow('/usr/bin/curl', ['-L', '-fsS', asset.browser_download_url, '-o', tmpPath], _('Download failed'));
+
+		if (manager.type === 'apk') {
+			await execOrThrow(manager.bin, ['add', tmpPath, '--allow-untrusted'], _('Failed to install MiClash package.'));
+		} else {
+			await execOrThrow(manager.bin, ['install', tmpPath], _('Failed to install MiClash package.'));
+		}
+
+		notify('info', _('MiClash package downloaded and installed.'));
+		notify('info', _('MiClash package installed. Reloading interface...'));
+		setTimeout(() => {
+			window.location.reload();
+		}, 1500);
+		return true;
+	} finally {
+		try { await fs.remove(tmpPath); } catch (e) {}
+	}
 }
 
 async function downloadMihomoKernel(downloadUrl, version, arch) {
@@ -505,6 +744,7 @@ async function installKernelFromSettings() {
 	appState.kernelStatus = await getMihomoStatus();
 	appState.versions.clash = (appState.kernelStatus && appState.kernelStatus.version) || appState.versions.clash;
 	await refreshHeaderAndControl();
+	await refreshReleaseMeta();
 	return true;
 }
 
@@ -2299,11 +2539,14 @@ function buildPageHtml() {
 
 	return '' +
 		'<div class="sbox-header">' +
-			'MiClash <strong id="sbox-app-version">' + versionApp + '</strong>' +
+			'MiClash <span class="sbox-version-inline">' +
+				'<strong id="sbox-app-version">' + versionApp + '</strong>' +
+				'<span id="sbox-app-action" class="sbox-version-action-icon" role="button" tabindex="0" title="' + safeText(_('Install MiClash')) + '" aria-label="' + safeText(_('Install MiClash')) + '"></span>' +
+			'</span>' +
 			'<span class="sbox-header-dot">|</span>' +
-			'mihomo <span class="sbox-kernel-inline">' +
+			'mihomo <span class="sbox-version-inline">' +
 				'<strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
-				'<span id="sbox-kernel-action" class="sbox-kernel-action-icon" role="button" tabindex="0" title="' + safeText(_('Install Kernel')) + '" aria-label="' + safeText(_('Install Kernel')) + '"></span>' +
+				'<span id="sbox-kernel-action" class="sbox-version-action-icon" role="button" tabindex="0" title="' + safeText(_('Install Kernel')) + '" aria-label="' + safeText(_('Install Kernel')) + '"></span>' +
 			'</span>' +
 			'<span class="sbox-header-dot">|</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
@@ -2382,6 +2625,7 @@ function updateHeaderAndControlDom() {
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
 	const dashboardBtn = pageRoot.querySelector('#sbox-dashboard');
 	const appVersion = pageRoot.querySelector('#sbox-app-version');
+	const appAction = pageRoot.querySelector('#sbox-app-action');
 	const kernelVersion = pageRoot.querySelector('#sbox-kernel-version');
 	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
 	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
@@ -2410,25 +2654,26 @@ function updateHeaderAndControlDom() {
 	}
 
 	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
+	if (appAction && !appAction.classList.contains('sbox-version-action-busy')) {
+		const appActionState = resolveAppActionState();
+		appAction.classList.remove('sbox-version-action-install', 'sbox-version-action-reinstall');
+		appAction.classList.add(appActionState.className);
+		appAction.textContent = appActionState.icon;
+		appAction.title = appActionState.title;
+		appAction.setAttribute('aria-label', appActionState.title);
+	}
 	if (kernelVersion) {
 		kernelVersion.textContent = appState.kernelStatus && appState.kernelStatus.installed
 			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
 			: _('Not installed');
 	}
-	if (kernelAction && !kernelAction.classList.contains('sbox-kernel-action-busy')) {
-		const installed = !!(appState.kernelStatus && appState.kernelStatus.installed);
-		kernelAction.classList.remove('sbox-kernel-action-install', 'sbox-kernel-action-reinstall');
-		if (installed) {
-			kernelAction.classList.add('sbox-kernel-action-reinstall');
-			kernelAction.textContent = '\u21bb';
-			kernelAction.title = _('Reinstall Kernel');
-			kernelAction.setAttribute('aria-label', _('Reinstall Kernel'));
-		} else {
-			kernelAction.classList.add('sbox-kernel-action-install');
-			kernelAction.textContent = '\u2b07';
-			kernelAction.title = _('Install Kernel');
-			kernelAction.setAttribute('aria-label', _('Install Kernel'));
-		}
+	if (kernelAction && !kernelAction.classList.contains('sbox-version-action-busy')) {
+		const kernelActionState = resolveKernelActionState();
+		kernelAction.classList.remove('sbox-version-action-install', 'sbox-version-action-reinstall');
+		kernelAction.classList.add(kernelActionState.className);
+		kernelAction.textContent = kernelActionState.icon;
+		kernelAction.title = kernelActionState.title;
+		kernelAction.setAttribute('aria-label', kernelActionState.title);
 	}
 	if (modeSelect) modeSelect.value = normalizeProxyMode(appState.proxyMode);
 }
@@ -2602,6 +2847,15 @@ function startControlPolling() {
 	}, STATUS_POLL_MS);
 }
 
+function startUpdatePolling() {
+	if (updatePollTimer) clearInterval(updatePollTimer);
+
+	updatePollTimer = setInterval(() => {
+		if (document.hidden) return;
+		refreshReleaseMeta().catch(() => {});
+	}, UPDATE_CHECK_MS);
+}
+
 function bindControlAndHeaderEvents() {
 	const themeBtn = pageRoot.querySelector('#sbox-theme-toggle');
 	if (themeBtn) {
@@ -2615,11 +2869,39 @@ function bindControlAndHeaderEvents() {
 	}
 
 	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
+	const appAction = pageRoot.querySelector('#sbox-app-action');
+	if (appAction) {
+		const runAppAction = () => {
+			if (appAction.classList.contains('sbox-version-action-busy')) return;
+
+			appAction.classList.add('sbox-version-action-busy');
+			appAction.innerHTML = '<span class="sbox-spinner"></span>';
+
+			installMiClashFromSettings().catch((e) => {
+				notify('error', _('Failed to update MiClash: %s').format(e.message));
+			}).finally(async () => {
+				if (appAction && appAction.isConnected) {
+					appAction.classList.remove('sbox-version-action-busy');
+					await refreshHeaderAndControl();
+					updateHeaderAndControlDom();
+				}
+			});
+		};
+
+		appAction.addEventListener('click', runAppAction);
+		appAction.addEventListener('keydown', (ev) => {
+			if (ev.key === 'Enter' || ev.key === ' ') {
+				ev.preventDefault();
+				runAppAction();
+			}
+		});
+	}
+
 	if (kernelAction) {
 		const runKernelAction = () => {
-			if (kernelAction.classList.contains('sbox-kernel-action-busy')) return;
+			if (kernelAction.classList.contains('sbox-version-action-busy')) return;
 
-			kernelAction.classList.add('sbox-kernel-action-busy');
+			kernelAction.classList.add('sbox-version-action-busy');
 			kernelAction.innerHTML = '<span class="sbox-spinner"></span>';
 
 			installKernelFromSettings().then(() => {
@@ -2628,7 +2910,7 @@ function bindControlAndHeaderEvents() {
 				notify('error', _('Failed to load kernel information: %s').format(e.message));
 			}).finally(() => {
 				if (kernelAction && kernelAction.isConnected) {
-					kernelAction.classList.remove('sbox-kernel-action-busy');
+					kernelAction.classList.remove('sbox-version-action-busy');
 					updateHeaderAndControlDom();
 				}
 			});
@@ -3026,12 +3308,12 @@ const PAGE_CSS = `
 	color: var(--sbox-text);
 	font-weight: 700;
 }
-.sbox-kernel-inline {
+.sbox-version-inline {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
 }
-.sbox-kernel-action-icon {
+.sbox-version-action-icon {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -3044,15 +3326,15 @@ const PAGE_CSS = `
 	opacity: 0.95;
 	transition: transform 0.16s ease, opacity 0.16s ease;
 }
-.sbox-kernel-action-icon:hover,
-.sbox-kernel-action-icon:focus {
+.sbox-version-action-icon:hover,
+.sbox-version-action-icon:focus {
 	transform: scale(1.08);
 	opacity: 1;
 	outline: none;
 }
-.sbox-kernel-action-install { color: #29a55a; }
-.sbox-kernel-action-reinstall { color: #2a78ff; }
-.sbox-kernel-action-busy {
+.sbox-version-action-install { color: #29a55a; }
+.sbox-version-action-reinstall { color: #2a78ff; }
+.sbox-version-action-busy {
 	pointer-events: none;
 }
 .sbox-header-dot {
@@ -3599,8 +3881,10 @@ return view.extend({
 		bindTabEvents();
 		renderSettingsPane();
 		updateHeaderAndControlDom();
+		refreshReleaseMeta().catch(() => {});
 
 		startControlPolling();
+		startUpdatePolling();
 
 		document.addEventListener('visibilitychange', () => {
 			if (document.hidden) {
@@ -3608,6 +3892,9 @@ return view.extend({
 			} else if (appState.activeCfgTab === 'logs') {
 				refreshLogs().catch(() => {});
 				startLogPolling();
+			}
+			if (!document.hidden) {
+				refreshReleaseMeta().catch(() => {});
 			}
 		});
 
