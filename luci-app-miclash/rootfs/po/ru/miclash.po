@@ -785,6 +785,18 @@ msgstr "Не установлено"
 msgid "Install Kernel"
 msgstr "Установить ядро"
 
+msgid "Update Kernel"
+msgstr "Обновить ядро"
+
+msgid "Install MiClash"
+msgstr "Установить MiClash"
+
+msgid "Update MiClash"
+msgstr "Обновить MiClash"
+
+msgid "Reinstall MiClash"
+msgstr "Переустановить MiClash"
+
 msgid "Settings saved."
 msgstr "Настройки сохранены."
 
@@ -932,6 +944,36 @@ msgstr "Интерфейсы вручную: %s"
 
 msgid "Mihomo kernel downloaded and installed."
 msgstr "Ядро Mihomo загружено и установлено."
+
+msgid "Downloading MiClash package..."
+msgstr "Загрузка пакета MiClash..."
+
+msgid "MiClash package downloaded and installed."
+msgstr "Пакет MiClash загружен и установлен."
+
+msgid "MiClash package installed. Reloading interface..."
+msgstr "Пакет MiClash установлен. Перезагрузка интерфейса..."
+
+msgid "Failed to update MiClash: %s"
+msgstr "Не удалось обновить MiClash: %s"
+
+msgid "Failed to load MiClash release information: %s"
+msgstr "Не удалось загрузить информацию о релизе MiClash: %s"
+
+msgid "No supported package manager found (apk/opkg)."
+msgstr "Не найден поддерживаемый пакетный менеджер (apk/opkg)."
+
+msgid "Failed to update package index."
+msgstr "Не удалось обновить индекс пакетов."
+
+msgid "Failed to install MiClash dependencies."
+msgstr "Не удалось установить зависимости MiClash."
+
+msgid "Failed to install MiClash package."
+msgstr "Не удалось установить пакет MiClash."
+
+msgid "Command failed"
+msgstr "Команда завершилась ошибкой"
 
 msgid "Mode: Explicit (proxy only selected interfaces)"
 msgstr "Режим: Явный (прокси только для выбранных интерфейсов)"
