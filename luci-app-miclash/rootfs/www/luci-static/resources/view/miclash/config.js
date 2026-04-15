@@ -687,7 +687,7 @@ async function installMiClashDependencies(manager) {
 	);
 }
 
-async function installMiClashFromSettings() {
+async function installMiClashFromSettings(actionKind) {
 	const manager = await detectPackageManager();
 	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
 
@@ -700,6 +700,8 @@ async function installMiClashFromSettings() {
 	}
 
 	const tmpPath = manager.type === 'apk' ? '/tmp/miclash-update.apk' : '/tmp/miclash-update.ipk';
+	const mode = String(actionKind || 'update');
+	const forceReinstall = mode === 'reinstall';
 
 	try {
 		notify('info', _('Downloading MiClash package...'));
@@ -708,9 +710,21 @@ async function installMiClashFromSettings() {
 
 		try {
 			if (manager.type === 'apk') {
-				await execOrThrow(manager.bin, ['add', tmpPath, '--allow-untrusted'], _('Failed to install MiClash package.'));
+				await execOrThrow(
+					manager.bin,
+					forceReinstall
+						? ['add', '--force-reinstall', '--allow-untrusted', tmpPath]
+						: ['add', tmpPath, '--allow-untrusted'],
+					_('Failed to install MiClash package.')
+				);
 			} else {
-				await execOrThrow(manager.bin, ['install', tmpPath], _('Failed to install MiClash package.'));
+				await execOrThrow(
+					manager.bin,
+					forceReinstall
+						? ['--force-reinstall', 'install', tmpPath]
+						: ['install', tmpPath],
+					_('Failed to install MiClash package.')
+				);
 			}
 		} catch (e) {
 			if (!isRpcReconnectLikeError(e.message)) throw e;
@@ -2942,11 +2956,12 @@ function bindControlAndHeaderEvents() {
 	if (appAction) {
 		const runAppAction = () => {
 			if (appAction.classList.contains('sbox-version-action-busy')) return;
+			const appActionKind = resolveAppActionState().kind;
 
 			appAction.classList.add('sbox-version-action-busy');
 			appAction.innerHTML = '<span class="sbox-spinner"></span>';
 
-			installMiClashFromSettings().catch((e) => {
+			installMiClashFromSettings(appActionKind).catch((e) => {
 				notify('error', _('Failed to update MiClash: %s').format(e.message));
 			}).finally(async () => {
 				if (appAction && appAction.isConnected) {
