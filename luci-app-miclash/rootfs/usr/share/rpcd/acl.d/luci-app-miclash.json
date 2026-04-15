@@ -4,6 +4,9 @@
         "read": {
             "file": {
                 "/etc/openwrt_release": [ "read" ],
+                "/usr/lib/opkg/status": [ "read" ],
+                "/usr/lib/apk/db/installed": [ "read" ],
+                "/lib/apk/db/installed": [ "read" ],
                 "/opt/clash/config.yaml": [ "read" ],
                 "/opt/clash/config2.yaml": [ "read" ],
                 "/opt/clash/config3.yaml": [ "read" ],
@@ -20,6 +23,10 @@
                 "/sys/class/net/*/address": [ "read" ],
                 "/tmp/sysinfo/model": [ "read" ],
                 "/sbin/logread": [ "exec" ],
+                "/bin/opkg": [ "exec" ],
+                "/usr/bin/opkg": [ "exec" ],
+                "/bin/apk": [ "exec" ],
+                "/usr/bin/apk": [ "exec" ],
                 "/bin/ls": [ "exec" ],
                 "/sbin/ip": [ "exec" ],
                 "/usr/sbin/brctl": [ "exec" ],
