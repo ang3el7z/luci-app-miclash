@@ -2477,6 +2477,10 @@ function buildSettingsPaneHtml() {
 	const showTunStack = currentProxyMode === 'tun' || currentProxyMode === 'mixed';
 
 	return '' +
+		'<div id="sbox-settings-status" class="sbox-settings-status">' +
+			buildSettingsSummary() +
+		'</div>' +
+		'<div class="sbox-settings-gap" aria-hidden="true"></div>' +
 		'<div class="sbox-settings-grid">' +
 			'<section class="sbox-settings-block">' +
 				'<h4>' + safeText(_('Traffic Scope')) + '</h4>' +
@@ -2552,13 +2556,10 @@ function buildSettingsPaneHtml() {
 			'</section>' +
 			'</div>' +
 
-			'<div class="sbox-actions" style="margin-top:10px;">' +
-				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save Settings')) + '</button>' +
+			'<div class="sbox-settings-save-wrap">' +
+				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply sbox-settings-save-btn">' + safeText(_('Save Settings')) + '</button>' +
 			'</div>' +
-
-		'<div id="sbox-settings-status" class="sbox-settings-status">' +
-			buildSettingsSummary() +
-		'</div>';
+		'';
 }
 
 function buildConfigOptionsHtml() {
@@ -3658,6 +3659,18 @@ const PAGE_CSS = `
 	font-size: 12px;
 	color: var(--sbox-text);
 	line-height: 1.5;
+}
+.sbox-settings-gap {
+	height: 12px;
+}
+.sbox-settings-save-wrap {
+	margin-top: 12px;
+}
+.sbox-settings-save-btn {
+	width: 100%;
+	min-height: 42px;
+	padding-top: 10px;
+	padding-bottom: 10px;
 }
 @keyframes sbox-spin { to { transform: rotate(360deg); } }
 .sbox-spinner {
