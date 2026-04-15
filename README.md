@@ -1,3 +1,5 @@
+<img width="972" height="858" alt="image" src="https://github.com/user-attachments/assets/45e45cd6-e76b-464d-8a19-0f9e7d861b61" />
+
 # OpenWrt 25.12.x
 
 ```bash
