@@ -2339,7 +2339,7 @@ function buildPageHtml() {
 					'<div class="sbox-config-toolbar">' +
 						'<select id="sbox-config-select" class="cbi-input-select sbox-select">' + buildConfigOptionsHtml() + '</select>' +
 						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
-						'<button id="sbox-save-update-sub" type="button" class="cbi-button cbi-button-apply sbox-save-update-sub">' + safeText(_('Save URL / Update Config')) + '</button>' +
+						'<button id="sbox-save-update-sub" type="button" class="cbi-button cbi-button-positive sbox-save-update-sub">' + safeText(_('Save URL / Update Config')) + '</button>' +
 					'</div>' +
 				'<div id="miclash-editor" class="sbox-editor"></div>' +
 				'<div class="sbox-actions">' +
