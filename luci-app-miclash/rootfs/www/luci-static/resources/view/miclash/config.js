@@ -22,6 +22,8 @@ const UI_THEME_KEY = 'UI_THEME';
 const MIHOMO_RELEASE_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest';
 const MICLASH_RELEASE_API = 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest';
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
+const SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC = 8;
+const SUBSCRIPTION_CURL_MAX_TIME_SEC = 18;
 
 const callServiceList = rpc.declare({
 	object: 'service',
@@ -1066,19 +1068,41 @@ function normalizeSubscriptionDownloadUrl(rawUrl) {
 	try {
 		parsed = new URL(rawUrl);
 	} catch (e) {
-		return { url: rawUrl, mode: 'direct', remnawaveCandidateUrl: null };
+		return { url: rawUrl, mode: 'direct', remnawaveCandidateUrl: null, fallbackOnError: false };
 	}
 
 	const segments = parsed.pathname.split('/').filter(Boolean);
+	const lastSegment = String(segments[segments.length - 1] || '').toLowerCase();
+	if (lastSegment === 'mihomo') {
+		return {
+			url: parsed.toString(),
+			mode: 'remnawave-client-path',
+			remnawaveCandidateUrl: null,
+			fallbackOnError: false
+		};
+	}
+
 	const subIndex = segments.indexOf('sub');
 	if (subIndex < 0 || !segments[subIndex + 1]) {
-		return { url: parsed.toString(), mode: 'direct', remnawaveCandidateUrl: null };
+		const genericCandidate = new URL(parsed.toString());
+		genericCandidate.pathname = '/' + segments.concat('mihomo').join('/');
+		return {
+			url: parsed.toString(),
+			mode: 'direct',
+			remnawaveCandidateUrl: genericCandidate.toString(),
+			fallbackOnError: false
+		};
 	}
 
 	const clientType = String(segments[subIndex + 2] || '').toLowerCase();
 
 	if (clientType === 'mihomo') {
-		return { url: parsed.toString(), mode: 'remnawave-client-path', remnawaveCandidateUrl: null };
+		return {
+			url: parsed.toString(),
+			mode: 'remnawave-client-path',
+			remnawaveCandidateUrl: null,
+			fallbackOnError: false
+		};
 	}
 
 	if (clientType) {
@@ -1091,7 +1115,8 @@ function normalizeSubscriptionDownloadUrl(rawUrl) {
 		return {
 			url: parsed.toString(),
 			mode: 'direct',
-			remnawaveCandidateUrl: candidate.toString()
+			remnawaveCandidateUrl: candidate.toString(),
+			fallbackOnError: true
 		};
 	}
 
@@ -1104,7 +1129,8 @@ function normalizeSubscriptionDownloadUrl(rawUrl) {
 	return {
 		url: parsed.toString(),
 		mode: 'direct',
-		remnawaveCandidateUrl: candidate.toString()
+		remnawaveCandidateUrl: candidate.toString(),
+		fallbackOnError: true
 	};
 }
 
@@ -1130,6 +1156,8 @@ async function buildSubscriptionDeviceHeaders(settings) {
 async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode) {
 	const args = [
 		'-L', '-fsS',
+		'--connect-timeout', String(SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC),
+		'--max-time', String(SUBSCRIPTION_CURL_MAX_TIME_SEC),
 		'-A', profile.ua,
 		'-H', 'Accept: application/yaml, text/yaml, text/plain, */*',
 		'-H', 'Cache-Control: no-cache',
@@ -1240,7 +1268,7 @@ async function fetchSubscriptionAsYaml(url, targetPath) {
 	const needsFallbackByPayload = !primaryError &&
 		(looksLikeBase64Blob(payload) || looksLikeUriSubscription(payload));
 	const shouldTryFallback = !!resolved.remnawaveCandidateUrl &&
-		(primaryError || needsFallbackByPayload);
+		(needsFallbackByPayload || (primaryError && resolved.fallbackOnError));
 
 	if (shouldTryFallback) {
 		try {
