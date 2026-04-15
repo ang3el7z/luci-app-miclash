@@ -27,15 +27,6 @@ const callServiceList = rpc.declare({
 	expect: { '': {} }
 });
 
-const REMNAWAVE_CLIENT_TYPES = {
-	mihomo: true,
-	clash: true,
-	singbox: true,
-	stash: true,
-	json: true,
-	'v2ray-json': true
-};
-
 const LOG_POLL_MS = 5000;
 const STATUS_POLL_MS = 5000;
 
@@ -806,11 +797,11 @@ function normalizeSubscriptionDownloadUrl(rawUrl) {
 
 	const clientType = String(segments[subIndex + 2] || '').toLowerCase();
 
-	if (clientType && REMNAWAVE_CLIENT_TYPES[clientType]) {
-		if (clientType === 'mihomo') {
-			return { url: parsed.toString(), mode: 'remnawave-client-path', remnawaveCandidateUrl: null };
-		}
+	if (clientType === 'mihomo') {
+		return { url: parsed.toString(), mode: 'remnawave-client-path', remnawaveCandidateUrl: null };
+	}
 
+	if (clientType) {
 		const candidateSegments = segments.slice();
 		candidateSegments[subIndex + 2] = 'mihomo';
 
@@ -819,21 +810,13 @@ function normalizeSubscriptionDownloadUrl(rawUrl) {
 
 		return {
 			url: parsed.toString(),
-			mode: 'remnawave-client-path',
+			mode: 'direct',
 			remnawaveCandidateUrl: candidate.toString()
 		};
 	}
 
-	if (clientType && clientType !== 'info') {
-		return { url: parsed.toString(), mode: 'direct', remnawaveCandidateUrl: null };
-	}
-
 	const candidateSegments = segments.slice();
-	if (clientType === 'info') {
-		candidateSegments[subIndex + 2] = 'mihomo';
-	} else {
-		candidateSegments.push('mihomo');
-	}
+	candidateSegments.push('mihomo');
 
 	const candidate = new URL(parsed.toString());
 	candidate.pathname = '/' + candidateSegments.join('/');
@@ -965,19 +948,40 @@ async function fetchSubscriptionAsYaml(url, targetPath) {
 	const deviceHeaders = await buildSubscriptionDeviceHeaders(settingsMap);
 	const resolved = normalizeSubscriptionDownloadUrl(url);
 	let mode = resolved.mode;
+	let payload = '';
+	let primaryError = null;
 
-	let payload = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, mode);
-	if (!payload.trim()) throw new Error(_('Downloaded file is empty.'));
-
-	if (looksLikeBase64Blob(payload) && resolved.remnawaveCandidateUrl) {
-		payload = await downloadSubscriptionWithProfile(
-			resolved.remnawaveCandidateUrl,
-			profile,
-			deviceHeaders,
-			'remnawave-client-path'
-		);
-		mode = 'remnawave-client-path';
+	try {
+		payload = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, mode);
+	} catch (e) {
+		primaryError = e;
 	}
+
+	const needsFallbackByPayload = !primaryError &&
+		(looksLikeBase64Blob(payload) || looksLikeUriSubscription(payload));
+	const shouldTryFallback = !!resolved.remnawaveCandidateUrl &&
+		(primaryError || needsFallbackByPayload);
+
+	if (shouldTryFallback) {
+		try {
+			payload = await downloadSubscriptionWithProfile(
+				resolved.remnawaveCandidateUrl,
+				profile,
+				deviceHeaders,
+				'remnawave-client-path'
+			);
+			mode = 'remnawave-client-path';
+			primaryError = null;
+		} catch (fallbackError) {
+			if (primaryError) {
+				throw new Error(_('Subscription download failed for both original URL and /mihomo fallback: %s').format(fallbackError.message));
+			}
+			throw new Error(_('Original URL returned links/base64 and /mihomo fallback failed: %s').format(fallbackError.message));
+		}
+	}
+
+	if (primaryError) throw primaryError;
+	if (!payload.trim()) throw new Error(_('Downloaded file is empty.'));
 
 	if (looksLikeBase64Blob(payload)) {
 		const decoded = tryDecodeBase64(payload);
@@ -987,6 +991,9 @@ async function fetchSubscriptionAsYaml(url, targetPath) {
 	}
 
 	if (looksLikeBase64Blob(payload) || looksLikeUriSubscription(payload)) {
+		if (mode === 'remnawave-client-path') {
+			throw new Error(_('Both original URL and /mihomo returned links/base64 instead of Clash YAML. Check provider export type.'));
+		}
 		throw new Error(_('The subscription server returned links/base64 instead of Clash YAML. For Remnawave use the /mihomo subscription path.'));
 	}
 

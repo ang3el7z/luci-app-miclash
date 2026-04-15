@@ -987,6 +987,15 @@ msgstr "Подписка загружена и применена."
 msgid "The subscription server returned links/base64 instead of Clash YAML. For Remnawave use the /mihomo subscription path."
 msgstr "Сервер подписки вернул links/base64 вместо Clash YAML. Для Remnawave используйте путь подписки /mihomo."
 
+msgid "Subscription download failed for both original URL and /mihomo fallback: %s"
+msgstr "Не удалось загрузить подписку ни по исходному URL, ни через fallback /mihomo: %s"
+
+msgid "Original URL returned links/base64 and /mihomo fallback failed: %s"
+msgstr "Исходный URL вернул links/base64, а fallback /mihomo завершился ошибкой: %s"
+
+msgid "Both original URL and /mihomo returned links/base64 instead of Clash YAML. Check provider export type."
+msgstr "И исходный URL, и /mihomo вернули links/base64 вместо Clash YAML. Проверьте тип экспорта у провайдера."
+
 msgid "This name is reserved."
 msgstr "Это имя зарезервировано."
 
