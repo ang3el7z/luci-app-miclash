@@ -1,15 +1,3 @@
-# Установка MiClash на OpenWrt
-
-1. Скачать свежую https://github.com/ang3el7z/luci-app-miclash/releases
-2. Веб интерфейс -> `Software` -> `Update lists` -> `Upload Package` установить скачанный файл `.ipk`
-3. Там же в фильтре ищем `kmod-nft-tproxy` для OpenWrt 23-24 или `iptables-mod-tproxy` для древних OpenWrt и ставим его.
-4. Выходим из админки `Log out` и заходим снова, появляется меню `Services` -> `MiClash`
-5. `MiClash` -> `Settings` -> внизу скачать ядро Mihomo `Download Core`
-6. Вместо `TPROXY` лучше выбрать `Mixed (TCP+UDP)`
-7. Если используете подписки с модемом на белых списках, лучше отключить `Store rules and proxy providers in RAM (tmpfs)`
-
-# Если не сработало, работаем клавиатурой:
-
 # OpenWrt 25.12.x
 
 ```bash
@@ -63,12 +51,4 @@ rm -rf /tmp/clash.gz
 ```
 
 **Ядра для других архитектур:** [https://github.com/MetaCubeX/mihomo/releases](https://4pda.to/stat/go?u=https%3A%2F%2Fgithub.com%2FMetaCubeX%2Fmihomo%2Freleases&e=132278268)
-
-*Чтобы в админке вашего роутера появилась новая менюшка с MiClash, после установки нужно один раз из админки выйти (log out), если вы сейчас в ней, и зайти заново (log in).*
-
-Стандартный конфиг Clash нужно отредактировать, прописав хотя бы один рабочий сервер, а затем применить **`Save & Apply`**. Если в конфиге нет ошибок, Clash запустится и загорится зелёная надпись Clash is running, если есть ошибки, останется красная надпись Clash stopped, а в соседней вкладке `Log` можно почитать, что ему не нравится и попробовать исправить. Чтобы увидеть больше информации в логах, стартуйте Clash из консоли:
-
-```bash
-service clash start
-```
 
