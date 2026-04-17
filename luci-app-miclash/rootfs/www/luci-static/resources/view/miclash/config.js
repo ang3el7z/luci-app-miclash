@@ -24,6 +24,8 @@ const MICLASH_RELEASE_API = 'https://api.github.com/repos/ang3el7z/luci-app-micl
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
 const SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC = 8;
 const SUBSCRIPTION_CURL_MAX_TIME_SEC = 18;
+const SERVICE_ACTION_POLL_MS = 400;
+const SERVICE_ACTION_TIMEOUT_MS = 10000;
 
 const callServiceList = rpc.declare({
 	object: 'service',
@@ -66,7 +68,8 @@ const appState = {
 		appVersion: '',
 		kernelVersion: '',
 		checkedAt: 0
-	}
+	},
+	serviceActionBusy: false
 };
 
 function notify(type, message) {
@@ -958,11 +961,41 @@ async function withButtons(btns, fn) {
 	}
 }
 
+async function withServiceButtons(activeBtn, inactiveBtn, fn) {
+	const activeHtml = activeBtn ? activeBtn.innerHTML : '';
+	const inactiveDisabled = inactiveBtn ? inactiveBtn.disabled : false;
+
+	appState.serviceActionBusy = true;
+
+	if (activeBtn) {
+		activeBtn.disabled = true;
+		activeBtn.innerHTML = '<span class="sbox-spinner"></span> ' + safeText(activeBtn.textContent || '').trim();
+	}
+	if (inactiveBtn) inactiveBtn.disabled = true;
+	updateHeaderAndControlDom();
+
+	try {
+		return await fn();
+	} finally {
+		appState.serviceActionBusy = false;
+
+		if (activeBtn && activeBtn.isConnected) {
+			activeBtn.disabled = false;
+			activeBtn.innerHTML = activeHtml;
+		}
+		if (inactiveBtn && inactiveBtn.isConnected) inactiveBtn.disabled = inactiveDisabled;
+	}
+}
+
 function parseYamlValue(yaml, key) {
 	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	const re = new RegExp('^\\s*' + escapedKey + '\\s*:\\s*(["\\\']?)([^#\\r\\n]+?)\\1\\s*(?:#.*)?$', 'm');
 	const m = String(yaml || '').match(re);
 	return m ? m[2].trim() : null;
+}
+
+function delay(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeHostPortFromAddr(addr, fallbackHost, fallbackPort) {
@@ -1000,6 +1033,18 @@ async function getServiceStatus() {
 	} catch (e) {
 		return false;
 	}
+}
+
+async function waitForServiceStatus(targetStatus, timeoutMs) {
+	const desired = !!targetStatus;
+	const deadline = Date.now() + (timeoutMs || SERVICE_ACTION_TIMEOUT_MS);
+
+	while (Date.now() < deadline) {
+		if (!!(await getServiceStatus()) === desired) return true;
+		await delay(SERVICE_ACTION_POLL_MS);
+	}
+
+	return !!(await getServiceStatus()) === desired;
 }
 
 async function execService(action) {
@@ -2227,13 +2272,24 @@ async function openRulesetsModal() {
 		applyThemeToEditor(rulesetMainEditor);
 	}
 
+	function resizeAndFocusRulesetEditor(shouldFocus) {
+		if (!rulesetMainEditor) return;
+		setTimeout(() => {
+			try { rulesetMainEditor.resize(); } catch (e) {}
+			if (shouldFocus) {
+				try { rulesetMainEditor.focus(); } catch (e) {}
+			}
+		}, 0);
+	}
+
 	function refreshToolbarState() {
 		const hasCurrent = !!currentRuleset;
 		if (currentNode) currentNode.textContent = hasCurrent ? ('./lst/' + currentRuleset) : _('No file selected');
 		if (saveBtn) saveBtn.disabled = !hasCurrent;
 		if (deleteBtn) deleteBtn.disabled = !hasCurrent;
 		if (emptyNode) emptyNode.style.display = hasCurrent ? 'none' : '';
-		if (editorWrap) editorWrap.style.display = hasCurrent ? '' : 'none';
+		if (editorWrap) editorWrap.style.display = hasCurrent ? 'block' : 'none';
+		if (hasCurrent) resizeAndFocusRulesetEditor(false);
 	}
 
 	function renderRulesetList() {
@@ -2262,6 +2318,7 @@ async function openRulesetsModal() {
 				rulesetCache[currentRuleset] = content;
 				rulesetMainEditor.setValue(String(content || ''), -1);
 				rulesetMainEditor.clearSelection();
+				resizeAndFocusRulesetEditor(true);
 			});
 
 			listNode.appendChild(button);
@@ -2288,6 +2345,7 @@ async function openRulesetsModal() {
 		ensureRulesetEditor();
 		rulesetMainEditor.setValue(String(rulesetCache[currentRuleset] || ''), -1);
 		rulesetMainEditor.clearSelection();
+		resizeAndFocusRulesetEditor(false);
 	}
 
 	if (createInput && createBtn) {
@@ -2317,6 +2375,7 @@ async function openRulesetsModal() {
 			ensureRulesetEditor();
 			rulesetMainEditor.setValue('', -1);
 			rulesetMainEditor.clearSelection();
+			resizeAndFocusRulesetEditor(true);
 			notify('info', _('Ruleset "%s" created.').format(filename));
 		}).catch((e) => {
 			notify('error', e.message || _('Failed to create ruleset.'));
@@ -2639,7 +2698,9 @@ function buildPageHtml() {
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
 			'<button id="sbox-theme-toggle" type="button" class="cbi-button cbi-button-neutral sbox-header-button sbox-theme-toggle" title="' + safeText(_('Switch theme')) + '">o</button>' +
-			'<button id="sbox-dashboard" type="button" class="cbi-button cbi-button-negative sbox-header-button">' + safeText(_('Dashboard')) + '</button>' +
+			'<button id="sbox-dashboard" type="button" class="cbi-button sbox-header-button sbox-btn-dashboard ' + (appState.serviceRunning ? 'sbox-btn-dashboard-on' : 'sbox-btn-dashboard-off') + '"' +
+				(appState.serviceRunning ? '' : ' disabled') +
+			'>' + safeText(_('Dashboard')) + '</button>' +
 		'</div>' +
 
 		'<div class="sbox-card">' +
@@ -2650,12 +2711,19 @@ function buildPageHtml() {
 
 				'<div id="sbox-pane-control">' +
 					'<div class="sbox-row">' +
-						'<span id="sbox-status" class="sbox-status sbox-status-off">' +
-							'<span class="sbox-dot sbox-dot-off"></span>' +
-							'<span id="sbox-status-label">' + safeText(_('Service stopped')) + '</span>' +
+						'<span id="sbox-status" class="sbox-status ' + (appState.serviceRunning ? 'sbox-status-on' : 'sbox-status-off') + '">' +
+							'<span class="sbox-dot ' + (appState.serviceRunning ? 'sbox-dot-on' : 'sbox-dot-off') + '"></span>' +
+							'<span id="sbox-status-label">' + safeText(appState.serviceRunning ? _('Service running') : _('Service stopped')) + '</span>' +
 						'</span>' +
-						'<button id="sbox-start-stop" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Start')) + '</button>' +
-						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Restart')) + '</button>' +
+						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-btn-start sbox-service-button"' +
+							(appState.serviceRunning ? ' style="display:none"' : '') +
+						'>' + safeText(_('Start')) + '</button>' +
+						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-btn-stop sbox-service-button"' +
+							(appState.serviceRunning ? '' : ' style="display:none"') +
+						'>' + safeText(_('Stop')) + '</button>' +
+						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply sbox-btn-restart"' +
+							(appState.serviceRunning ? '' : ' style="display:none"') +
+						'>' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
@@ -2704,7 +2772,8 @@ function updateHeaderAndControlDom() {
 	const status = pageRoot.querySelector('#sbox-status');
 	const statusLabel = pageRoot.querySelector('#sbox-status-label');
 	const dot = pageRoot.querySelector('#sbox-status .sbox-dot');
-	const startStop = pageRoot.querySelector('#sbox-start-stop');
+	const startBtn = pageRoot.querySelector('#sbox-start');
+	const stopBtn = pageRoot.querySelector('#sbox-stop');
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
 	const dashboardBtn = pageRoot.querySelector('#sbox-dashboard');
 	const appVersion = pageRoot.querySelector('#sbox-app-version');
@@ -2712,6 +2781,7 @@ function updateHeaderAndControlDom() {
 	const kernelVersion = pageRoot.querySelector('#sbox-kernel-version');
 	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
 	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
+	const serviceBusy = !!appState.serviceActionBusy;
 
 	if (status && statusLabel && dot) {
 		status.classList.toggle('sbox-status-on', appState.serviceRunning);
@@ -2721,19 +2791,25 @@ function updateHeaderAndControlDom() {
 		statusLabel.textContent = appState.serviceRunning ? _('Service running') : _('Service stopped');
 	}
 
-	if (startStop) {
-		startStop.textContent = appState.serviceRunning ? _('Stop') : _('Start');
-		startStop.className = 'cbi-button ' + (appState.serviceRunning ? 'cbi-button-negative' : 'cbi-button-positive');
+	if (startBtn) {
+		if (!serviceBusy) startBtn.style.display = appState.serviceRunning ? 'none' : '';
+		startBtn.disabled = serviceBusy || appState.serviceRunning;
+	}
+
+	if (stopBtn) {
+		if (!serviceBusy) stopBtn.style.display = appState.serviceRunning ? '' : 'none';
+		stopBtn.disabled = serviceBusy || !appState.serviceRunning;
 	}
 
 	if (restartBtn) {
-		restartBtn.style.display = appState.serviceRunning ? '' : 'none';
-		restartBtn.disabled = !appState.serviceRunning;
+		if (!serviceBusy) restartBtn.style.display = appState.serviceRunning ? '' : 'none';
+		restartBtn.disabled = serviceBusy || !appState.serviceRunning;
 	}
 
 	if (dashboardBtn) {
-		dashboardBtn.disabled = !appState.serviceRunning;
-		dashboardBtn.className = 'cbi-button cbi-button-negative sbox-header-button';
+		dashboardBtn.disabled = serviceBusy || !appState.serviceRunning;
+		dashboardBtn.className = 'cbi-button sbox-header-button sbox-btn-dashboard ' +
+			(appState.serviceRunning ? 'sbox-btn-dashboard-on' : 'sbox-btn-dashboard-off');
 	}
 
 	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
@@ -2775,6 +2851,17 @@ async function refreshHeaderAndControl() {
 	appState.proxyMode = proxyMode || 'tproxy';
 
 	updateHeaderAndControlDom();
+}
+
+async function refreshHeaderAndControlSafe() {
+	try {
+		await refreshHeaderAndControl();
+	} catch (e) {
+		try {
+			appState.serviceRunning = await getServiceStatus();
+		} catch (statusError) {}
+		updateHeaderAndControlDom();
+	}
 }
 
 function renderSettingsPane() {
@@ -3032,22 +3119,42 @@ function bindControlAndHeaderEvents() {
 		});
 	}
 
-	const startStop = pageRoot.querySelector('#sbox-start-stop');
-	if (startStop) {
-		startStop.addEventListener('click', () => withButtons(startStop, async () => {
-			const running = await getServiceStatus();
-			if (running) {
-				await execService('stop');
-				await execService('disable');
-			} else {
-				await execService('enable');
-				await execService('start');
+	const startBtn = pageRoot.querySelector('#sbox-start');
+	const stopBtn = pageRoot.querySelector('#sbox-stop');
+	if (startBtn) {
+		startBtn.addEventListener('click', async () => {
+			try {
+				await withServiceButtons(startBtn, stopBtn, async () => {
+					await execService('enable');
+					await execService('start');
+					if (!(await waitForServiceStatus(true))) {
+						throw new Error(_('Service did not enter running state in time.'));
+					}
+				});
+				await refreshHeaderAndControlSafe();
+			} catch (e) {
+				await refreshHeaderAndControlSafe();
+				notify('error', _('Unable to start service: %s').format(e.message));
 			}
-			appState.serviceRunning = await getServiceStatus();
-			updateHeaderAndControlDom();
-		}).catch((e) => {
-			notify('error', _('Unable to toggle service: %s').format(e.message));
-		}));
+		});
+	}
+
+	if (stopBtn) {
+		stopBtn.addEventListener('click', async () => {
+			try {
+				await withServiceButtons(stopBtn, startBtn, async () => {
+					await execService('stop');
+					await execService('disable');
+					if (!(await waitForServiceStatus(false))) {
+						throw new Error(_('Service did not stop in time.'));
+					}
+				});
+				await refreshHeaderAndControlSafe();
+			} catch (e) {
+				await refreshHeaderAndControlSafe();
+				notify('error', _('Unable to stop service: %s').format(e.message));
+			}
+		});
 	}
 
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
@@ -3496,6 +3603,9 @@ const PAGE_CSS = `
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 8px;
+}
+.sbox-service-button {
+	min-width: 72px;
 }
 .sbox-status {
 	display: inline-flex;
