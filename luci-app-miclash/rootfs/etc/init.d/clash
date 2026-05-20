@@ -39,6 +39,42 @@ check_files() {
 	return 0
 }
 
+ensure_top_level_config_key() {
+	local key="$1"
+	local line="$2"
+	local tmp_file="${CLASH_DIR}/.${key}.tmp.$$"
+
+	[ -f "$CLASH_DIR/config.yaml" ] || return 0
+	grep -Eq "^[[:space:]]*${key}:" "$CLASH_DIR/config.yaml" && return 0
+
+	awk -v insert_line="$line" '
+		BEGIN { inserted = 0 }
+		{
+			print
+			if (!inserted && $0 ~ /^mode:[[:space:]]*/) {
+				print insert_line
+				inserted = 1
+			}
+		}
+		END {
+			if (!inserted) print insert_line
+		}
+	' "$CLASH_DIR/config.yaml" > "$tmp_file" && mv "$tmp_file" "$CLASH_DIR/config.yaml"
+}
+
+ensure_transparent_proxy_ports() {
+	local proxy_mode="tproxy"
+
+	[ -f "$SETTINGS_FILE" ] && proxy_mode=$(grep -m1 '^PROXY_MODE=' "$SETTINGS_FILE" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+	case "$proxy_mode" in
+		tproxy|mixed) ;;
+		*) return 0 ;;
+	esac
+
+	ensure_top_level_config_key "redir-port" "redir-port: 7892" || return 1
+	ensure_top_level_config_key "tproxy-port" "tproxy-port: 7894" || return 1
+}
+
 # Function to set up clash directories
 setup_clash_directories() {
 	if [ "$USE_TMPFS_RULES" = "true" ]; then
@@ -223,6 +259,16 @@ remove_firewall_rules() {
 	fi
 }
 
+refresh_guard_rules() {
+	if [ -f "$CLASH_RULES" ]; then
+		if "$CLASH_RULES" guard_refresh; then
+			msg "Internet-only guard refreshed"
+		else
+			msg "WARNING: Failed to refresh internet-only guard"
+		fi
+	fi
+}
+
 # Function to restart dnsmasq
 restart_dnsmasq() {
 	if /etc/init.d/dnsmasq restart >/dev/null 2>&1; then
@@ -237,11 +283,21 @@ restart_dnsmasq() {
 start_service() {
 	msg "Starting Clash service..."
 
+	# Apply or remove the fail-closed guard before any expensive startup work.
+	refresh_guard_rules
+
 	# Check the required files
 	check_files || return 1
 
 	# Set up the directories (ruleset and proxy_providers)
 	setup_clash_directories || return 1
+
+	# Make sure transparent inbounds required by firewall rules exist even when
+	# a subscription overwrote config.yaml without MiClash-managed ports.
+	ensure_transparent_proxy_ports || {
+		msg "ERROR: Failed to ensure transparent proxy ports in config.yaml"
+		return 1
+	}
 
 	# Check Clash configuration
 	if ! "$CLASH_BIN" -d "$CLASH_DIR" -t; then
@@ -290,6 +346,9 @@ stop_service() {
 
 	# Remove firewall rules
 	remove_firewall_rules
+
+	# Keep the guard active only when "Internet only through MiClash" is enabled.
+	refresh_guard_rules
 
 	# Restore DNS settings
 	restore_dns

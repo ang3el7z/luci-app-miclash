@@ -1070,3 +1070,33 @@ msgstr "VPN / Туннель"
 
 msgid "YAML validation failed."
 msgstr "Проверка YAML завершилась ошибкой."
+
+msgid "Internet only through MiClash"
+msgstr "Интернет только через MiClash"
+
+msgid "Blocks direct external traffic from clients. If MiClash is stopped or fails, the internet is blocked while local network access remains available."
+msgstr "Блокирует прямой внешний трафик от клиентов. Если MiClash остановлен или упал, интернет блокируется, а доступ к локальной сети остаётся доступным."
+
+msgid "Guard"
+msgstr "Защита"
+
+msgid "ON"
+msgstr "ВКЛ"
+
+msgid "OFF"
+msgstr "ВЫКЛ"
+
+msgid "Network access is blocked by \"Internet only through MiClash\". Start the service or disable this option in Settings to update."
+msgstr "Сетевой доступ заблокирован опцией \"Интернет только через MiClash\". Запустите службу или отключите эту опцию в настройках, чтобы обновить."
+
+msgid "Auto-hide notifications"
+msgstr "Автоматически скрывать уведомления"
+
+msgid "Release channel"
+msgstr "Канал релизов"
+
+msgid "Release only"
+msgstr "Только релизы"
+
+msgid "Release + pre-release"
+msgstr "Релизы + pre-release"

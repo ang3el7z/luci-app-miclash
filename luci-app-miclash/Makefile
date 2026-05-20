@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=0.2.6
+PKG_VERSION:=0.3.5
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
@@ -37,10 +37,12 @@ choice
 
 config PACKAGE_$(PKG_NAME)_Iptables_Transparent_Proxy
 	bool "Iptables Transparent Proxy"
+	select PACKAGE_kmod-ipt-nat
 	select PACKAGE_iptables-mod-tproxy
 
 config PACKAGE_$(PKG_NAME)_Nftables_Transparent_Proxy
 	bool "Nftables Transparent Proxy"
+	select PACKAGE_kmod-nft-nat
 	select PACKAGE_kmod-nft-tproxy
 
 endchoice
@@ -147,6 +149,15 @@ fi
 exit 0
 endef
 
+define Package/$(PKG_NAME)/prerm
+#!/bin/sh
+[ -n "$$IPKG_INSTROOT" ] || {
+	[ -x /etc/init.d/clash ] && /etc/init.d/clash stop >/dev/null 2>&1 || true
+	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || true
+}
+exit 0
+endef
+
 define Package/$(PKG_NAME)/postrm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
@@ -163,6 +174,8 @@ define Package/$(PKG_NAME)/postrm
 		fi
 		return 1
 	}
+
+	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || true
 
 	# Clean up cron job for clash-rules update, if present
 	CRON_FILE="/etc/crontabs/root"

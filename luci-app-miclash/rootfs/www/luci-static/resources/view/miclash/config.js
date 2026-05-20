@@ -20,7 +20,9 @@ const ACE_BASE = '/luci-static/resources/view/miclash/ace/';
 const TMP_SUBSCRIPTION_PATH = '/tmp/miclash-subscription.yaml';
 const UI_THEME_KEY = 'UI_THEME';
 const MIHOMO_RELEASE_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest';
+const MIHOMO_RELEASES_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases';
 const MICLASH_RELEASE_API = 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest';
+const MICLASH_RELEASES_API = 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases';
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
 const SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC = 8;
 const SUBSCRIPTION_CURL_MAX_TIME_SEC = 18;
@@ -74,8 +76,13 @@ const appState = {
 
 function notify(type, message) {
 	const node = ui.addNotification(null, E('p', String(message || '')), type);
-	const timeout = type === 'error' ? 10000 : 6000;
-	if (node) {
+	// "Auto-hide notifications" defaults to true; the toast disappears after a
+	// short timeout (longer for errors so the user has time to read them).
+	// When the user turns the option off, the toast stays until they close it
+	// manually — useful for diagnosing rare issues without losing the message.
+	const autoHide = !appState.settings || appState.settings.autoHideNotifications !== false;
+	if (node && autoHide) {
+		const timeout = type === 'error' ? 10000 : 6000;
 		setTimeout(() => {
 			try {
 				node.remove();
@@ -300,16 +307,19 @@ function parsePackageVersion(raw, packageName) {
 	if (!text) return '';
 
 	const escaped = String(packageName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	// Every pattern is scoped to the package name. Unscoped version fallbacks
+	// can latch onto unrelated kernel/package-manager output (for example a
+	// Linux "6.6.x" line) while network commands are failing.
 	const patterns = [
-		new RegExp('^\\s*Version\\s*:\\s*([^\\s]+)', 'im'),
-		new RegExp(escaped + '\\s*-\\s*([^\\s]+)', 'i'),
-		new RegExp(escaped + '-([\\w.+~:-]+)', 'i'),
-		new RegExp('(\\d+\\.\\d+\\.\\d+(?:[-+][\\w.-]+)?)', 'i')
+		new RegExp('(^|\\n)\\s*Package\\s*:\\s*' + escaped + '\\s*[\\s\\S]*?\\n\\s*Version\\s*:\\s*([^\\s\\n]+)', 'i'),
+		new RegExp('^\\s*' + escaped + '\\s*-\\s*([^\\s]+)', 'im'),
+		new RegExp('^\\s*' + escaped + '-([\\w.+~:-]+)', 'im')
 	];
 
 	for (let i = 0; i < patterns.length; i++) {
 		const match = text.match(patterns[i]);
-		if (match && match[1]) return match[1].trim();
+		const value = patterns[i].source.indexOf('Package') !== -1 ? match && match[2] : match && match[1];
+		if (value) return value.trim();
 	}
 
 	return '';
@@ -446,28 +456,51 @@ async function ensureMihomoKernelInstalled() {
 	return status;
 }
 
-async function getLatestMihomoRelease() {
+function normalizeReleaseChannel(value) {
+	const normalized = String(value || '').toLowerCase().trim();
+	return normalized === 'prerelease' ? 'prerelease' : 'release';
+}
+
+function includePrereleases() {
+	return normalizeReleaseChannel(appState.settings && appState.settings.releaseChannel) === 'prerelease';
+}
+
+function normalizeGithubRelease(data) {
+	if (!data || data.draft || !data.tag_name || !Array.isArray(data.assets)) return null;
+	return { version: data.tag_name, assets: data.assets, prerelease: !!data.prerelease };
+}
+
+async function fetchGithubRelease(latestUrl, releasesUrl) {
+	if (includePrereleases()) {
+		try {
+			const response = await fetch(releasesUrl);
+			if (response.ok) {
+				const releases = await response.json();
+				if (Array.isArray(releases)) {
+					for (let i = 0; i < releases.length; i++) {
+						const release = normalizeGithubRelease(releases[i]);
+						if (release) return release;
+					}
+				}
+			}
+		} catch (e) {}
+	}
+
 	try {
-		const response = await fetch(MIHOMO_RELEASE_API);
+		const response = await fetch(latestUrl);
 		if (!response.ok) return null;
-		const data = await response.json();
-		if (!data || data.prerelease || !data.tag_name || !Array.isArray(data.assets)) return null;
-		return { version: data.tag_name, assets: data.assets };
+		return normalizeGithubRelease(await response.json());
 	} catch (e) {
 		return null;
 	}
 }
 
+async function getLatestMihomoRelease() {
+	return fetchGithubRelease(MIHOMO_RELEASE_API, MIHOMO_RELEASES_API);
+}
+
 async function getLatestMiClashRelease() {
-	try {
-		const response = await fetch(MICLASH_RELEASE_API);
-		if (!response.ok) return null;
-		const data = await response.json();
-		if (!data || !data.tag_name || !Array.isArray(data.assets)) return null;
-		return { version: data.tag_name, assets: data.assets };
-	} catch (e) {
-		return null;
-	}
+	return fetchGithubRelease(MICLASH_RELEASE_API, MICLASH_RELEASES_API);
 }
 
 function compareNumericVersions(left, right) {
@@ -684,7 +717,7 @@ async function installMiClashDependencies(manager) {
 	if (manager.type === 'apk') {
 		await execOrThrow(
 			manager.bin,
-			['add', 'curl', 'kmod-nft-tproxy', 'kmod-tun', 'coreutils-base64'],
+			['add', 'curl', 'kmod-nft-tproxy', 'kmod-nft-nat', 'kmod-tun', 'coreutils-base64'],
 			_('Failed to install MiClash dependencies.')
 		);
 		return;
@@ -694,15 +727,20 @@ async function installMiClashDependencies(manager) {
 	const majorMatch = String(release || '').match(/^(\d+)/);
 	const major = majorMatch ? parseInt(majorMatch[1], 10) : 0;
 	const tproxyPkg = major > 0 && major < 23 ? 'iptables-mod-tproxy' : 'kmod-nft-tproxy';
+	const natPkg = major > 0 && major < 23 ? 'kmod-ipt-nat' : 'kmod-nft-nat';
 
 	await execOrThrow(
 		manager.bin,
-		['install', 'curl', tproxyPkg, 'kmod-tun', 'coreutils-base64'],
+		['install', 'curl', tproxyPkg, natPkg, 'kmod-tun', 'coreutils-base64'],
 		_('Failed to install MiClash dependencies.')
 	);
 }
 
 async function installMiClashFromSettings(actionKind) {
+	if (isUpdateBlockedByGuard()) {
+		throw new Error(guardBlockedNetworkMessage());
+	}
+
 	const manager = await detectPackageManager();
 	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
 
@@ -795,6 +833,10 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 }
 
 async function installKernelFromSettings() {
+	if (isUpdateBlockedByGuard()) {
+		throw new Error(guardBlockedNetworkMessage());
+	}
+
 	const arch = await detectSystemArchitecture();
 	const release = await getLatestMihomoRelease();
 	const asset = findKernelAsset(release, arch);
@@ -805,11 +847,13 @@ async function installKernelFromSettings() {
 	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
 	if (!ok) return false;
 
-	try {
-		await execService('restart');
-		notify('info', _('Kernel installed and service restarted.'));
-	} catch (e) {
-		notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
+	if (await getServiceStatus()) {
+		try {
+			await execService('restart');
+			notify('info', _('Kernel installed and service restarted.'));
+		} catch (e) {
+			notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
+		}
 	}
 
 	appState.kernelStatus = await getMihomoStatus();
@@ -924,11 +968,13 @@ async function openKernelModal() {
 					ctx.button.textContent = _('Downloading...');
 					const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
 					if (ok) {
-						try {
-							await execService('restart');
-							notify('info', _('Kernel installed and service restarted.'));
-						} catch (e) {
-							notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
+						if (await getServiceStatus()) {
+							try {
+								await execService('restart');
+								notify('info', _('Kernel installed and service restarted.'));
+							} catch (e) {
+								notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
+							}
 						}
 						await refreshHeaderAndControl();
 						ctx.closeModal();
@@ -1327,6 +1373,10 @@ async function testConfigContent(content, keepOnSuccess, targetPath) {
 }
 
 async function fetchSubscriptionAsYaml(url, targetPath) {
+	if (isUpdateBlockedByGuard()) {
+		throw new Error(guardBlockedNetworkMessage());
+	}
+
 	const settingsMap = await readSettingsMap();
 	const versions = await getVersions();
 	const profile = buildSubscriptionClientProfile(settingsMap, versions.app);
@@ -1613,11 +1663,12 @@ function transformProxyMode(content, proxyMode, tunStack) {
 
 		if (trimmed === '' && i + 1 < lines.length) {
 			const nextLine = lines[i + 1].trim();
-			if (/^#\s*Proxy\s+Mode:/i.test(nextLine) || /^tproxy-port/.test(nextLine) || /^tun:/.test(nextLine)) {
+			if (/^#\s*Proxy\s+Mode:/i.test(nextLine) || /^redir-port/.test(nextLine) || /^tproxy-port/.test(nextLine) || /^tun:/.test(nextLine)) {
 				continue;
 			}
 		}
 
+		if (/^redir-port:/.test(trimmed)) continue;
 		if (/^tproxy-port:/.test(trimmed)) continue;
 
 		if (/^tun:/.test(trimmed)) {
@@ -1650,7 +1701,7 @@ function transformProxyMode(content, proxyMode, tunStack) {
 
 	switch (proxyMode) {
 		case 'tproxy':
-			configToInsert = ['# Proxy Mode: TPROXY', 'tproxy-port: 7894'];
+			configToInsert = ['# Proxy Mode: TPROXY', 'redir-port: 7892', 'tproxy-port: 7894'];
 			break;
 		case 'tun':
 			configToInsert = [
@@ -1667,6 +1718,7 @@ function transformProxyMode(content, proxyMode, tunStack) {
 		case 'mixed':
 			configToInsert = [
 				'# Proxy Mode: MIXED (TCP via TPROXY, UDP via TUN)',
+				'redir-port: 7892',
 				'tproxy-port: 7894',
 				'tun:',
 				'  enable: true',
@@ -1728,7 +1780,10 @@ async function loadOperationalSettings() {
 			autoDetectLan: true,
 			autoDetectWan: true,
 			blockQuic: true,
+			internetOnlyMiclash: false,
 			useTmpfsRules: true,
+			autoHideNotifications: true,
+			releaseChannel: 'release',
 			detectedLan: '',
 			detectedWan: '',
 			includedInterfaces: [],
@@ -1751,7 +1806,10 @@ async function loadOperationalSettings() {
 				case 'AUTO_DETECT_LAN': settings.autoDetectLan = value === 'true'; break;
 				case 'AUTO_DETECT_WAN': settings.autoDetectWan = value === 'true'; break;
 				case 'BLOCK_QUIC': settings.blockQuic = value === 'true'; break;
+				case 'INTERNET_ONLY_MICLASH': settings.internetOnlyMiclash = value === 'true'; break;
 				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
+				case 'AUTO_HIDE_NOTIFICATIONS': settings.autoHideNotifications = value !== 'false'; break;
+				case 'RELEASE_CHANNEL': settings.releaseChannel = normalizeReleaseChannel(value); break;
 				case 'DETECTED_LAN': settings.detectedLan = value; break;
 				case 'DETECTED_WAN': settings.detectedWan = value; break;
 				case 'INCLUDED_INTERFACES':
@@ -1775,7 +1833,10 @@ async function loadOperationalSettings() {
 			autoDetectLan: true,
 			autoDetectWan: true,
 			blockQuic: true,
+			internetOnlyMiclash: false,
 			useTmpfsRules: true,
+			autoHideNotifications: true,
+			releaseChannel: 'release',
 			detectedLan: '',
 			detectedWan: '',
 			includedInterfaces: [],
@@ -1865,7 +1926,7 @@ async function detectWanInterface() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, options) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, releaseChannel, options) {
 	const opts = options || {};
 	try {
 		let detectedLan = '';
@@ -1891,7 +1952,10 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			'AUTO_DETECT_LAN=' + autoDetectLan,
 			'AUTO_DETECT_WAN=' + autoDetectWan,
 			'BLOCK_QUIC=' + blockQuic,
+			'INTERNET_ONLY_MICLASH=' + internetOnlyMiclash,
 			'USE_TMPFS_RULES=' + useTmpfsRules,
+			'AUTO_HIDE_NOTIFICATIONS=' + (autoHideNotifications !== false),
+			'RELEASE_CHANNEL=' + normalizeReleaseChannel(releaseChannel),
 			'DETECTED_LAN=' + detectedLan,
 			'DETECTED_WAN=' + detectedWan,
 			'INCLUDED_INTERFACES=' + includedInterfaces.join(','),
@@ -1954,11 +2018,14 @@ async function switchProxyModeFromHeader(targetMode) {
 		!!current.autoDetectLan,
 		!!current.autoDetectWan,
 		!!current.blockQuic,
+		!!current.internetOnlyMiclash,
 		!!current.useTmpfsRules,
 		interfaces,
 		!!current.enableHwid,
 		current.hwidUserAgent || 'MiClash',
 		current.hwidDeviceOS || 'OpenWrt',
+		current.autoHideNotifications !== false,
+		current.releaseChannel || 'release',
 		{ silent: true }
 	);
 
@@ -2586,7 +2653,10 @@ function buildSettingsPaneHtml() {
 		autoDetectLan: true,
 		autoDetectWan: true,
 		blockQuic: true,
+		internetOnlyMiclash: false,
 		useTmpfsRules: true,
+		autoHideNotifications: true,
+		releaseChannel: 'release',
 		enableHwid: false,
 		hwidUserAgent: 'MiClash',
 		hwidDeviceOS: 'OpenWrt'
@@ -2655,9 +2725,24 @@ function buildSettingsPaneHtml() {
 						'<span>' + safeText(_('Block QUIC (UDP/443)')) + '</span>' +
 					'</label>' +
 				'<label class="sbox-checkbox-row">' +
+					'<input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Internet only through MiClash')) + '</span>' +
+				'</label>' +
+				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Store rules/providers on tmpfs')) + '</span>' +
 				'</label>' +
+				'<label class="sbox-checkbox-row">' +
+					'<input type="checkbox" id="sbox-auto-hide-notifications"' + (s.autoHideNotifications !== false ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Auto-hide notifications')) + '</span>' +
+				'</label>' +
+				'<div style="margin-bottom:10px;">' +
+					'<label>' + safeText(_('Release channel')) + '</label>' +
+					'<select id="sbox-release-channel" class="cbi-input-select sbox-select">' +
+						'<option value="release"' + (normalizeReleaseChannel(s.releaseChannel) === 'release' ? ' selected' : '') + '>' + safeText(_('Release only')) + '</option>' +
+						'<option value="prerelease"' + (normalizeReleaseChannel(s.releaseChannel) === 'prerelease' ? ' selected' : '') + '>' + safeText(_('Release + pre-release')) + '</option>' +
+					'</select>' +
+				'</div>' +
 				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Inject HWID headers into proxy-providers')) + '</span>' +
@@ -2715,6 +2800,12 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
+			'<span class="sbox-header-dot">|</span>' +
+			'<span id="sbox-guard" class="sbox-guard-pill ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Internet only through MiClash')) + '">' +
+				'<span class="sbox-guard-dot ' + (isInternetOnlyEnabled() ? 'sbox-dot-on' : 'sbox-dot-off') + '"></span>' +
+				'<span class="sbox-guard-label">' + safeText(_('Guard')) + '</span>' +
+				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
+			'</span>' +
 			'<button id="sbox-theme-toggle" type="button" class="cbi-button cbi-button-neutral sbox-header-button sbox-theme-toggle" title="' + safeText(_('Switch theme')) + '">o</button>' +
 			'<button id="sbox-dashboard" type="button" class="cbi-button sbox-header-button sbox-btn-dashboard ' + (appState.serviceRunning ? 'sbox-btn-dashboard-on' : 'sbox-btn-dashboard-off') + '"' +
 				(appState.serviceRunning ? '' : ' disabled') +
@@ -2853,6 +2944,38 @@ function updateHeaderAndControlDom() {
 		kernelAction.setAttribute('aria-label', kernelActionState.title);
 	}
 	if (modeSelect) modeSelect.value = normalizeProxyMode(appState.proxyMode);
+
+	const guardPill = pageRoot.querySelector('#sbox-guard');
+	const guardState = pageRoot.querySelector('#sbox-guard-state');
+	const guardEnabled = isInternetOnlyEnabled();
+	if (guardPill) {
+		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
+		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
+		const guardDot = guardPill.querySelector('.sbox-guard-dot');
+		if (guardDot) {
+			guardDot.classList.toggle('sbox-dot-on', guardEnabled);
+			guardDot.classList.toggle('sbox-dot-off', !guardEnabled);
+		}
+	}
+	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
+}
+
+function isInternetOnlyEnabled() {
+	return !!(appState.settings && appState.settings.internetOnlyMiclash);
+}
+
+// Returns an Error to throw / a string to display when the user clicked an
+// "Update" button while the service is stopped but the "Internet only through
+// MiClash" guard is still active. In that combination all WAN-bound traffic
+// from the router is dropped at the firewall (no proxy is running to carry it),
+// so the request is guaranteed to fail. We surface a concrete instruction
+// instead of letting curl/XHR run into a generic timeout / DNS failure.
+function guardBlockedNetworkMessage() {
+	return _('Network access is blocked by "Internet only through MiClash". Start the service or disable this option in Settings to update.');
+}
+
+function isUpdateBlockedByGuard() {
+	return !appState.serviceRunning && isInternetOnlyEnabled();
 }
 
 async function refreshHeaderAndControl() {
@@ -2901,7 +3024,11 @@ async function collectSettingsFormState() {
 	const autoDetectLan = !!pane.querySelector('#sbox-auto-lan')?.checked;
 	const autoDetectWan = !!pane.querySelector('#sbox-auto-wan')?.checked;
 	const blockQuic = !!pane.querySelector('#sbox-block-quic')?.checked;
+	const internetOnlyMiclash = !!pane.querySelector('#sbox-internet-only-miclash')?.checked;
 	const useTmpfsRules = !!pane.querySelector('#sbox-tmpfs')?.checked;
+	const autoHideNotificationsEl = pane.querySelector('#sbox-auto-hide-notifications');
+	const autoHideNotifications = autoHideNotificationsEl ? !!autoHideNotificationsEl.checked : true;
+	const releaseChannel = normalizeReleaseChannel(pane.querySelector('#sbox-release-channel')?.value || 'release');
 	const enableHwid = !!pane.querySelector('#sbox-enable-hwid')?.checked;
 	const hwidUserAgent = String(pane.querySelector('#sbox-hwid-user-agent')?.value || 'MiClash').trim() || 'MiClash';
 	const hwidDeviceOS = String(pane.querySelector('#sbox-hwid-device-os')?.value || 'OpenWrt').trim() || 'OpenWrt';
@@ -2918,7 +3045,10 @@ async function collectSettingsFormState() {
 		autoDetectLan,
 		autoDetectWan,
 		blockQuic,
+		internetOnlyMiclash,
 		useTmpfsRules,
+		autoHideNotifications,
+		releaseChannel,
 		selected,
 		enableHwid,
 		hwidUserAgent,
@@ -2943,6 +3073,7 @@ function bindSettingsPaneEvents() {
 		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
 			const formState = await collectSettingsFormState();
 			if (!formState) return;
+			const previousReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.releaseChannel);
 
 			const ok = await saveOperationalSettings(
 				formState.mode,
@@ -2951,13 +3082,16 @@ function bindSettingsPaneEvents() {
 				formState.autoDetectLan,
 				formState.autoDetectWan,
 				formState.blockQuic,
-					formState.useTmpfsRules,
-					formState.selected,
-					formState.enableHwid,
-					formState.hwidUserAgent,
-					formState.hwidDeviceOS,
-					{ silent: true }
-				);
+				formState.internetOnlyMiclash,
+				formState.useTmpfsRules,
+				formState.selected,
+				formState.enableHwid,
+				formState.hwidUserAgent,
+				formState.hwidDeviceOS,
+				formState.autoHideNotifications,
+				formState.releaseChannel,
+				{ silent: true }
+			);
 
 				if (!ok) return;
 				try {
@@ -2973,6 +3107,7 @@ function bindSettingsPaneEvents() {
 				appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
 				appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
 				appState.serviceRunning = await getServiceStatus();
+				const releaseChannelChanged = normalizeReleaseChannel(appState.settings.releaseChannel) !== previousReleaseChannel;
 
 				const freshConfig = await L.resolveDefault(
 					fs.read(getConfigPathByName(appState.selectedConfigName)),
@@ -2985,6 +3120,9 @@ function bindSettingsPaneEvents() {
 				}
 
 				await refreshHeaderAndControl();
+				if (releaseChannelChanged) {
+					await refreshReleaseMeta({ force: true });
+				}
 				renderSettingsPane();
 				updateHeaderAndControlDom();
 			}).catch((e) => {
@@ -3309,7 +3447,12 @@ function bindConfigEvents() {
 				appState.subscriptionUrl = url;
 
 				const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
-				const downloaded = String(downloadedInfo.content || '').trimEnd() + '\n';
+				const currentSettings = appState.settings || await loadOperationalSettings();
+				const downloaded = transformProxyMode(
+					String(downloadedInfo.content || '').trimEnd() + '\n',
+					normalizeProxyMode(appState.proxyMode || currentSettings.proxyMode || 'tproxy'),
+					currentSettings.tunStack || 'system'
+				);
 
 				const tested = await testConfigContent(downloaded, true, selectedPath);
 				if (!tested.ok) throw new Error(_('YAML validation failed: %s').format(tested.message));
@@ -3320,15 +3463,19 @@ function bindConfigEvents() {
 					editor.clearSelection();
 				}
 
+				let serviceReloaded = false;
 				if (selectedConfig === MAIN_CONFIG_NAME) {
-					await execService('reload');
+					if (await getServiceStatus()) {
+						await execService('reload');
+						serviceReloaded = true;
+					}
 					appState.serviceRunning = await getServiceStatus();
 					updateHeaderAndControlDom();
 				}
 
-				if (downloadedInfo.mode === 'remnawave-client-path') {
+				if (downloadedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
 					notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
-				} else if (selectedConfig === MAIN_CONFIG_NAME) {
+				} else if (serviceReloaded) {
 					notify('info', _('Subscription downloaded and applied.'));
 				} else {
 					notify('info', _('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
@@ -3368,10 +3515,13 @@ function bindConfigEvents() {
 			appState.configContent = editor.getValue();
 
 			if (selectedConfig === MAIN_CONFIG_NAME) {
-				await execService('reload');
+				const wasRunning = await getServiceStatus();
+				if (wasRunning) {
+					await execService('reload');
+				}
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();
-				notify('info', _('Configuration applied and service reloaded.'));
+				notify('info', wasRunning ? _('Configuration applied and service reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
 			} else {
 				notify('info', _('%s saved.').format(_(getConfigLabel(selectedConfig))));
 			}
@@ -3665,6 +3815,41 @@ const PAGE_CSS = `
 	color: var(--sbox-muted);
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
+}
+.sbox-guard-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid transparent;
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	cursor: help;
+}
+.sbox-guard-on {
+	background: rgba(46, 204, 113, 0.12);
+	border-color: rgba(46, 204, 113, 0.4);
+	color: #63d996;
+}
+.sbox-guard-off {
+	background: rgba(120, 120, 120, 0.12);
+	border-color: rgba(120, 120, 120, 0.35);
+	color: var(--sbox-muted);
+}
+.sbox-guard-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+.sbox-guard-label {
+	letter-spacing: 0.08em;
+}
+.sbox-guard-state {
+	font-weight: 800;
 }
 .sbox-mode-select {
 	min-width: 96px;
@@ -4129,5 +4314,3 @@ return view.extend({
 		return pageRoot;
 	}
 });
-
-

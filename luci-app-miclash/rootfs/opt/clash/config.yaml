@@ -1,4 +1,5 @@
 mode: rule
+redir-port: 7892
 tproxy-port: 7894
 ipv6: false
 log-level: error

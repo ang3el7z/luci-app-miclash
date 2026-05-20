@@ -253,26 +253,10 @@ jobs:
 
           ls -lah release_files
 
-      - name: Generate Release Notes
-        shell: bash
-        run: |
-          cat > release_notes.md <<'EOF'
-          ## MiClash ${{ github.ref_name }}
-
-          - Tag version: `${{ needs.sync-version.outputs.tag_version }}`
-          - Source branch: `${{ needs.sync-version.outputs.target_branch }}`
-          - Source commit: `${{ needs.sync-version.outputs.sync_sha }}`
-
-          ### Packages
-          - IPK packages for OpenWrt 24.10.x (opkg)
-          - APK packages for OpenWrt 25.12.x (apk)
-          EOF
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          body_path: release_notes.md
           files: release_files/*
           draft: false
           prerelease: false
