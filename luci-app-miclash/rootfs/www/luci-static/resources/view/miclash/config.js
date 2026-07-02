@@ -717,7 +717,7 @@ async function installMiClashDependencies(manager) {
 	if (manager.type === 'apk') {
 		await execOrThrow(
 			manager.bin,
-			['add', 'zlib', 'curl', 'kmod-nft-tproxy', 'kmod-nft-nat', 'kmod-tun', 'coreutils-base64'],
+			['add', 'zlib', 'libcurl4', 'curl', 'kmod-nft-tproxy', 'kmod-nft-nat', 'kmod-tun', 'coreutils-base64'],
 			_('Failed to install MiClash dependencies.')
 		);
 		return;
@@ -731,7 +731,7 @@ async function installMiClashDependencies(manager) {
 
 	await execOrThrow(
 		manager.bin,
-		['install', 'zlib', 'curl', tproxyPkg, natPkg, 'kmod-tun', 'coreutils-base64'],
+		['install', 'zlib', 'libcurl4', 'curl', tproxyPkg, natPkg, 'kmod-tun', 'coreutils-base64'],
 		_('Failed to install MiClash dependencies.')
 	);
 }
@@ -742,7 +742,7 @@ async function reinstallCurlDependencies(manager) {
 	if (manager.type === 'apk') {
 		await execOrThrow(
 			manager.bin,
-			['fix', 'zlib', 'curl'],
+			['fix', 'zlib', 'libcurl4', 'curl'],
 			_('Failed to install MiClash dependencies.')
 		);
 		return;
@@ -750,7 +750,7 @@ async function reinstallCurlDependencies(manager) {
 
 	await execOrThrow(
 		manager.bin,
-		['install', '--force-reinstall', 'zlib', 'curl'],
+		['--force-reinstall', 'install', 'zlib', 'libcurl4', 'curl'],
 		_('Failed to install MiClash dependencies.')
 	);
 }
