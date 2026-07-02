@@ -717,7 +717,7 @@ async function installMiClashDependencies(manager) {
 	if (manager.type === 'apk') {
 		await execOrThrow(
 			manager.bin,
-			['add', 'curl', 'kmod-nft-tproxy', 'kmod-nft-nat', 'kmod-tun', 'coreutils-base64'],
+			['add', 'zlib', 'curl', 'kmod-nft-tproxy', 'kmod-nft-nat', 'kmod-tun', 'coreutils-base64'],
 			_('Failed to install MiClash dependencies.')
 		);
 		return;
@@ -731,9 +731,47 @@ async function installMiClashDependencies(manager) {
 
 	await execOrThrow(
 		manager.bin,
-		['install', 'curl', tproxyPkg, natPkg, 'kmod-tun', 'coreutils-base64'],
+		['install', 'zlib', 'curl', tproxyPkg, natPkg, 'kmod-tun', 'coreutils-base64'],
 		_('Failed to install MiClash dependencies.')
 	);
+}
+
+async function reinstallCurlDependencies(manager) {
+	await execOrThrow(manager.bin, ['update'], _('Failed to update package index.'));
+
+	if (manager.type === 'apk') {
+		await execOrThrow(
+			manager.bin,
+			['fix', 'zlib', 'curl'],
+			_('Failed to install MiClash dependencies.')
+		);
+		return;
+	}
+
+	await execOrThrow(
+		manager.bin,
+		['install', '--force-reinstall', 'zlib', 'curl'],
+		_('Failed to install MiClash dependencies.')
+	);
+}
+
+async function ensureCurlAvailable() {
+	const probe = await fs.exec('/usr/bin/curl', ['--version']);
+	if (probe.code === 0) return;
+
+	const manager = await detectPackageManager();
+	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
+
+	await installMiClashDependencies(manager);
+
+	const retry = await fs.exec('/usr/bin/curl', ['--version']);
+	if (retry.code !== 0) {
+		await reinstallCurlDependencies(manager);
+		const forcedRetry = await fs.exec('/usr/bin/curl', ['--version']);
+		if (forcedRetry.code !== 0) {
+			throw new Error(String(forcedRetry.stderr || forcedRetry.stdout || retry.stderr || retry.stdout || _('Failed to install MiClash dependencies.')).trim());
+		}
+	}
 }
 
 async function installMiClashFromSettings(actionKind) {
@@ -809,6 +847,7 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 	try {
 		notify('info', _('Downloading mihomo kernel...'));
 
+		await ensureCurlAvailable();
 		const curlResult = await fs.exec('/usr/bin/curl', ['-L', '-fsS', downloadUrl, '-o', downloadPath]);
 		if (curlResult.code !== 0) {
 			throw new Error(String(curlResult.stderr || curlResult.stdout || _('Download failed')).trim());
@@ -1292,6 +1331,7 @@ async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode
 	args.push('-o');
 	args.push(TMP_SUBSCRIPTION_PATH);
 
+	await ensureCurlAvailable();
 	const dl = await fs.exec('/usr/bin/curl', args);
 	if (dl.code !== 0) {
 		const msg = String(dl.stderr || dl.stdout || _('Download failed')).trim();
