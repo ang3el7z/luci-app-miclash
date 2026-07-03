@@ -98,14 +98,20 @@ msgstr "Не удалось открыть панель управления: %s
 msgid "Configuration saved successfully."
 msgstr "Конфигурация успешно сохранена."
 
-msgid "Configuration test failed — service not reloaded. Please fix the errors below: %s"
-msgstr "Проверка конфигурации завершилась с ошибкой — служба не была перезагружена. Пожалуйста, исправьте следующие ошибки: %s"
+msgid "Configuration test failed — service not reloaded. Please fix the errors below:"
+msgstr "Проверка конфигурации завершилась с ошибкой — служба не была перезагружена. Пожалуйста, исправьте следующие ошибки:"
 
 msgid "unknown error"
 msgstr "неизвестная ошибка"
 
 msgid "Service reloaded successfully."
 msgstr "Служба успешно перезагружена."
+
+msgid "Service is restarting…"
+msgstr "Служба перезапускается…"
+
+msgid "Service is still restarting — it may take longer on a slow connection. Reload the page in a moment to check its status."
+msgstr "Служба всё ещё перезапускается — на медленном соединении это может занять больше времени. Обновите страницу через несколько секунд, чтобы проверить её состояние."
 
 msgid "Unable to save contents: %s"
 msgstr "Не удалось сохранить содержимое: %s"
@@ -521,8 +527,8 @@ msgstr "АВТО"
 msgid "Store rules and proxy providers in RAM (tmpfs)"
 msgstr "Хранить правила и proxy-providers в RAM (tmpfs)"
 
-msgid "When enabled, rulesets and proxy-providers directories are placed on tmpfs for faster access (at the cost of using RAM). Disable to keep them on persistent storage."
-msgstr "Если включено, каталоги rulesets и proxy-providers размещаются в tmpfs для более быстрого доступа (за счёт использования оперативной памяти). Отключите, чтобы хранить их на постоянном носителе."
+msgid "When enabled, rulesets and proxy-providers directories are placed on tmpfs to extend the lifespan of the NAND chip (at the cost of using RAM). Disable to keep them on persistent storage."
+msgstr "Если включено, каталоги rulesets и proxy-providers размещаются в tmpfs для сохранения ресурса NAND-чипа (за счёт использования оперативной памяти). Отключите, чтобы хранить их на постоянном носителе."
 
 ### HWID-заголовки ###
 
@@ -1100,3 +1106,6 @@ msgstr "Только релизы"
 
 msgid "Release + pre-release"
 msgstr "Релизы + pre-release"
+
+msgid "Support the author"
+msgstr "Поддержать автора"

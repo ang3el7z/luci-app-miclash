@@ -1,5 +1,14 @@
 <img width="972" height="858" alt="image" src="https://github.com/user-attachments/assets/45e45cd6-e76b-464d-8a19-0f9e7d861b61" />
 
+# Auto install
+
+```bash
+wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+Если `luci-app-miclash` уже установлен, скрипт в интерактивном режиме предложит `update / reinstall / delete / skip`.
+При запуске через `wget ... | ash` без TTY удаление не делается автоматически: скрипт выберет безопасный `update` или `skip`.
+
 # OpenWrt 25.12.x
 
 ```bash
@@ -53,4 +62,3 @@ rm -rf /tmp/clash.gz
 ```
 
 **Ядра для других архитектур:** [https://github.com/MetaCubeX/mihomo/releases](https://4pda.to/stat/go?u=https%3A%2F%2Fgithub.com%2FMetaCubeX%2Fmihomo%2Freleases&e=132278268)
-
