@@ -1,5 +1,29 @@
 # Upstream Audit 2026-07-03
 
+## Final branch status
+
+Final branch:
+- `codex/sync-upstream-2026-07-03-finally`
+
+Created from:
+- `codex/sync-upstream-2026-07-03` at `ba8f393`
+
+Upstream checked:
+- `upstream/main` at `f8990bc` (`v4.7.0`)
+
+Fork/divergence point:
+- `aeb0220` (`v4.3.0`, `2026-04-30 09:43:02 +0300`)
+
+Graph status:
+- `HEAD..upstream/main` is empty
+- `upstream/main` is already merged into the MiClash sync branch through `3f21426`
+- no new upstream commits remained to merge after fetching on `2026-07-03`
+
+Final decision:
+- keep MiClash package/app names, paths, release endpoints, Russian locale, custom UI, internet-only guard, multi-config profiles, and MiClash installer
+- keep upstream runtime/build behavior where it affects correctness
+- keep SSClash docs, screenshots, Chinese locale, and `install-ssclash.sh` out of MiClash unless separately adapted later
+
 Branch audited:
 - `codex/sync-upstream-2026-07-03`
 
