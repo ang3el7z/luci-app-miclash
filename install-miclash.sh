@@ -49,7 +49,14 @@ detect_openwrt() {
     info "OpenWrt: ${B}${OW_RELEASE}${N}"
     info "DISTRIB_ARCH: ${B}${ARCH_PKG}${N}"
 
-    if [ "${OW_MAJOR:-0}" -ge 25 ] 2>/dev/null; then
+    # Detect the package manager by the actual installed binary. This is more
+    # reliable than DISTRIB_RELEASE because modern SNAPSHOT builds can report
+    # "SNAPSHOT" while already using apk.
+    if command -v apk >/dev/null 2>&1; then
+        PKG_MGR="apk"
+    elif command -v opkg >/dev/null 2>&1; then
+        PKG_MGR="opkg"
+    elif [ "${OW_MAJOR:-0}" -ge 25 ] 2>/dev/null; then
         PKG_MGR="apk"
     else
         PKG_MGR="opkg"

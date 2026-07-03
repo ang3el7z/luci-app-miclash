@@ -64,6 +64,12 @@ Additional audit notes:
 - `upstream/main:luci-app-ssclash/rootfs/opt/clash/config.yaml` vs MiClash default config differs only by MiClash keeping `redir-port: 7892` instead of upstream's `# Proxy Mode: TPROXY` comment
 - no additional unmerged upstream commits were found after `git fetch --all --prune`
 
+## Post-v4.7 upstream PRs
+
+| Upstream PR | Change | MiClash status |
+| --- | --- | --- |
+| `zerolabnet/SSClash#73` | Detect `apk`/`opkg` by installed binary so OpenWrt SNAPSHOT builds do not fall back to `opkg` incorrectly. | Ported into `install-miclash.sh` with MiClash naming preserved. |
+
 Branch audited:
 - `codex/sync-upstream-2026-07-03`
 
