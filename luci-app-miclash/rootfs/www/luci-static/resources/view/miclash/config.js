@@ -2,8 +2,8 @@
 'require view';
 'require fs';
 'require ui';
-'require rpc';
 'require network';
+'require view.miclash.utils';
 
 const CONFIG_PATH = '/opt/clash/config.yaml';
 const CONFIG_DIR = '/opt/clash';
@@ -26,15 +26,7 @@ const MICLASH_RELEASES_API = 'https://api.github.com/repos/ang3el7z/luci-app-mic
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
 const SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC = 8;
 const SUBSCRIPTION_CURL_MAX_TIME_SEC = 18;
-const SERVICE_ACTION_POLL_MS = 400;
 const SERVICE_ACTION_TIMEOUT_MS = 10000;
-
-const callServiceList = rpc.declare({
-	object: 'service',
-	method: 'list',
-	params: ['name'],
-	expect: { '': {} }
-});
 
 const LOG_POLL_MS = 5000;
 const STATUS_POLL_MS = 5000;
@@ -46,6 +38,8 @@ let logPollTimer = null;
 let updatePollTimer = null;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
+
+view_miclash_utils.bumpRpcTimeout();
 
 const appState = {
 	versions: { app: 'unknown', clash: 'unknown' },
@@ -136,6 +130,10 @@ async function setFileMode(path) {
 	await L.resolveDefault(fs.exec('/usr/bin/chmod', ['0644', path]), null);
 }
 
+async function writeTextFile(path, content) {
+	await view_miclash_utils.writeFile(path, String(content || ''));
+}
+
 async function readConfigFileByName(name) {
 	const path = getConfigPathByName(name);
 	await setFileMode(path);
@@ -145,7 +143,7 @@ async function readConfigFileByName(name) {
 async function writeConfigFileByName(name, content) {
 	const path = getConfigPathByName(name);
 	const normalized = String(content || '').trimEnd() + '\n';
-	await fs.write(path, normalized);
+	await writeTextFile(path, normalized);
 	await setFileMode(path);
 }
 
@@ -154,7 +152,7 @@ async function ensureConfigProfilesReady(seedMainContent) {
 	let mainContent = await L.resolveDefault(fs.read(mainPath), null);
 	if (mainContent == null) {
 		mainContent = String(seedMainContent || '');
-		await fs.write(mainPath, String(mainContent).trimEnd() + '\n');
+		await writeTextFile(mainPath, String(mainContent).trimEnd() + '\n');
 	}
 	await setFileMode(mainPath);
 
@@ -163,7 +161,7 @@ async function ensureConfigProfilesReady(seedMainContent) {
 		const path = getConfigPathByName(profile.name);
 		const existing = await L.resolveDefault(fs.read(path), null);
 		if (existing == null) {
-			await fs.write(path, String(mainContent || '').trimEnd() + '\n');
+			await writeTextFile(path, String(mainContent || '').trimEnd() + '\n');
 		}
 		await setFileMode(path);
 	}
@@ -196,7 +194,7 @@ async function readSettingsMap() {
 }
 
 async function writeSettingsMap(map) {
-	await fs.write(SETTINGS_PATH, mapToSettingsContent(map));
+	await writeTextFile(SETTINGS_PATH, mapToSettingsContent(map));
 }
 
 function normalizeTheme(theme) {
@@ -888,7 +886,9 @@ async function installKernelFromSettings() {
 
 	if (await getServiceStatus()) {
 		try {
-			await execService('restart');
+			if (!(await restartOrReloadService('restart'))) {
+				throw new Error(_('Service did not enter running state in time.'));
+			}
 			notify('info', _('Kernel installed and service restarted.'));
 		} catch (e) {
 			notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
@@ -1009,7 +1009,9 @@ async function openKernelModal() {
 					if (ok) {
 						if (await getServiceStatus()) {
 							try {
-								await execService('restart');
+								if (!(await restartOrReloadService('restart'))) {
+									throw new Error(_('Service did not enter running state in time.'));
+								}
 								notify('info', _('Kernel installed and service restarted.'));
 							} catch (e) {
 								notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
@@ -1124,28 +1126,38 @@ function computeUiPath(externalUiName, externalUi) {
 }
 
 async function getServiceStatus() {
-	try {
-		const instances = (await callServiceList('clash')).clash?.instances;
-		return Object.values(instances || {})[0]?.running || false;
-	} catch (e) {
-		return false;
-	}
+	return view_miclash_utils.getClashRunning();
 }
 
 async function waitForServiceStatus(targetStatus, timeoutMs) {
-	const desired = !!targetStatus;
-	const deadline = Date.now() + (timeoutMs || SERVICE_ACTION_TIMEOUT_MS);
-
-	while (Date.now() < deadline) {
-		if (!!(await getServiceStatus()) === desired) return true;
-		await delay(SERVICE_ACTION_POLL_MS);
-	}
-
-	return !!(await getServiceStatus()) === desired;
+	return view_miclash_utils.waitForServiceStatus(
+		getServiceStatus,
+		!!targetStatus,
+		timeoutMs || SERVICE_ACTION_TIMEOUT_MS
+	);
 }
 
-async function execService(action) {
-	return fs.exec('/etc/init.d/clash', [action]);
+async function dispatchServiceActions(actions) {
+	const script = (Array.isArray(actions) ? actions : [actions])
+		.filter((action) => !!action)
+		.map((action) => '/etc/init.d/clash ' + action)
+		.join('; ');
+	return view_miclash_utils.execDetached(script);
+}
+
+async function restartOrReloadService(action) {
+	await dispatchServiceActions([action]);
+	await delay(300);
+	return waitForServiceStatus(true);
+}
+
+function notifyDetailedError(title, detail) {
+	ui.addNotification(null, E('div', {}, [
+		E('p', String(title || '')),
+		E('pre', {
+			'style': 'margin: 6px 0 0; padding: 0 0 0 10px; font-size: 11px; line-height: 1.45; font-family: monospace; white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto; background: none; border: 0; border-left: 2px solid rgba(0,0,0,0.18);'
+		}, String(detail || _('unknown error')))
+	]), 'error');
 }
 
 function looksLikeBase64Text(value) {
@@ -1355,15 +1367,7 @@ function looksLikeYamlConfig(content) {
 }
 
 function extractTestError(testResult) {
-	const rawDetail = String(testResult?.stderr || testResult?.stdout || '').trim();
-	if (!rawDetail) return 'unknown error';
-
-	const lines = rawDetail.split('\n').filter((l) => l.trim().length > 0);
-	for (let i = 0; i < lines.length; i++) {
-		const msgMatch = lines[i].match(/msg="([^"]+)"/);
-		if (msgMatch) return msgMatch[1].trim();
-	}
-	return lines[lines.length - 1].trim();
+	return view_miclash_utils.formatClashTestError(testResult?.stdout, testResult?.stderr) || 'unknown error';
 }
 
 async function testConfigContent(content, keepOnSuccess, targetPath) {
@@ -1384,7 +1388,7 @@ async function testConfigContent(content, keepOnSuccess, targetPath) {
 	}
 
 	try {
-		await fs.write(configPath, normalized);
+		await writeTextFile(configPath, normalized);
 		await setFileMode(configPath);
 		let testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-f', configPath, '-t']);
 		if (testResult.code !== 0 && configPath === CONFIG_PATH) {
@@ -1393,19 +1397,19 @@ async function testConfigContent(content, keepOnSuccess, targetPath) {
 		}
 
 		if (testResult.code !== 0) {
-			await fs.write(configPath, original);
+			await writeTextFile(configPath, original);
 			await setFileMode(configPath);
 			return { ok: false, message: extractTestError(testResult) };
 		}
 
 		if (!keepOnSuccess) {
-			await fs.write(configPath, original);
+			await writeTextFile(configPath, original);
 			await setFileMode(configPath);
 		}
 		return { ok: true, message: '' };
 	} catch (e) {
 		try {
-			await fs.write(configPath, original);
+			await writeTextFile(configPath, original);
 			await setFileMode(configPath);
 		} catch (restoreError) {}
 		return { ok: false, message: e.message || 'test failed' };
@@ -2006,7 +2010,7 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			''
 		].join('\n');
 
-		await fs.write(SETTINGS_PATH, settingsContent);
+		await writeTextFile(SETTINGS_PATH, settingsContent);
 
 		const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
 		if (configContent) {
@@ -2022,7 +2026,7 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 					hwidValues.deviceModel
 				);
 			}
-			await fs.write(CONFIG_PATH, updatedConfig);
+			await writeTextFile(CONFIG_PATH, updatedConfig);
 		}
 
 			if (!opts.silent) {
@@ -2071,7 +2075,9 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	if (!ok) throw new Error(_('Cannot save proxy mode.'));
 
-	await execService('restart');
+	if (!(await restartOrReloadService('restart'))) {
+		throw new Error(_('Service did not enter running state in time.'));
+	}
 
 	appState.settings = await loadOperationalSettings();
 	appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
@@ -3135,7 +3141,9 @@ function bindSettingsPaneEvents() {
 
 				if (!ok) return;
 				try {
-					await execService('restart');
+					if (!(await restartOrReloadService('restart'))) {
+						throw new Error(_('Service did not enter running state in time.'));
+					}
 					notify('info', _('Settings saved and Clash service restarted.'));
 				} catch (e) {
 					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
@@ -3322,8 +3330,8 @@ function bindControlAndHeaderEvents() {
 			try {
 				await withServiceButtons(startBtn, stopBtn, async () => {
 					await ensureMihomoKernelInstalled();
-					await execService('enable');
-					await execService('start');
+					await dispatchServiceActions(['enable', 'start']);
+					await delay(300);
 					if (!(await waitForServiceStatus(true))) {
 						throw new Error(_('Service did not enter running state in time.'));
 					}
@@ -3340,8 +3348,8 @@ function bindControlAndHeaderEvents() {
 		stopBtn.addEventListener('click', async () => {
 			try {
 				await withServiceButtons(stopBtn, startBtn, async () => {
-					await execService('stop');
-					await execService('disable');
+					await dispatchServiceActions(['stop', 'disable']);
+					await delay(300);
 					if (!(await waitForServiceStatus(false))) {
 						throw new Error(_('Service did not stop in time.'));
 					}
@@ -3357,7 +3365,9 @@ function bindControlAndHeaderEvents() {
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
 	if (restartBtn) {
 		restartBtn.addEventListener('click', () => withButtons(restartBtn, async () => {
-			await execService('restart');
+			if (!(await restartOrReloadService('restart'))) {
+				throw new Error(_('Service did not enter running state in time.'));
+			}
 			notify('info', _('Clash service restarted successfully.'));
 			await refreshHeaderAndControl();
 		}).catch((e) => {
@@ -3418,7 +3428,9 @@ async function setSelectedConfigAsMain() {
 	await saveSubscriptionUrl(selectedUrl, MAIN_CONFIG_NAME);
 	await saveSubscriptionUrl(mainUrl, selected);
 
-	await execService('restart');
+	if (!(await restartOrReloadService('restart'))) {
+		throw new Error(_('Service did not enter running state in time.'));
+	}
 	appState.serviceRunning = await getServiceStatus();
 	await switchConfigProfile(MAIN_CONFIG_NAME);
 	await refreshHeaderAndControl();
@@ -3506,7 +3518,9 @@ function bindConfigEvents() {
 				let serviceReloaded = false;
 				if (selectedConfig === MAIN_CONFIG_NAME) {
 					if (await getServiceStatus()) {
-						await execService('reload');
+						if (!(await restartOrReloadService('reload'))) {
+							throw new Error(_('Service did not enter running state in time.'));
+						}
 						serviceReloaded = true;
 					}
 					appState.serviceRunning = await getServiceStatus();
@@ -3537,7 +3551,10 @@ function bindConfigEvents() {
 				false,
 				getConfigPathByName(appState.selectedConfigName)
 			);
-			if (!tested.ok) throw new Error(tested.message);
+			if (!tested.ok) {
+				notifyDetailedError(_('YAML validation failed.'), tested.message);
+				return;
+			}
 			notify('info', _('YAML validation passed.'));
 		}).catch((e) => {
 			notify('error', _('YAML validation failed: %s').format(e.message));
@@ -3551,13 +3568,21 @@ function bindConfigEvents() {
 			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
 			const selectedPath = getConfigPathByName(selectedConfig);
 			const tested = await testConfigContent(editor.getValue(), true, selectedPath);
-			if (!tested.ok) throw new Error(tested.message);
+			if (!tested.ok) {
+				notifyDetailedError(
+					_('Configuration test failed — service not reloaded. Please fix the errors below:'),
+					tested.message
+				);
+				return;
+			}
 			appState.configContent = editor.getValue();
 
 			if (selectedConfig === MAIN_CONFIG_NAME) {
 				const wasRunning = await getServiceStatus();
 				if (wasRunning) {
-					await execService('reload');
+					if (!(await restartOrReloadService('reload'))) {
+						throw new Error(_('Service did not enter running state in time.'));
+					}
 				}
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();
