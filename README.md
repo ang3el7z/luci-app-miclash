@@ -6,6 +6,9 @@
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
+Если `luci-app-miclash` уже установлен, скрипт в интерактивном режиме предложит `update / reinstall / delete / skip`.
+При запуске через `wget ... | ash` без TTY удаление не делается автоматически: скрипт выберет безопасный `update` или `skip`.
+
 # OpenWrt 25.12.x
 
 ```bash

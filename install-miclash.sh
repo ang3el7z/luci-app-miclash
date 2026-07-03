@@ -15,6 +15,10 @@ CLASH_BIN="/opt/clash/bin/clash"
 MICLASH_APK_URL=""
 MICLASH_IPK_URL=""
 MICLASH_VER=""
+MICLASH_INSTALLED_VER=""
+MICLASH_RELEASE_NORM=""
+MICLASH_INSTALLED_NORM=""
+INSTALL_ACTION=""
 PKG_UPDATED=0
 
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
@@ -29,6 +33,10 @@ info() { printf "%s[i]%s %s\n" "$C" "$N" "$*"; }
 warn() { printf "%s[!]%s %s\n" "$Y" "$N" "$*"; }
 die()  { printf "%s[✗] %s%s\n" "$R" "$*" "$N" >&2; exit 1; }
 sep()  { printf "%s%s%s\n" "$C" "────────────────────────────────────────" "$N"; }
+
+normalize_version() {
+    printf '%s' "$1" | sed 's/^v//; s/-r[0-9][0-9]*$//'
+}
 
 detect_openwrt() {
     [ -f /etc/openwrt_release ] || die "Не найден /etc/openwrt_release"
@@ -180,6 +188,7 @@ fetch_miclash_release() {
         | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
     info "Latest MiClash: ${B}v${MICLASH_VER}${N}"
+    MICLASH_RELEASE_NORM=$(normalize_version "$MICLASH_VER")
 
     if [ "$PKG_MGR" = "apk" ]; then
         [ -n "$MICLASH_APK_URL" ] || die "No MiClash .apk asset found in latest release"
@@ -190,20 +199,128 @@ fetch_miclash_release() {
     fi
 }
 
+detect_installed_miclash() {
+    MICLASH_INSTALLED_VER=""
+
+    if [ "$PKG_MGR" = "apk" ]; then
+        if apk info -e luci-app-miclash >/dev/null 2>&1; then
+            MICLASH_INSTALLED_VER=$(apk info -v luci-app-miclash 2>/dev/null \
+                | sed -n '1s/^luci-app-miclash-//p')
+        fi
+    else
+        MICLASH_INSTALLED_VER=$(opkg list-installed luci-app-miclash 2>/dev/null | awk 'NR==1 {print $3}')
+    fi
+
+    MICLASH_INSTALLED_NORM=$(normalize_version "$MICLASH_INSTALLED_VER")
+
+    if [ -n "$MICLASH_INSTALLED_VER" ]; then
+        info "Installed MiClash: ${B}${MICLASH_INSTALLED_VER}${N}"
+    else
+        info "Installed MiClash: ${B}not found${N}"
+    fi
+}
+
+choose_install_action() {
+    INSTALL_ACTION="install"
+
+    [ -n "$MICLASH_INSTALLED_VER" ] || return 0
+
+    if [ -t 0 ] && [ -t 1 ]; then
+        echo ""
+        warn "Обнаружена установленная MiClash: ${MICLASH_INSTALLED_VER}"
+        printf "Выбери действие: [u]pdate [r]einstall [d]elete [s]kip (default: %s): " \
+            "$( [ "$MICLASH_INSTALLED_NORM" = "$MICLASH_RELEASE_NORM" ] && printf 'skip' || printf 'update' )"
+        read action
+
+        case "${action:-}" in
+            u|U) INSTALL_ACTION="update" ;;
+            r|R) INSTALL_ACTION="reinstall" ;;
+            d|D) INSTALL_ACTION="remove" ;;
+            s|S) INSTALL_ACTION="skip" ;;
+            "")
+                if [ "$MICLASH_INSTALLED_NORM" = "$MICLASH_RELEASE_NORM" ]; then
+                    INSTALL_ACTION="skip"
+                else
+                    INSTALL_ACTION="update"
+                fi
+                ;;
+            *)
+                warn "Неизвестный выбор, использую безопасный вариант"
+                if [ "$MICLASH_INSTALLED_NORM" = "$MICLASH_RELEASE_NORM" ]; then
+                    INSTALL_ACTION="skip"
+                else
+                    INSTALL_ACTION="update"
+                fi
+                ;;
+        esac
+    else
+        if [ "$MICLASH_INSTALLED_NORM" = "$MICLASH_RELEASE_NORM" ]; then
+            INSTALL_ACTION="skip"
+        else
+            INSTALL_ACTION="update"
+        fi
+        info "Non-interactive mode: action=${INSTALL_ACTION}"
+    fi
+}
+
+remove_miclash() {
+    log "Removing MiClash package..."
+
+    if [ -x /etc/init.d/clash ]; then
+        /etc/init.d/clash stop >/dev/null 2>&1 || warn "Failed to stop clash service"
+        /etc/init.d/clash disable >/dev/null 2>&1 || warn "Failed to disable clash service"
+    fi
+
+    if [ "$PKG_MGR" = "apk" ]; then
+        apk del luci-app-miclash || die "Failed to remove MiClash package"
+    else
+        opkg remove luci-app-miclash || die "Failed to remove MiClash package"
+    fi
+
+    if [ -t 0 ] && [ -t 1 ]; then
+        printf "Удалить runtime/config dir /opt/clash тоже? [y/N]: "
+        read purge_runtime
+        case "${purge_runtime:-}" in
+            y|Y)
+                rm -rf /opt/clash
+                log "Removed /opt/clash"
+                ;;
+            *)
+                info "Kept /opt/clash"
+                ;;
+        esac
+    else
+        info "Kept /opt/clash (non-interactive mode)"
+    fi
+}
+
 install_miclash() {
-    log "Installing MiClash v${MICLASH_VER}..."
+    case "$INSTALL_ACTION" in
+        update)    log "Updating MiClash to v${MICLASH_VER}..." ;;
+        reinstall) log "Reinstalling MiClash v${MICLASH_VER}..." ;;
+        *)         log "Installing MiClash v${MICLASH_VER}..." ;;
+    esac
 
     if [ "$PKG_MGR" = "apk" ]; then
         PKG_FILE="/tmp/luci-app-miclash.apk"
         curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
             "$MICLASH_APK_URL" -o "$PKG_FILE" || die "Failed to download MiClash .apk"
-        apk add "$PKG_FILE" --allow-untrusted || die "Failed to install MiClash .apk"
+        if [ "$INSTALL_ACTION" = "reinstall" ]; then
+            apk add "$PKG_FILE" --allow-untrusted --force-overwrite \
+                || die "Failed to reinstall MiClash .apk"
+        else
+            apk add "$PKG_FILE" --allow-untrusted || die "Failed to install MiClash .apk"
+        fi
         rm -f "$PKG_FILE"
     else
         PKG_FILE="/tmp/luci-app-miclash.ipk"
         curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
             "$MICLASH_IPK_URL" -o "$PKG_FILE" || die "Failed to download MiClash .ipk"
-        (cd /tmp && opkg install luci-app-miclash.ipk) || die "Failed to install MiClash .ipk"
+        if [ "$INSTALL_ACTION" = "reinstall" ]; then
+            opkg install --force-reinstall "$PKG_FILE" || die "Failed to reinstall MiClash .ipk"
+        else
+            opkg install "$PKG_FILE" || die "Failed to install MiClash .ipk"
+        fi
         rm -f "$PKG_FILE"
     fi
 }
@@ -248,7 +365,21 @@ main() {
     ensure_curl
     detect_arch
     fetch_miclash_release
+    detect_installed_miclash
+    choose_install_action
     sep
+
+    if [ "$INSTALL_ACTION" = "skip" ]; then
+        log "MiClash already up to date, nothing to do"
+        exit 0
+    fi
+
+    if [ "$INSTALL_ACTION" = "remove" ]; then
+        remove_miclash
+        sep
+        log "Removal complete"
+        exit 0
+    fi
 
     pkg_update
     sep
