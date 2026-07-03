@@ -2,32 +2,25 @@
 'require view';
 'require fs';
 'require ui';
-'require network';
 'require view.miclash.utils';
+'require view.miclash.route';
+'require view.miclash.service';
+'require view.miclash.store';
+'require view.miclash.release';
+'require view.miclash.package';
+'require view.miclash.logs';
+'require view.miclash.settings-model';
+'require view.miclash.rulesets-model';
+'require view.miclash.ui-shell';
+'require view.miclash.subscription';
 
-const CONFIG_PATH = '/opt/clash/config.yaml';
-const CONFIG_DIR = '/opt/clash';
-const MAIN_CONFIG_NAME = 'config.yaml';
-const CONFIG_PROFILES = [
-	{ name: 'config.yaml', label: 'Main Config #1' },
-	{ name: 'config2.yaml', label: 'Backup Config #2' },
-	{ name: 'config3.yaml', label: 'Backup Config #3' }
-];
-const SETTINGS_PATH = '/opt/clash/settings';
-const RULESET_PATH = '/opt/clash/lst/';
-const FAKEIP_WHITELIST_FILENAME = 'fakeip-whitelist-ipcidr.txt';
+const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
+const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
+const CONFIG_PROFILES = view_miclash_store.CONFIG_PROFILES;
+const RULESET_PATH = view_miclash_rulesets_model.RULESET_PATH;
+const FAKEIP_WHITELIST_FILENAME = view_miclash_rulesets_model.FAKEIP_WHITELIST_FILENAME;
 const ACE_BASE = '/luci-static/resources/view/miclash/ace/';
-const TMP_SUBSCRIPTION_PATH = '/tmp/miclash-subscription.yaml';
-const UI_THEME_KEY = 'UI_THEME';
-const MIHOMO_RELEASE_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest';
-const MIHOMO_RELEASES_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases';
-const MICLASH_RELEASE_API = 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest';
-const MICLASH_RELEASES_API = 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases';
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
-const SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC = 8;
-const SUBSCRIPTION_CURL_MAX_TIME_SEC = 18;
-const SERVICE_ACTION_TIMEOUT_MS = 10000;
-
 const LOG_POLL_MS = 5000;
 const STATUS_POLL_MS = 5000;
 
@@ -73,7 +66,7 @@ function notify(type, message) {
 	// "Auto-hide notifications" defaults to true; the toast disappears after a
 	// short timeout (longer for errors so the user has time to read them).
 	// When the user turns the option off, the toast stays until they close it
-	// manually — useful for diagnosing rare issues without losing the message.
+	// manually Р Р†Р вЂљРІР‚Сњ useful for diagnosing rare issues without losing the message.
 	const autoHide = !appState.settings || appState.settings.autoHideNotifications !== false;
 	if (node && autoHide) {
 		const timeout = type === 'error' ? 10000 : 6000;
@@ -102,128 +95,60 @@ function isValidUrl(url) {
 	}
 }
 
-function normalizeConfigProfileName(name) {
-	const clean = String(name || '').trim();
-	return CONFIG_PROFILES.some((item) => item.name === clean) ? clean : MAIN_CONFIG_NAME;
-}
-
-function getConfigProfileByName(name) {
-	const normalized = normalizeConfigProfileName(name);
-	return CONFIG_PROFILES.find((item) => item.name === normalized) || CONFIG_PROFILES[0];
-}
-
-function getConfigLabel(name) {
-	return getConfigProfileByName(name).label;
-}
-
-function getConfigPathByName(name) {
-	return CONFIG_DIR + '/' + normalizeConfigProfileName(name);
-}
-
-function getSubscriptionKeyForConfig(name) {
-	const normalized = normalizeConfigProfileName(name).replace(/[^A-Za-z0-9]/g, '_').toUpperCase();
-	return 'SUBSCRIPTION_URL_' + normalized;
-}
-
-async function setFileMode(path) {
-	await L.resolveDefault(fs.exec('/bin/chmod', ['0644', path]), null);
-	await L.resolveDefault(fs.exec('/usr/bin/chmod', ['0644', path]), null);
-}
-
-async function writeTextFile(path, content) {
-	await view_miclash_utils.writeFile(path, String(content || ''));
-}
-
-async function readConfigFileByName(name) {
-	const path = getConfigPathByName(name);
-	await setFileMode(path);
-	return String(await L.resolveDefault(fs.read(path), ''));
-}
-
-async function writeConfigFileByName(name, content) {
-	const path = getConfigPathByName(name);
-	const normalized = String(content || '').trimEnd() + '\n';
-	await writeTextFile(path, normalized);
-	await setFileMode(path);
-}
-
-async function ensureConfigProfilesReady(seedMainContent) {
-	const mainPath = getConfigPathByName(MAIN_CONFIG_NAME);
-	let mainContent = await L.resolveDefault(fs.read(mainPath), null);
-	if (mainContent == null) {
-		mainContent = String(seedMainContent || '');
-		await writeTextFile(mainPath, String(mainContent).trimEnd() + '\n');
-	}
-	await setFileMode(mainPath);
-
-	for (let i = 0; i < CONFIG_PROFILES.length; i++) {
-		const profile = CONFIG_PROFILES[i];
-		const path = getConfigPathByName(profile.name);
-		const existing = await L.resolveDefault(fs.read(path), null);
-		if (existing == null) {
-			await writeTextFile(path, String(mainContent || '').trimEnd() + '\n');
-		}
-		await setFileMode(path);
-	}
-}
-
-function parseSettingsToMap(raw) {
-	const map = {};
-	String(raw || '').split('\n').forEach((line) => {
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.charAt(0) === '#') return;
-		const idx = trimmed.indexOf('=');
-		if (idx <= 0) return;
-		const key = trimmed.slice(0, idx).trim();
-		const value = trimmed.slice(idx + 1).trim();
-		if (key) map[key] = value;
-	});
-	return map;
-}
-
-function mapToSettingsContent(map) {
-	return Object.keys(map).map((k) => k + '=' + map[k]).join('\n') + '\n';
-}
-
-async function readSettingsMap() {
-	try {
-		return parseSettingsToMap(await fs.read(SETTINGS_PATH));
-	} catch (e) {
-		return {};
-	}
-}
-
-async function writeSettingsMap(map) {
-	await writeTextFile(SETTINGS_PATH, mapToSettingsContent(map));
-}
-
-function normalizeTheme(theme) {
-	return theme === 'light' ? 'light' : 'dark';
-}
-
-function getPreferredAceTheme() {
-	return appState.uiTheme === 'light' ? 'ace/theme/textmate' : 'ace/theme/tomorrow_night_bright';
-}
+const normalizeConfigProfileName = view_miclash_store.normalizeConfigProfileName;
+const getConfigLabel = view_miclash_store.getConfigLabel;
+const getConfigPathByName = view_miclash_store.getConfigPathByName;
+const readConfigFileByName = view_miclash_store.readConfigFileByName;
+const writeConfigFileByName = view_miclash_store.writeConfigFileByName;
+const ensureConfigProfilesReady = view_miclash_store.ensureConfigProfilesReady;
+const readSubscriptionUrl = view_miclash_store.readSubscriptionUrl;
+const saveSubscriptionUrl = view_miclash_store.saveSubscriptionUrl;
+const readSettingsMap = view_miclash_store.readSettingsMap;
+const writeSettingsMap = view_miclash_store.writeSettingsMap;
+const parseVersion = view_miclash_release.parseVersion;
+const parsePackageVersion = view_miclash_release.parsePackageVersion;
+const parseVersionFromOpkgStatus = view_miclash_release.parseVersionFromOpkgStatus;
+const normalizeAppVersion = view_miclash_release.normalizeAppVersion;
+const normalizeVersion = view_miclash_release.normalizeVersion;
+const normalizeReleaseChannel = view_miclash_release.normalizeReleaseChannel;
+const compareNumericVersions = view_miclash_release.compareNumericVersions;
+const findKernelAsset = view_miclash_release.findKernelAsset;
+const findMiClashAsset = view_miclash_release.findMiClashAsset;
+const detectPackageManager = view_miclash_package.detectPackageManager;
+const execOrThrow = view_miclash_package.execOrThrow;
+const installMiClashDependencies = view_miclash_package.installMiClashDependencies;
+const ensureCurlAvailable = view_miclash_package.ensureCurlAvailable;
+const getNetworkInterfaces = view_miclash_settings_model.getNetworkInterfaces;
+const transformProxyMode = view_miclash_settings_model.transformProxyMode;
+const detectCurrentProxyMode = view_miclash_settings_model.detectCurrentProxyMode;
+const loadOperationalSettings = view_miclash_settings_model.loadOperationalSettings;
+const loadInterfacesByMode = view_miclash_settings_model.loadInterfacesByMode;
+const detectLanBridge = view_miclash_settings_model.detectLanBridge;
+const detectWanInterface = view_miclash_settings_model.detectWanInterface;
+const normalizeProxyMode = view_miclash_settings_model.normalizeProxyMode;
+const normalizeRulesetName = view_miclash_rulesets_model.normalizeName;
+const readRulesetsData = () => view_miclash_rulesets_model.readData(CONFIG_PATH);
+const createRulesetFile = view_miclash_rulesets_model.createFile;
+const saveRulesetFile = view_miclash_rulesets_model.saveFile;
+const deleteRulesetFile = view_miclash_rulesets_model.deleteFile;
+const saveRulesetWhitelist = view_miclash_rulesets_model.saveWhitelist;
+const normalizeTheme = view_miclash_ui_shell.normalizeTheme;
+const looksLikeBase64Text = view_miclash_subscription.looksLikeBase64Text;
+const tryDecodeBase64 = view_miclash_subscription.tryDecodeBase64;
+const looksLikeUriSubscription = view_miclash_subscription.looksLikeUriSubscription;
+const looksLikeBase64Blob = view_miclash_subscription.looksLikeBase64Blob;
+const looksLikeYamlConfig = view_miclash_subscription.looksLikeYamlConfig;
 
 function applyThemeToEditor(editorInstance) {
-	if (!editorInstance) return;
-	try {
-		editorInstance.setTheme(getPreferredAceTheme());
-	} catch (e) {
-		editorInstance.setTheme('ace/theme/tomorrow_night_bright');
-	}
+	view_miclash_ui_shell.applyThemeToEditor(editorInstance, appState.uiTheme);
 }
 
 async function readThemePreference() {
-	const settings = await readSettingsMap();
-	const saved = String(settings[UI_THEME_KEY] || '').trim();
-	return saved ? normalizeTheme(saved) : '';
+	return view_miclash_ui_shell.readThemePreference();
 }
 
 async function saveThemePreference(theme) {
-	const settings = await readSettingsMap();
-	settings[UI_THEME_KEY] = normalizeTheme(theme);
-	await writeSettingsMap(settings);
+	return view_miclash_ui_shell.saveThemePreference(theme);
 }
 
 function applyEditorTheme() {
@@ -233,119 +158,15 @@ function applyEditorTheme() {
 }
 
 function detectInitialTheme() {
-	const root = document.documentElement;
-	const body = document.body;
-	const signal = [
-		root ? root.className : '',
-		body ? body.className : '',
-		root ? root.getAttribute('data-theme') : '',
-		root ? root.getAttribute('theme') : '',
-		body ? body.getAttribute('data-theme') : '',
-		body ? body.getAttribute('theme') : ''
-	].join(' ').toLowerCase();
-
-	if (/(^|\s)(dark|night)(\s|$)/.test(signal)) return 'dark';
-	if (/(^|\s)(light|bright)(\s|$)/.test(signal)) return 'light';
-	if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
-	return 'light';
+	return view_miclash_ui_shell.detectInitialTheme();
 }
 
 function applyUiTheme(theme) {
-	appState.uiTheme = normalizeTheme(theme);
-
-	if (pageRoot) {
-		pageRoot.classList.toggle('sbox-theme-dark', appState.uiTheme === 'dark');
-		pageRoot.classList.toggle('sbox-theme-light', appState.uiTheme === 'light');
-
-		const btn = pageRoot.querySelector('#sbox-theme-toggle');
-		if (btn) {
-			btn.textContent = appState.uiTheme === 'dark' ? '\u2600' : '\u263D';
-			btn.title = appState.uiTheme === 'dark'
-				? _('Switch to light theme')
-				: _('Switch to dark theme');
-		}
-	}
-
-	applyEditorTheme();
-}
-
-async function readSubscriptionUrl(configName) {
-	const normalized = normalizeConfigProfileName(configName || MAIN_CONFIG_NAME);
-	const key = getSubscriptionKeyForConfig(normalized);
-	const settings = await readSettingsMap();
-
-	if (normalized === MAIN_CONFIG_NAME) {
-		return String(settings[key] || settings.SUBSCRIPTION_URL || '').trim();
-	}
-
-	return String(settings[key] || '').trim();
-}
-
-async function saveSubscriptionUrl(url, configName) {
-	const normalized = normalizeConfigProfileName(configName || MAIN_CONFIG_NAME);
-	const key = getSubscriptionKeyForConfig(normalized);
-	const clean = String(url || '').trim().replace(/\r?\n/g, '');
-	const settings = await readSettingsMap();
-	settings[key] = clean;
-	if (normalized === MAIN_CONFIG_NAME) {
-		settings.SUBSCRIPTION_URL = clean;
-	}
-	await writeSettingsMap(settings);
-}
-
-function parseVersion(raw, fallback) {
-	const str = String(raw || '').trim();
-	if (!str) return fallback;
-	const matched = str.match(/(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/);
-	return matched ? matched[1] : str.split('\n')[0];
-}
-
-function parsePackageVersion(raw, packageName) {
-	const text = String(raw || '').trim();
-	if (!text) return '';
-
-	const escaped = String(packageName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	// Every pattern is scoped to the package name. Unscoped version fallbacks
-	// can latch onto unrelated kernel/package-manager output (for example a
-	// Linux "6.6.x" line) while network commands are failing.
-	const patterns = [
-		new RegExp('(^|\\n)\\s*Package\\s*:\\s*' + escaped + '\\s*[\\s\\S]*?\\n\\s*Version\\s*:\\s*([^\\s\\n]+)', 'i'),
-		new RegExp('^\\s*' + escaped + '\\s*-\\s*([^\\s]+)', 'im'),
-		new RegExp('^\\s*' + escaped + '-([\\w.+~:-]+)', 'im')
-	];
-
-	for (let i = 0; i < patterns.length; i++) {
-		const match = text.match(patterns[i]);
-		const value = patterns[i].source.indexOf('Package') !== -1 ? match && match[2] : match && match[1];
-		if (value) return value.trim();
-	}
-
-	return '';
-}
-
-function parseVersionFromOpkgStatus(raw, packageNames) {
-	const text = String(raw || '');
-	if (!text) return '';
-
-	for (let i = 0; i < packageNames.length; i++) {
-		const escaped = String(packageNames[i] || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		const pattern = new RegExp(
-			'(^|\\n)\\s*Package\\s*:\\s*' + escaped + '\\s*[\\s\\S]*?\\n\\s*Version\\s*:\\s*([^\\s\\n]+)',
-			'i'
-		);
-		const match = text.match(pattern);
-		if (match && match[2]) return match[2].trim();
-	}
-
-	return '';
-}
-
-function normalizeAppVersion(version) {
-	const str = String(version || '').trim();
-	if (!str) return '';
-	const numeric = str.match(/^\d+(?:\.\d+)+/);
-	if (numeric && numeric[0]) return numeric[0];
-	return str.replace(/-r\d+$/i, '').replace(/-\d+$/, '');
+	appState.uiTheme = view_miclash_ui_shell.applyUiTheme(pageRoot, theme, [
+		editor,
+		rulesetMainEditor,
+		rulesetWhitelistEditor
+	]);
 }
 
 async function getVersions() {
@@ -387,12 +208,6 @@ async function getVersions() {
 
 	return info;
 }
-function normalizeVersion(str) {
-	if (!str) return '';
-	const match = String(str).match(/v?(\d+\.\d+\.\d+)/i);
-	return match ? match[1] : String(str).trim();
-}
-
 async function detectSystemArchitecture() {
 	try {
 		const releaseInfo = await L.resolveDefault(fs.read('/etc/openwrt_release'), null);
@@ -454,73 +269,16 @@ async function ensureMihomoKernelInstalled() {
 	return status;
 }
 
-function normalizeReleaseChannel(value) {
-	const normalized = String(value || '').toLowerCase().trim();
-	return normalized === 'prerelease' ? 'prerelease' : 'release';
-}
-
 function includePrereleases() {
 	return normalizeReleaseChannel(appState.settings && appState.settings.releaseChannel) === 'prerelease';
 }
 
-function normalizeGithubRelease(data) {
-	if (!data || data.draft || !data.tag_name || !Array.isArray(data.assets)) return null;
-	return { version: data.tag_name, assets: data.assets, prerelease: !!data.prerelease };
-}
-
-async function fetchGithubRelease(latestUrl, releasesUrl) {
-	if (includePrereleases()) {
-		try {
-			const response = await fetch(releasesUrl);
-			if (response.ok) {
-				const releases = await response.json();
-				if (Array.isArray(releases)) {
-					for (let i = 0; i < releases.length; i++) {
-						const release = normalizeGithubRelease(releases[i]);
-						if (release) return release;
-					}
-				}
-			}
-		} catch (e) {}
-	}
-
-	try {
-		const response = await fetch(latestUrl);
-		if (!response.ok) return null;
-		return normalizeGithubRelease(await response.json());
-	} catch (e) {
-		return null;
-	}
-}
-
 async function getLatestMihomoRelease() {
-	return fetchGithubRelease(MIHOMO_RELEASE_API, MIHOMO_RELEASES_API);
+	return view_miclash_release.getLatestMihomoRelease(includePrereleases());
 }
 
 async function getLatestMiClashRelease() {
-	return fetchGithubRelease(MICLASH_RELEASE_API, MICLASH_RELEASES_API);
-}
-
-function compareNumericVersions(left, right) {
-	const normalize = (value) => {
-		const matched = String(value || '').trim().match(/\d+(?:\.\d+)+/);
-		if (!matched || !matched[0]) return null;
-		return matched[0].split('.').map((item) => parseInt(item, 10));
-	};
-
-	const l = normalize(left);
-	const r = normalize(right);
-	if (!l || !r) return null;
-
-	const len = Math.max(l.length, r.length);
-	for (let i = 0; i < len; i++) {
-		const a = i < l.length ? l[i] : 0;
-		const b = i < r.length ? r[i] : 0;
-		if (a < b) return -1;
-		if (a > b) return 1;
-	}
-
-	return 0;
+	return view_miclash_release.getLatestMiClashRelease(includePrereleases());
 }
 
 function resolveAppActionState() {
@@ -625,79 +383,6 @@ async function refreshReleaseMeta(options) {
 	return true;
 }
 
-function findKernelAsset(release, arch) {
-	if (!release || !Array.isArray(release.assets)) return null;
-
-	const tag = String(release.version || '');
-	const cleanTag = tag.replace(/^v/i, '');
-	const exactNames = [
-		'mihomo-linux-' + arch + '-' + tag + '.gz',
-		'mihomo-linux-' + arch + '-' + cleanTag + '.gz'
-	];
-
-	for (let i = 0; i < exactNames.length; i++) {
-		const asset = release.assets.find((item) => item.name === exactNames[i]);
-		if (asset) return asset;
-	}
-
-	return release.assets.find((item) =>
-		item.name && item.name.indexOf('mihomo-linux-' + arch + '-') === 0 && item.name.endsWith('.gz')) || null;
-}
-
-function findMiClashAsset(release, managerType) {
-	if (!release || !Array.isArray(release.assets)) return null;
-
-	const rawTag = String(release.version || '');
-	const cleanTag = rawTag.replace(/^v/i, '');
-	const normalized = normalizeAppVersion(cleanTag);
-	const ext = managerType === 'apk' ? '.apk' : '.ipk';
-	const expectedNames = managerType === 'apk'
-		? [
-			'luci-app-miclash-' + cleanTag + '.apk',
-			'luci-app-miclash-' + normalized + '.apk'
-		]
-		: [
-			'luci-app-miclash_' + cleanTag + '_all.ipk',
-			'luci-app-miclash_' + normalized + '_all.ipk'
-		];
-
-	for (let i = 0; i < expectedNames.length; i++) {
-		const asset = release.assets.find((item) => item.name === expectedNames[i]);
-		if (asset) return asset;
-	}
-
-	return release.assets.find((item) =>
-		item &&
-		item.name &&
-		item.name.indexOf('luci-app-miclash') !== -1 &&
-		item.name.endsWith(ext)
-	) || null;
-}
-
-async function detectPackageManager() {
-	const checks = [
-		{ type: 'apk', bin: '/usr/bin/apk' },
-		{ type: 'apk', bin: '/bin/apk' },
-		{ type: 'opkg', bin: '/bin/opkg' },
-		{ type: 'opkg', bin: '/usr/bin/opkg' }
-	];
-
-	for (let i = 0; i < checks.length; i++) {
-		try {
-			const probe = await fs.exec(checks[i].bin, ['--version']);
-			if (probe && typeof probe.code === 'number') return checks[i];
-		} catch (e) {}
-	}
-
-	return null;
-}
-
-async function execOrThrow(bin, args, fallbackMessage) {
-	const result = await fs.exec(bin, args);
-	if (result.code === 0) return result;
-	throw new Error(String(result.stderr || result.stdout || fallbackMessage || _('Command failed')).trim());
-}
-
 function isRpcReconnectLikeError(message) {
 	const text = String(message || '').toLowerCase();
 	if (!text) return false;
@@ -707,69 +392,6 @@ function isRpcReconnectLikeError(message) {
 	if (text.indexOf('failed to fetch') !== -1) return true;
 	if (text.indexOf('connection') !== -1 && (text.indexOf('closed') !== -1 || text.indexOf('reset') !== -1 || text.indexOf('refused') !== -1)) return true;
 	return false;
-}
-
-async function installMiClashDependencies(manager) {
-	await execOrThrow(manager.bin, ['update'], _('Failed to update package index.'));
-
-	if (manager.type === 'apk') {
-		await execOrThrow(
-			manager.bin,
-			['add', 'zlib', 'libcurl4', 'curl', 'kmod-nft-tproxy', 'kmod-nft-nat', 'kmod-tun', 'coreutils-base64'],
-			_('Failed to install MiClash dependencies.')
-		);
-		return;
-	}
-
-	const release = await getOpenWrtReleaseVersion();
-	const majorMatch = String(release || '').match(/^(\d+)/);
-	const major = majorMatch ? parseInt(majorMatch[1], 10) : 0;
-	const tproxyPkg = major > 0 && major < 23 ? 'iptables-mod-tproxy' : 'kmod-nft-tproxy';
-	const natPkg = major > 0 && major < 23 ? 'kmod-ipt-nat' : 'kmod-nft-nat';
-
-	await execOrThrow(
-		manager.bin,
-		['install', 'zlib', 'libcurl4', 'curl', tproxyPkg, natPkg, 'kmod-tun', 'coreutils-base64'],
-		_('Failed to install MiClash dependencies.')
-	);
-}
-
-async function reinstallCurlDependencies(manager) {
-	await execOrThrow(manager.bin, ['update'], _('Failed to update package index.'));
-
-	if (manager.type === 'apk') {
-		await execOrThrow(
-			manager.bin,
-			['fix', 'zlib', 'libcurl4', 'curl'],
-			_('Failed to install MiClash dependencies.')
-		);
-		return;
-	}
-
-	await execOrThrow(
-		manager.bin,
-		['--force-reinstall', 'install', 'zlib', 'libcurl4', 'curl'],
-		_('Failed to install MiClash dependencies.')
-	);
-}
-
-async function ensureCurlAvailable() {
-	const probe = await fs.exec('/usr/bin/curl', ['--version']);
-	if (probe.code === 0) return;
-
-	const manager = await detectPackageManager();
-	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
-
-	await installMiClashDependencies(manager);
-
-	const retry = await fs.exec('/usr/bin/curl', ['--version']);
-	if (retry.code !== 0) {
-		await reinstallCurlDependencies(manager);
-		const forcedRetry = await fs.exec('/usr/bin/curl', ['--version']);
-		if (forcedRetry.code !== 0) {
-			throw new Error(String(forcedRetry.stderr || forcedRetry.stdout || retry.stderr || retry.stdout || _('Failed to install MiClash dependencies.')).trim());
-		}
-	}
 }
 
 async function installMiClashFromSettings(actionKind) {
@@ -903,73 +525,8 @@ async function installKernelFromSettings() {
 }
 
 function showModal(options) {
-	const overlayClass = 'sbox-modal-overlay' + (options.overlayClass ? ' ' + options.overlayClass : '');
-	const modalClass = 'sbox-modal' + (options.modalClass ? ' ' + options.modalClass : '');
-	const overlay = E('div', { 'class': overlayClass });
-	const modal = E('div', { 'class': modalClass });
-	const titleNode = E('div', { 'class': 'sbox-modal-title' }, String(options.title || ''));
-	const bodyNode = options.body && options.body.nodeType
-		? options.body
-		: E('div', { 'class': 'sbox-modal-body' }, String(options.body || ''));
-	const actionsNode = E('div', { 'class': 'sbox-modal-actions' });
-	let isClosed = false;
-
-	function closeModal() {
-		if (isClosed) return;
-		isClosed = true;
-		document.removeEventListener('keydown', onKeyDown);
-		if (options.onClose) {
-			try { options.onClose(); } catch (e) {}
-		}
-		overlay.remove();
-	}
-
-	function onKeyDown(ev) {
-		if (ev.key === 'Escape') closeModal();
-	}
-
-	(options.buttons || []).forEach((item) => {
-		const button = E('button', {
-			'class': item.className || 'cbi-button cbi-button-neutral'
-		}, String(item.label || ''));
-
-		button.addEventListener('click', async function(ev) {
-			ev.preventDefault();
-			if (item.onClick) {
-				const oldText = button.textContent;
-				button.disabled = true;
-				try {
-					await item.onClick({ closeModal: closeModal, button: button });
-				} finally {
-					if (button.isConnected) {
-						button.disabled = false;
-						button.textContent = oldText;
-					}
-				}
-			} else {
-				closeModal();
-			}
-		});
-
-		actionsNode.appendChild(button);
-	});
-
-	modal.appendChild(titleNode);
-	modal.appendChild(bodyNode);
-	modal.appendChild(actionsNode);
-	overlay.appendChild(modal);
-
-	overlay.addEventListener('click', function(ev) {
-		if (ev.target === overlay) closeModal();
-	});
-	document.addEventListener('keydown', onKeyDown);
-
-	if (pageRoot && pageRoot.appendChild) {
-		pageRoot.appendChild(overlay);
-	} else {
-		document.body.appendChild(overlay);
-	}
-	return closeModal;
+	const opts = Object.assign({}, options || {}, { mountNode: pageRoot });
+	return view_miclash_ui_shell.showModal(opts);
 }
 
 async function openKernelModal() {
@@ -1040,24 +597,7 @@ async function openKernelModal() {
 }
 
 async function withButtons(btns, fn) {
-	const list = Array.isArray(btns) ? btns : (btns ? [btns] : []);
-	const saved = list.map((b) => b.innerHTML);
-
-	list.forEach((b) => {
-		b.disabled = true;
-		b.innerHTML = '<span class="sbox-spinner"></span> ' + safeText(b.textContent || '').trim();
-	});
-
-	try {
-		return await fn();
-	} finally {
-		list.forEach((b, i) => {
-			if (b && b.isConnected) {
-				b.disabled = false;
-				b.innerHTML = saved[i];
-			}
-		});
-	}
+	return view_miclash_ui_shell.withButtons(btns, fn, safeText);
 }
 
 async function withServiceButtons(activeBtn, inactiveBtn, fn) {
@@ -1093,10 +633,6 @@ function parseYamlValue(yaml, key) {
 	return m ? m[2].trim() : null;
 }
 
-function delay(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function normalizeHostPortFromAddr(addr, fallbackHost, fallbackPort) {
 	if (!addr) return { host: fallbackHost, port: fallbackPort };
 	const cleaned = addr.replace(/["']/g, '').trim();
@@ -1126,29 +662,19 @@ function computeUiPath(externalUiName, externalUi) {
 }
 
 async function getServiceStatus() {
-	return view_miclash_utils.getClashRunning();
+	return view_miclash_service.getStatus();
 }
 
 async function waitForServiceStatus(targetStatus, timeoutMs) {
-	return view_miclash_utils.waitForServiceStatus(
-		getServiceStatus,
-		!!targetStatus,
-		timeoutMs || SERVICE_ACTION_TIMEOUT_MS
-	);
+	return view_miclash_service.waitForStatus(!!targetStatus, timeoutMs);
 }
 
 async function dispatchServiceActions(actions) {
-	const script = (Array.isArray(actions) ? actions : [actions])
-		.filter((action) => !!action)
-		.map((action) => '/etc/init.d/clash ' + action)
-		.join('; ');
-	return view_miclash_utils.execDetached(script);
+	return view_miclash_service.dispatchActions(actions);
 }
 
 async function restartOrReloadService(action) {
-	await dispatchServiceActions([action]);
-	await delay(300);
-	return waitForServiceStatus(true);
+	return view_miclash_service.restartOrReload(action);
 }
 
 function notifyDetailedError(title, detail) {
@@ -1160,260 +686,29 @@ function notifyDetailedError(title, detail) {
 	]), 'error');
 }
 
-function looksLikeBase64Text(value) {
-	const cleaned = String(value || '').replace(/\s+/g, '');
-	if (cleaned.length < 64 || cleaned.length % 4 !== 0) return false;
-	return /^[A-Za-z0-9+/=]+$/.test(cleaned);
-}
-
-function tryDecodeBase64(value) {
-	try {
-		if (typeof atob !== 'function') return null;
-		const cleaned = String(value || '').replace(/\s+/g, '');
-		return atob(cleaned);
-	} catch (e) {
-		return null;
-	}
-}
-
-function looksLikeUriSubscription(value) {
-	const content = String(value || '');
-	return /(?:^|\n)\s*(vmess|vless|trojan|ss|ssr|hysteria|hysteria2|tuic):\/\/[^\s]+/i.test(content);
-}
-
-function looksLikeBase64Blob(text) {
-	const compact = String(text || '').replace(/\s+/g, '');
-	if (compact.length < 48) return false;
-	if (String(text || '').indexOf(':') !== -1) return false;
-	return /^[A-Za-z0-9+/=]+$/.test(compact);
-}
-
-async function getOpenWrtReleaseVersion() {
-	try {
-		const release = await fs.read('/etc/openwrt_release');
-		const line = String(release || '').split('\n').find((item) => item.indexOf('DISTRIB_RELEASE=') === 0);
-		return line ? line.split('=')[1].replace(/["']/g, '').trim() : '';
-	} catch (e) {
-		return '';
-	}
-}
-
-async function getSystemModel() {
-	try {
-		return String(await fs.read('/tmp/sysinfo/model') || '').trim();
-	} catch (e) {
-		return '';
-	}
-}
-
-async function getHwidHash() {
-	const probes = [
-		"cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | md5sum | cut -c1-14",
-		"for i in /sys/class/net/*/address; do n=\"${i%/address}\"; n=\"${n##*/}\"; [ \"$n\" = \"lo\" ] && continue; cat \"$i\" 2>/dev/null | tr -d ':' | md5sum | cut -c1-14 && break; done"
-	];
-
-	for (let i = 0; i < probes.length; i++) {
-		try {
-			const r = await fs.exec('/bin/sh', ['-c', probes[i]]);
-			if (r.code === 0) {
-				const hwid = String(r.stdout || '').trim();
-				if (hwid && hwid !== 'unknown') return hwid;
-			}
-		} catch (e) {}
-	}
-
-	return '';
-}
-
 function buildSubscriptionClientProfile(settings, appVersion) {
-	const safeVersion = /^\d+\.\d+\.\d+/.test(String(appVersion || '')) ? String(appVersion) : '1.0.0';
-	const settingsUa = String(settings.HWID_USER_AGENT || '').trim();
-	return { ua: settingsUa || ('MiClash/' + safeVersion) };
+	return view_miclash_subscription.buildClientProfile(settings, appVersion);
 }
 
 function normalizeSubscriptionDownloadUrl(rawUrl) {
-	let parsed = null;
-	try {
-		parsed = new URL(rawUrl);
-	} catch (e) {
-		return { url: rawUrl, mode: 'direct', remnawaveCandidateUrl: null, fallbackOnError: false };
-	}
-
-	const segments = parsed.pathname.split('/').filter(Boolean);
-	const lastSegment = String(segments[segments.length - 1] || '').toLowerCase();
-	if (lastSegment === 'mihomo') {
-		return {
-			url: parsed.toString(),
-			mode: 'remnawave-client-path',
-			remnawaveCandidateUrl: null,
-			fallbackOnError: false
-		};
-	}
-
-	const subIndex = segments.indexOf('sub');
-	if (subIndex < 0 || !segments[subIndex + 1]) {
-		const genericCandidate = new URL(parsed.toString());
-		genericCandidate.pathname = '/' + segments.concat('mihomo').join('/');
-		return {
-			url: parsed.toString(),
-			mode: 'direct',
-			remnawaveCandidateUrl: genericCandidate.toString(),
-			fallbackOnError: false
-		};
-	}
-
-	const clientType = String(segments[subIndex + 2] || '').toLowerCase();
-
-	if (clientType === 'mihomo') {
-		return {
-			url: parsed.toString(),
-			mode: 'remnawave-client-path',
-			remnawaveCandidateUrl: null,
-			fallbackOnError: false
-		};
-	}
-
-	if (clientType) {
-		const candidateSegments = segments.slice();
-		candidateSegments[subIndex + 2] = 'mihomo';
-
-		const candidate = new URL(parsed.toString());
-		candidate.pathname = '/' + candidateSegments.join('/');
-
-		return {
-			url: parsed.toString(),
-			mode: 'direct',
-			remnawaveCandidateUrl: candidate.toString(),
-			fallbackOnError: true
-		};
-	}
-
-	const candidateSegments = segments.slice();
-	candidateSegments.push('mihomo');
-
-	const candidate = new URL(parsed.toString());
-	candidate.pathname = '/' + candidateSegments.join('/');
-
-	return {
-		url: parsed.toString(),
-		mode: 'direct',
-		remnawaveCandidateUrl: candidate.toString(),
-		fallbackOnError: true
-	};
+	return view_miclash_subscription.normalizeDownloadUrl(rawUrl);
 }
 
 async function buildSubscriptionDeviceHeaders(settings) {
-	const headers = {};
-	const deviceOs = String(settings.HWID_DEVICE_OS || 'OpenWrt').trim() || 'OpenWrt';
-	headers['x-device-os'] = deviceOs;
-
-	const release = await getOpenWrtReleaseVersion();
-	if (release) headers['x-ver-os'] = release;
-
-	const model = await getSystemModel();
-	if (model) headers['x-device-model'] = model;
-
-	if (String(settings.ENABLE_HWID || '').toLowerCase() === 'true') {
-		const hwid = await getHwidHash();
-		if (hwid) headers['x-hwid'] = hwid;
-	}
-
-	return headers;
+	return view_miclash_subscription.buildDeviceHeaders(settings);
 }
 
 async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode) {
-	const args = [
-		'-L', '-fsS',
-		'--connect-timeout', String(SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC),
-		'--max-time', String(SUBSCRIPTION_CURL_MAX_TIME_SEC),
-		'-A', profile.ua,
-		'-H', 'Accept: application/yaml, text/yaml, text/plain, */*',
-		'-H', 'Cache-Control: no-cache',
-		'-H', 'Pragma: no-cache'
-	];
-
-	Object.keys(deviceHeaders || {}).forEach((key) => {
-		const value = String(deviceHeaders[key] || '').trim();
-		if (!value) return;
-		args.push('-H');
-		args.push(key + ': ' + value);
-	});
-
-	args.push(url);
-	args.push('-o');
-	args.push(TMP_SUBSCRIPTION_PATH);
-
-	await ensureCurlAvailable();
-	const dl = await fs.exec('/usr/bin/curl', args);
-	if (dl.code !== 0) {
-		const msg = String(dl.stderr || dl.stdout || _('Download failed')).trim();
-		if (mode === 'remnawave-client-path' && /403/.test(msg)) {
-			throw new Error(_('Remnawave blocked /mihomo path (HTTP 403). Disable "Disable Subscription Access by Path" in Remnawave response-rules settings.'));
-		}
-		throw new Error(msg);
-	}
-
-	const catResult = await fs.exec('/bin/cat', [TMP_SUBSCRIPTION_PATH]);
-	if (catResult.code !== 0) {
-		throw new Error(String(catResult.stderr || catResult.stdout || _('Unable to read downloaded file')).trim());
-	}
-
-	return String(catResult.stdout || '');
-}
-
-function looksLikeYamlConfig(content) {
-	const text = String(content || '');
-	return /(^|\n)\s*(proxies|proxy-providers|mixed-port|port|mode|rules):\s*/m.test(text);
-}
-
-function extractTestError(testResult) {
-	return view_miclash_utils.formatClashTestError(testResult?.stdout, testResult?.stderr) || 'unknown error';
+	return view_miclash_subscription.downloadWithProfile(url, profile, deviceHeaders, mode);
 }
 
 async function testConfigContent(content, keepOnSuccess, targetPath) {
-	const normalized = String(content || '').trimEnd() + '\n';
-	const configPath = String(targetPath || CONFIG_PATH);
-	let original = '';
-
-	try {
-		await ensureMihomoKernelInstalled();
-	} catch (e) {
-		return { ok: false, message: e.message || _('Mihomo kernel is not installed.') };
-	}
-
-	try {
-		original = await fs.read(configPath);
-	} catch (e) {
-		original = '';
-	}
-
-	try {
-		await writeTextFile(configPath, normalized);
-		await setFileMode(configPath);
-		let testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-f', configPath, '-t']);
-		if (testResult.code !== 0 && configPath === CONFIG_PATH) {
-			// Fallback for older builds that only validate default config path.
-			testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-t']);
-		}
-
-		if (testResult.code !== 0) {
-			await writeTextFile(configPath, original);
-			await setFileMode(configPath);
-			return { ok: false, message: extractTestError(testResult) };
-		}
-
-		if (!keepOnSuccess) {
-			await writeTextFile(configPath, original);
-			await setFileMode(configPath);
-		}
-		return { ok: true, message: '' };
-	} catch (e) {
-		try {
-			await writeTextFile(configPath, original);
-			await setFileMode(configPath);
-		} catch (restoreError) {}
-		return { ok: false, message: e.message || 'test failed' };
-	}
+	return view_miclash_subscription.testConfigContent(
+		content,
+		keepOnSuccess,
+		targetPath,
+		{ ensureKernelInstalled: ensureMihomoKernelInstalled }
+	);
 }
 
 async function fetchSubscriptionAsYaml(url, targetPath) {
@@ -1520,529 +815,34 @@ async function openDashboard() {
 	}
 }
 
-function createInterfaceEntry(name) {
-	let category = 'other';
-
-	if (/\.\d+$/.test(name) || /^(br-|bridge|eth|lan|switch|bond|team)/.test(name)) {
-		category = 'ethernet';
-	} else if (/^(wlan|wifi|ath|phy|ra|mt|rtl|iwl)/.test(name)) {
-		category = 'wifi';
-	} else if (/^(wan|ppp|modem|3g|4g|5g|lte|gsm|cdma|hsdpa|hsupa|umts)/.test(name)) {
-		category = 'wan';
-	} else if (/^(tun|tap|vpn|wg|ovpn|openvpn|l2tp|pptp|sstp|ikev2|ipsec)/.test(name)) {
-		category = 'vpn';
-	} else if (/^(veth|macvlan|ipvlan|dummy|vrf|vcan|vxcan)/.test(name)) {
-		category = 'virtual';
-	}
-
-	return {
-		name: name,
-		category: category,
-		description: name
-	};
-}
-
-async function getNetworkInterfaces() {
-	const result = [];
-	const seen = new Set();
-
-	const pushIface = (name) => {
-		const clean = String(name || '').trim();
-		if (!clean || clean === 'lo' || clean === 'clash-tun' || seen.has(clean)) return;
-		seen.add(clean);
-		result.push(createInterfaceEntry(clean));
-	};
-
-	try {
-		const r = await fs.exec('ls', ['/sys/class/net/']);
-		if (r.code === 0 && r.stdout) {
-			String(r.stdout).split('\n').forEach(pushIface);
-		}
-	} catch (e) {}
-
-	try {
-		const r = await fs.exec('ip', ['link', 'show']);
-		if (r.code === 0 && r.stdout) {
-			String(r.stdout).split('\n').forEach((line) => {
-				const m = line.match(/^\d+:\s+([^:@]+)/);
-				if (m && m[1]) pushIface(m[1]);
-			});
-		}
-	} catch (e) {}
-
-	try {
-		const devices = await network.getDevices();
-		devices.forEach((dev) => {
-			const n = dev.getName && dev.getName();
-			if (n) pushIface(n);
-		});
-	} catch (e) {}
-
-	try {
-		const nets = await network.getNetworks();
-		nets.forEach((net) => {
-			const dev = net.getL3Device && net.getL3Device();
-			const n = dev && dev.getName && dev.getName();
-			if (n) pushIface(n);
-		});
-	} catch (e) {}
-
-	const order = ['wan', 'ethernet', 'wifi', 'vpn', 'virtual', 'other'];
-	return result.sort((a, b) => {
-		const ca = order.indexOf(a.category);
-		const cb = order.indexOf(b.category);
-		if (ca !== cb) return ca - cb;
-		return a.name.localeCompare(b.name);
-	});
-}
-
-async function getHwidValues() {
-	try {
-		let hwid = 'unknown';
-		try {
-			const macResult = await fs.exec('/bin/sh', ['-c',
-				"cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | md5sum | cut -c1-14"
-			]);
-			if (macResult.code === 0 && macResult.stdout) hwid = macResult.stdout.trim();
-		} catch (e) {}
-
-		let verOs = 'unknown';
-		try {
-			const verResult = await fs.exec('/bin/sh', ['-c',
-				'. /etc/openwrt_release && echo $DISTRIB_RELEASE'
-			]);
-			if (verResult.code === 0 && verResult.stdout) verOs = verResult.stdout.trim();
-		} catch (e) {}
-
-		let deviceModel = 'Router';
-		try {
-			const modelResult = await fs.exec('/bin/sh', ['-c', 'cat /tmp/sysinfo/model 2>/dev/null']);
-			if (modelResult.code === 0 && modelResult.stdout) deviceModel = modelResult.stdout.trim();
-		} catch (e) {}
-
-		return { hwid, verOs, deviceModel };
-	} catch (e) {
-		return { hwid: 'unknown', verOs: 'unknown', deviceModel: 'Router' };
-	}
-}
-
-function addHwidToYaml(yamlContent, userAgent, deviceOS, hwid, verOs, deviceModel) {
-	const lines = String(yamlContent || '').split('\n');
-	const result = [];
-	let inProxyProviders = false;
-	let inProvider = false;
-	let currentProvider = [];
-	let hasHeader = false;
-
-	function flushProvider() {
-		result.push(...currentProvider);
-		if (!hasHeader) {
-			while (result.length > 0 && result[result.length - 1].trim() === '') result.pop();
-			result.push('    header:');
-			result.push('      User-Agent: [' + userAgent + ']');
-			result.push('      x-hwid: [' + hwid + ']');
-			result.push('      x-device-os: [' + deviceOS + ']');
-			result.push('      x-ver-os: [' + verOs + ']');
-			result.push('      x-device-model: [' + deviceModel + ']');
-			result.push('');
-		}
-	}
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-
-		if (/^proxy-providers:\s*$/.test(line)) {
-			inProxyProviders = true;
-			result.push(line);
-			continue;
-		}
-
-		if (inProxyProviders) {
-			if (/^[a-zA-Z]/.test(line)) {
-				if (inProvider) flushProvider();
-				inProxyProviders = false;
-				inProvider = false;
-				result.push(line);
-				continue;
-			}
-
-			const providerMatch = line.match(/^  ([a-zA-Z0-9_-]+):\s*$/);
-			if (providerMatch) {
-				if (inProvider) flushProvider();
-				currentProvider = [line];
-				inProvider = true;
-				hasHeader = false;
-				continue;
-			}
-
-			if (inProvider && /^    header:\s*$/.test(line)) hasHeader = true;
-
-			if (inProvider) {
-				currentProvider.push(line);
-			} else {
-				result.push(line);
-			}
-		} else {
-			result.push(line);
-		}
-	}
-
-	if (inProvider) flushProvider();
-	return result.join('\n');
-}
-
-function transformProxyMode(content, proxyMode, tunStack) {
-	const lines = String(content || '').split('\n');
-	const newLines = [];
-	let inTunSection = false;
-	let tunIndentLevel = 0;
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		const trimmed = line.trim();
-
-		if (/^#\s*Proxy\s+Mode:/i.test(trimmed)) continue;
-
-		if (trimmed === '' && i + 1 < lines.length && lines[i + 1].trim() === '') continue;
-
-		if (trimmed === '' && i + 1 < lines.length) {
-			const nextLine = lines[i + 1].trim();
-			if (/^#\s*Proxy\s+Mode:/i.test(nextLine) || /^redir-port/.test(nextLine) || /^tproxy-port/.test(nextLine) || /^tun:/.test(nextLine)) {
-				continue;
-			}
-		}
-
-		if (/^redir-port:/.test(trimmed)) continue;
-		if (/^tproxy-port:/.test(trimmed)) continue;
-
-		if (/^tun:/.test(trimmed)) {
-			inTunSection = true;
-			tunIndentLevel = line.search(/\S/);
-			continue;
-		}
-
-		if (inTunSection) {
-			const currentIndent = line.search(/\S/);
-			if (line.trim() === '' || line.trim().startsWith('#') || (currentIndent > tunIndentLevel && line.trim() !== '')) {
-				continue;
-			}
-			inTunSection = false;
-		}
-
-		newLines.push(line);
-	}
-
-	let insertIndex = 0;
-	for (let i = 0; i < newLines.length; i++) {
-		if (/^mode:/.test(newLines[i].trim())) {
-			insertIndex = i + 1;
-			break;
-		}
-	}
-
-	const normalizedTunStack = ['system', 'gvisor', 'mixed'].includes(tunStack) ? tunStack : 'system';
-	let configToInsert = [];
-
-	switch (proxyMode) {
-		case 'tproxy':
-			configToInsert = ['# Proxy Mode: TPROXY', 'redir-port: 7892', 'tproxy-port: 7894'];
-			break;
-		case 'tun':
-			configToInsert = [
-				'# Proxy Mode: TUN',
-				'tun:',
-				'  enable: true',
-				'  device: clash-tun',
-				'  stack: ' + normalizedTunStack,
-				'  auto-route: false',
-				'  auto-redirect: false',
-				'  auto-detect-interface: false'
-			];
-			break;
-		case 'mixed':
-			configToInsert = [
-				'# Proxy Mode: MIXED (TCP via TPROXY, UDP via TUN)',
-				'redir-port: 7892',
-				'tproxy-port: 7894',
-				'tun:',
-				'  enable: true',
-				'  device: clash-tun',
-				'  stack: ' + normalizedTunStack,
-				'  auto-route: false',
-				'  auto-redirect: false',
-				'  auto-detect-interface: false'
-			];
-			break;
-	}
-
-	newLines.splice(insertIndex, 0, ...configToInsert);
-	return newLines.join('\n');
-}
-
-async function detectCurrentProxyMode() {
-	try {
-		const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
-		if (!configContent) return 'tproxy';
-
-		const lines = configContent.split('\n');
-		let hasTproxy = false;
-		let hasTun = false;
-
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			const trimmed = line.trim();
-
-			if (/^tproxy-port:/.test(trimmed) && !trimmed.startsWith('#')) hasTproxy = true;
-			if (/^tun:/.test(trimmed)) {
-				for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
-					const next = lines[j].trim();
-					if (/^enable:\s*true/.test(next)) {
-						hasTun = true;
-						break;
-					}
-					if (/^[a-zA-Z]/.test(next) && !next.startsWith('#')) break;
-				}
-			}
-		}
-
-		if (hasTproxy && hasTun) return 'mixed';
-		if (hasTun) return 'tun';
-		if (hasTproxy) return 'tproxy';
-		return 'tproxy';
-	} catch (e) {
-		return 'tproxy';
-	}
-}
-
-async function loadOperationalSettings() {
-	try {
-		const content = await L.resolveDefault(fs.read(SETTINGS_PATH), '');
-		const settings = {
-			mode: 'exclude',
-			proxyMode: '',
-			tunStack: 'system',
-			autoDetectLan: true,
-			autoDetectWan: true,
-			blockQuic: true,
-			internetOnlyMiclash: false,
-			useTmpfsRules: true,
-			autoHideNotifications: true,
-			releaseChannel: 'release',
-			detectedLan: '',
-			detectedWan: '',
-			includedInterfaces: [],
-			excludedInterfaces: [],
-			enableHwid: false,
-			hwidUserAgent: 'MiClash',
-			hwidDeviceOS: 'OpenWrt'
-		};
-
-		String(content || '').split('\n').forEach((line) => {
-			const idx = line.indexOf('=');
-			if (idx === -1) return;
-			const key = line.slice(0, idx).trim();
-			const value = line.slice(idx + 1).trim();
-
-			switch (key) {
-				case 'INTERFACE_MODE': settings.mode = value; break;
-				case 'PROXY_MODE': settings.proxyMode = value; break;
-				case 'TUN_STACK': settings.tunStack = value || 'system'; break;
-				case 'AUTO_DETECT_LAN': settings.autoDetectLan = value === 'true'; break;
-				case 'AUTO_DETECT_WAN': settings.autoDetectWan = value === 'true'; break;
-				case 'BLOCK_QUIC': settings.blockQuic = value === 'true'; break;
-				case 'INTERNET_ONLY_MICLASH': settings.internetOnlyMiclash = value === 'true'; break;
-				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
-				case 'AUTO_HIDE_NOTIFICATIONS': settings.autoHideNotifications = value !== 'false'; break;
-				case 'RELEASE_CHANNEL': settings.releaseChannel = normalizeReleaseChannel(value); break;
-				case 'DETECTED_LAN': settings.detectedLan = value; break;
-				case 'DETECTED_WAN': settings.detectedWan = value; break;
-				case 'INCLUDED_INTERFACES':
-					settings.includedInterfaces = value ? value.split(',').map((i) => i.trim()).filter(Boolean) : [];
-					break;
-				case 'EXCLUDED_INTERFACES':
-					settings.excludedInterfaces = value ? value.split(',').map((i) => i.trim()).filter(Boolean) : [];
-					break;
-				case 'ENABLE_HWID': settings.enableHwid = value === 'true'; break;
-				case 'HWID_USER_AGENT': settings.hwidUserAgent = value || 'MiClash'; break;
-				case 'HWID_DEVICE_OS': settings.hwidDeviceOS = value || 'OpenWrt'; break;
-			}
-		});
-
-		return settings;
-	} catch (e) {
-		return {
-			mode: 'exclude',
-			proxyMode: '',
-			tunStack: 'system',
-			autoDetectLan: true,
-			autoDetectWan: true,
-			blockQuic: true,
-			internetOnlyMiclash: false,
-			useTmpfsRules: true,
-			autoHideNotifications: true,
-			releaseChannel: 'release',
-			detectedLan: '',
-			detectedWan: '',
-			includedInterfaces: [],
-			excludedInterfaces: [],
-			enableHwid: false,
-			hwidUserAgent: 'MiClash',
-			hwidDeviceOS: 'OpenWrt'
-		};
-	}
-}
-
-async function loadInterfacesByMode(mode) {
-	const settings = await loadOperationalSettings();
-	const manualList = mode === 'explicit' ? settings.includedInterfaces : settings.excludedInterfaces;
-	const detected = mode === 'explicit' ? settings.detectedLan : settings.detectedWan;
-
-	const all = manualList.slice();
-	if (detected && !all.includes(detected)) all.push(detected);
-	return all;
-}
-
-async function detectLanBridge() {
-	try {
-		try {
-			const nets = await network.getNetworks();
-			for (let i = 0; i < nets.length; i++) {
-				const net = nets[i];
-				if (net.getName && net.getName() === 'lan') {
-					const dev = net.getL3Device && net.getL3Device();
-					if (dev && dev.getName && dev.getName()) return dev.getName();
-				}
-			}
-		} catch (e) {}
-
-		const ipResult = await fs.exec('ip', ['addr', 'show']);
-		if (ipResult.code === 0 && ipResult.stdout) {
-			const lines = String(ipResult.stdout).split('\n');
-			let currentIface = '';
-
-			for (let i = 0; i < lines.length; i++) {
-				const line = lines[i];
-				const ifaceMatch = line.match(/^\d+:\s+([^:@]+):/);
-				if (ifaceMatch) {
-					currentIface = ifaceMatch[1];
-					continue;
-				}
-
-				const ipMatch = line.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
-				if (ipMatch && currentIface && currentIface !== 'lo') {
-					const ip = ipMatch[1];
-					if (/^192\.168\.|^10\.|^172\.(1[6-9]|2[0-9]|3[01])\./.test(ip)) {
-						if (/^(br-|bridge)/.test(currentIface) || currentIface === 'lan') return currentIface;
-					}
-				}
-			}
-		}
-
-		return null;
-	} catch (e) {
-		return null;
-	}
-}
-
-async function detectWanInterface() {
-	try {
-		try {
-			const nets = await network.getNetworks();
-			for (let i = 0; i < nets.length; i++) {
-				const net = nets[i];
-				if ((net.getName && net.getName() === 'wan') || (net.getName && net.getName() === 'wan6')) {
-					const dev = net.getL3Device && net.getL3Device();
-					if (dev && dev.getName && dev.getName()) return dev.getName();
-				}
-			}
-		} catch (e) {}
-
-		const routeContent = await L.resolveDefault(fs.read('/proc/net/route'), '');
-		const lines = String(routeContent).split('\n');
-		for (let i = 0; i < lines.length; i++) {
-			const fields = lines[i].split('\t');
-			if (fields[1] === '00000000' && fields[0] !== 'Iface') return fields[0];
-		}
-
-		return null;
-	} catch (e) {
-		return null;
-	}
-}
-
 async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, releaseChannel, options) {
 	const opts = options || {};
 	try {
-		let detectedLan = '';
-		let detectedWan = '';
+		await view_miclash_settings_model.saveOperationalSettings(
+			mode,
+			proxyMode,
+			tunStack,
+			autoDetectLan,
+			autoDetectWan,
+			blockQuic,
+			internetOnlyMiclash,
+			useTmpfsRules,
+			interfaces,
+			enableHwid,
+			hwidUserAgent,
+			hwidDeviceOS,
+			autoHideNotifications,
+			releaseChannel
+		);
 
-		if (autoDetectLan) detectedLan = await detectLanBridge() || '';
-		if (autoDetectWan) detectedWan = await detectWanInterface() || '';
-
-		let cleanInterfaces = interfaces.slice();
-		if (mode === 'explicit' && autoDetectLan && detectedLan) {
-			cleanInterfaces = cleanInterfaces.filter((iface) => iface !== detectedLan);
-		} else if (mode === 'exclude' && autoDetectWan && detectedWan) {
-			cleanInterfaces = cleanInterfaces.filter((iface) => iface !== detectedWan);
+		if (!opts.silent) {
+			notify('info', _('Settings saved.'));
 		}
-
-		const includedInterfaces = mode === 'explicit' ? cleanInterfaces : [];
-		const excludedInterfaces = mode === 'exclude' ? cleanInterfaces : [];
-
-		const settingsContent = [
-			'INTERFACE_MODE=' + mode,
-			'PROXY_MODE=' + proxyMode,
-			'TUN_STACK=' + tunStack,
-			'AUTO_DETECT_LAN=' + autoDetectLan,
-			'AUTO_DETECT_WAN=' + autoDetectWan,
-			'BLOCK_QUIC=' + blockQuic,
-			'INTERNET_ONLY_MICLASH=' + internetOnlyMiclash,
-			'USE_TMPFS_RULES=' + useTmpfsRules,
-			'AUTO_HIDE_NOTIFICATIONS=' + (autoHideNotifications !== false),
-			'RELEASE_CHANNEL=' + normalizeReleaseChannel(releaseChannel),
-			'DETECTED_LAN=' + detectedLan,
-			'DETECTED_WAN=' + detectedWan,
-			'INCLUDED_INTERFACES=' + includedInterfaces.join(','),
-			'EXCLUDED_INTERFACES=' + excludedInterfaces.join(','),
-			'ENABLE_HWID=' + enableHwid,
-			'HWID_USER_AGENT=' + hwidUserAgent,
-			'HWID_DEVICE_OS=' + hwidDeviceOS,
-			''
-		].join('\n');
-
-		await writeTextFile(SETTINGS_PATH, settingsContent);
-
-		const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
-		if (configContent) {
-			let updatedConfig = transformProxyMode(configContent, proxyMode, tunStack);
-			if (enableHwid) {
-				const hwidValues = await getHwidValues();
-				updatedConfig = addHwidToYaml(
-					updatedConfig,
-					hwidUserAgent,
-					hwidDeviceOS,
-					hwidValues.hwid,
-					hwidValues.verOs,
-					hwidValues.deviceModel
-				);
-			}
-			await writeTextFile(CONFIG_PATH, updatedConfig);
-		}
-
-			if (!opts.silent) {
-				notify('info', _('Settings saved.'));
-			}
-			return true;
+		return true;
 	} catch (e) {
 		notify('error', _('Failed to save settings: %s').format(e.message));
 		return false;
 	}
-}
-
-function normalizeProxyMode(mode) {
-	const normalized = String(mode || '').toLowerCase().trim();
-	if (normalized === 'tun' || normalized === 'mixed' || normalized === 'tproxy') return normalized;
-	return 'tproxy';
 }
 
 async function switchProxyModeFromHeader(targetMode) {
@@ -2102,86 +902,14 @@ async function switchProxyModeFromHeader(targetMode) {
 }
 
 async function loadClashLogs() {
-	try {
-		const direct = await fs.exec('/sbin/logread', ['-e', 'clash']);
-		if (direct.code === 0) return String(direct.stdout || '').trim();
-	} catch (e) {}
-
-	try {
-		const all = await fs.exec('/sbin/logread', []);
-		if (all.code === 0) {
-			return String(all.stdout || '')
-				.split('\n')
-				.filter((line) => /clash/i.test(line))
-				.join('\n')
-				.trim();
-		}
-	} catch (e) {}
-
-	return '';
-}
-
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const SYSLOG_CLASH_RE = /^.*? ([\d:]{8}) .*?daemon\.(\w+)\s+(clash(?:-rules|-hotplug)?)\b(?:\[\d+\])?:\s*(.*)$/;
-
-function normalizeLogMessage(message) {
-	let text = String(message || '').trim();
-	if (!text) return '';
-
-	const msgOnly = text.match(/^msg="(.*)"$/);
-	if (msgOnly) text = msgOnly[1];
-
-	const clashCore = text.match(/^time="[^"]+"\s+level=\w+\s+msg="(.*)"$/);
-	if (clashCore) text = clashCore[1];
-
-	return text.replace(/\\"/g, '"').trim();
-}
-
-function formatLogLine(line) {
-	const raw = String(line || '').replace(ANSI_RE, '').trim();
-	if (!raw) return null;
-
-	const syslogMatch = raw.match(SYSLOG_CLASH_RE);
-	if (syslogMatch) {
-		const time = syslogMatch[1];
-		const level = String(syslogMatch[2] || '').toUpperCase();
-		const daemon = syslogMatch[3];
-		const message = normalizeLogMessage(syslogMatch[4]);
-
-		return {
-			text: '[' + time + '] [' + daemon + '] [' + level + '] ' + message,
-			level: level
-		};
-	}
-
-	const clashRawMatch = raw.match(/^time="([^"]+)"\s+level=(\w+)\s+msg="(.*)"$/);
-	if (clashRawMatch) {
-		const isoTime = clashRawMatch[1];
-		const level = String(clashRawMatch[2] || '').toUpperCase();
-		const message = normalizeLogMessage(clashRawMatch[3]);
-		const time = (isoTime.match(/(\d{2}:\d{2}:\d{2})/) || [null, '--:--:--'])[1];
-
-		return {
-			text: '[' + time + '] [clash] [' + level + '] ' + message,
-			level: level
-		};
-	}
-
-	if (!/clash/i.test(raw)) return null;
-
-	const fallbackLevel =
-		/\b(FATAL|PANIC|ERRO|ERROR)\b/i.test(raw) ? 'ERROR' :
-		/\b(WARN|WARNING)\b/i.test(raw) ? 'WARN' :
-		/\b(INFO)\b/i.test(raw) ? 'INFO' : 'MUTED';
-
-	return { text: raw, level: fallbackLevel };
+	return view_miclash_logs.readRaw();
 }
 
 function colorizeLog(raw) {
 	if (!raw) return '<span class="sbox-log-muted">No logs yet.</span>';
 
 	const rows = String(raw || '').split('\n')
-		.map((line) => formatLogLine(line))
+		.map((line) => view_miclash_logs.formatLine(line))
 		.filter((item) => !!item && !!item.text);
 
 	if (!rows.length) return '<span class="sbox-log-muted">No logs yet.</span>';
@@ -2242,92 +970,6 @@ function destroyRulesetEditors() {
 		try { if (rulesetWhitelistEditor.container) rulesetWhitelistEditor.container.textContent = ''; } catch (e) {}
 		rulesetWhitelistEditor = null;
 	}
-}
-
-function normalizeRulesetName(rawName) {
-	const clean = String(rawName || '').trim().replace(/\.txt$/i, '');
-	if (!clean || !/^[A-Za-z0-9_-]+$/.test(clean)) return '';
-	return clean.toLowerCase();
-}
-
-function isEditableRulesetFile(fileName) {
-	return /\.txt$/i.test(fileName) && fileName !== FAKEIP_WHITELIST_FILENAME;
-}
-
-async function detectFakeIpWhitelistMode() {
-	try {
-		const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
-		if (!configContent) return false;
-
-		let inDns = false;
-		let dnsEnabled = false;
-		let fakeIpMode = false;
-		let filterMode = 'blacklist';
-
-		String(configContent).split('\n').forEach((line) => {
-			const trimmed = line.trim();
-
-			if (/^dns:\s*$/.test(trimmed)) {
-				inDns = true;
-				return;
-			}
-
-			if (inDns && trimmed && !/^\s/.test(line)) {
-				inDns = false;
-			}
-			if (!inDns) return;
-
-			if (/^enable:\s*true/i.test(trimmed)) dnsEnabled = true;
-			if (/^enhanced-mode:\s*fake-ip/i.test(trimmed)) fakeIpMode = true;
-
-			const modeMatch = trimmed.match(/^fake-ip-filter-mode:\s*(\S+)/i);
-			if (modeMatch) {
-				filterMode = String(modeMatch[1] || '').toLowerCase().replace(/['"]/g, '');
-			}
-		});
-
-		return dnsEnabled && fakeIpMode && filterMode === 'whitelist';
-	} catch (e) {
-		return false;
-	}
-}
-
-async function readRulesetsData() {
-	try {
-		await fs.exec('/bin/mkdir', ['-p', RULESET_PATH]);
-	} catch (e) {}
-
-	const files = await L.resolveDefault(fs.list(RULESET_PATH), []);
-	const rulesetNames = (files || [])
-		.filter((item) => item && isEditableRulesetFile(item.name || ''))
-		.map((item) => item.name)
-		.sort((a, b) => a.localeCompare(b));
-
-	const contentMap = {};
-	for (let i = 0; i < rulesetNames.length; i++) {
-		const name = rulesetNames[i];
-		contentMap[name] = await L.resolveDefault(fs.read(RULESET_PATH + name), '');
-	}
-
-	const whitelistMode = await detectFakeIpWhitelistMode();
-	let whitelistContent = '';
-
-	if (whitelistMode) {
-		const filePath = RULESET_PATH + FAKEIP_WHITELIST_FILENAME;
-		const existing = await L.resolveDefault(fs.read(filePath), null);
-		if (existing == null) {
-			await fs.write(filePath, '');
-		} else {
-			whitelistContent = existing;
-		}
-	}
-
-	return {
-		rulesetNames: rulesetNames,
-		contentMap: contentMap,
-		whitelistMode: whitelistMode,
-		whitelistContent: whitelistContent
-	};
 }
 
 async function openRulesetsModal() {
@@ -2494,7 +1136,7 @@ async function openRulesetsModal() {
 				throw new Error(_('A ruleset with this name already exists.'));
 			}
 
-			await fs.write(RULESET_PATH + filename, '');
+			await createRulesetFile(filename);
 			rulesetNames.push(filename);
 			rulesetNames.sort((a, b) => a.localeCompare(b));
 			rulesetCache[filename] = '';
@@ -2526,7 +1168,7 @@ async function openRulesetsModal() {
 			if (!currentRuleset || !rulesetMainEditor) return;
 			const raw = String(rulesetMainEditor.getValue() || '').replace(/\r\n/g, '\n');
 			const finalContent = raw.trim() ? raw.trimEnd() + '\n' : '';
-			await fs.write(RULESET_PATH + currentRuleset, finalContent);
+			await saveRulesetFile(currentRuleset, finalContent);
 			rulesetCache[currentRuleset] = finalContent;
 			notify('info', _('Ruleset "%s" saved.').format(currentRuleset));
 		}).catch((e) => {
@@ -2547,7 +1189,7 @@ async function openRulesetsModal() {
 						label: _('Delete'),
 						className: 'cbi-button cbi-button-negative',
 						onClick: async function(ctx) {
-							await fs.remove(RULESET_PATH + deletingName);
+							await deleteRulesetFile(deletingName);
 							rulesetNames = rulesetNames.filter((name) => name !== deletingName);
 							delete rulesetCache[deletingName];
 							currentRuleset = rulesetNames[0] || '';
@@ -2586,9 +1228,7 @@ async function openRulesetsModal() {
 		saveWhitelistBtn.addEventListener('click', () => withButtons(saveWhitelistBtn, async () => {
 			const raw = String(rulesetWhitelistEditor.getValue() || '').replace(/\r\n/g, '\n');
 			const finalContent = raw.trim() ? raw.trimEnd() + '\n' : '';
-			await fs.write(RULESET_PATH + FAKEIP_WHITELIST_FILENAME, finalContent);
-
-			const update = await fs.exec('/opt/clash/bin/clash-rules', ['update-ip-whitelist']);
+			const update = await saveRulesetWhitelist(finalContent);
 			if (update && update.code === 0) {
 				notify('info', _('IP-CIDR list saved and firewall rules updated.'));
 			} else {
@@ -3197,37 +1837,29 @@ async function refreshLogs() {
 }
 
 function startLogPolling() {
-	if (logPollTimer) return;
-	logPollTimer = setInterval(() => {
+	logPollTimer = view_miclash_ui_shell.startInterval(logPollTimer, () => {
 		if (appState.activeCfgTab === 'logs') refreshLogs().catch(() => {});
 	}, LOG_POLL_MS);
 }
 
 function stopLogPolling() {
-	if (logPollTimer) {
-		clearInterval(logPollTimer);
-		logPollTimer = null;
-	}
+	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
 }
 
 function startControlPolling() {
-	if (controlPollTimer) clearInterval(controlPollTimer);
-
-	controlPollTimer = setInterval(async () => {
+	controlPollTimer = view_miclash_ui_shell.startInterval(controlPollTimer, async () => {
 		try {
 			appState.serviceRunning = await getServiceStatus();
 			updateHeaderAndControlDom();
 		} catch (e) {}
-	}, STATUS_POLL_MS);
+	}, STATUS_POLL_MS, { replace: true });
 }
 
 function startUpdatePolling() {
-	if (updatePollTimer) clearInterval(updatePollTimer);
-
-	updatePollTimer = setInterval(() => {
+	updatePollTimer = view_miclash_ui_shell.startInterval(updatePollTimer, () => {
 		if (document.hidden) return;
 		refreshReleaseMeta({ force: false }).catch(() => {});
-	}, UPDATE_CHECK_MS);
+	}, UPDATE_CHECK_MS, { replace: true });
 }
 
 function bindControlAndHeaderEvents() {
@@ -3330,9 +1962,7 @@ function bindControlAndHeaderEvents() {
 			try {
 				await withServiceButtons(startBtn, stopBtn, async () => {
 					await ensureMihomoKernelInstalled();
-					await dispatchServiceActions(['enable', 'start']);
-					await delay(300);
-					if (!(await waitForServiceStatus(true))) {
+					if (!(await view_miclash_service.dispatchActionsAndWait(['enable', 'start'], true))) {
 						throw new Error(_('Service did not enter running state in time.'));
 					}
 				});
@@ -3348,9 +1978,7 @@ function bindControlAndHeaderEvents() {
 		stopBtn.addEventListener('click', async () => {
 			try {
 				await withServiceButtons(stopBtn, startBtn, async () => {
-					await dispatchServiceActions(['stop', 'disable']);
-					await delay(300);
-					if (!(await waitForServiceStatus(false))) {
+					if (!(await view_miclash_service.dispatchActionsAndWait(['stop', 'disable'], false))) {
 						throw new Error(_('Service did not stop in time.'));
 					}
 				});
@@ -3537,7 +2165,7 @@ function bindConfigEvents() {
 			}).catch((e) => {
 				notify('error', _('Failed to apply subscription: %s').format(e.message));
 			}).finally(async () => {
-				try { await fs.remove(TMP_SUBSCRIPTION_PATH); } catch (removeErr) {}
+				await view_miclash_subscription.cleanupTemp();
 			})
 		);
 	}
@@ -3570,7 +2198,7 @@ function bindConfigEvents() {
 			const tested = await testConfigContent(editor.getValue(), true, selectedPath);
 			if (!tested.ok) {
 				notifyDetailedError(
-					_('Configuration test failed — service not reloaded. Please fix the errors below:'),
+					_('Configuration test failed Р Р†Р вЂљРІР‚Сњ service not reloaded. Please fix the errors below:'),
 					tested.message
 				);
 				return;
@@ -3642,46 +2270,36 @@ function bindConfigEvents() {
 }
 
 function bindTabEvents() {
-	const ctrlTabs = Array.from(pageRoot.querySelectorAll('[data-ctrl-tab]'));
-	const cfgTabs = Array.from(pageRoot.querySelectorAll('[data-cfg-tab]'));
-
-	const paneControl = pageRoot.querySelector('#sbox-pane-control');
-	const paneSettings = pageRoot.querySelector('#sbox-pane-settings');
-	const paneConfig = pageRoot.querySelector('#sbox-pane-config');
-	const paneLogs = pageRoot.querySelector('#sbox-pane-logs');
-
-	const setCtrlTab = (name) => {
-		appState.activeCtrlTab = name;
-		ctrlTabs.forEach((tab) => tab.classList.toggle('sbox-tab-active', tab.dataset.ctrlTab === name));
-		paneControl.style.display = name === 'control' ? '' : 'none';
-		paneSettings.style.display = name === 'settings' ? '' : 'none';
-		if (name === 'settings') renderSettingsPane();
-	};
-
-	const setCfgTab = (name) => {
-		appState.activeCfgTab = name;
-		cfgTabs.forEach((tab) => tab.classList.toggle('sbox-tab-active', tab.dataset.cfgTab === name));
-		paneConfig.style.display = name === 'config' ? '' : 'none';
-		paneLogs.style.display = name === 'logs' ? '' : 'none';
-
-		if (name === 'logs') {
-			refreshLogs().catch(() => {});
-			startLogPolling();
-		} else {
-			stopLogPolling();
+	view_miclash_ui_shell.bindTabGroup(pageRoot, {
+		tabAttr: 'ctrl-tab',
+		initial: appState.activeCtrlTab || 'control',
+		panes: {
+			control: '#sbox-pane-control',
+			settings: '#sbox-pane-settings'
+		},
+		onChange: (name) => {
+			appState.activeCtrlTab = name;
+			if (name === 'settings') renderSettingsPane();
 		}
-	};
-
-	ctrlTabs.forEach((tab) => {
-		tab.addEventListener('click', () => setCtrlTab(tab.dataset.ctrlTab));
 	});
 
-	cfgTabs.forEach((tab) => {
-		tab.addEventListener('click', () => setCfgTab(tab.dataset.cfgTab));
+	view_miclash_ui_shell.bindTabGroup(pageRoot, {
+		tabAttr: 'cfg-tab',
+		initial: appState.activeCfgTab || 'config',
+		panes: {
+			config: '#sbox-pane-config',
+			logs: '#sbox-pane-logs'
+		},
+		onChange: (name) => {
+			appState.activeCfgTab = name;
+			if (name === 'logs') {
+				refreshLogs().catch(() => {});
+				startLogPolling();
+			} else {
+				stopLogPolling();
+			}
+		}
 	});
-
-	setCtrlTab(appState.activeCtrlTab || 'control');
-	setCfgTab(appState.activeCfgTab || 'config');
 }
 
 const PAGE_CSS = `
@@ -4319,6 +2937,7 @@ return view.extend({
 	},
 
 	render: async function(data) {
+		const routeSection = view_miclash_route.getSection();
 		await ensureConfigProfilesReady(data[0] || '');
 		appState.configProfiles = CONFIG_PROFILES.slice();
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
@@ -4332,6 +2951,7 @@ return view.extend({
 		appState.kernelStatus = data[6] || { installed: false, version: null };
 		appState.serviceRunning = !!data[7];
 		appState.proxyMode = data[8] || 'tproxy';
+		view_miclash_route.applySection(appState, routeSection);
 
 		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
 		appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
@@ -4363,6 +2983,14 @@ return view.extend({
 
 		startControlPolling();
 		startUpdatePolling();
+
+		if (routeSection === 'rulesets') {
+			setTimeout(() => {
+				openRulesetsModal().catch((e) => {
+					notify('error', _('Failed to open rulesets: %s').format(e.message));
+				});
+			}, 0);
+		}
 
 		document.addEventListener('visibilitychange', () => {
 			if (document.hidden) {

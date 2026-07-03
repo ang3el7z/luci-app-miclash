@@ -163,6 +163,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -yq gettext libncurses5-dev rsync xsltproc build-essential gawk unzip
 
+      - name: Verify LuCI JS Modules
+        run: node .github/scripts/verify-luci-js.mjs
+
+      - name: Verify OpenWrt Shell Scripts
+        run: node .github/scripts/verify-openwrt-shell.mjs
+
+      - name: Verify Package Layout
+        run: node .github/scripts/verify-package-layout.mjs
+
       - name: Create Build Directories
         run: |
           echo "SDK_DL_DIR=$(mktemp -d)" >> "$GITHUB_ENV"
@@ -239,6 +248,11 @@ jobs:
       - sync-version
       - build
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -253,10 +267,32 @@ jobs:
 
           ls -lah release_files
 
+      - name: Generate Release Notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          current_tag="${{ github.ref_name }}"
+          previous_tag="$(git tag --sort=-creatordate | grep -v -F "$current_tag" | head -n 1 || true)"
+
+          if [ -n "$previous_tag" ]; then
+            commit_subjects="$(git log --no-merges --pretty=format:'%s' "${previous_tag}..HEAD")"
+          else
+            commit_subjects="$(git log --no-merges --pretty=format:'%s')"
+          fi
+
+          echo "## Release ${{ github.ref_name }}" > release_notes.md
+          if [ -n "$commit_subjects" ]; then
+            echo "" >> release_notes.md
+            printf '%s\n' "$commit_subjects" >> release_notes.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           files: release_files/*
+          body_path: release_notes.md
           draft: false
           prerelease: false

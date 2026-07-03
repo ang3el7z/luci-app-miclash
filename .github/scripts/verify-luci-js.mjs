@@ -1,0 +1,170 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+const viewDir = path.join(
+	process.cwd(),
+	'luci-app-miclash',
+	'rootfs',
+	'www',
+	'luci-static',
+	'resources',
+	'view',
+	'miclash'
+);
+const menuPath = path.join(
+	process.cwd(),
+	'luci-app-miclash',
+	'rootfs',
+	'usr',
+	'share',
+	'luci',
+	'menu.d',
+	'luci-app-miclash.json'
+);
+const aclPath = path.join(
+	process.cwd(),
+	'luci-app-miclash',
+	'rootfs',
+	'usr',
+	'share',
+	'rpcd',
+	'acl.d',
+	'luci-app-miclash.json'
+);
+
+function walk(dir) {
+	const out = [];
+	for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+		const full = path.join(dir, item.name);
+		if (item.isDirectory()) out.push(...walk(full));
+		else if (item.isFile() && item.name.endsWith('.js')) out.push(full);
+	}
+	return out;
+}
+
+const files = walk(viewDir);
+const missing = [];
+
+for (const file of files) {
+	const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+	if (check.status !== 0) {
+		process.stderr.write(check.stderr || check.stdout || `Syntax check failed: ${file}\n`);
+		process.exit(check.status || 1);
+	}
+
+	const source = fs.readFileSync(file, 'utf8');
+	const requiredGlobals = new Set();
+
+	for (const match of source.matchAll(/'require view\.miclash\.([^']+)'/g)) {
+		const rel = match[1].replace(/\./g, path.sep) + '.js';
+		const target = path.join(viewDir, rel);
+		requiredGlobals.add(`view_miclash_${match[1].replace(/[.-]/g, '_')}`);
+		if (!fs.existsSync(target)) {
+			missing.push(`${path.relative(process.cwd(), file)} -> ${rel}`);
+		}
+	}
+
+	for (const match of source.matchAll(/\bview_miclash_[A-Za-z0-9_]+\b/g)) {
+		const identifier = match[0];
+		if (!requiredGlobals.has(identifier)) {
+			missing.push(`${path.relative(process.cwd(), file)} -> missing require for ${identifier}`);
+		}
+	}
+}
+
+const menu = JSON.parse(fs.readFileSync(menuPath, 'utf8'));
+const acl = JSON.parse(fs.readFileSync(aclPath, 'utf8'));
+const miclashAcl = acl['luci-app-miclash'];
+
+if (!miclashAcl) {
+	missing.push('ACL object luci-app-miclash');
+}
+
+function aclFileEntries() {
+	const entries = [];
+	for (const section of ['read', 'write']) {
+		const files = miclashAcl?.[section]?.file || {};
+		for (const [pattern, perms] of Object.entries(files)) {
+			entries.push({ section, pattern, perms: new Set(perms) });
+		}
+	}
+	return entries;
+}
+
+function patternMatches(pattern, candidate) {
+	if (pattern === candidate) return true;
+	const escaped = pattern
+		.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+		.replace(/\*/g, '.*');
+	return new RegExp(`^${escaped}$`).test(candidate);
+}
+
+function hasAclPermission(candidate, permission) {
+	return aclFileEntries().some((entry) => (
+		entry.perms.has(permission) && patternMatches(entry.pattern, candidate)
+	));
+}
+
+const fsOperationPermissions = {
+	exec: 'exec',
+	read: 'read',
+	write: 'write',
+	remove: 'remove',
+	stat: 'stat',
+	list: 'list'
+};
+
+const knownCommandPaths = {
+	ls: ['/bin/ls'],
+	ip: ['/sbin/ip', '/bin/ip', '/usr/sbin/ip', '/usr/bin/ip'],
+	opkg: ['/bin/opkg', '/usr/bin/opkg'],
+	apk: ['/bin/apk', '/usr/bin/apk']
+};
+
+for (const file of files) {
+	const source = fs.readFileSync(file, 'utf8');
+	for (const match of source.matchAll(/fs\.(exec|read|write|remove|stat|list)\(\s*(['"])(\/[^'"]+)\2/g)) {
+		const operation = match[1];
+		const target = match[3];
+		const permission = fsOperationPermissions[operation];
+		if (permission && !hasAclPermission(target, permission)) {
+			missing.push(`${path.relative(process.cwd(), file)} -> ACL ${permission} ${target}`);
+		}
+	}
+
+	for (const match of source.matchAll(/fs\.exec\(\s*(['"])([^\/'"][^'"]*)\1/g)) {
+		const command = match[2];
+		const candidates = knownCommandPaths[command];
+		if (!candidates) continue;
+
+		if (!candidates.some((target) => hasAclPermission(target, 'exec'))) {
+			missing.push(`${path.relative(process.cwd(), file)} -> ACL exec ${command} (${candidates.join(' or ')})`);
+		}
+	}
+}
+
+for (const [entry, node] of Object.entries(menu)) {
+	const action = node && node.action;
+	if (!action || action.type !== 'view') continue;
+
+	const viewPath = String(action.path || '');
+	if (!viewPath.startsWith('miclash/')) {
+		missing.push(`${entry} -> invalid view path ${viewPath}`);
+		continue;
+	}
+
+	const rel = viewPath.replace(/^miclash\//, '') + '.js';
+	const target = path.join(viewDir, rel);
+	if (!fs.existsSync(target)) {
+		missing.push(`${entry} -> ${rel}`);
+	}
+}
+
+if (missing.length) {
+	console.error('LuCI verification failed:');
+	for (const item of missing) console.error(`- ${item}`);
+	process.exit(1);
+}
+
+console.log(`LuCI JS verified: ${files.length} files`);

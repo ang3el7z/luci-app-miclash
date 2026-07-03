@@ -37,12 +37,10 @@ choice
 
 config PACKAGE_$(PKG_NAME)_Iptables_Transparent_Proxy
 	bool "Iptables Transparent Proxy"
-	select PACKAGE_kmod-ipt-nat
 	select PACKAGE_iptables-mod-tproxy
 
 config PACKAGE_$(PKG_NAME)_Nftables_Transparent_Proxy
 	bool "Nftables Transparent Proxy"
-	select PACKAGE_kmod-nft-nat
 	select PACKAGE_kmod-nft-tproxy
 
 endchoice

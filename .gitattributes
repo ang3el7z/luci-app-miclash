@@ -1,0 +1,16 @@
+* text=auto
+
+*.sh text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.mk text eol=lf
+Makefile text eol=lf
+*.po text eol=lf
+*.md text eol=lf
+
+luci-app-miclash/rootfs/etc/init.d/* text eol=lf
+luci-app-miclash/rootfs/etc/hotplug.d/**/* text eol=lf
+luci-app-miclash/rootfs/opt/clash/bin/* text eol=lf
+install-miclash.sh text eol=lf
