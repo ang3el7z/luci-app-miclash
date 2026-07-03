@@ -24,6 +24,46 @@ Final decision:
 - keep upstream runtime/build behavior where it affects correctness
 - keep SSClash docs, screenshots, Chinese locale, and `install-ssclash.sh` out of MiClash unless separately adapted later
 
+## Commit-by-commit upstream matrix
+
+Range audited:
+- `aeb0220..f8990bc`
+
+Non-merge upstream commits:
+
+| Commit | Upstream change | MiClash status |
+| --- | --- | --- |
+| `7fcb53b` | Preserve fake-IP whitelist on incomplete updates | Ported into `luci-app-miclash/rootfs/opt/clash/bin/clash-rules`; failed nft refresh keeps previous set contents. |
+| `842f31c` | Restore config before upgrade-triggered start | Ported into `luci-app-miclash/Makefile` preinst/postinst and init behavior. |
+| `ac65493` | Version/docs/config UI bump | Version/docs adapted through MiClash release flow; SSClash version string not copied. |
+| `05aeb29` | Route local fake-IP output before root bypass | Ported into MiClash `clash-rules`; adapted around internet-only guard/redir-port logic. |
+| `c99bda6` | Add Chinese UI translation and language setting | Intentionally not ported; MiClash keeps Russian locale and no SSClash zh-cn payload. |
+| `a21e611` | Version/readme/workflow changes | Workflow behavior adapted in `.github/workflows/makefile.yml`; SSClash docs/branch naming not copied. |
+| `ea44f4d` | Build workflow SDK/package matrix update | Adapted in MiClash tag-driven workflow with OpenWrt `24.10.2` ipk and `25.12.0-rc2` apk. |
+| `fb9824f` | Build workflow release/artifact behavior | Adapted in MiClash workflow; release assets are MiClash-named and version-synced from tag. |
+| `9cc78d3` | README changes | Intentionally not copied as-is; MiClash README has fork-specific install/release URLs. |
+| `2ca3c36` | Remove LuCI global language switching and refresh example config/ACL | Example config is aligned except MiClash keeps `redir-port: 7892`; ACL has upstream removals plus MiClash extra permissions. |
+| `1b1d285` | SSClash screenshots/logo assets | Intentionally not ported; SSClash branding assets removed from MiClash. |
+| `2774091` | Dark/light theme fixes and `utils.js` helper | Functionality covered by MiClash custom `.sbox-theme-*` CSS/theme toggle; upstream helper exists but SSClash panel code is not copied. |
+| `99e120a` | Version bump and locale text | Version handled by MiClash tag workflow; zh-cn skipped; ru adapted in `miclash.po`. |
+| `f08dd21` | Add `install-ssclash.sh` | Replaced by MiClash-native `install-miclash.sh`. |
+| `3404660` | OpenWrt install docs | Adapted to MiClash install script/release endpoint. |
+| `cb20d3d` | Resilient `clash-rules` startup when WAN/DNS unavailable | Ported into MiClash `clash-rules` and iface hotplug behavior. |
+| `964ab65` | v4.6.0 UI bundle and hardened mihomo installer | UI bundle ported; installer hardening adapted in `install-miclash.sh`; SSClash URLs/names replaced. |
+| `0c8778f` | Kernel download false "Access denied" after install | Ported/adapted: kernel status uses binary/stat path, ACL includes needed execs including `/bin/rm`. |
+| `b37992a` | Detach Clash restart to avoid XHR timeout | Ported via `utils.execDetached()` and MiClash service action wrappers. |
+| `db6df9c` | Add `curl` to dependencies and installer dedupe | Ported into `LUCI_DEPENDS`, LuCI dependency repair, and MiClash installer deps. |
+| `08add6d` | Chunked base64 write for large configs | Ported via `utils.writeFile()` and MiClash config/settings/profile writes. |
+| `16904d6` | Poll boot dependencies instead of fixed sleep | Ported into MiClash init script. |
+| `f8990bc` | Show full `clash -t` and syslog errors in web UI | Ported via `utils.formatClashTestError()` and MiClash save validation flow. |
+
+Merge commits in the range (`f0c5f2b`, `05255af`, `db085fd`, `601d53b`, `57dff62`) were wrappers around the listed changes and did not add separate payload.
+
+Additional audit notes:
+- current tree has no `luci-app-ssclash/` directory; entries shown in fork-point diffs are historical deletions/renames
+- `upstream/main:luci-app-ssclash/rootfs/opt/clash/config.yaml` vs MiClash default config differs only by MiClash keeping `redir-port: 7892` instead of upstream's `# Proxy Mode: TPROXY` comment
+- no additional unmerged upstream commits were found after `git fetch --all --prune`
+
 Branch audited:
 - `codex/sync-upstream-2026-07-03`
 
