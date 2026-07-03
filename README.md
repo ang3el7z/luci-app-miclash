@@ -53,4 +53,3 @@ rm -rf /tmp/clash.gz
 ```
 
 **Ядра для других архитектур:** [https://github.com/MetaCubeX/mihomo/releases](https://4pda.to/stat/go?u=https%3A%2F%2Fgithub.com%2FMetaCubeX%2Fmihomo%2Freleases&e=132278268)
-

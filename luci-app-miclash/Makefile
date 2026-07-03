@@ -112,14 +112,15 @@ endef
 
 define Package/$(PKG_NAME)/preinst
 #!/bin/sh
-[ -f /opt/clash/config.yaml ] && cp -p /opt/clash/config.yaml /tmp/miclash_config.yaml.bak
+mkdir -p /opt/clash 2>/dev/null || true
+[ -f /opt/clash/config.yaml ] && cp -p /opt/clash/config.yaml /opt/clash/.config.yaml.upgrade.bak
 exit 0
 endef
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
-if [ -f /tmp/miclash_config.yaml.bak ]; then
-	mv /tmp/miclash_config.yaml.bak /opt/clash/config.yaml
+if [ -f /opt/clash/.config.yaml.upgrade.bak ]; then
+	mv /opt/clash/.config.yaml.upgrade.bak /opt/clash/config.yaml
 	FIRST_INSTALL=0
 else
 	FIRST_INSTALL=1
@@ -190,6 +191,7 @@ define Package/$(PKG_NAME)/postrm
 	rm -rf /tmp/clash
 	rm -rf /www/luci-static/resources/view/miclash
 	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
+	rm -f /opt/clash/.config.yaml.upgrade.bak
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
 	rm -f /etc/apk/protected_paths.d/miclash.list
