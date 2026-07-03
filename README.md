@@ -1,5 +1,11 @@
 <img width="972" height="858" alt="image" src="https://github.com/user-attachments/assets/45e45cd6-e76b-464d-8a19-0f9e7d861b61" />
 
+# Auto install
+
+```bash
+wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
 # OpenWrt 25.12.x
 
 ```bash
