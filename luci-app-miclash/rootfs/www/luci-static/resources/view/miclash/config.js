@@ -1540,6 +1540,10 @@ function isInternetOnlyEnabled() {
 }
 
 async function prepareNetworkUpdate() {
+	const serviceRunning = await getServiceStatus();
+	appState.serviceRunning = !!serviceRunning;
+	updateHeaderAndControlDom();
+
 	const result = await view_miclash_guard.prepareNetworkUpdate(appState.settings, appState.serviceRunning);
 	if (result && result.warning) {
 		notify('warning', _('Network path repair failed, continuing update: %s').format(result.warning));

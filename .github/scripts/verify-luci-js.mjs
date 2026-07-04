@@ -122,6 +122,10 @@ if (!/async function\s+prepareNetworkUpdate\(\)[\s\S]+result\.warning[\s\S]+cont
 	missing.push('config.js -> repair warnings must be shown as non-fatal continuing update notices');
 }
 
+if (!/async function\s+prepareNetworkUpdate\(\)[\s\S]+await getServiceStatus\(\)[\s\S]+appState\.serviceRunning\s*=/.test(configSource)) {
+	missing.push('config.js -> guarded network updates must refresh live service status before deciding block/repair');
+}
+
 for (const file of files) {
 	const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
 	if (check.status !== 0) {
