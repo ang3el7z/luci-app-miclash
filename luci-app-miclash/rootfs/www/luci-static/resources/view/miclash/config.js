@@ -449,9 +449,7 @@ async function installKernelFromSettings() {
 
 	if (await getServiceStatus()) {
 		try {
-			if (!(await restartOrReloadService('restart'))) {
-				throw new Error(_('Service did not enter running state in time.'));
-			}
+			await restartOrReloadServiceOrThrow('restart');
 			notify('info', _('Kernel installed and service restarted.'));
 		} catch (e) {
 			notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
@@ -507,9 +505,7 @@ async function openKernelModal() {
 					if (ok) {
 						if (await getServiceStatus()) {
 							try {
-								if (!(await restartOrReloadService('restart'))) {
-									throw new Error(_('Service did not enter running state in time.'));
-								}
+								await restartOrReloadServiceOrThrow('restart');
 								notify('info', _('Kernel installed and service restarted.'));
 							} catch (e) {
 								notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
@@ -606,16 +602,12 @@ async function getServiceStatus() {
 	return view_miclash_service.getStatus();
 }
 
-async function waitForServiceStatus(targetStatus, timeoutMs) {
-	return view_miclash_service.waitForStatus(!!targetStatus, timeoutMs);
+async function restartOrReloadServiceOrThrow(action) {
+	return view_miclash_service.restartOrReloadOrThrow(action);
 }
 
-async function dispatchServiceActions(actions) {
-	return view_miclash_service.dispatchActions(actions);
-}
-
-async function restartOrReloadService(action) {
-	return view_miclash_service.restartOrReload(action);
+async function dispatchServiceActionsAndWaitOrThrow(actions, targetStatus) {
+	return view_miclash_service.dispatchActionsAndWaitOrThrow(actions, targetStatus);
 }
 
 function notifyDetailedError(title, detail) {
@@ -814,9 +806,7 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	if (!ok) throw new Error(_('Cannot save proxy mode.'));
 
-	if (!(await restartOrReloadService('restart'))) {
-		throw new Error(_('Service did not enter running state in time.'));
-	}
+	await restartOrReloadServiceOrThrow('restart');
 
 	appState.settings = await loadOperationalSettings();
 	appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
@@ -1714,9 +1704,7 @@ function bindSettingsPaneEvents() {
 
 				if (!ok) return;
 				try {
-					if (!(await restartOrReloadService('restart'))) {
-						throw new Error(_('Service did not enter running state in time.'));
-					}
+					await restartOrReloadServiceOrThrow('restart');
 					notify('info', _('Settings saved and Clash service restarted.'));
 				} catch (e) {
 					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
@@ -1884,9 +1872,7 @@ function bindControlAndHeaderEvents() {
 			try {
 				await withServiceButtons(startBtn, stopBtn, async () => {
 					await ensureMihomoKernelInstalled();
-					if (!(await view_miclash_service.dispatchActionsAndWait(['enable', 'start'], true))) {
-						throw new Error(_('Service did not enter running state in time.'));
-					}
+					await dispatchServiceActionsAndWaitOrThrow(['enable', 'start'], true);
 				});
 				await refreshHeaderAndControlSafe();
 			} catch (e) {
@@ -1900,9 +1886,7 @@ function bindControlAndHeaderEvents() {
 		stopBtn.addEventListener('click', async () => {
 			try {
 				await withServiceButtons(stopBtn, startBtn, async () => {
-					if (!(await view_miclash_service.dispatchActionsAndWait(['stop', 'disable'], false))) {
-						throw new Error(_('Service did not stop in time.'));
-					}
+					await dispatchServiceActionsAndWaitOrThrow(['stop', 'disable'], false);
 				});
 				await refreshHeaderAndControlSafe();
 			} catch (e) {
@@ -1915,9 +1899,7 @@ function bindControlAndHeaderEvents() {
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
 	if (restartBtn) {
 		restartBtn.addEventListener('click', () => withButtons(restartBtn, async () => {
-			if (!(await restartOrReloadService('restart'))) {
-				throw new Error(_('Service did not enter running state in time.'));
-			}
+			await restartOrReloadServiceOrThrow('restart');
 			notify('info', _('Clash service restarted successfully.'));
 			await refreshHeaderAndControl();
 		}).catch((e) => {
@@ -1978,9 +1960,7 @@ async function setSelectedConfigAsMain() {
 	await saveSubscriptionUrl(selectedUrl, MAIN_CONFIG_NAME);
 	await saveSubscriptionUrl(mainUrl, selected);
 
-	if (!(await restartOrReloadService('restart'))) {
-		throw new Error(_('Service did not enter running state in time.'));
-	}
+	await restartOrReloadServiceOrThrow('restart');
 	appState.serviceRunning = await getServiceStatus();
 	await switchConfigProfile(MAIN_CONFIG_NAME);
 	await refreshHeaderAndControl();
@@ -2076,9 +2056,7 @@ function bindConfigEvents() {
 				let serviceReloaded = false;
 				if (selectedConfig === MAIN_CONFIG_NAME) {
 					if (await getServiceStatus()) {
-						if (!(await restartOrReloadService('reload'))) {
-							throw new Error(_('Service did not enter running state in time.'));
-						}
+						await restartOrReloadServiceOrThrow('reload');
 						serviceReloaded = true;
 					}
 					appState.serviceRunning = await getServiceStatus();
@@ -2138,9 +2116,7 @@ function bindConfigEvents() {
 			if (selectedConfig === MAIN_CONFIG_NAME) {
 				const wasRunning = await getServiceStatus();
 				if (wasRunning) {
-					if (!(await restartOrReloadService('reload'))) {
-						throw new Error(_('Service did not enter running state in time.'));
-					}
+					await restartOrReloadServiceOrThrow('reload');
 				}
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();

@@ -83,6 +83,12 @@ msgstr "Не удалось запустить службу: %s"
 msgid "Unable to stop and disable service: %s"
 msgstr "Не удалось остановить и отключить службу: %s"
 
+msgid "Service did not enter running state in time after: %s"
+msgstr "Служба не перешла в состояние запуска вовремя после: %s"
+
+msgid "Service did not stop in time after: %s"
+msgstr "Служба не остановилась вовремя после: %s"
+
 msgid "Popup was blocked. Please allow popups for this site."
 msgstr "Всплывающее окно заблокировано. Пожалуйста, разрешите всплывающие окна для этого сайта."
 
