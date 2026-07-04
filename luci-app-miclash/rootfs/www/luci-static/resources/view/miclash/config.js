@@ -2220,7 +2220,6 @@ const PAGE_CSS = `
 	--sbox-warn: var(--warning-color, #b7791f);
 	--sbox-log-bg: var(--background-color-low, var(--background-color, Canvas));
 	--sbox-panel-bg: var(--background-color-medium, transparent);
-	--sbox-modal-bg: var(--background-color-high, Canvas);
 	color: var(--sbox-text);
 }
 .sbox-page .main {
@@ -2555,29 +2554,6 @@ const PAGE_CSS = `
 	border-radius: 50%;
 	animation: sbox-spin 0.65s linear infinite;
 	vertical-align: -0.1em;
-}
-.sbox-modal-overlay {
-	position: fixed;
-	inset: 0;
-	background: var(--modal-overlay-background, rgba(0, 0, 0, 0.7));
-	z-index: 10000;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-}
-.sbox-modal {
-	width: min(92vw, 420px);
-	border: 1px solid var(--sbox-border);
-	border-radius: 10px;
-	background: var(--sbox-modal-bg);
-	color: var(--sbox-text);
-	padding: 14px;
-	box-shadow: var(--shadow-large, 0 20px 50px rgba(0, 0, 0, 0.45));
-}
-.sbox-modal-title {
-	font-size: 14px;
-	font-weight: 700;
-	margin-bottom: 8px;
 }
 .sbox-modal-body {
 	color: var(--sbox-muted);

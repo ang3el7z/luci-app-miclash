@@ -1,4 +1,5 @@
 'use strict';
+'require ui';
 
 function detectNativeTheme() {
 	const root = document.documentElement;
@@ -37,30 +38,26 @@ function applyThemeToEditors(editors) {
 
 function showModal(options) {
 	const opts = options || {};
-	const mountNode = opts.mountNode && opts.mountNode.appendChild ? opts.mountNode : document.body;
-	const overlayClass = 'sbox-modal-overlay' + (opts.overlayClass ? ' ' + opts.overlayClass : '');
-	const modalClass = 'sbox-modal' + (opts.modalClass ? ' ' + opts.modalClass : '');
-	const overlay = E('div', { 'class': overlayClass });
-	const modal = E('div', { 'class': modalClass });
-	const titleNode = E('div', { 'class': 'sbox-modal-title' }, String(opts.title || ''));
 	const bodyNode = opts.body && opts.body.nodeType
 		? opts.body
 		: E('div', { 'class': 'sbox-modal-body' }, String(opts.body || ''));
 	const actionsNode = E('div', { 'class': 'sbox-modal-actions' });
 	let isClosed = false;
+	let observer = null;
 
-	function closeModal() {
+	function finalizeClose() {
 		if (isClosed) return;
 		isClosed = true;
-		document.removeEventListener('keydown', onKeyDown);
+		if (observer) observer.disconnect();
 		if (opts.onClose) {
 			try { opts.onClose(); } catch (e) {}
 		}
-		overlay.remove();
 	}
 
-	function onKeyDown(ev) {
-		if (ev.key === 'Escape') closeModal();
+	function closeModal() {
+		if (isClosed) return;
+		ui.hideModal();
+		finalizeClose();
 	}
 
 	(opts.buttons || []).forEach((item) => {
@@ -89,17 +86,19 @@ function showModal(options) {
 		actionsNode.appendChild(button);
 	});
 
-	modal.appendChild(titleNode);
-	modal.appendChild(bodyNode);
-	modal.appendChild(actionsNode);
-	overlay.appendChild(modal);
+	const content = E('div', {
+		'class': 'sbox-modal-content' + (opts.modalClass ? ' ' + opts.modalClass : '')
+	}, [
+		bodyNode,
+		actionsNode
+	]);
 
-	overlay.addEventListener('click', function(ev) {
-		if (ev.target === overlay) closeModal();
+	ui.showModal(String(opts.title || ''), content);
+
+	observer = new MutationObserver(function() {
+		if (!content.isConnected) finalizeClose();
 	});
-	document.addEventListener('keydown', onKeyDown);
-
-	mountNode.appendChild(overlay);
+	observer.observe(document.body, { childList: true, subtree: true });
 	return closeModal;
 }
 
