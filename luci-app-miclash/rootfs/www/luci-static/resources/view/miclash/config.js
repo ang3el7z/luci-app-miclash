@@ -819,7 +819,7 @@ async function loadClashLogs() {
 	return view_miclash_logs.readRaw();
 }
 
-function colorizeLog(raw) {
+function formatLogHtml(raw) {
 	if (!raw) return '<span class="sbox-log-muted">No logs yet.</span>';
 
 	const rows = String(raw || '').split('\n')
@@ -827,14 +827,7 @@ function colorizeLog(raw) {
 		.filter((item) => !!item && !!item.text);
 
 	if (!rows.length) return '<span class="sbox-log-muted">No logs yet.</span>';
-
-	return rows.map((item) => {
-		const esc = safeText(item.text);
-		if (/(FATAL|PANIC|ERRO|ERROR)/i.test(item.level)) return '<span class="sbox-log-error">' + esc + '</span>';
-		if (/(WARN|WARNING)/i.test(item.level)) return '<span class="sbox-log-warn">' + esc + '</span>';
-		if (/(INFO)/i.test(item.level)) return '<span class="sbox-log-info">' + esc + '</span>';
-		return '<span class="sbox-log-muted">' + esc + '</span>';
-	}).join('\n');
+	return rows.map((item) => safeText(item.text)).join('\n');
 }
 
 function createNativeEditor(host, content) {
@@ -1722,7 +1715,7 @@ async function refreshLogs() {
 	const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
 	const updated = pageRoot && pageRoot.querySelector('#sbox-log-updated');
 
-	if (content) content.innerHTML = colorizeLog(raw);
+	if (content) content.innerHTML = formatLogHtml(raw);
 	if (updated) {
 		const text = appState.logsUpdatedAt
 			? new Date(appState.logsUpdatedAt).toLocaleString()

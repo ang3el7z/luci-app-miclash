@@ -43,6 +43,8 @@ const banned = [
 	[/\bsbox-panel-bg\b/, 'custom panel background instead of native cbi-section theme'],
 	[/\bsbox-ruleset-list-item['"][^]*?\bactive\b/, 'custom active ruleset state instead of native cbi-button state'],
 	[/\bsbox-version-action-(?:icon|install|reinstall)\b/, 'custom colored header action instead of native LuCI button state'],
+	[/\bsbox-log-(?:info|warn|error)\b/, 'custom log severity palette instead of native preformatted log text'],
+	[/--sbox-(?:accent|success|danger|warn)\b/, 'custom semantic color variables instead of native LuCI button/text classes'],
 	[/linear-gradient\(/i, 'custom gradient palette'],
 	[/border-radius:\s*999px/i, 'pill-shaped custom shell radius'],
 	[/transform:\s*scale\(/i, 'custom hover scaling instead of native LuCI interaction'],

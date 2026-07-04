@@ -3,10 +3,6 @@
 	--sbox-border: var(--border-color-medium, var(--border-color-low, currentColor));
 	--sbox-text: var(--text-color-high, var(--text-color, CanvasText));
 	--sbox-muted: var(--text-color-medium, var(--text-color-low, GrayText));
-	--sbox-accent: var(--primary-color, var(--link-color, LinkText));
-	--sbox-success: var(--success-color, var(--color-success, currentColor));
-	--sbox-danger: var(--error-color, var(--danger-color, var(--color-error, currentColor)));
-	--sbox-warn: var(--warning-color, var(--color-warning, currentColor));
 	--sbox-log-bg: var(--background-color-low, var(--background-color, Canvas));
 	color: var(--sbox-text);
 }
@@ -196,9 +192,6 @@
 	line-height: 1.45;
 	white-space: pre;
 }
-.sbox-log-info { color: var(--sbox-success); }
-.sbox-log-warn { color: var(--sbox-warn); }
-.sbox-log-error { color: var(--sbox-danger); }
 .sbox-log-muted { color: var(--sbox-muted); }
 .sbox-settings-grid {
 	display: grid;
