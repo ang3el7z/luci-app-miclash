@@ -75,8 +75,16 @@ if (!/\.join\(\s*['"];\s*['"]\s*\)/.test(serviceSource)) {
 	missing.push('service.js -> multiple init.d actions must run sequentially in one detached script');
 }
 
-if (!/async function\s+readDiagnostics\(\)[\s\S]+view_miclash_logs\.readRaw\(\)/.test(serviceSource)) {
+if (!/async function\s+readDiagnostics\([^)]*\)[\s\S]+view_miclash_logs\.readRaw\(\)/.test(serviceSource)) {
 	missing.push('service.js -> service timeouts must include recent MiClash logs');
+}
+
+if (!/async function\s+readConfigTestDiagnostics\(\)[\s\S]+fs\.exec\(\s*['"]\/opt\/clash\/bin\/clash['"]\s*,\s*\[[\s\S]*?['"]-d['"][\s\S]*?['"]\/opt\/clash['"][\s\S]*?['"]-t['"][\s\S]*?\]\s*\)/.test(serviceSource)) {
+	missing.push('service.js -> running-state timeouts must include clash -t diagnostics');
+}
+
+if (!/describeTimeout\([^)]*\)[\s\S]+readDiagnostics\(\s*!!targetStatus\s*\)/.test(serviceSource)) {
+	missing.push('service.js -> clash -t diagnostics must only run for start/restart timeouts');
 }
 
 if (!/dispatchServiceActionsAndWaitOrThrow\(\s*\[\s*['"]enable['"]\s*,\s*['"]start['"]\s*\]\s*,\s*true\s*\)/.test(configSource)) {

@@ -1,9 +1,11 @@
 'use strict';
+'require fs';
 'require view.miclash.utils';
 'require view.miclash.logs';
 
 const SERVICE_ACTION_SETTLE_MS = 300;
 const DIAGNOSTIC_LOG_LINES = 12;
+const DIAGNOSTIC_TEST_LINES = 40;
 const START_SERVICE_TIMEOUT_MS = 180000;
 const STOP_SERVICE_TIMEOUT_MS = 60000;
 const RESTART_SERVICE_TIMEOUT_MS = 180000;
@@ -56,14 +58,39 @@ function getActionTimeout(actions, targetStatus, timeoutMs) {
 	return START_SERVICE_TIMEOUT_MS;
 }
 
-async function readDiagnostics() {
+async function readConfigTestDiagnostics() {
+	try {
+		const result = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-t']);
+		const formatted = view_miclash_utils.formatClashTestError(result.stdout, result.stderr);
+		const lines = String(formatted || '')
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.slice(-DIAGNOSTIC_TEST_LINES)
+			.join('\n');
+		return lines ? 'clash -t:\n' + lines : '';
+	} catch (e) {
+		return 'clash -t: ' + (e.message || e);
+	}
+}
+
+async function readDiagnostics(includeConfigTest) {
+	const parts = [];
+	if (includeConfigTest) {
+		const test = await readConfigTestDiagnostics();
+		if (test) parts.push(test);
+	}
+
 	const raw = await view_miclash_logs.readRaw();
-	return String(raw || '')
+	const logs = String(raw || '')
 		.split(/\r?\n/)
 		.map((line) => line.trim())
 		.filter(Boolean)
 		.slice(-DIAGNOSTIC_LOG_LINES)
 		.join('\n');
+	if (logs) parts.push('logread:\n' + logs);
+
+	return parts.join('\n\n');
 }
 
 async function describeTimeout(actions, targetStatus, timeoutMs) {
@@ -73,7 +100,7 @@ async function describeTimeout(actions, targetStatus, timeoutMs) {
 		? _('Service did not enter running state within %ss after: %s').format(timeoutSec, actionText)
 		: _('Service did not stop within %ss after: %s').format(timeoutSec, actionText);
 
-	const logs = await readDiagnostics();
+	const logs = await readDiagnostics(!!targetStatus);
 	if (logs) message += '\n\n' + logs;
 	return message;
 }
