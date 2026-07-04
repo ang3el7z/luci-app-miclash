@@ -14,6 +14,7 @@ const scripts = [
 const shell = process.env.SHELL_CHECK_BIN || '/bin/sh';
 const missing = [];
 let failed = false;
+const initPath = path.join(process.cwd(), 'luci-app-miclash/rootfs/etc/init.d/clash');
 const clashRulesPath = path.join(process.cwd(), 'luci-app-miclash/rootfs/opt/clash/bin/clash-rules');
 
 for (const rel of scripts) {
@@ -45,6 +46,17 @@ if (fs.existsSync(clashRulesPath)) {
 	if (!/\brepair_network_path\)[\s\S]+repair_network_path/.test(clashRules)) {
 		failed = true;
 		process.stderr.write('clash-rules: missing repair_network_path CLI case\n');
+	}
+}
+
+if (fs.existsSync(initPath)) {
+	const initScript = fs.readFileSync(initPath, 'utf8');
+	if (!/boot_deps_ready\(\)\s*{[\s\S]+pidof dnsmasq[\s\S]+ip route show default/.test(initScript) ||
+		!/wait_for_boot_deps\(\)\s*{[\s\S]+dnsmasq_only[\s\S]+Boot wait timed out/.test(initScript) ||
+		!/boot\(\)\s*{[\s\S]+wait_for_boot_deps[\s\S]+start/.test(initScript) ||
+		/boot\(\)\s*{[\s\S]{0,120}\bsleep\s+10\b/.test(initScript)) {
+		failed = true;
+		process.stderr.write('init.d/clash: boot must poll dnsmasq/default route instead of fixed sleep\n');
 	}
 }
 
