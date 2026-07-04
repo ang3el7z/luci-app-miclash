@@ -2,7 +2,7 @@
 'require fs';
 'require rpc';
 
-const RPC_TIMEOUT_SEC = 60;
+const RPC_TIMEOUT_SEC = 360;
 const SERVICE_POLL_TIMEOUT_MS = 60000;
 const SERVICE_POLL_INTERVAL_MS = 500;
 const WRITE_CHUNK_SIZE = 8000;

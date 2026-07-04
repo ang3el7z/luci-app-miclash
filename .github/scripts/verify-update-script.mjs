@@ -29,6 +29,18 @@ const configPath = path.join(
 	'config.js'
 );
 const configSource = fs.readFileSync(configPath, 'utf8');
+const utilsPath = path.join(
+	process.cwd(),
+	'luci-app-miclash',
+	'rootfs',
+	'www',
+	'luci-static',
+	'resources',
+	'view',
+	'miclash',
+	'utils.js'
+);
+const utilsSource = fs.readFileSync(utilsPath, 'utf8');
 
 if (!/install_kernel\(\)\s*{[\s\S]+pidof clash[\s\S]+\/etc\/init\.d\/clash stop[\s\S]+mv "\$extracted" \/opt\/clash\/bin\/clash[\s\S]+\/etc\/init\.d\/clash start/.test(scriptSource)) {
 	throw new Error('miclash-update: kernel install must stop running Clash before replace and restart it after replace');
@@ -45,6 +57,11 @@ if (!/download_file "\$url" "\$tmp" "MiClash package"/.test(scriptSource) ||
 
 if (/downloadMihomoKernel\([^)]*\)[\s\S]{0,500}restartOrReloadServiceOrThrow\('restart'\)/.test(configSource)) {
 	throw new Error('config.js: kernel install restart must stay in miclash-update, not LuCI UI');
+}
+
+const rpcTimeoutMatch = utilsSource.match(/const\s+RPC_TIMEOUT_SEC\s*=\s*(\d+)/);
+if (!rpcTimeoutMatch || Number(rpcTimeoutMatch[1]) < 360) {
+	throw new Error('utils.js: LuCI RPC timeout must cover bounded router update downloads');
 }
 
 if (path.isAbsolute(shell)) {
