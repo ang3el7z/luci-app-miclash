@@ -1,0 +1,28 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - refactoring-redesign
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Static Package Checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify LuCI JS Modules
+        run: node .github/scripts/verify-luci-js.mjs
+
+      - name: Verify OpenWrt Shell Scripts
+        run: node .github/scripts/verify-openwrt-shell.mjs
+
+      - name: Verify Package Layout
+        run: node .github/scripts/verify-package-layout.mjs
