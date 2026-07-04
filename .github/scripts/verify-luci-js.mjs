@@ -33,6 +33,8 @@ const aclPath = path.join(
 	'luci-app-miclash.json'
 );
 const servicePath = path.join(viewDir, 'service.js');
+const configPath = path.join(viewDir, 'config.js');
+const guardPath = path.join(viewDir, 'guard.js');
 
 function walk(dir) {
 	const out = [];
@@ -47,6 +49,8 @@ function walk(dir) {
 const files = walk(viewDir);
 const missing = [];
 const serviceSource = fs.readFileSync(servicePath, 'utf8');
+const configSource = fs.readFileSync(configPath, 'utf8');
+const guardSource = fs.readFileSync(guardPath, 'utf8');
 
 for (const [name, minValue] of [
 	['START_SERVICE_TIMEOUT_MS', 120000],
@@ -61,6 +65,29 @@ for (const [name, minValue] of [
 
 if (!/getActionTimeout\([\s\S]+START_SERVICE_TIMEOUT_MS/.test(serviceSource)) {
 	missing.push('service.js -> start/restart actions must use long action timeout defaults');
+}
+
+if (!/function\s+isNetworkUpdateBlocked\(\)[\s\S]+view_miclash_guard\.isNetworkUpdateBlocked/.test(configSource)) {
+	missing.push('config.js -> subscription/update guard block helper is missing');
+}
+
+if (!/async function\s+fetchSubscriptionAsYaml\([^)]*\)\s*{[\s\S]*?await prepareNetworkUpdate\(\);/.test(configSource)) {
+	missing.push('config.js -> subscription downloads must prepare guarded network path first');
+}
+
+for (const fn of ['installMiClashFromSettings', 'installKernelFromSettings']) {
+	const pattern = new RegExp(`async function\\s+${fn}\\([^)]*\\)\\s*{[\\s\\S]*?await prepareNetworkUpdate\\(\\);`);
+	if (!pattern.test(configSource)) {
+		missing.push(`config.js -> ${fn} must prepare guarded network path first`);
+	}
+}
+
+if (!/function\s+isNetworkUpdateBlocked\([^)]*\)[\s\S]+isInternetOnlyEnabled\(settings\)\s*&&\s*!serviceRunning/.test(guardSource)) {
+	missing.push('guard.js -> guard must block network updates when service is stopped');
+}
+
+if (!/async function\s+prepareNetworkUpdate\([^)]*\)[\s\S]+assertNetworkUpdateAllowed\([^)]*\)[\s\S]+repair_network_path/.test(guardSource)) {
+	missing.push('guard.js -> running guard updates must repair network path before network access');
 }
 
 for (const file of files) {
