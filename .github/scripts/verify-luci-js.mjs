@@ -32,6 +32,7 @@ const aclPath = path.join(
 	'acl.d',
 	'luci-app-miclash.json'
 );
+const servicePath = path.join(viewDir, 'service.js');
 
 function walk(dir) {
 	const out = [];
@@ -45,6 +46,22 @@ function walk(dir) {
 
 const files = walk(viewDir);
 const missing = [];
+const serviceSource = fs.readFileSync(servicePath, 'utf8');
+
+for (const [name, minValue] of [
+	['START_SERVICE_TIMEOUT_MS', 120000],
+	['RESTART_SERVICE_TIMEOUT_MS', 120000],
+	['STOP_SERVICE_TIMEOUT_MS', 60000]
+]) {
+	const match = serviceSource.match(new RegExp(`const\\s+${name}\\s*=\\s*(\\d+)`));
+	if (!match || Number(match[1]) < minValue) {
+		missing.push(`service.js -> ${name} must be at least ${minValue}ms`);
+	}
+}
+
+if (!/getActionTimeout\([\s\S]+START_SERVICE_TIMEOUT_MS/.test(serviceSource)) {
+	missing.push('service.js -> start/restart actions must use long action timeout defaults');
+}
 
 for (const file of files) {
 	const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });

@@ -4,6 +4,9 @@
 
 const SERVICE_ACTION_SETTLE_MS = 300;
 const DIAGNOSTIC_LOG_LINES = 12;
+const START_SERVICE_TIMEOUT_MS = 180000;
+const STOP_SERVICE_TIMEOUT_MS = 60000;
+const RESTART_SERVICE_TIMEOUT_MS = 180000;
 
 function delay(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,11 +39,21 @@ async function dispatchActionsAndWait(actions, targetStatus, timeoutMs) {
 }
 
 async function restartOrReload(action) {
-	return dispatchActionsAndWait([action], true);
+	return dispatchActionsAndWait([action], true, RESTART_SERVICE_TIMEOUT_MS);
 }
 
 function formatActionList(actions) {
 	return (Array.isArray(actions) ? actions : [actions]).filter(Boolean).join(', ');
+}
+
+function getActionTimeout(actions, targetStatus, timeoutMs) {
+	if (timeoutMs) return timeoutMs;
+	if (!targetStatus) return STOP_SERVICE_TIMEOUT_MS;
+	const list = (Array.isArray(actions) ? actions : [actions]).filter(Boolean);
+	if (list.some((action) => /^(restart|reload)$/.test(action))) {
+		return RESTART_SERVICE_TIMEOUT_MS;
+	}
+	return START_SERVICE_TIMEOUT_MS;
 }
 
 async function readDiagnostics() {
@@ -53,11 +66,12 @@ async function readDiagnostics() {
 		.join('\n');
 }
 
-async function describeTimeout(actions, targetStatus) {
+async function describeTimeout(actions, targetStatus, timeoutMs) {
 	const actionText = formatActionList(actions) || 'service action';
+	const timeoutSec = Math.round(getActionTimeout(actions, targetStatus, timeoutMs) / 1000);
 	let message = targetStatus
-		? _('Service did not enter running state in time after: %s').format(actionText)
-		: _('Service did not stop in time after: %s').format(actionText);
+		? _('Service did not enter running state within %ss after: %s').format(timeoutSec, actionText)
+		: _('Service did not stop within %ss after: %s').format(timeoutSec, actionText);
 
 	const logs = await readDiagnostics();
 	if (logs) message += '\n\n' + logs;
@@ -65,13 +79,14 @@ async function describeTimeout(actions, targetStatus) {
 }
 
 async function dispatchActionsAndWaitOrThrow(actions, targetStatus, timeoutMs) {
-	const ok = await dispatchActionsAndWait(actions, targetStatus, timeoutMs);
+	const effectiveTimeout = getActionTimeout(actions, !!targetStatus, timeoutMs);
+	const ok = await dispatchActionsAndWait(actions, targetStatus, effectiveTimeout);
 	if (ok) return true;
-	throw new Error(await describeTimeout(actions, !!targetStatus));
+	throw new Error(await describeTimeout(actions, !!targetStatus, effectiveTimeout));
 }
 
 async function restartOrReloadOrThrow(action) {
-	return dispatchActionsAndWaitOrThrow([action], true);
+	return dispatchActionsAndWaitOrThrow([action], true, RESTART_SERVICE_TIMEOUT_MS);
 }
 
 return L.Class.extend({
@@ -82,5 +97,8 @@ return L.Class.extend({
 	dispatchActionsAndWaitOrThrow: dispatchActionsAndWaitOrThrow,
 	restartOrReload: restartOrReload,
 	restartOrReloadOrThrow: restartOrReloadOrThrow,
-	describeTimeout: describeTimeout
+	describeTimeout: describeTimeout,
+	START_SERVICE_TIMEOUT_MS: START_SERVICE_TIMEOUT_MS,
+	STOP_SERVICE_TIMEOUT_MS: STOP_SERVICE_TIMEOUT_MS,
+	RESTART_SERVICE_TIMEOUT_MS: RESTART_SERVICE_TIMEOUT_MS
 });
