@@ -38,6 +38,7 @@ const banned = [
 	[/\bsbox-modal-(body|actions|content)\b/, 'custom modal internals instead of native LuCI modal structure'],
 	[/\bsbox-tab-active\b/, 'custom active tab state instead of native cbi-tab/cbi-tab-disabled'],
 	[/\bsbox-header-dot\b/, 'custom header separator instead of native spacing'],
+	[/\bsbox-(?:status-on|status-off|dot|dot-on|dot-off|guard-pill|guard-on|guard-off|guard-dot)\b/, 'custom colored state badge instead of native LuCI button state'],
 	[/linear-gradient\(/i, 'custom gradient palette'],
 	[/border-radius:\s*999px/i, 'pill-shaped custom shell radius'],
 	[/transform:\s*scale\(/i, 'custom hover scaling instead of native LuCI interaction'],

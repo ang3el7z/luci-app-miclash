@@ -1393,9 +1393,8 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="sbox-guard-pill ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Internet only through MiClash')) + '">' +
-				'<span class="sbox-guard-dot ' + (isInternetOnlyEnabled() ? 'sbox-dot-on' : 'sbox-dot-off') + '"></span>' +
-				'<span class="sbox-guard-label">' + safeText(_('Guard')) + '</span>' +
+			'<span id="sbox-guard" class="cbi-button ' + (isInternetOnlyEnabled() ? 'cbi-button-apply' : 'cbi-button-neutral') + ' sbox-guard-state-label" title="' + safeText(_('Internet only through MiClash')) + '">' +
+				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
 			'</span>' +
 			'<button id="sbox-dashboard" type="button" class="cbi-button ' + (appState.serviceRunning ? 'cbi-button-apply' : 'cbi-button-neutral') + ' sbox-header-button sbox-btn-dashboard"' +
@@ -1411,8 +1410,7 @@ function buildPageHtml() {
 
 				'<div id="sbox-pane-control">' +
 					'<div class="sbox-row">' +
-						'<span id="sbox-status" class="sbox-status ' + (appState.serviceRunning ? 'sbox-status-on' : 'sbox-status-off') + '">' +
-							'<span class="sbox-dot ' + (appState.serviceRunning ? 'sbox-dot-on' : 'sbox-dot-off') + '"></span>' +
+						'<span id="sbox-status" class="cbi-button ' + (appState.serviceRunning ? 'cbi-button-apply' : 'cbi-button-negative') + ' sbox-status">' +
 							'<span id="sbox-status-label">' + safeText(appState.serviceRunning ? _('Service running') : _('Service stopped')) + '</span>' +
 						'</span>' +
 						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-service-button"' + (appState.serviceRunning ? ' hidden' : '') + '>' + safeText(_('Start')) + '</button>' +
@@ -1463,7 +1461,6 @@ function updateHeaderAndControlDom() {
 
 	const status = pageRoot.querySelector('#sbox-status');
 	const statusLabel = pageRoot.querySelector('#sbox-status-label');
-	const dot = pageRoot.querySelector('#sbox-status .sbox-dot');
 	const startBtn = pageRoot.querySelector('#sbox-start');
 	const stopBtn = pageRoot.querySelector('#sbox-stop');
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
@@ -1475,11 +1472,9 @@ function updateHeaderAndControlDom() {
 	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
 	const serviceBusy = !!appState.serviceActionBusy;
 
-	if (status && statusLabel && dot) {
-		status.classList.toggle('sbox-status-on', appState.serviceRunning);
-		status.classList.toggle('sbox-status-off', !appState.serviceRunning);
-		dot.classList.toggle('sbox-dot-on', appState.serviceRunning);
-		dot.classList.toggle('sbox-dot-off', !appState.serviceRunning);
+	if (status && statusLabel) {
+		status.classList.toggle('cbi-button-apply', appState.serviceRunning);
+		status.classList.toggle('cbi-button-negative', !appState.serviceRunning);
 		statusLabel.textContent = appState.serviceRunning ? _('Service running') : _('Service stopped');
 	}
 
@@ -1533,13 +1528,8 @@ function updateHeaderAndControlDom() {
 	const guardState = pageRoot.querySelector('#sbox-guard-state');
 	const guardEnabled = isInternetOnlyEnabled();
 	if (guardPill) {
-		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
-		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
-		const guardDot = guardPill.querySelector('.sbox-guard-dot');
-		if (guardDot) {
-			guardDot.classList.toggle('sbox-dot-on', guardEnabled);
-			guardDot.classList.toggle('sbox-dot-off', !guardEnabled);
-		}
+		guardPill.classList.toggle('cbi-button-apply', guardEnabled);
+		guardPill.classList.toggle('cbi-button-neutral', !guardEnabled);
 	}
 	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
 }
