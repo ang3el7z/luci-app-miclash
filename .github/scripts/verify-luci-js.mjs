@@ -35,6 +35,7 @@ const aclPath = path.join(
 const servicePath = path.join(viewDir, 'service.js');
 const configPath = path.join(viewDir, 'config.js');
 const guardPath = path.join(viewDir, 'guard.js');
+const packagePath = path.join(viewDir, 'package.js');
 const rulesetsPath = path.join(viewDir, 'rulesets-model.js');
 const routePath = path.join(viewDir, 'route.js');
 
@@ -53,6 +54,7 @@ const missing = [];
 const serviceSource = fs.readFileSync(servicePath, 'utf8');
 const configSource = fs.readFileSync(configPath, 'utf8');
 const guardSource = fs.readFileSync(guardPath, 'utf8');
+const packageSource = fs.readFileSync(packagePath, 'utf8');
 const rulesetsSource = fs.readFileSync(rulesetsPath, 'utf8');
 const routeSource = fs.existsSync(routePath) ? fs.readFileSync(routePath, 'utf8') : '';
 
@@ -139,6 +141,11 @@ for (const fn of ['installMiClashFromSettings', 'installKernelFromSettings']) {
 	if (!pattern.test(configSource)) {
 		missing.push(`config.js -> ${fn} must prepare guarded network path first`);
 	}
+}
+
+if (/installMiClashDependencies|ensureCurlAvailable|reinstallCurlDependencies|zlib|libcurl4/.test(packageSource) ||
+	!/detectPackageManager/.test(packageSource)) {
+	missing.push('package.js -> package helper must only detect manager; install/update work belongs to miclash-update script');
 }
 
 if (!/function\s+isNetworkUpdateBlocked\([^)]*\)[\s\S]+isInternetOnlyEnabled\(settings\)\s*&&\s*!serviceRunning/.test(guardSource)) {

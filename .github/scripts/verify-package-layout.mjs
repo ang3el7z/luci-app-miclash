@@ -27,7 +27,6 @@ const makefile = fs.readFileSync(path.join(root, 'luci-app-miclash/Makefile'), '
 const runtimeDependencyFiles = [
 	'install-miclash.sh',
 	'luci-app-miclash/rootfs/opt/clash/bin/miclash-update',
-	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/package.js',
 	'README.md'
 ];
 const expectedInstallSnippets = [
