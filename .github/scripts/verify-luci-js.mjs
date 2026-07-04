@@ -90,6 +90,18 @@ if (!/async function\s+prepareNetworkUpdate\([^)]*\)[\s\S]+assertNetworkUpdateAl
 	missing.push('guard.js -> running guard updates must repair network path before network access');
 }
 
+if (!/result\.code\s*!==\s*0[\s\S]+return\s*{[\s\S]+repaired:\s*false[\s\S]+warning:/.test(guardSource)) {
+	missing.push('guard.js -> failed repair_network_path must return a warning instead of throwing while service is running');
+}
+
+if (!/function\s+blockedNetworkMessage\(\)[\s\S]+Start the service or disable this option/.test(guardSource)) {
+	missing.push('guard.js -> blocked stopped-service guard message must explain the recovery action');
+}
+
+if (!/async function\s+prepareNetworkUpdate\(\)[\s\S]+result\.warning[\s\S]+continuing update/.test(configSource)) {
+	missing.push('config.js -> repair warnings must be shown as non-fatal continuing update notices');
+}
+
 for (const file of files) {
 	const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
 	if (check.status !== 0) {
