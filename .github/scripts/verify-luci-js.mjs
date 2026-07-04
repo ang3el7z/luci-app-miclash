@@ -93,6 +93,11 @@ if (!/dispatchServiceActionsAndWaitOrThrow\(\s*\[\s*['"]enable['"]\s*,\s*['"]sta
 	missing.push('config.js -> start button must enable then start service and wait for running state');
 }
 
+if (!/async function\s+validateMainConfigBeforeStart\(\)[\s\S]+readConfigFileByName\(MAIN_CONFIG_NAME\)[\s\S]+testConfigContent\([^)]*CONFIG_PATH[\s\S]+notifyDetailedError/.test(configSource) ||
+	!/validateMainConfigBeforeStart\(\)[\s\S]+dispatchServiceActionsAndWaitOrThrow\(\s*\[\s*['"]enable['"]\s*,\s*['"]start['"]/.test(configSource)) {
+	missing.push('config.js -> start button must validate main config with clash -t before enabling/starting service');
+}
+
 if (!/dispatchServiceActionsAndWaitOrThrow\(\s*\[\s*['"]stop['"]\s*,\s*['"]disable['"]\s*\]\s*,\s*false\s*\)/.test(configSource)) {
 	missing.push('config.js -> stop button must stop then disable service and wait for stopped state');
 }

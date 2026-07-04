@@ -616,6 +616,14 @@ async function testConfigContent(content, keepOnSuccess, targetPath) {
 	);
 }
 
+async function validateMainConfigBeforeStart() {
+	const content = await readConfigFileByName(MAIN_CONFIG_NAME);
+	const tested = await testConfigContent(content, false, CONFIG_PATH);
+	if (tested.ok) return true;
+	notifyDetailedError(_('YAML validation failed.'), tested.message);
+	return false;
+}
+
 async function fetchSubscriptionAsYaml(url, targetPath) {
 	await prepareNetworkUpdate();
 
@@ -1842,7 +1850,7 @@ function bindControlAndHeaderEvents() {
 		startBtn.addEventListener('click', async () => {
 			try {
 				await withServiceButtons(startBtn, stopBtn, async () => {
-					await ensureMihomoKernelInstalled();
+					if (!(await validateMainConfigBeforeStart())) return;
 					await dispatchServiceActionsAndWaitOrThrow(['enable', 'start'], true);
 				});
 				await refreshHeaderAndControlSafe();
