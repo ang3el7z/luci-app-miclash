@@ -56,6 +56,13 @@ function pathState(file) {
 	return 'missing';
 }
 
+function isHighRiskPath(file) {
+	return /(^|\/)(Makefile|install-miclash\.sh)$/.test(file) ||
+		/\/(config|settings|utils|log|logs|service|guard|subscription)\.js$/.test(file) ||
+		/\/(clash|clash-rules|miclash-update|40-clash|99-clash-tun)$/.test(file) ||
+		/\/(acl\.d|menu\.d)\//.test(file);
+}
+
 verifyRef(base);
 verifyRef(head);
 
@@ -70,6 +77,25 @@ const localOnly = git(['log', '--format=%h%x09%s', '--left-right', '--cherry-pic
 const nameStatus = git(['diff', '--name-status', '--find-renames=50%', `${base}...${head}`])
 	.split('\n')
 	.filter(Boolean);
+const reviewQueue = new Map();
+const missingPaths = new Map();
+
+function recordReview(file, commitHash, subject) {
+	const mapped = mapUpstreamPath(file);
+	const state = pathState(file);
+	const target = mapped !== file ? mapped : file;
+	const bucket = state === 'missing' ? missingPaths : reviewQueue;
+	if (!bucket.has(target)) {
+		bucket.set(target, {
+			source: file,
+			mapped,
+			state,
+			highRisk: isHighRiskPath(mapped),
+			commits: []
+		});
+	}
+	bucket.get(target).commits.push(`${commitHash} ${subject}`);
+}
 
 console.log(`# Upstream Sync Audit`);
 console.log();
@@ -85,8 +111,43 @@ for (const line of upstreamCommits) {
 	for (const file of files) {
 		const mapped = mapUpstreamPath(file);
 		const state = pathState(file);
-		console.log(`  - ${file}${mapped !== file ? ` -> ${mapped}` : ''} [${state}]`);
+		recordReview(file, hash, subject);
+		const risk = isHighRiskPath(mapped) ? ' HIGH' : '';
+		console.log(`  - ${file}${mapped !== file ? ` -> ${mapped}` : ''} [${state}${risk}]`);
 	}
+}
+console.log();
+
+console.log(`## Recent upstream review queue`);
+if (reviewQueue.size) {
+	for (const [target, info] of [...reviewQueue.entries()].sort((a, b) => {
+		if (a[1].highRisk !== b[1].highRisk) return a[1].highRisk ? -1 : 1;
+		return a[0].localeCompare(b[0]);
+	})) {
+		const risk = info.highRisk ? ' HIGH' : '';
+		const commits = info.commits.slice(0, 3).join('; ');
+		const more = info.commits.length > 3 ? `; +${info.commits.length - 3} more` : '';
+		console.log(`- ${target} [${info.state}${risk}]`);
+		console.log(`  - upstream: ${info.source}${info.mapped !== info.source ? ` -> ${info.mapped}` : ''}`);
+		console.log(`  - commits: ${commits}${more}`);
+	}
+} else {
+	console.log('- none');
+}
+console.log();
+
+console.log(`## Missing upstream paths`);
+if (missingPaths.size) {
+	for (const [target, info] of [...missingPaths.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+		const risk = info.highRisk ? ' HIGH' : '';
+		const commits = info.commits.slice(0, 3).join('; ');
+		const more = info.commits.length > 3 ? `; +${info.commits.length - 3} more` : '';
+		console.log(`- ${target} [missing${risk}]`);
+		console.log(`  - upstream: ${info.source}${info.mapped !== info.source ? ` -> ${info.mapped}` : ''}`);
+		console.log(`  - commits: ${commits}${more}`);
+	}
+} else {
+	console.log('- none');
 }
 console.log();
 
