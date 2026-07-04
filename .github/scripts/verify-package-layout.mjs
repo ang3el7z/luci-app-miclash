@@ -3,6 +3,8 @@ import path from 'node:path';
 
 const root = process.cwd();
 const required = [
+	'README.md',
+	'README.ru.md',
 	'luci-app-miclash/Makefile',
 	'luci-app-miclash/rootfs/etc/init.d/clash',
 	'luci-app-miclash/rootfs/etc/hotplug.d/iface/40-clash',
@@ -82,6 +84,14 @@ if (!zhCnPo.includes('Language: zh-cn\\n')) {
 }
 if (/\bSSClash\b/.test(zhCnPo) || /\bssclash\b/.test(zhCnPo)) {
 	missing.push('zh-cn locale must use MiClash naming');
+}
+
+const readmeRu = fs.readFileSync(path.join(root, 'README.ru.md'), 'utf8');
+if (!readmeRu.includes('luci-app-miclash') || !readmeRu.includes('install-miclash.sh')) {
+	missing.push('README.ru.md must document MiClash install commands');
+}
+if (/\bSSClash\b/.test(readmeRu) || /\bssclash\b/.test(readmeRu)) {
+	missing.push('README.ru.md must use MiClash naming');
 }
 
 const protectedPaths = fs
