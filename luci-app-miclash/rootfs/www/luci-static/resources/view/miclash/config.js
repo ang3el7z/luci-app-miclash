@@ -256,7 +256,7 @@ function resolveAppActionState() {
 		return {
 			kind: 'install',
 			icon: '\u2b07',
-			className: 'sbox-version-action-install',
+			className: 'cbi-button-positive',
 			title: _('Install MiClash')
 		};
 	}
@@ -265,7 +265,7 @@ function resolveAppActionState() {
 		return {
 			kind: 'update',
 			icon: '\u2b07',
-			className: 'sbox-version-action-install',
+			className: 'cbi-button-positive',
 			title: _('Update MiClash')
 		};
 	}
@@ -273,7 +273,7 @@ function resolveAppActionState() {
 	return {
 		kind: 'reinstall',
 		icon: '\u21bb',
-		className: 'sbox-version-action-reinstall',
+		className: 'cbi-button-neutral',
 		title: _('Reinstall MiClash')
 	};
 }
@@ -293,7 +293,7 @@ function resolveKernelActionState() {
 		return {
 			kind: 'install',
 			icon: '\u2b07',
-			className: 'sbox-version-action-install',
+			className: 'cbi-button-positive',
 			title: _('Install Kernel')
 		};
 	}
@@ -302,7 +302,7 @@ function resolveKernelActionState() {
 		return {
 			kind: 'update',
 			icon: '\u2b07',
-			className: 'sbox-version-action-install',
+			className: 'cbi-button-positive',
 			title: _('Update Kernel')
 		};
 	}
@@ -310,7 +310,7 @@ function resolveKernelActionState() {
 	return {
 		kind: 'reinstall',
 		icon: '\u21bb',
-		className: 'sbox-version-action-reinstall',
+		className: 'cbi-button-neutral',
 		title: _('Reinstall Kernel')
 	};
 }
@@ -1370,6 +1370,8 @@ function buildConfigOptionsHtml() {
 }
 
 function buildPageHtml() {
+	const appActionState = resolveAppActionState();
+	const kernelActionState = resolveKernelActionState();
 	const versionApp = safeText(appState.versions.app || _('unknown'));
 	const versionKernel = safeText(
 		appState.kernelStatus && appState.kernelStatus.installed
@@ -1381,11 +1383,11 @@ function buildPageHtml() {
 		'<div class="sbox-header">' +
 			'MiClash <span class="sbox-version-inline">' +
 				'<strong id="sbox-app-version">' + versionApp + '</strong>' +
-				'<span id="sbox-app-action" class="sbox-version-action-icon" role="button" tabindex="0" title="' + safeText(_('Install MiClash')) + '" aria-label="' + safeText(_('Install MiClash')) + '"></span>' +
+				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '">' + safeText(appActionState.icon) + '</button>' +
 			'</span>' +
 			'mihomo <span class="sbox-version-inline">' +
 				'<strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
-				'<span id="sbox-kernel-action" class="sbox-version-action-icon" role="button" tabindex="0" title="' + safeText(_('Install Kernel')) + '" aria-label="' + safeText(_('Install Kernel')) + '"></span>' +
+				'<button id="sbox-kernel-action" type="button" class="cbi-button ' + kernelActionState.className + ' sbox-version-action-button" title="' + safeText(kernelActionState.title) + '" aria-label="' + safeText(kernelActionState.title) + '">' + safeText(kernelActionState.icon) + '</button>' +
 			'</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
 			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select">' +
@@ -1503,7 +1505,7 @@ function updateHeaderAndControlDom() {
 	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
 	if (appAction && !appAction.classList.contains('sbox-version-action-busy')) {
 		const appActionState = resolveAppActionState();
-		appAction.classList.remove('sbox-version-action-install', 'sbox-version-action-reinstall');
+		appAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
 		appAction.classList.add(appActionState.className);
 		appAction.textContent = appActionState.icon;
 		appAction.title = appActionState.title;
@@ -1516,7 +1518,7 @@ function updateHeaderAndControlDom() {
 	}
 	if (kernelAction && !kernelAction.classList.contains('sbox-version-action-busy')) {
 		const kernelActionState = resolveKernelActionState();
-		kernelAction.classList.remove('sbox-version-action-install', 'sbox-version-action-reinstall');
+		kernelAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
 		kernelAction.classList.add(kernelActionState.className);
 		kernelAction.textContent = kernelActionState.icon;
 		kernelAction.title = kernelActionState.title;

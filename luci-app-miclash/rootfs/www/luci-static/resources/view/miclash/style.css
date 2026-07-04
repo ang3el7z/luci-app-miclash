@@ -49,23 +49,18 @@
 	align-items: center;
 	gap: 6px;
 }
-.sbox-version-action-icon {
+.sbox-version-action-button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 16px;
-	height: 16px;
-	font-size: 14px;
+	width: 22px;
+	min-width: 22px;
+	height: 22px;
+	min-height: 22px;
+	padding: 0;
+	font-size: 12px;
 	line-height: 1;
-	cursor: pointer;
-	user-select: none;
 }
-.sbox-version-action-icon:hover,
-.sbox-version-action-icon:focus {
-	outline: none;
-}
-.sbox-version-action-install { color: var(--sbox-success); }
-.sbox-version-action-reinstall { color: var(--sbox-accent); }
 .sbox-version-action-busy {
 	pointer-events: none;
 }
