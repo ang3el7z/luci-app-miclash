@@ -17,7 +17,8 @@ const required = [
 	'luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json',
 	'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json',
 	'luci-app-miclash/rootfs/etc/apk/protected_paths.d/miclash.list',
-	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js'
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js',
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css'
 ];
 
 const missing = required.filter((rel) => !fs.existsSync(path.join(root, rel)));
