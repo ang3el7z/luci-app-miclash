@@ -250,6 +250,16 @@ function hasAclPermission(candidate, permission) {
 	));
 }
 
+for (const [target, permission] of [
+	['/bin/rm', 'exec'],
+	['/tmp/mihomo-test', 'remove'],
+	['/opt/clash/bin/miclash-update', 'exec']
+]) {
+	if (!hasAclPermission(target, permission)) {
+		missing.push(`ACL regression guard -> ${permission} ${target}`);
+	}
+}
+
 const fsOperationPermissions = {
 	exec: 'exec',
 	read: 'read',
