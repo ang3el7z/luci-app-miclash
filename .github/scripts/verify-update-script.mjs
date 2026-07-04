@@ -34,6 +34,15 @@ if (!/install_kernel\(\)\s*{[\s\S]+pidof clash[\s\S]+\/etc\/init\.d\/clash stop[
 	throw new Error('miclash-update: kernel install must stop running Clash before replace and restart it after replace');
 }
 
+if (!/download_file\(\)\s*{[\s\S]+curl -L -fsS[\s\S]+--retry "\$CURL_RETRY"[\s\S]+--connect-timeout "\$CURL_CONNECT_TIMEOUT"[\s\S]+--max-time "\$CURL_MAX_TIME"/.test(scriptSource)) {
+	throw new Error('miclash-update: downloads must use bounded curl retry/connect/max-time options');
+}
+
+if (!/download_file "\$url" "\$tmp" "MiClash package"/.test(scriptSource) ||
+	!/download_file "\$url" "\$download" "mihomo kernel"/.test(scriptSource)) {
+	throw new Error('miclash-update: app and kernel downloads must go through download_file');
+}
+
 if (/downloadMihomoKernel\([^)]*\)[\s\S]{0,500}restartOrReloadServiceOrThrow\('restart'\)/.test(configSource)) {
 	throw new Error('config.js: kernel install restart must stay in miclash-update, not LuCI UI');
 }

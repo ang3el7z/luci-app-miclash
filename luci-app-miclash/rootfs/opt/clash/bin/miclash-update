@@ -5,6 +5,9 @@ set -u
 TMP_FILES=""
 LOCK_DIR="/tmp/miclash-update.lock"
 LOCK_ACQUIRED=0
+CURL_CONNECT_TIMEOUT=15
+CURL_MAX_TIME=300
+CURL_RETRY=2
 
 cleanup() {
 	for file in $TMP_FILES; do
@@ -85,6 +88,18 @@ install_deps() {
 	opkg install zlib libcurl4 curl "$tproxy_pkg" kmod-tun coreutils-base64 || fail "failed to install dependencies"
 }
 
+download_file() {
+	url="$1"
+	target="$2"
+	label="$3"
+
+	curl -L -fsS \
+		--retry "$CURL_RETRY" \
+		--connect-timeout "$CURL_CONNECT_TIMEOUT" \
+		--max-time "$CURL_MAX_TIME" \
+		"$url" -o "$target" || fail "failed to download $label"
+}
+
 install_app() {
 	url=""
 	mode="update"
@@ -121,7 +136,7 @@ install_app() {
 	esac
 	TMP_FILES="$TMP_FILES $tmp"
 
-	curl -L -fsS "$url" -o "$tmp" || fail "failed to download MiClash package"
+	download_file "$url" "$tmp" "MiClash package"
 
 	if [ "$manager" = "apk" ]; then
 		if [ "$mode" = "reinstall" ]; then
@@ -168,7 +183,7 @@ install_kernel() {
 	extracted="/tmp/mihomo-update-$$"
 	TMP_FILES="$TMP_FILES $download $extracted"
 
-	curl -L -fsS "$url" -o "$download" || fail "failed to download mihomo kernel"
+	download_file "$url" "$download" "mihomo kernel"
 	gzip -dc "$download" > "$extracted" || fail "failed to extract mihomo kernel"
 	chmod +x "$extracted" || fail "failed to mark mihomo kernel executable"
 
