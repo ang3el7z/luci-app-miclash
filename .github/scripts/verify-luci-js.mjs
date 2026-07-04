@@ -104,6 +104,16 @@ if (!/const\s+restartBtn[\s\S]+addEventListener\(\s*['"]click['"][\s\S]+validate
 	missing.push('config.js -> restart button must validate main config with clash -t before restarting service');
 }
 
+for (const [label, pattern] of [
+	['proxy mode switch', /async function\s+switchProxyModeFromHeader\([^)]*\)[\s\S]+validateMainConfigBeforeStart\(\)[\s\S]+restartOrReloadServiceOrThrow\(\s*['"]restart['"]\s*\)/],
+	['settings save', /function\s+bindSettingsPaneEvents\(\)[\s\S]+validateMainConfigBeforeStart\(\)[\s\S]+restartOrReloadServiceOrThrow\(\s*['"]restart['"]\s*\)/],
+	['set main config', /async function\s+setSelectedConfigAsMain\(\)[\s\S]+validateContentAsMainConfig\(selectedContent\)[\s\S]+restartOrReloadServiceOrThrow\(\s*['"]restart['"]\s*\)/]
+]) {
+	if (!pattern.test(configSource)) {
+		missing.push(`config.js -> ${label} must validate config with clash -t before restarting service`);
+	}
+}
+
 if (!/dispatchServiceActionsAndWaitOrThrow\(\s*\[\s*['"]stop['"]\s*,\s*['"]disable['"]\s*\]\s*,\s*false\s*\)/.test(configSource)) {
 	missing.push('config.js -> stop button must stop then disable service and wait for stopped state');
 }

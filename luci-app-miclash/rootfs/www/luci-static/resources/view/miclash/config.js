@@ -616,12 +616,16 @@ async function testConfigContent(content, keepOnSuccess, targetPath) {
 	);
 }
 
-async function validateMainConfigBeforeStart() {
-	const content = await readConfigFileByName(MAIN_CONFIG_NAME);
+async function validateContentAsMainConfig(content) {
 	const tested = await testConfigContent(content, false, CONFIG_PATH);
 	if (tested.ok) return true;
 	notifyDetailedError(_('YAML validation failed.'), tested.message);
 	return false;
+}
+
+async function validateMainConfigBeforeStart() {
+	const content = await readConfigFileByName(MAIN_CONFIG_NAME);
+	return validateContentAsMainConfig(content);
 }
 
 async function fetchSubscriptionAsYaml(url, targetPath) {
@@ -786,6 +790,7 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	if (!ok) throw new Error(_('Cannot save proxy mode.'));
 
+	if (!(await validateMainConfigBeforeStart())) return;
 	await restartOrReloadServiceOrThrow('restart');
 
 	appState.settings = await loadOperationalSettings();
@@ -1682,6 +1687,7 @@ function bindSettingsPaneEvents() {
 			);
 
 				if (!ok) return;
+				if (!(await validateMainConfigBeforeStart())) return;
 				try {
 					await restartOrReloadServiceOrThrow('restart');
 					notify('info', _('Settings saved and Clash service restarted.'));
@@ -1934,6 +1940,8 @@ async function setSelectedConfigAsMain() {
 		readSubscriptionUrl(MAIN_CONFIG_NAME),
 		readSubscriptionUrl(selected)
 	]);
+
+	if (!(await validateContentAsMainConfig(selectedContent))) return;
 
 	await writeConfigFileByName(MAIN_CONFIG_NAME, selectedContent);
 	await writeConfigFileByName(selected, mainContent);
