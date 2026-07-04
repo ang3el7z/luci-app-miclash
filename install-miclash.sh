@@ -374,11 +374,6 @@ main() {
     choose_install_action
     sep
 
-    if [ "$INSTALL_ACTION" = "skip" ]; then
-        log "MiClash already up to date, nothing to do"
-        exit 0
-    fi
-
     if [ "$INSTALL_ACTION" = "remove" ]; then
         remove_miclash
         sep
@@ -398,7 +393,11 @@ main() {
         info "clash service was enabled before update"
     fi
 
-    install_miclash
+    if [ "$INSTALL_ACTION" = "skip" ]; then
+        log "MiClash package already up to date, skipping package install"
+    else
+        install_miclash
+    fi
 
     if [ "$CLASH_WAS_ENABLED" = "1" ] && [ -x /etc/init.d/clash ]; then
         log "Restoring clash service enable state..."

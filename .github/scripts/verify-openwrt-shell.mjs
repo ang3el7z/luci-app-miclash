@@ -14,6 +14,7 @@ const scripts = [
 const shell = process.env.SHELL_CHECK_BIN || '/bin/sh';
 const missing = [];
 let failed = false;
+const installerPath = path.join(process.cwd(), 'install-miclash.sh');
 const initPath = path.join(process.cwd(), 'luci-app-miclash/rootfs/etc/init.d/clash');
 const clashRulesPath = path.join(process.cwd(), 'luci-app-miclash/rootfs/opt/clash/bin/clash-rules');
 
@@ -57,6 +58,23 @@ if (fs.existsSync(initPath)) {
 		/boot\(\)\s*{[\s\S]{0,120}\bsleep\s+10\b/.test(initScript)) {
 		failed = true;
 		process.stderr.write('init.d/clash: boot must poll dnsmasq/default route instead of fixed sleep\n');
+	}
+}
+
+if (fs.existsSync(installerPath)) {
+	const installer = fs.readFileSync(installerPath, 'utf8');
+	if (!/install_deps\(\)\s*{[\s\S]+zlib libcurl4 curl/.test(installer)) {
+		failed = true;
+		process.stderr.write('install-miclash.sh: runtime deps must keep zlib libcurl4 curl\n');
+	}
+	if (!/curl -fL --retry 2 --connect-timeout 15 --max-time 300/.test(installer)) {
+		failed = true;
+		process.stderr.write('install-miclash.sh: downloads must use bounded curl retry/connect/max-time options\n');
+	}
+	if (/if \[ "\$INSTALL_ACTION" = "skip" \]; then[\s\S]{0,160}exit 0/.test(installer) ||
+		!/if \[ "\$INSTALL_ACTION" = "skip" \]; then[\s\S]+skipping package install[\s\S]+else[\s\S]+install_miclash[\s\S]+install_mihomo/.test(installer)) {
+		failed = true;
+		process.stderr.write('install-miclash.sh: skip must only skip MiClash package install and still install/update Mihomo\n');
 	}
 }
 
