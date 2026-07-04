@@ -13,6 +13,14 @@ function blockedNetworkMessage() {
 	return _('Network access is blocked by "Internet only through MiClash". Start the service or disable this option in Settings to update.');
 }
 
+function shouldSkipSubscriptionDownload(settings, serviceRunning) {
+	return isNetworkUpdateBlocked(settings, serviceRunning);
+}
+
+function skippedSubscriptionMessage() {
+	return _('Subscription URL saved. Download skipped because "Internet only through MiClash" is enabled while the service is stopped.');
+}
+
 function assertNetworkUpdateAllowed(settings, serviceRunning) {
 	if (isNetworkUpdateBlocked(settings, serviceRunning)) {
 		throw new Error(blockedNetworkMessage());
@@ -45,6 +53,8 @@ return L.Class.extend({
 	isInternetOnlyEnabled: isInternetOnlyEnabled,
 	isNetworkUpdateBlocked: isNetworkUpdateBlocked,
 	blockedNetworkMessage: blockedNetworkMessage,
+	shouldSkipSubscriptionDownload: shouldSkipSubscriptionDownload,
+	skippedSubscriptionMessage: skippedSubscriptionMessage,
 	assertNetworkUpdateAllowed: assertNetworkUpdateAllowed,
 	prepareNetworkUpdate: prepareNetworkUpdate
 });

@@ -99,6 +99,10 @@ if (!/function\s+isNetworkUpdateBlocked\(\)[\s\S]+view_miclash_guard\.isNetworkU
 	missing.push('config.js -> subscription/update guard block helper is missing');
 }
 
+if (!/function\s+shouldSkipSubscriptionDownload\(\)[\s\S]+view_miclash_guard\.shouldSkipSubscriptionDownload/.test(configSource)) {
+	missing.push('config.js -> subscription stopped-service skip policy must be delegated to guard.js');
+}
+
 if (!/async function\s+fetchSubscriptionAsYaml\([^)]*\)\s*{[\s\S]*?await prepareNetworkUpdate\(\);/.test(configSource)) {
 	missing.push('config.js -> subscription downloads must prepare guarded network path first');
 }
@@ -112,6 +116,10 @@ for (const fn of ['installMiClashFromSettings', 'installKernelFromSettings']) {
 
 if (!/function\s+isNetworkUpdateBlocked\([^)]*\)[\s\S]+isInternetOnlyEnabled\(settings\)\s*&&\s*!serviceRunning/.test(guardSource)) {
 	missing.push('guard.js -> guard must block network updates when service is stopped');
+}
+
+if (!/function\s+shouldSkipSubscriptionDownload\([^)]*\)[\s\S]+isNetworkUpdateBlocked\(settings,\s*serviceRunning\)/.test(guardSource)) {
+	missing.push('guard.js -> subscription URL save must skip downloads through the guard policy while stopped');
 }
 
 if (!/async function\s+prepareNetworkUpdate\([^)]*\)[\s\S]+assertNetworkUpdateAllowed\([^)]*\)[\s\S]+repair_network_path/.test(guardSource)) {

@@ -1555,6 +1555,10 @@ function isNetworkUpdateBlocked() {
 	return view_miclash_guard.isNetworkUpdateBlocked(appState.settings, appState.serviceRunning);
 }
 
+function shouldSkipSubscriptionDownload() {
+	return view_miclash_guard.shouldSkipSubscriptionDownload(appState.settings, appState.serviceRunning);
+}
+
 async function refreshHeaderAndControl() {
 	const [running, versions, kernelStatus, proxyMode] = await Promise.all([
 		getServiceStatus(),
@@ -1997,8 +2001,8 @@ function bindConfigEvents() {
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();
 
-				if (isNetworkUpdateBlocked()) {
-					notify('warning', _('Subscription URL saved. Download skipped because "Internet only through MiClash" is enabled while the service is stopped.'));
+				if (shouldSkipSubscriptionDownload()) {
+					notify('warning', view_miclash_guard.skippedSubscriptionMessage());
 					return;
 				}
 
