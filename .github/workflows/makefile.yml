@@ -166,8 +166,14 @@ jobs:
       - name: Verify LuCI JS Modules
         run: node .github/scripts/verify-luci-js.mjs
 
+      - name: Verify Native UI Contract
+        run: node .github/scripts/verify-native-ui.mjs
+
       - name: Verify OpenWrt Shell Scripts
         run: node .github/scripts/verify-openwrt-shell.mjs
+
+      - name: Verify Update Script Behavior
+        run: node .github/scripts/verify-update-script.mjs
 
       - name: Verify Package Layout
         run: node .github/scripts/verify-package-layout.mjs
