@@ -52,7 +52,7 @@ const missing = [];
 const serviceSource = fs.readFileSync(servicePath, 'utf8');
 const configSource = fs.readFileSync(configPath, 'utf8');
 const guardSource = fs.readFileSync(guardPath, 'utf8');
-const routeSource = fs.readFileSync(routePath, 'utf8');
+const routeSource = fs.existsSync(routePath) ? fs.readFileSync(routePath, 'utf8') : '';
 
 for (const [name, minValue] of [
 	['START_SERVICE_TIMEOUT_MS', 120000],
@@ -197,8 +197,8 @@ if (rootMenuEntry?.action?.type !== 'view' || rootMenuEntry?.action?.path !== 'm
 	missing.push('menu -> admin/services/miclash must point directly to miclash/config');
 }
 
-if (/miclash\/rulesets|hash\s*===\s*['"]rulesets['"]|routeSection\s*===\s*['"]rulesets['"]/.test(routeSource + '\n' + configSource)) {
-	missing.push('route/config -> rulesets must stay an in-page native action, not a legacy routed top section');
+if (/view\.miclash\.route|miclash\/(?:settings|rulesets|log)|hash\s*===\s*['"](?:settings|rulesets|logs?)['"]|routeSection|applySection/.test(routeSource + '\n' + configSource)) {
+	missing.push('route/config -> settings, logs and rulesets must stay in-page native tabs/actions, not legacy routed top sections');
 }
 
 for (const entry of menuEntries) {

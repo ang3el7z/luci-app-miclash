@@ -3,7 +3,6 @@
 'require fs';
 'require ui';
 'require view.miclash.utils';
-'require view.miclash.route';
 'require view.miclash.service';
 'require view.miclash.store';
 'require view.miclash.release';
@@ -2722,7 +2721,6 @@ return view.extend({
 	},
 
 	render: async function(data) {
-		const routeSection = view_miclash_route.getSection();
 		await ensureConfigProfilesReady(data[0] || '');
 		appState.configProfiles = CONFIG_PROFILES.slice();
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
@@ -2734,7 +2732,6 @@ return view.extend({
 		appState.kernelStatus = data[5] || { installed: false, version: null };
 		appState.serviceRunning = !!data[6];
 		appState.proxyMode = data[7] || 'tproxy';
-		view_miclash_route.applySection(appState, routeSection);
 
 		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
 		appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
