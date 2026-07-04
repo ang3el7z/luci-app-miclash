@@ -126,6 +126,10 @@ if (!/function\s+shouldSkipSubscriptionDownload\(\)[\s\S]+view_miclash_guard\.sh
 	missing.push('config.js -> subscription stopped-service skip policy must be delegated to guard.js');
 }
 
+if (!/saveSubscriptionUrl\(url,\s*selectedConfig\)[\s\S]+appState\.serviceRunning\s*=\s*await getServiceStatus\(\)[\s\S]+if\s*\(shouldSkipSubscriptionDownload\(\)\)[\s\S]+return;[\s\S]+ensureMihomoKernelInstalled\(\)[\s\S]+fetchSubscriptionAsYaml\(url,\s*selectedPath\)/.test(configSource)) {
+	missing.push('config.js -> subscription URL save must refresh status and skip stopped-service guard before kernel/download work');
+}
+
 if (!/async function\s+fetchSubscriptionAsYaml\([^)]*\)\s*{[\s\S]*?await prepareNetworkUpdate\(\);/.test(configSource)) {
 	missing.push('config.js -> subscription downloads must prepare guarded network path first');
 }
