@@ -1878,6 +1878,7 @@ function bindControlAndHeaderEvents() {
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
 	if (restartBtn) {
 		restartBtn.addEventListener('click', () => withButtons(restartBtn, async () => {
+			if (!(await validateMainConfigBeforeStart())) return;
 			await restartOrReloadServiceOrThrow('restart');
 			notify('info', _('Clash service restarted successfully.'));
 			await refreshHeaderAndControl();

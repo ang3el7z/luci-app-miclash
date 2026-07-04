@@ -98,6 +98,10 @@ if (!/async function\s+validateMainConfigBeforeStart\(\)[\s\S]+readConfigFileByN
 	missing.push('config.js -> start button must validate main config with clash -t before enabling/starting service');
 }
 
+if (!/const\s+restartBtn[\s\S]+addEventListener\(\s*['"]click['"][\s\S]+validateMainConfigBeforeStart\(\)[\s\S]+restartOrReloadServiceOrThrow\(\s*['"]restart['"]\s*\)/.test(configSource)) {
+	missing.push('config.js -> restart button must validate main config with clash -t before restarting service');
+}
+
 if (!/dispatchServiceActionsAndWaitOrThrow\(\s*\[\s*['"]stop['"]\s*,\s*['"]disable['"]\s*\]\s*,\s*false\s*\)/.test(configSource)) {
 	missing.push('config.js -> stop button must stop then disable service and wait for stopped state');
 }
