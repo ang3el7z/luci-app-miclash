@@ -1,41 +1,6 @@
 'use strict';
 'require ui';
 
-function detectNativeTheme() {
-	const root = document.documentElement;
-	const body = document.body;
-	const signal = [
-		root ? root.className : '',
-		body ? body.className : '',
-		root ? root.getAttribute('data-theme') : '',
-		root ? root.getAttribute('theme') : '',
-		body ? body.getAttribute('data-theme') : '',
-		body ? body.getAttribute('theme') : ''
-	].join(' ').toLowerCase();
-
-	if (/(^|\s)(dark|night)(\s|$)/.test(signal)) return 'dark';
-	if (/(^|\s)(light|bright)(\s|$)/.test(signal)) return 'light';
-	if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
-	return 'light';
-}
-
-function getPreferredAceTheme() {
-	return detectNativeTheme() === 'light' ? 'ace/theme/textmate' : 'ace/theme/tomorrow_night_bright';
-}
-
-function applyThemeToEditor(editorInstance) {
-	if (!editorInstance) return;
-	try {
-		editorInstance.setTheme(getPreferredAceTheme());
-	} catch (e) {
-		editorInstance.setTheme('ace/theme/tomorrow_night_bright');
-	}
-}
-
-function applyThemeToEditors(editors) {
-	(editors || []).forEach(applyThemeToEditor);
-}
-
 function showModal(options) {
 	const opts = options || {};
 	const bodyNode = opts.body && opts.body.nodeType
@@ -176,9 +141,6 @@ function stopInterval(timer) {
 }
 
 return L.Class.extend({
-	detectNativeTheme: detectNativeTheme,
-	applyThemeToEditor: applyThemeToEditor,
-	applyThemeToEditors: applyThemeToEditors,
 	showModal: showModal,
 	withButtons: withButtons,
 	bindTabGroup: bindTabGroup,

@@ -20,7 +20,6 @@ const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
 const CONFIG_PROFILES = view_miclash_store.CONFIG_PROFILES;
 const RULESET_PATH = view_miclash_rulesets_model.RULESET_PATH;
 const FAKEIP_WHITELIST_FILENAME = view_miclash_rulesets_model.FAKEIP_WHITELIST_FILENAME;
-const ACE_BASE = '/luci-static/resources/view/miclash/ace/';
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
 const LOG_POLL_MS = 5000;
 const STATUS_POLL_MS = 5000;
@@ -134,18 +133,6 @@ const tryDecodeBase64 = view_miclash_subscription.tryDecodeBase64;
 const looksLikeUriSubscription = view_miclash_subscription.looksLikeUriSubscription;
 const looksLikeBase64Blob = view_miclash_subscription.looksLikeBase64Blob;
 const looksLikeYamlConfig = view_miclash_subscription.looksLikeYamlConfig;
-
-function applyThemeToEditor(editorInstance) {
-	view_miclash_ui_shell.applyThemeToEditor(editorInstance);
-}
-
-function applyEditorTheme() {
-	view_miclash_ui_shell.applyThemeToEditors([
-		editor,
-		rulesetMainEditor,
-		rulesetWhitelistEditor
-	]);
-}
 
 async function getVersions() {
 	const info = { app: 'unknown', clash: 'unknown' };
@@ -840,39 +827,54 @@ function colorizeLog(raw) {
 	}).join('\n');
 }
 
-function loadScript(src) {
-	return new Promise((resolve, reject) => {
-		if (document.querySelector('script[src="' + src + '"]')) {
-			resolve();
-			return;
-		}
+function createNativeEditor(host, content) {
+	const target = typeof host === 'string' ? document.getElementById(host) : host;
+	if (!target) throw new Error('editor container not found');
+	target.textContent = '';
 
-		const script = document.createElement('script');
-		script.src = src;
-		script.onload = resolve;
-		script.onerror = reject;
-		document.head.appendChild(script);
+	const textarea = E('textarea', {
+		'class': 'cbi-input-text sbox-native-editor',
+		'spellcheck': 'false',
+		'wrap': 'off'
 	});
+	target.appendChild(textarea);
+
+	const api = {
+		container: target,
+		session: {
+			setMode: function() {}
+		},
+		setOptions: function() {},
+		setValue: function(value) {
+			textarea.value = String(value || '');
+		},
+		getValue: function() {
+			return textarea.value;
+		},
+		clearSelection: function() {
+			try {
+				textarea.selectionStart = 0;
+				textarea.selectionEnd = 0;
+			} catch (e) {}
+		},
+		resize: function() {},
+		focus: function() {
+			textarea.focus();
+		},
+		destroy: function() {
+			target.textContent = '';
+		}
+	};
+
+	api.setValue(content);
+	return api;
 }
 
-async function initializeAceEditor(content) {
-	await loadScript(ACE_BASE + 'ace.js');
-	await loadScript(ACE_BASE + 'mode-yaml.js');
-
-	ace.config.set('basePath', ACE_BASE);
+async function initializeNativeEditor(content) {
 	const editorHost = (pageRoot && pageRoot.querySelector('#miclash-editor')) || document.getElementById('miclash-editor');
 	if (!editorHost) throw new Error('editor container #miclash-editor not found');
-	editor = ace.edit(editorHost);
-	editor.session.setMode('ace/mode/yaml');
-	editor.setValue(String(content || ''), -1);
+	editor = createNativeEditor(editorHost, content);
 	editor.clearSelection();
-	editor.setOptions({
-		fontSize: '12px',
-		showPrintMargin: false,
-		wrap: true,
-		highlightActiveLine: true
-	});
-	applyEditorTheme();
 }
 
 function destroyRulesetEditors() {
@@ -890,9 +892,6 @@ function destroyRulesetEditors() {
 }
 
 async function openRulesetsModal() {
-	await loadScript(ACE_BASE + 'ace.js');
-	await loadScript(ACE_BASE + 'mode-text.js');
-
 	const data = await readRulesetsData();
 	let rulesetNames = data.rulesetNames.slice();
 	let currentRuleset = rulesetNames[0] || '';
@@ -951,15 +950,7 @@ async function openRulesetsModal() {
 
 	function ensureRulesetEditor() {
 		if (rulesetMainEditor) return;
-		rulesetMainEditor = ace.edit('sbox-ruleset-editor');
-		rulesetMainEditor.session.setMode('ace/mode/text');
-		rulesetMainEditor.setOptions({
-			fontSize: '12px',
-			showPrintMargin: false,
-			wrap: true,
-			highlightActiveLine: true
-		});
-		applyThemeToEditor(rulesetMainEditor);
+		rulesetMainEditor = createNativeEditor('sbox-ruleset-editor', '');
 	}
 
 	function resizeAndFocusRulesetEditor(shouldFocus) {
@@ -1130,17 +1121,8 @@ async function openRulesetsModal() {
 	}
 
 	if (data.whitelistMode && saveWhitelistBtn) {
-		rulesetWhitelistEditor = ace.edit('sbox-ruleset-whitelist-editor');
-		rulesetWhitelistEditor.session.setMode('ace/mode/text');
-		rulesetWhitelistEditor.setOptions({
-			fontSize: '12px',
-			showPrintMargin: false,
-			wrap: true,
-			highlightActiveLine: true
-		});
-		rulesetWhitelistEditor.setValue(String(data.whitelistContent || ''), -1);
+		rulesetWhitelistEditor = createNativeEditor('sbox-ruleset-whitelist-editor', data.whitelistContent || '');
 		rulesetWhitelistEditor.clearSelection();
-		applyThemeToEditor(rulesetWhitelistEditor);
 
 		saveWhitelistBtn.addEventListener('click', () => withButtons(saveWhitelistBtn, async () => {
 			const raw = String(rulesetWhitelistEditor.getValue() || '').replace(/\r\n/g, '\n');
@@ -2381,6 +2363,23 @@ const PAGE_CSS = `
 	border: 1px solid var(--sbox-border);
 	border-radius: 8px;
 }
+.sbox-native-editor {
+	display: block;
+	width: 100%;
+	height: 100%;
+	min-height: inherit;
+	box-sizing: border-box;
+	border: 0;
+	margin: 0;
+	resize: none;
+	background: var(--sbox-log-bg);
+	color: var(--sbox-text);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	font-size: 12px;
+	line-height: 1.45;
+	white-space: pre;
+	overflow: auto;
+}
 .sbox-actions {
 	display: flex;
 	flex-wrap: wrap;
@@ -2734,7 +2733,7 @@ return view.extend({
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
 
 		try {
-			await initializeAceEditor(appState.configContent);
+			await initializeNativeEditor(appState.configContent);
 		} catch (e) {
 			notify('error', _('Failed to initialize editor: %s').format(e.message));
 		}

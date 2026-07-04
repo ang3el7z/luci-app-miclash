@@ -26,6 +26,9 @@ const banned = [
 	[/\bUI_THEME\b/, 'custom MiClash theme state'],
 	[/\bthemeToggle\b/, 'custom theme toggle'],
 	[/localStorage\.(?:getItem|setItem|removeItem)\([^)]*theme/i, 'persisted custom theme'],
+	[/prefers-color-scheme/i, 'custom browser theme detection instead of native LuCI theme inheritance'],
+	[/\bace\.(?:edit|config)\b/i, 'Ace editor runtime instead of native LuCI themed textarea'],
+	[/tomorrow_night_bright/i, 'bundled custom dark Ace theme'],
 	[/\bsbox-card\b/, 'custom card shell instead of cbi-section'],
 	[/\bsbox-section\b/, 'custom cbi-section wrapper instead of native section styling'],
 	[/\bsbox-modal-overlay\b/, 'custom modal overlay instead of ui.showModal'],
@@ -64,6 +67,12 @@ if (!/class="cbi-tabmenu/.test(config)) {
 const uiShell = fs.readFileSync(path.join(viewDir, 'ui-shell.js'), 'utf8');
 if (!/ui\.showModal\(/.test(uiShell) || !/ui\.hideModal\(/.test(uiShell)) {
 	failures.push('ui-shell.js: modal helper must use native LuCI ui.showModal/ui.hideModal');
+}
+if (fs.existsSync(path.join(viewDir, 'ace', 'theme-tomorrow_night_bright.js'))) {
+	failures.push('ace/theme-tomorrow_night_bright.js: custom dark editor palette must not be packaged');
+}
+if (fs.existsSync(path.join(viewDir, 'ace', 'ace.js'))) {
+	failures.push('ace/ace.js: custom editor palette/runtime must not be packaged');
 }
 
 if (failures.length) {
