@@ -907,10 +907,10 @@ async function openRulesetsModal() {
 	let currentRuleset = rulesetNames[0] || '';
 	const rulesetCache = Object.assign({}, data.contentMap || {});
 
-	const body = E('div', { 'class': 'cbi-section sbox-rulesets-modal-body' });
+	const body = E('div', { 'class': 'sbox-rulesets-modal-body' });
 	body.innerHTML = '' +
 		'<div class="sbox-rulesets-layout">' +
-			'<aside class="sbox-rulesets-sidebar">' +
+			'<aside class="cbi-section sbox-rulesets-sidebar">' +
 				'<div class="sbox-rulesets-title">' + safeText(_('Local Rulesets')) + '</div>' +
 				'<div class="sbox-muted">' + safeText(_('Manage local .txt lists for rule-providers.')) + '</div>' +
 				'<div class="sbox-rulesets-create-row">' +
@@ -919,7 +919,7 @@ async function openRulesetsModal() {
 				'</div>' +
 				'<div id="sbox-rulesets-list" class="sbox-rulesets-list"></div>' +
 			'</aside>' +
-			'<section class="sbox-rulesets-main">' +
+			'<section class="cbi-section sbox-rulesets-main">' +
 				'<div class="sbox-rulesets-toolbar">' +
 					'<span id="sbox-ruleset-current" class="sbox-ruleset-current"></span>' +
 					'<div class="sbox-rulesets-toolbar-actions">' +
@@ -927,7 +927,7 @@ async function openRulesetsModal() {
 						'<button id="sbox-ruleset-delete" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Delete')) + '</button>' +
 					'</div>' +
 				'</div>' +
-				'<div id="sbox-ruleset-empty" class="sbox-rulesets-empty">' + safeText(_('No ruleset selected. Create one to begin.')) + '</div>' +
+				'<div id="sbox-ruleset-empty" class="cbi-section-descr sbox-rulesets-empty">' + safeText(_('No ruleset selected. Create one to begin.')) + '</div>' +
 				'<div id="sbox-ruleset-editor-wrap" class="sbox-ruleset-editor-wrap" hidden>' +
 					'<div id="sbox-ruleset-editor" class="sbox-ruleset-editor"></div>' +
 				'</div>' +
@@ -936,7 +936,7 @@ async function openRulesetsModal() {
 					'<pre>rule-providers:\n  your-list:\n    behavior: classical\n    type: file\n    format: text\n    path: ./lst/your-list.txt</pre>' +
 				'</div>' +
 				(data.whitelistMode ? '' +
-					'<div class="sbox-rulesets-whitelist">' +
+					'<div class="cbi-section sbox-rulesets-whitelist">' +
 						'<div class="sbox-rulesets-whitelist-head">' + safeText(_('IP-CIDR List (fake-ip whitelist mode)')) + '</div>' +
 						'<div class="sbox-muted sbox-rulesets-whitelist-note">' + safeText(_('One IPv4/CIDR per line. Save applies firewall update without restarting Mihomo.')) + '</div>' +
 						'<div id="sbox-ruleset-whitelist-editor" class="sbox-ruleset-whitelist-editor"></div>' +
@@ -995,7 +995,7 @@ async function openRulesetsModal() {
 		rulesetNames.forEach((name) => {
 			const button = E('button', {
 				'type': 'button',
-				'class': 'sbox-ruleset-list-item' + (name === currentRuleset ? ' active' : '')
+				'class': 'cbi-button ' + (name === currentRuleset ? 'cbi-button-apply' : 'cbi-button-neutral') + ' sbox-ruleset-list-item'
 			}, name);
 
 			button.addEventListener('click', async () => {

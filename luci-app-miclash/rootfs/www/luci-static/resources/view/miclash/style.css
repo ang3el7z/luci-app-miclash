@@ -8,7 +8,6 @@
 	--sbox-danger: var(--error-color, var(--danger-color, var(--color-error, currentColor)));
 	--sbox-warn: var(--warning-color, var(--color-warning, currentColor));
 	--sbox-log-bg: var(--background-color-low, var(--background-color, Canvas));
-	--sbox-panel-bg: var(--background-color-medium, transparent);
 	color: var(--sbox-text);
 }
 .sbox-page .main {
@@ -304,7 +303,7 @@
 	width: min(96vw, 1180px);
 	max-height: 92vh;
 }
-.sbox-modal-wide .cbi-section {
+.sbox-modal-wide .sbox-rulesets-modal-body {
 	max-height: calc(92vh - 104px);
 	overflow: hidden;
 }
@@ -318,9 +317,6 @@
 }
 .sbox-rulesets-sidebar,
 .sbox-rulesets-main {
-	border: 1px solid var(--sbox-border);
-	border-radius: 8px;
-	background: var(--sbox-panel-bg);
 	padding: 10px;
 }
 .sbox-rulesets-title {
@@ -345,20 +341,10 @@
 .sbox-ruleset-list-item {
 	width: 100%;
 	text-align: left;
-	border: 1px solid var(--sbox-border);
-	border-radius: 6px;
-	background: var(--sbox-panel-bg);
-	color: var(--sbox-text);
 	padding: 6px 8px;
 	cursor: pointer;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 	font-size: 12px;
-}
-.sbox-ruleset-list-item:hover {
-	border-color: var(--sbox-accent);
-}
-.sbox-ruleset-list-item.active {
-	border-color: var(--sbox-accent);
 }
 .sbox-rulesets-toolbar {
 	display: flex;
@@ -383,10 +369,7 @@
 	border-radius: 8px;
 }
 .sbox-rulesets-empty {
-	border: 1px dashed var(--sbox-border);
-	border-radius: 8px;
 	padding: 16px;
-	color: var(--sbox-muted);
 	font-size: 12px;
 }
 .sbox-rulesets-example {
@@ -407,8 +390,6 @@
 }
 .sbox-rulesets-whitelist {
 	margin-top: 10px;
-	border: 1px solid var(--sbox-success);
-	border-radius: 8px;
 	padding: 10px;
 }
 .sbox-rulesets-whitelist-head {
