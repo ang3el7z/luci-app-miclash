@@ -1383,19 +1383,16 @@ function buildPageHtml() {
 				'<strong id="sbox-app-version">' + versionApp + '</strong>' +
 				'<span id="sbox-app-action" class="sbox-version-action-icon" role="button" tabindex="0" title="' + safeText(_('Install MiClash')) + '" aria-label="' + safeText(_('Install MiClash')) + '"></span>' +
 			'</span>' +
-			'<span class="sbox-header-dot">|</span>' +
 			'mihomo <span class="sbox-version-inline">' +
 				'<strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
 				'<span id="sbox-kernel-action" class="sbox-version-action-icon" role="button" tabindex="0" title="' + safeText(_('Install Kernel')) + '" aria-label="' + safeText(_('Install Kernel')) + '"></span>' +
 			'</span>' +
-			'<span class="sbox-header-dot">|</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
 			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select">' +
 				'<option value="tproxy"' + (appState.proxyMode === 'tproxy' ? ' selected' : '') + '>tproxy</option>' +
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span class="sbox-header-dot">|</span>' +
 			'<span id="sbox-guard" class="sbox-guard-pill ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Internet only through MiClash')) + '">' +
 				'<span class="sbox-guard-dot ' + (isInternetOnlyEnabled() ? 'sbox-dot-on' : 'sbox-dot-off') + '"></span>' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + '</span>' +

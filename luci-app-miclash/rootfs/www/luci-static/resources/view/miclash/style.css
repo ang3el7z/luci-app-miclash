@@ -70,9 +70,6 @@
 .sbox-version-action-busy {
 	pointer-events: none;
 }
-.sbox-header-dot {
-	opacity: 0.55;
-}
 .sbox-header-button {
 	font-size: 11px;
 	padding: 2px 8px;
