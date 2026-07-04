@@ -1,38 +1,6 @@
 'use strict';
-'require view.miclash.store';
 
-const UI_THEME_KEY = 'UI_THEME';
-
-function normalizeTheme(theme) {
-	return theme === 'light' ? 'light' : 'dark';
-}
-
-function getPreferredAceTheme(theme) {
-	return normalizeTheme(theme) === 'light' ? 'ace/theme/textmate' : 'ace/theme/tomorrow_night_bright';
-}
-
-function applyThemeToEditor(editorInstance, theme) {
-	if (!editorInstance) return;
-	try {
-		editorInstance.setTheme(getPreferredAceTheme(theme));
-	} catch (e) {
-		editorInstance.setTheme('ace/theme/tomorrow_night_bright');
-	}
-}
-
-async function readThemePreference() {
-	const settings = await view_miclash_store.readSettingsMap();
-	const saved = String(settings[UI_THEME_KEY] || '').trim();
-	return saved ? normalizeTheme(saved) : '';
-}
-
-async function saveThemePreference(theme) {
-	const settings = await view_miclash_store.readSettingsMap();
-	settings[UI_THEME_KEY] = normalizeTheme(theme);
-	await view_miclash_store.writeSettingsMap(settings);
-}
-
-function detectInitialTheme() {
+function detectNativeTheme() {
 	const root = document.documentElement;
 	const body = document.body;
 	const signal = [
@@ -50,24 +18,21 @@ function detectInitialTheme() {
 	return 'light';
 }
 
-function applyUiTheme(pageRoot, theme, editors) {
-	const normalized = normalizeTheme(theme);
+function getPreferredAceTheme() {
+	return detectNativeTheme() === 'light' ? 'ace/theme/textmate' : 'ace/theme/tomorrow_night_bright';
+}
 
-	if (pageRoot) {
-		pageRoot.classList.toggle('sbox-theme-dark', normalized === 'dark');
-		pageRoot.classList.toggle('sbox-theme-light', normalized === 'light');
-
-		const btn = pageRoot.querySelector('#sbox-theme-toggle');
-		if (btn) {
-			btn.textContent = normalized === 'dark' ? '\u2600' : '\u263D';
-			btn.title = normalized === 'dark'
-				? _('Switch to light theme')
-				: _('Switch to dark theme');
-		}
+function applyThemeToEditor(editorInstance) {
+	if (!editorInstance) return;
+	try {
+		editorInstance.setTheme(getPreferredAceTheme());
+	} catch (e) {
+		editorInstance.setTheme('ace/theme/tomorrow_night_bright');
 	}
+}
 
-	(editors || []).forEach((editorInstance) => applyThemeToEditor(editorInstance, normalized));
-	return normalized;
+function applyThemeToEditors(editors) {
+	(editors || []).forEach(applyThemeToEditor);
 }
 
 function showModal(options) {
@@ -207,12 +172,9 @@ function stopInterval(timer) {
 }
 
 return L.Class.extend({
-	normalizeTheme: normalizeTheme,
+	detectNativeTheme: detectNativeTheme,
 	applyThemeToEditor: applyThemeToEditor,
-	readThemePreference: readThemePreference,
-	saveThemePreference: saveThemePreference,
-	detectInitialTheme: detectInitialTheme,
-	applyUiTheme: applyUiTheme,
+	applyThemeToEditors: applyThemeToEditors,
 	showModal: showModal,
 	withButtons: withButtons,
 	bindTabGroup: bindTabGroup,

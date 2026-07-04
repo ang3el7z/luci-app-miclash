@@ -52,7 +52,6 @@ const appState = {
 	activeCfgTab: 'config',
 	logsRaw: '',
 	logsUpdatedAt: 0,
-	uiTheme: 'dark',
 	releaseMeta: {
 		appVersion: '',
 		kernelVersion: '',
@@ -132,7 +131,6 @@ const createRulesetFile = view_miclash_rulesets_model.createFile;
 const saveRulesetFile = view_miclash_rulesets_model.saveFile;
 const deleteRulesetFile = view_miclash_rulesets_model.deleteFile;
 const saveRulesetWhitelist = view_miclash_rulesets_model.saveWhitelist;
-const normalizeTheme = view_miclash_ui_shell.normalizeTheme;
 const looksLikeBase64Text = view_miclash_subscription.looksLikeBase64Text;
 const tryDecodeBase64 = view_miclash_subscription.tryDecodeBase64;
 const looksLikeUriSubscription = view_miclash_subscription.looksLikeUriSubscription;
@@ -140,29 +138,11 @@ const looksLikeBase64Blob = view_miclash_subscription.looksLikeBase64Blob;
 const looksLikeYamlConfig = view_miclash_subscription.looksLikeYamlConfig;
 
 function applyThemeToEditor(editorInstance) {
-	view_miclash_ui_shell.applyThemeToEditor(editorInstance, appState.uiTheme);
-}
-
-async function readThemePreference() {
-	return view_miclash_ui_shell.readThemePreference();
-}
-
-async function saveThemePreference(theme) {
-	return view_miclash_ui_shell.saveThemePreference(theme);
+	view_miclash_ui_shell.applyThemeToEditor(editorInstance);
 }
 
 function applyEditorTheme() {
-	applyThemeToEditor(editor);
-	applyThemeToEditor(rulesetMainEditor);
-	applyThemeToEditor(rulesetWhitelistEditor);
-}
-
-function detectInitialTheme() {
-	return view_miclash_ui_shell.detectInitialTheme();
-}
-
-function applyUiTheme(theme) {
-	appState.uiTheme = view_miclash_ui_shell.applyUiTheme(pageRoot, theme, [
+	view_miclash_ui_shell.applyThemeToEditors([
 		editor,
 		rulesetMainEditor,
 		rulesetWhitelistEditor
@@ -681,7 +661,7 @@ function notifyDetailedError(title, detail) {
 	ui.addNotification(null, E('div', {}, [
 		E('p', String(title || '')),
 		E('pre', {
-			'style': 'margin: 6px 0 0; padding: 0 0 0 10px; font-size: 11px; line-height: 1.45; font-family: monospace; white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto; background: none; border: 0; border-left: 2px solid rgba(0,0,0,0.18);'
+			'style': 'margin: 6px 0 0; padding: 0 0 0 10px; font-size: 11px; line-height: 1.45; font-family: monospace; white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto; background: none; border: 0; border-left: 2px solid var(--sbox-border, currentColor);'
 		}, String(detail || _('unknown error')))
 	]), 'error');
 }
@@ -1492,7 +1472,6 @@ function buildPageHtml() {
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + '</span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
 			'</span>' +
-			'<button id="sbox-theme-toggle" type="button" class="cbi-button cbi-button-neutral sbox-header-button sbox-theme-toggle" title="' + safeText(_('Switch theme')) + '">o</button>' +
 			'<button id="sbox-dashboard" type="button" class="cbi-button sbox-header-button sbox-btn-dashboard ' + (appState.serviceRunning ? 'sbox-btn-dashboard-on' : 'sbox-btn-dashboard-off') + '"' +
 				(appState.serviceRunning ? '' : ' disabled') +
 			'>' + safeText(_('Dashboard')) + '</button>' +
@@ -1863,17 +1842,6 @@ function startUpdatePolling() {
 }
 
 function bindControlAndHeaderEvents() {
-	const themeBtn = pageRoot.querySelector('#sbox-theme-toggle');
-	if (themeBtn) {
-		themeBtn.addEventListener('click', () => {
-			const nextTheme = appState.uiTheme === 'dark' ? 'light' : 'dark';
-			applyUiTheme(nextTheme);
-			saveThemePreference(nextTheme).catch((e) => {
-				notify('error', _('Failed to save theme preference: %s').format(e.message));
-			});
-		});
-	}
-
 	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
 	const appAction = pageRoot.querySelector('#sbox-app-action');
 	if (appAction) {
@@ -2305,38 +2273,21 @@ function bindTabEvents() {
 const PAGE_CSS = `
 #tabmenu, .cbi-tabmenu { display: none !important; }
 .sbox-page {
-	--sbox-bg: linear-gradient(180deg, #111214 0%, #0f1012 100%);
-	--sbox-card: #17191d;
-	--sbox-border: #2a2d33;
-	--sbox-text: #e3e6eb;
-	--sbox-muted: #8f97a3;
-	--sbox-accent: #5c7088;
-	--sbox-success: #2ecc71;
-	--sbox-danger: #f85149;
-	--sbox-warn: #d29922;
-	--sbox-log-bg: #0b0c0f;
-	--sbox-panel-bg: rgba(255, 255, 255, 0.02);
-	--sbox-modal-bg: #171a1f;
+	--sbox-bg: transparent;
+	--sbox-card: var(--background-color-high, var(--background-color-medium, Canvas));
+	--sbox-border: var(--border-color-medium, var(--border-color-low, currentColor));
+	--sbox-text: var(--text-color-high, var(--text-color, CanvasText));
+	--sbox-muted: var(--text-color-medium, var(--text-color-low, GrayText));
+	--sbox-accent: var(--primary-color, var(--link-color, #0069d9));
+	--sbox-success: var(--success-color, #198754);
+	--sbox-danger: var(--error-color, var(--danger-color, #dc3545));
+	--sbox-warn: var(--warning-color, #b7791f);
+	--sbox-log-bg: var(--background-color-low, var(--background-color, Canvas));
+	--sbox-panel-bg: var(--background-color-medium, transparent);
+	--sbox-modal-bg: var(--background-color-high, Canvas);
+	--sbox-button-text: var(--button-text-color, #fff);
 	color: var(--sbox-text);
 }
-.sbox-page.sbox-theme-light {
-	--sbox-bg: linear-gradient(180deg, #f5f7fb 0%, #eef2f8 100%);
-	--sbox-card: #ffffff;
-	--sbox-border: #d8deea;
-	--sbox-text: #1d2634;
-	--sbox-muted: #5f6f86;
-	--sbox-accent: #2a78ff;
-	--sbox-success: #1f9c57;
-	--sbox-danger: #cc3b34;
-	--sbox-warn: #b8801d;
-	--sbox-log-bg: #f7f9fc;
-	--sbox-panel-bg: #f8fbff;
-	--sbox-modal-bg: #ffffff;
-}
-.sbox-page.sbox-theme-light .sbox-log-muted { color: #4f627a; }
-.sbox-page.sbox-theme-light .sbox-log-info { color: #1f9c57; }
-.sbox-page.sbox-theme-light .sbox-log-warn { color: #b8801d; }
-.sbox-page.sbox-theme-light .sbox-log-error { color: #cc3b34; }
 .sbox-page .main {
 	background: var(--sbox-bg);
 }
@@ -2378,8 +2329,8 @@ const PAGE_CSS = `
 	opacity: 1;
 	outline: none;
 }
-.sbox-version-action-install { color: #29a55a; }
-.sbox-version-action-reinstall { color: #2a78ff; }
+.sbox-version-action-install { color: var(--sbox-success); }
+.sbox-version-action-reinstall { color: var(--sbox-accent); }
 .sbox-version-action-busy {
 	pointer-events: none;
 }
@@ -2396,29 +2347,22 @@ const PAGE_CSS = `
 .sbox-btn-dashboard-on {
 	background: var(--sbox-accent) !important;
 	border-color: var(--sbox-accent) !important;
-	color: #fff !important;
+	color: var(--sbox-button-text) !important;
 }
 .sbox-btn-start {
 	background: var(--sbox-success) !important;
 	border-color: var(--sbox-success) !important;
-	color: #fff !important;
+	color: var(--sbox-button-text) !important;
 }
 .sbox-btn-stop,
 .sbox-btn-dashboard-off {
 	background: var(--sbox-danger) !important;
 	border-color: var(--sbox-danger) !important;
-	color: #fff !important;
+	color: var(--sbox-button-text) !important;
 }
 .sbox-btn-dashboard:disabled {
 	cursor: not-allowed;
 	opacity: 0.8;
-}
-.sbox-theme-toggle {
-	width: 24px;
-	min-width: 24px;
-	padding: 0;
-	font-size: 12px;
-	line-height: 1;
 }
 .sbox-card {
 	background: var(--sbox-card);
@@ -2471,14 +2415,12 @@ const PAGE_CSS = `
 	font-weight: 700;
 }
 .sbox-status-on {
-	background: rgba(46, 204, 113, 0.12);
-	border-color: rgba(46, 204, 113, 0.4);
-	color: #63d996;
+	border-color: var(--sbox-success);
+	color: var(--sbox-success);
 }
 .sbox-status-off {
-	background: rgba(248, 81, 73, 0.12);
-	border-color: rgba(248, 81, 73, 0.35);
-	color: #ff8f89;
+	border-color: var(--sbox-danger);
+	color: var(--sbox-danger);
 }
 .sbox-dot {
 	width: 8px;
@@ -2488,7 +2430,6 @@ const PAGE_CSS = `
 }
 .sbox-dot-on {
 	background: var(--sbox-success);
-	box-shadow: 0 0 8px rgba(46, 204, 113, 0.5);
 }
 .sbox-dot-off {
 	background: var(--sbox-danger);
@@ -2513,13 +2454,11 @@ const PAGE_CSS = `
 	cursor: help;
 }
 .sbox-guard-on {
-	background: rgba(46, 204, 113, 0.12);
-	border-color: rgba(46, 204, 113, 0.4);
-	color: #63d996;
+	border-color: var(--sbox-success);
+	color: var(--sbox-success);
 }
 .sbox-guard-off {
-	background: rgba(120, 120, 120, 0.12);
-	border-color: rgba(120, 120, 120, 0.35);
+	border-color: var(--sbox-border);
 	color: var(--sbox-muted);
 }
 .sbox-guard-dot {
@@ -2614,10 +2553,10 @@ const PAGE_CSS = `
 	line-height: 1.45;
 	white-space: pre;
 }
-.sbox-log-info { color: #4dd58a; }
-.sbox-log-warn { color: #e6b450; }
-.sbox-log-error { color: #ff7b72; }
-.sbox-log-muted { color: #93a4be; }
+.sbox-log-info { color: var(--sbox-success); }
+.sbox-log-warn { color: var(--sbox-warn); }
+.sbox-log-error { color: var(--sbox-danger); }
+.sbox-log-muted { color: var(--sbox-muted); }
 .sbox-settings-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(220px, 1fr));
@@ -2680,23 +2619,22 @@ const PAGE_CSS = `
 	border: 1px solid var(--sbox-border);
 	border-radius: 6px;
 	padding: 5px 8px;
-	background: rgba(255, 255, 255, 0.02);
+	background: var(--sbox-panel-bg);
 }
 .sbox-interface-item em {
-	color: #63d996;
+	color: var(--sbox-success);
 	font-style: normal;
 	font-size: 11px;
 }
 .sbox-interface-auto {
-	border-color: rgba(46, 204, 113, 0.55);
-	background: rgba(46, 204, 113, 0.08);
+	border-color: var(--sbox-success);
 }
 .sbox-settings-status {
 	margin-top: 10px;
 	border-left: 3px solid var(--sbox-accent);
 	padding: 8px 10px;
 	border-radius: 0 6px 6px 0;
-	background: rgba(255, 255, 255, 0.04);
+	background: var(--sbox-panel-bg);
 	font-size: 12px;
 	color: var(--sbox-text);
 	line-height: 1.5;
@@ -2727,7 +2665,7 @@ const PAGE_CSS = `
 .sbox-modal-overlay {
 	position: fixed;
 	inset: 0;
-	background: rgba(0, 0, 0, 0.7);
+	background: var(--modal-overlay-background, rgba(0, 0, 0, 0.7));
 	z-index: 10000;
 	display: flex;
 	align-items: center;
@@ -2735,12 +2673,12 @@ const PAGE_CSS = `
 }
 .sbox-modal {
 	width: min(92vw, 420px);
-	border: 1px solid var(--sbox-border, #2a2d33);
+	border: 1px solid var(--sbox-border);
 	border-radius: 10px;
-	background: var(--sbox-modal-bg, #171a1f);
-	color: var(--sbox-text, #e3e6eb);
+	background: var(--sbox-modal-bg);
+	color: var(--sbox-text);
 	padding: 14px;
-	box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+	box-shadow: var(--shadow-large, 0 20px 50px rgba(0, 0, 0, 0.45));
 }
 .sbox-modal-title {
 	font-size: 14px;
@@ -2748,7 +2686,7 @@ const PAGE_CSS = `
 	margin-bottom: 8px;
 }
 .sbox-modal-body {
-	color: var(--sbox-muted, #8f97a3);
+	color: var(--sbox-muted);
 	font-size: 12px;
 	line-height: 1.5;
 }
@@ -2806,7 +2744,7 @@ const PAGE_CSS = `
 	text-align: left;
 	border: 1px solid var(--sbox-border);
 	border-radius: 6px;
-	background: rgba(255, 255, 255, 0.02);
+	background: var(--sbox-panel-bg);
 	color: var(--sbox-text);
 	padding: 6px 8px;
 	cursor: pointer;
@@ -2818,7 +2756,6 @@ const PAGE_CSS = `
 }
 .sbox-ruleset-list-item.active {
 	border-color: var(--sbox-accent);
-	background: rgba(92, 112, 136, 0.2);
 }
 .sbox-rulesets-toolbar {
 	display: flex;
@@ -2867,10 +2804,9 @@ const PAGE_CSS = `
 }
 .sbox-rulesets-whitelist {
 	margin-top: 10px;
-	border: 1px solid rgba(46, 204, 113, 0.35);
+	border: 1px solid var(--sbox-success);
 	border-radius: 8px;
 	padding: 10px;
-	background: rgba(46, 204, 113, 0.06);
 }
 .sbox-rulesets-whitelist-head {
 	font-size: 13px;
@@ -2881,15 +2817,6 @@ const PAGE_CSS = `
 	height: 240px;
 	border: 1px solid var(--sbox-border);
 	border-radius: 8px;
-}
-.sbox-page.sbox-theme-light .sbox-ruleset-list-item {
-	background: #f3f6fb;
-}
-.sbox-page.sbox-theme-light .sbox-ruleset-list-item.active {
-	background: #dde9ff;
-}
-.sbox-page.sbox-theme-light .sbox-rulesets-whitelist {
-	background: #eefbf3;
 }
 @media (max-width: 980px) {
 	.sbox-config-toolbar {
@@ -2926,7 +2853,6 @@ return view.extend({
 		return Promise.all([
 			L.resolveDefault(fs.read(CONFIG_PATH), ''),
 			readSubscriptionUrl(),
-			readThemePreference(),
 			loadOperationalSettings(),
 			getNetworkInterfaces(),
 			getVersions(),
@@ -2943,14 +2869,12 @@ return view.extend({
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
 		appState.configContent = await readConfigFileByName(MAIN_CONFIG_NAME);
 		appState.subscriptionUrl = await readSubscriptionUrl(MAIN_CONFIG_NAME);
-		const savedTheme = String(data[2] || '').trim();
-		appState.uiTheme = savedTheme ? normalizeTheme(savedTheme) : detectInitialTheme();
-		appState.settings = data[3] || await loadOperationalSettings();
-		appState.interfaces = data[4] || [];
-		appState.versions = data[5] || { app: 'unknown', clash: 'unknown' };
-		appState.kernelStatus = data[6] || { installed: false, version: null };
-		appState.serviceRunning = !!data[7];
-		appState.proxyMode = data[8] || 'tproxy';
+		appState.settings = data[2] || await loadOperationalSettings();
+		appState.interfaces = data[3] || [];
+		appState.versions = data[4] || { app: 'unknown', clash: 'unknown' };
+		appState.kernelStatus = data[5] || { installed: false, version: null };
+		appState.serviceRunning = !!data[6];
+		appState.proxyMode = data[7] || 'tproxy';
 		view_miclash_route.applySection(appState, routeSection);
 
 		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
@@ -2963,10 +2887,6 @@ return view.extend({
 		]);
 
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
-		applyUiTheme(appState.uiTheme);
-		if (!savedTheme) {
-			saveThemePreference(appState.uiTheme).catch(() => {});
-		}
 
 		try {
 			await initializeAceEditor(appState.configContent);

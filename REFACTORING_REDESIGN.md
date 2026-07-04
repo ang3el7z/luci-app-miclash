@@ -162,8 +162,9 @@ and event binding.
 - Started `ui-shell.js` with generic modal rendering and button busy-state
   helpers; `config.js` keeps thin wrappers so existing MiClash event wiring does
   not churn.
-- Moved theme normalization, Ace theme application, theme persistence, and
-  root theme class/button updates into `ui-shell.js`.
+- Removed the custom MiClash theme toggle/persistence and made the LuCI page
+  inherit native LuCI theme variables; Ace editor theme is now detected from the
+  active LuCI/browser theme.
 - Moved tab binding and generic interval start/stop helpers into `ui-shell.js`;
   `config.js` keeps only MiClash state updates and side-effect callbacks.
 - Aligned OpenWrt transparent-proxy dependency declarations with upstream:
