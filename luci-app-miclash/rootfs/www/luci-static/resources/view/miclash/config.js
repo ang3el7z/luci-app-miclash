@@ -66,7 +66,7 @@ function notify(type, message) {
 	// "Auto-hide notifications" defaults to true; the toast disappears after a
 	// short timeout (longer for errors so the user has time to read them).
 	// When the user turns the option off, the toast stays until they close it
-	// manually Р Р†Р вЂљРІР‚Сњ useful for diagnosing rare issues without losing the message.
+	// manually - useful for diagnosing rare issues without losing the message.
 	const autoHide = !appState.settings || appState.settings.autoHideNotifications !== false;
 	if (node && autoHide) {
 		const timeout = type === 'error' ? 10000 : 6000;
@@ -2114,7 +2114,7 @@ function bindConfigEvents() {
 			const tested = await testConfigContent(editor.getValue(), true, selectedPath);
 			if (!tested.ok) {
 				notifyDetailedError(
-					_('Configuration test failed Р Р†Р вЂљРІР‚Сњ service not reloaded. Please fix the errors below:'),
+					_('Configuration test failed - service not reloaded. Please fix the errors below:'),
 					tested.message
 				);
 				return;

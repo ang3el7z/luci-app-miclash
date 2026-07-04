@@ -55,6 +55,10 @@ for (const file of files) {
 
 	const source = fs.readFileSync(file, 'utf8');
 	const requiredGlobals = new Set();
+	const mojibake = source.match(/(?:Р |РІР|вЂ|Р‚|Сњ)/);
+	if (mojibake) {
+		missing.push(`${path.relative(process.cwd(), file)} -> mojibake text ${mojibake[0]}`);
+	}
 
 	for (const match of source.matchAll(/'require view\.miclash\.([^']+)'/g)) {
 		const rel = match[1].replace(/\./g, path.sep) + '.js';
