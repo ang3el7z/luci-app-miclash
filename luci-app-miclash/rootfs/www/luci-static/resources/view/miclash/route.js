@@ -5,7 +5,6 @@ function getSection() {
 	const hash = String((window.location && window.location.hash) || '').replace(/^#/, '');
 
 	if (/\/miclash\/settings(?:\/|$)/.test(path) || hash === 'settings') return 'settings';
-	if (/\/miclash\/rulesets(?:\/|$)/.test(path) || hash === 'rulesets') return 'rulesets';
 	if (/\/miclash\/log(?:\/|$)/.test(path) || hash === 'log' || hash === 'logs') return 'log';
 	return 'config';
 }

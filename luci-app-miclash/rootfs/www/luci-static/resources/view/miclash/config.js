@@ -2763,14 +2763,6 @@ return view.extend({
 		startControlPolling();
 		startUpdatePolling();
 
-		if (routeSection === 'rulesets') {
-			setTimeout(() => {
-				openRulesetsModal().catch((e) => {
-					notify('error', _('Failed to open rulesets: %s').format(e.message));
-				});
-			}, 0);
-		}
-
 		document.addEventListener('visibilitychange', () => {
 			if (document.hidden) {
 				stopLogPolling();
