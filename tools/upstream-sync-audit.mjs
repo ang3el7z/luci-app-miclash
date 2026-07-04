@@ -30,6 +30,14 @@ function git(argv, options = {}) {
 	return String(result.stdout || '').trim();
 }
 
+function gitOk(argv) {
+	const result = spawnSync('git', argv, {
+		encoding: 'utf8',
+		stdio: 'ignore'
+	});
+	return result.status === 0;
+}
+
 function verifyRef(ref) {
 	git(['rev-parse', '--verify', `${ref}^{commit}`]);
 }
@@ -49,10 +57,15 @@ function filesChangedByCommit(commit) {
 	return out ? out.split('\n').filter(Boolean) : [];
 }
 
+function upstreamPathExists(file) {
+	return gitOk(['cat-file', '-e', `${base}:${file}`]);
+}
+
 function pathState(file) {
 	if (fs.existsSync(file)) return 'present';
 	const mapped = mapUpstreamPath(file);
 	if (mapped !== file && fs.existsSync(mapped)) return `mapped -> ${mapped}`;
+	if (!upstreamPathExists(file)) return 'obsolete upstream path';
 	return 'missing';
 }
 
@@ -79,12 +92,17 @@ const nameStatus = git(['diff', '--name-status', '--find-renames=50%', `${base}.
 	.filter(Boolean);
 const reviewQueue = new Map();
 const missingPaths = new Map();
+const obsoletePaths = new Map();
 
 function recordReview(file, commitHash, subject) {
 	const mapped = mapUpstreamPath(file);
 	const state = pathState(file);
 	const target = mapped !== file ? mapped : file;
-	const bucket = state === 'missing' ? missingPaths : reviewQueue;
+	const bucket = state === 'missing'
+		? missingPaths
+		: state === 'obsolete upstream path'
+			? obsoletePaths
+			: reviewQueue;
 	if (!bucket.has(target)) {
 		bucket.set(target, {
 			source: file,
@@ -143,6 +161,20 @@ if (missingPaths.size) {
 		const commits = info.commits.slice(0, 3).join('; ');
 		const more = info.commits.length > 3 ? `; +${info.commits.length - 3} more` : '';
 		console.log(`- ${target} [missing${risk}]`);
+		console.log(`  - upstream: ${info.source}${info.mapped !== info.source ? ` -> ${info.mapped}` : ''}`);
+		console.log(`  - commits: ${commits}${more}`);
+	}
+} else {
+	console.log('- none');
+}
+console.log();
+
+console.log(`## Obsolete upstream paths from recent commits`);
+if (obsoletePaths.size) {
+	for (const [target, info] of [...obsoletePaths.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+		const commits = info.commits.slice(0, 3).join('; ');
+		const more = info.commits.length > 3 ? `; +${info.commits.length - 3} more` : '';
+		console.log(`- ${target} [obsolete in ${base}]`);
 		console.log(`  - upstream: ${info.source}${info.mapped !== info.source ? ` -> ${info.mapped}` : ''}`);
 		console.log(`  - commits: ${commits}${more}`);
 	}
