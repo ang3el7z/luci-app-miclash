@@ -67,6 +67,26 @@ if (!/getActionTimeout\([\s\S]+START_SERVICE_TIMEOUT_MS/.test(serviceSource)) {
 	missing.push('service.js -> start/restart actions must use long action timeout defaults');
 }
 
+if (!/async function\s+dispatchActions\([^)]*\)[\s\S]+view_miclash_utils\.execDetached\([^)]*\)/.test(serviceSource)) {
+	missing.push('service.js -> service actions must be dispatched detached from LuCI request timeout');
+}
+
+if (!/\.join\(\s*['"];\s*['"]\s*\)/.test(serviceSource)) {
+	missing.push('service.js -> multiple init.d actions must run sequentially in one detached script');
+}
+
+if (!/async function\s+readDiagnostics\(\)[\s\S]+view_miclash_logs\.readRaw\(\)/.test(serviceSource)) {
+	missing.push('service.js -> service timeouts must include recent MiClash logs');
+}
+
+if (!/dispatchServiceActionsAndWaitOrThrow\(\s*\[\s*['"]enable['"]\s*,\s*['"]start['"]\s*\]\s*,\s*true\s*\)/.test(configSource)) {
+	missing.push('config.js -> start button must enable then start service and wait for running state');
+}
+
+if (!/dispatchServiceActionsAndWaitOrThrow\(\s*\[\s*['"]stop['"]\s*,\s*['"]disable['"]\s*\]\s*,\s*false\s*\)/.test(configSource)) {
+	missing.push('config.js -> stop button must stop then disable service and wait for stopped state');
+}
+
 if (!/function\s+isNetworkUpdateBlocked\(\)[\s\S]+view_miclash_guard\.isNetworkUpdateBlocked/.test(configSource)) {
 	missing.push('config.js -> subscription/update guard block helper is missing');
 }
