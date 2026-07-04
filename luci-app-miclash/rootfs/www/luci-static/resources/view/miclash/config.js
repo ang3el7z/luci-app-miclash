@@ -13,6 +13,7 @@
 'require view.miclash.rulesets-model';
 'require view.miclash.ui-shell';
 'require view.miclash.subscription';
+'require view.miclash.guard';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
@@ -375,9 +376,7 @@ function isRpcReconnectLikeError(message) {
 }
 
 async function installMiClashFromSettings(actionKind) {
-	if (isUpdateBlockedByGuard()) {
-		throw new Error(guardBlockedNetworkMessage());
-	}
+	assertNetworkUpdateAllowed();
 
 	const manager = await detectPackageManager();
 	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
@@ -472,9 +471,7 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 }
 
 async function installKernelFromSettings() {
-	if (isUpdateBlockedByGuard()) {
-		throw new Error(guardBlockedNetworkMessage());
-	}
+	assertNetworkUpdateAllowed();
 
 	const arch = await detectSystemArchitecture();
 	const release = await getLatestMihomoRelease();
@@ -692,9 +689,7 @@ async function testConfigContent(content, keepOnSuccess, targetPath) {
 }
 
 async function fetchSubscriptionAsYaml(url, targetPath) {
-	if (isUpdateBlockedByGuard()) {
-		throw new Error(guardBlockedNetworkMessage());
-	}
+	assertNetworkUpdateAllowed();
 
 	const settingsMap = await readSettingsMap();
 	const versions = await getVersions();
@@ -1626,21 +1621,15 @@ function updateHeaderAndControlDom() {
 }
 
 function isInternetOnlyEnabled() {
-	return !!(appState.settings && appState.settings.internetOnlyMiclash);
+	return view_miclash_guard.isInternetOnlyEnabled(appState.settings);
 }
 
-// Returns an Error to throw / a string to display when the user clicked an
-// "Update" button while the service is stopped but the "Internet only through
-// MiClash" guard is still active. In that combination all WAN-bound traffic
-// from the router is dropped at the firewall (no proxy is running to carry it),
-// so the request is guaranteed to fail. We surface a concrete instruction
-// instead of letting curl/XHR run into a generic timeout / DNS failure.
-function guardBlockedNetworkMessage() {
-	return _('Network access is blocked by "Internet only through MiClash". Start the service or disable this option in Settings to update.');
+function assertNetworkUpdateAllowed() {
+	view_miclash_guard.assertNetworkUpdateAllowed(appState.settings, appState.serviceRunning);
 }
 
-function isUpdateBlockedByGuard() {
-	return !appState.serviceRunning && isInternetOnlyEnabled();
+function isNetworkUpdateBlocked() {
+	return view_miclash_guard.isNetworkUpdateBlocked(appState.settings, appState.serviceRunning);
 }
 
 async function refreshHeaderAndControl() {
@@ -2087,12 +2076,20 @@ function bindConfigEvents() {
 				const url = String(subInput?.value || '').trim();
 				if (!url) throw new Error(_('Subscription URL is empty.'));
 				if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
-				await ensureMihomoKernelInstalled();
 
 				const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
 				const selectedPath = getConfigPathByName(selectedConfig);
 				await saveSubscriptionUrl(url, selectedConfig);
 				appState.subscriptionUrl = url;
+				appState.serviceRunning = await getServiceStatus();
+				updateHeaderAndControlDom();
+
+				if (isNetworkUpdateBlocked()) {
+					notify('warning', _('Subscription URL saved. Download skipped because "Internet only through MiClash" is enabled while the service is stopped.'));
+					return;
+				}
+
+				await ensureMihomoKernelInstalled();
 
 				const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
 				const currentSettings = appState.settings || await loadOperationalSettings();
@@ -2271,7 +2268,6 @@ function bindTabEvents() {
 }
 
 const PAGE_CSS = `
-#tabmenu, .cbi-tabmenu { display: none !important; }
 .sbox-page {
 	--sbox-bg: transparent;
 	--sbox-card: var(--background-color-high, var(--background-color-medium, Canvas));

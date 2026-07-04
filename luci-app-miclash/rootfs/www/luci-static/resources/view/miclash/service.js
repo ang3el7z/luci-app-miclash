@@ -1,7 +1,6 @@
 'use strict';
 'require view.miclash.utils';
 
-const SERVICE_ACTION_TIMEOUT_MS = 10000;
 const SERVICE_ACTION_SETTLE_MS = 300;
 
 function delay(ms) {
@@ -16,7 +15,7 @@ async function waitForStatus(targetStatus, timeoutMs) {
 	return view_miclash_utils.waitForServiceStatus(
 		getStatus,
 		!!targetStatus,
-		timeoutMs || SERVICE_ACTION_TIMEOUT_MS
+		timeoutMs || view_miclash_utils.SERVICE_POLL_TIMEOUT_MS
 	);
 }
 
