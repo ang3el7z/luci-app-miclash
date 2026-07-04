@@ -430,7 +430,8 @@ async function downloadMihomoKernel(downloadUrl, version, arch, options) {
 		if (result.code !== 0) {
 			throw new Error(String(result.stderr || result.stdout || _('Kernel download failed: %s').format(_('Download failed'))).trim());
 		}
-		notify('info', _('Mihomo kernel downloaded and installed.'));
+		const message = String(result.stdout || '').trim();
+		notify('info', message || _('Mihomo kernel downloaded and installed.'));
 		return true;
 	} catch (e) {
 		notify('error', _('Kernel download failed: %s').format(e.message));
@@ -450,15 +451,6 @@ async function installKernelFromSettings() {
 
 	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch, { skipNetworkPrepare: true });
 	if (!ok) return false;
-
-	if (await getServiceStatus()) {
-		try {
-			await restartOrReloadServiceOrThrow('restart');
-			notify('info', _('Kernel installed and service restarted.'));
-		} catch (e) {
-			notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
-		}
-	}
 
 	appState.kernelStatus = await getMihomoStatus();
 	appState.versions.clash = (appState.kernelStatus && appState.kernelStatus.version) || appState.versions.clash;
@@ -507,14 +499,6 @@ async function openKernelModal() {
 					ctx.button.textContent = _('Downloading...');
 					const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
 					if (ok) {
-						if (await getServiceStatus()) {
-							try {
-								await restartOrReloadServiceOrThrow('restart');
-								notify('info', _('Kernel installed and service restarted.'));
-							} catch (e) {
-								notify('error', _('Kernel installed, but failed to restart service: %s').format(e.message));
-							}
-						}
 						await refreshHeaderAndControl();
 						ctx.closeModal();
 					}

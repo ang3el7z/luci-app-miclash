@@ -1,4 +1,5 @@
 import os from 'node:os';
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -15,6 +16,27 @@ const scriptPath = path.join(
 const shell = process.env.SHELL_CHECK_BIN || 'sh';
 const lockDir = '/tmp/miclash-update.lock';
 const shellEnv = { ...process.env };
+const scriptSource = fs.readFileSync(scriptPath, 'utf8');
+const configPath = path.join(
+	process.cwd(),
+	'luci-app-miclash',
+	'rootfs',
+	'www',
+	'luci-static',
+	'resources',
+	'view',
+	'miclash',
+	'config.js'
+);
+const configSource = fs.readFileSync(configPath, 'utf8');
+
+if (!/install_kernel\(\)\s*{[\s\S]+pidof clash[\s\S]+\/etc\/init\.d\/clash stop[\s\S]+mv "\$extracted" \/opt\/clash\/bin\/clash[\s\S]+\/etc\/init\.d\/clash start/.test(scriptSource)) {
+	throw new Error('miclash-update: kernel install must stop running Clash before replace and restart it after replace');
+}
+
+if (/downloadMihomoKernel\([^)]*\)[\s\S]{0,500}restartOrReloadServiceOrThrow\('restart'\)/.test(configSource)) {
+	throw new Error('config.js: kernel install restart must stay in miclash-update, not LuCI UI');
+}
 
 if (path.isAbsolute(shell)) {
 	const shellBin = path.dirname(shell);

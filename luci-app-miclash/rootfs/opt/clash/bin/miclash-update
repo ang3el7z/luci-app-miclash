@@ -171,9 +171,21 @@ install_kernel() {
 	curl -L -fsS "$url" -o "$download" || fail "failed to download mihomo kernel"
 	gzip -dc "$download" > "$extracted" || fail "failed to extract mihomo kernel"
 	chmod +x "$extracted" || fail "failed to mark mihomo kernel executable"
+
+	was_running=0
+	if pidof clash >/dev/null 2>&1; then
+		was_running=1
+		/etc/init.d/clash stop || fail "failed to stop Clash service before replacing mihomo kernel"
+	fi
+
 	mv "$extracted" /opt/clash/bin/clash || fail "failed to install mihomo kernel"
 
-	echo "mihomo kernel installed"
+	if [ "$was_running" = "1" ]; then
+		/etc/init.d/clash start || fail "mihomo kernel installed, but failed to restart Clash service"
+		echo "mihomo kernel installed and Clash service restarted"
+	else
+		echo "mihomo kernel installed"
+	fi
 }
 
 case "${1:-}" in
