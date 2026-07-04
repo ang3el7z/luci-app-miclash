@@ -36,6 +36,8 @@ const banned = [
 	[/\bsbox-tab-active\b/, 'custom active tab state instead of native cbi-tab/cbi-tab-disabled'],
 	[/linear-gradient\(/i, 'custom gradient palette'],
 	[/border-radius:\s*999px/i, 'pill-shaped custom shell radius'],
+	[/transform:\s*scale\(/i, 'custom hover scaling instead of native LuCI interaction'],
+	[/transition:\s*[^;]+/i, 'custom transitions instead of native LuCI interaction'],
 	[/text-transform:\s*uppercase/i, 'custom uppercase tab typography'],
 	[/letter-spacing:\s*(?!0(?:[;\s]|$))/i, 'custom letter spacing']
 ];

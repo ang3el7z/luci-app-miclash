@@ -2242,13 +2242,9 @@ const PAGE_CSS = `
 	line-height: 1;
 	cursor: pointer;
 	user-select: none;
-	opacity: 0.95;
-	transition: transform 0.16s ease, opacity 0.16s ease;
 }
 .sbox-version-action-icon:hover,
 .sbox-version-action-icon:focus {
-	transform: scale(1.08);
-	opacity: 1;
 	outline: none;
 }
 .sbox-version-action-install { color: var(--sbox-success); }
@@ -2266,7 +2262,6 @@ const PAGE_CSS = `
 }
 .sbox-btn-dashboard:disabled {
 	cursor: not-allowed;
-	opacity: 0.8;
 }
 .sbox-tabs {
 	margin-bottom: 12px;
