@@ -91,7 +91,7 @@ function bindTabGroup(root, options) {
 	const opts = options || {};
 	const tabAttr = opts.tabAttr;
 	const panes = opts.panes || {};
-	const activeClass = opts.activeClass || 'sbox-tab-active';
+	const activeClass = opts.activeClass || '';
 	if (!root || !tabAttr) return function() {};
 
 	const tabs = Array.from(root.querySelectorAll('[data-' + tabAttr + ']'));
@@ -103,7 +103,7 @@ function bindTabGroup(root, options) {
 	function setActive(name) {
 		tabs.forEach((tab) => {
 			const active = tab.getAttribute('data-' + tabAttr) === name;
-			tab.classList.toggle(activeClass, active);
+			if (activeClass) tab.classList.toggle(activeClass, active);
 			if (tab.classList.contains('cbi-tab') || tab.classList.contains('cbi-tab-disabled')) {
 				tab.classList.toggle('cbi-tab', active);
 				tab.classList.toggle('cbi-tab-disabled', !active);

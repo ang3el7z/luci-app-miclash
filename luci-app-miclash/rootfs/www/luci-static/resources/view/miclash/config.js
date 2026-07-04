@@ -1396,7 +1396,7 @@ function buildPageHtml() {
 
 		'<div class="cbi-section">' +
 			'<div class="cbi-tabmenu sbox-tabs">' +
-				'<button type="button" class="cbi-tab sbox-tab sbox-tab-active" data-ctrl-tab="control">' + safeText(_('Control')) + '</button>' +
+				'<button type="button" class="cbi-tab sbox-tab" data-ctrl-tab="control">' + safeText(_('Control')) + '</button>' +
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-ctrl-tab="settings">' + safeText(_('Settings')) + '</button>' +
 			'</div>' +
 
@@ -1417,7 +1417,7 @@ function buildPageHtml() {
 
 		'<div class="cbi-section">' +
 			'<div class="cbi-tabmenu sbox-tabs">' +
-				'<button type="button" class="cbi-tab sbox-tab sbox-tab-active" data-cfg-tab="config">' + safeText(_('Config')) + '</button>' +
+				'<button type="button" class="cbi-tab sbox-tab" data-cfg-tab="config">' + safeText(_('Config')) + '</button>' +
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
 			'</div>' +
 
