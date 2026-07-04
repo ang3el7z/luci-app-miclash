@@ -9,7 +9,7 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
 LUCI_TITLE:=LuCI Support for MiClash
-LUCI_DEPENDS:=+luci-base +zlib +libcurl4 +curl +coreutils-base64 +kmod-tun
+LUCI_DEPENDS:=+luci-base +zlib +libcurl +curl +coreutils-base64 +kmod-tun
 LUCI_PKGARCH:=all
 
 PKG_CONFIG_DEPENDS:= \

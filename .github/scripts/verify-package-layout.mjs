@@ -22,6 +22,12 @@ const required = [
 const missing = required.filter((rel) => !fs.existsSync(path.join(root, rel)));
 
 const makefile = fs.readFileSync(path.join(root, 'luci-app-miclash/Makefile'), 'utf8');
+const runtimeDependencyFiles = [
+	'install-miclash.sh',
+	'luci-app-miclash/rootfs/opt/clash/bin/miclash-update',
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/package.js',
+	'README.md'
+];
 const expectedInstallSnippets = [
 	'./rootfs/etc/init.d/clash',
 	'./rootfs/etc/hotplug.d/iface/40-clash',
@@ -38,6 +44,21 @@ const expectedInstallSnippets = [
 
 for (const snippet of expectedInstallSnippets) {
 	if (!makefile.includes(snippet)) missing.push(`Makefile install snippet ${snippet}`);
+}
+
+if (!/^LUCI_DEPENDS:=.*\+zlib\b.*\+libcurl\b.*\+curl\b/m.test(makefile)) {
+	missing.push('Makefile LUCI_DEPENDS must use OpenWrt SDK package names +zlib +libcurl +curl');
+}
+
+if (/^LUCI_DEPENDS:=.*\+libcurl4\b/m.test(makefile)) {
+	missing.push('Makefile LUCI_DEPENDS must not use runtime package name +libcurl4');
+}
+
+for (const rel of runtimeDependencyFiles) {
+	const content = fs.readFileSync(path.join(root, rel), 'utf8');
+	if (!content.includes('zlib') || !content.includes('libcurl4') || !content.includes('curl')) {
+		missing.push(`${rel} must keep runtime dependency names zlib libcurl4 curl`);
+	}
 }
 
 const protectedPaths = fs
