@@ -17,8 +17,6 @@ const files = [
 	'ui-shell.js',
 	'guard.js',
 	'service.js',
-	'settings.js',
-	'rulesets.js',
 	'subscription.js'
 ].map((name) => path.join(viewDir, name));
 
@@ -76,6 +74,11 @@ if (fs.existsSync(path.join(viewDir, 'ace', 'theme-tomorrow_night_bright.js'))) 
 }
 if (fs.existsSync(path.join(viewDir, 'ace', 'ace.js'))) {
 	failures.push('ace/ace.js: custom editor palette/runtime must not be packaged');
+}
+for (const legacyView of ['settings.js', 'rulesets.js', 'log.js', 'route.js']) {
+	if (fs.existsSync(path.join(viewDir, legacyView))) {
+		failures.push(`${legacyView}: legacy routed view proxy must not be packaged`);
+	}
 }
 
 if (failures.length) {

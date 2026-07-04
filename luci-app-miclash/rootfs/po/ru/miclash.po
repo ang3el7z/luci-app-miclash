@@ -122,7 +122,7 @@ msgstr "Служба всё ещё перезапускается — на ме�
 msgid "Unable to save contents: %s"
 msgstr "Не удалось сохранить содержимое: %s"
 
-### Модуль log.js ###
+### Раздел журнала ###
 
 msgid "--- Log truncated, skipped %d older lines ---"
 msgstr "--- Лог урезан, пропущено %d старых строк ---"
@@ -133,7 +133,7 @@ msgstr "Ошибка выполнения logread:"
 msgid "Error reading logs: %s"
 msgstr "Ошибка чтения логов: %s"
 
-### Модуль rulesets.js ###
+### Раздел списков правил ###
 
 msgid "Local Rulesets"
 msgstr "Локальные списки правил"
@@ -210,7 +210,7 @@ msgstr "Белый список IP-CIDR сохранён, но обновлен�
 msgid "Failed to save IP-CIDR whitelist: %s"
 msgstr "Не удалось сохранить белый список IP-CIDR: %s"
 
-### Модуль settings.js ###
+### Раздел настроек ###
 
 msgid "WAN Interfaces"
 msgstr "WAN-интерфейсы"

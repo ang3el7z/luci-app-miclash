@@ -52,6 +52,12 @@ function mapUpstreamPath(file) {
 		.replace(/\/ssclash\.po$/g, '/miclash.po');
 }
 
+const intentionallyRemovedMappedPaths = new Set([
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/log.js',
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/rulesets.js',
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/settings.js'
+]);
+
 function filesChangedByCommit(commit) {
 	const out = git(['show', '--format=', '--name-only', commit]);
 	return out ? out.split('\n').filter(Boolean) : [];
@@ -65,6 +71,7 @@ function pathState(file) {
 	if (fs.existsSync(file)) return 'present';
 	const mapped = mapUpstreamPath(file);
 	if (mapped !== file && fs.existsSync(mapped)) return `mapped -> ${mapped}`;
+	if (intentionallyRemovedMappedPaths.has(mapped)) return 'intentionally removed local legacy path';
 	if (!upstreamPathExists(file)) return 'obsolete upstream path';
 	return 'missing';
 }
@@ -100,7 +107,7 @@ function recordReview(file, commitHash, subject) {
 	const target = mapped !== file ? mapped : file;
 	const bucket = state === 'missing'
 		? missingPaths
-		: state === 'obsolete upstream path'
+		: state === 'obsolete upstream path' || state === 'intentionally removed local legacy path'
 			? obsoletePaths
 			: reviewQueue;
 	if (!bucket.has(target)) {
@@ -174,7 +181,10 @@ if (obsoletePaths.size) {
 	for (const [target, info] of [...obsoletePaths.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
 		const commits = info.commits.slice(0, 3).join('; ');
 		const more = info.commits.length > 3 ? `; +${info.commits.length - 3} more` : '';
-		console.log(`- ${target} [obsolete in ${base}]`);
+		const label = info.state === 'intentionally removed local legacy path'
+			? 'intentionally removed local legacy path'
+			: `obsolete in ${base}`;
+		console.log(`- ${target} [${label}]`);
 		console.log(`  - upstream: ${info.source}${info.mapped !== info.source ? ` -> ${info.mapped}` : ''}`);
 		console.log(`  - commits: ${commits}${more}`);
 	}
