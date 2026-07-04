@@ -1220,9 +1220,9 @@ function buildInterfaceListHtml() {
 			const isAuto = autoInterface && iface.name === autoInterface;
 
 			return '' +
-				'<label class="sbox-interface-item' + (isAuto ? ' sbox-interface-auto' : '') + '">' +
+				'<label class="sbox-interface-item">' +
 				'<input type="checkbox" class="sbox-interface-check" value="' + safeText(iface.name) + '"' + (isChecked ? ' checked' : '') + ' />' +
-				'<span>' + safeText(iface.name) + (isAuto ? ' <em>(' + safeText(_('auto')) + ')</em>' : '') + '</span>' +
+				'<span>' + safeText(iface.name) + (isAuto ? ' <span class="sbox-muted">(' + safeText(_('auto')) + ')</span>' : '') + '</span>' +
 				'</label>';
 		}).join('');
 
@@ -1261,7 +1261,7 @@ function buildSettingsPaneHtml() {
 	const showTunStack = currentProxyMode === 'tun' || currentProxyMode === 'mixed';
 
 	return '' +
-		'<div id="sbox-settings-status" class="sbox-settings-status">' +
+		'<div id="sbox-settings-status" class="cbi-section-descr sbox-settings-status">' +
 			buildSettingsSummary() +
 		'</div>' +
 		'<div class="sbox-settings-gap" aria-hidden="true"></div>' +

@@ -270,24 +270,11 @@
 	border: 1px solid var(--sbox-border);
 	border-radius: 6px;
 	padding: 5px 8px;
-	background: var(--sbox-panel-bg);
-}
-.sbox-interface-item em {
-	color: var(--sbox-success);
-	font-style: normal;
-	font-size: 11px;
-}
-.sbox-interface-auto {
-	border-color: var(--sbox-success);
 }
 .sbox-settings-status {
 	margin-top: 10px;
-	border-left: 3px solid var(--sbox-accent);
-	padding: 8px 10px;
-	border-radius: 0 6px 6px 0;
-	background: var(--sbox-panel-bg);
+	padding: 0;
 	font-size: 12px;
-	color: var(--sbox-text);
 	line-height: 1.5;
 }
 .sbox-settings-gap {
