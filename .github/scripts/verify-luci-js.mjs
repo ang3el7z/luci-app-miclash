@@ -135,6 +135,10 @@ if (!rootMenuEntry) {
 	missing.push('menu -> missing admin/services/miclash root entry');
 }
 
+if (menuEntries.length !== 1) {
+	missing.push(`menu -> expected exactly one LuCI entry, found ${menuEntries.length}`);
+}
+
 if (rootMenuEntry?.action?.type !== 'view' || rootMenuEntry?.action?.path !== 'miclash/config') {
 	missing.push('menu -> admin/services/miclash must point directly to miclash/config');
 }

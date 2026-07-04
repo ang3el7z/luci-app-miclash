@@ -2316,7 +2316,7 @@ const PAGE_CSS = `
 	align-items: center;
 	gap: 6px;
 	padding: 4px 10px;
-	border-radius: 999px;
+	border-radius: 6px;
 	border: 1px solid transparent;
 	font-size: 12px;
 	font-weight: 700;
@@ -2352,7 +2352,7 @@ const PAGE_CSS = `
 	align-items: center;
 	gap: 5px;
 	padding: 2px 8px;
-	border-radius: 999px;
+	border-radius: 6px;
 	border: 1px solid transparent;
 	font-size: 11px;
 	font-weight: 700;

@@ -29,7 +29,8 @@ const banned = [
 	[/\bsbox-card\b/, 'custom card shell instead of cbi-section'],
 	[/\bsbox-modal-overlay\b/, 'custom modal overlay instead of ui.showModal'],
 	[/\bsbox-modal-window\b/, 'custom modal window instead of ui.showModal'],
-	[/linear-gradient\(/i, 'custom gradient palette']
+	[/linear-gradient\(/i, 'custom gradient palette'],
+	[/border-radius:\s*999px/i, 'pill-shaped custom shell radius']
 ];
 
 const colorLiteral = /(?:#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))/g;
