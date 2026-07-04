@@ -34,6 +34,7 @@ const banned = [
 	[/\bsbox-section\b/, 'custom cbi-section wrapper instead of native section styling'],
 	[/\bsbox-modal-overlay\b/, 'custom modal overlay instead of ui.showModal'],
 	[/\bsbox-modal-window\b/, 'custom modal window instead of ui.showModal'],
+	[/\bsbox-modal-(body|actions|content)\b/, 'custom modal internals instead of native LuCI modal structure'],
 	[/linear-gradient\(/i, 'custom gradient palette'],
 	[/border-radius:\s*999px/i, 'pill-shaped custom shell radius'],
 	[/text-transform:\s*uppercase/i, 'custom uppercase tab typography'],

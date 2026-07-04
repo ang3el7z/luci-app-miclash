@@ -5,8 +5,8 @@ function showModal(options) {
 	const opts = options || {};
 	const bodyNode = opts.body && opts.body.nodeType
 		? opts.body
-		: E('div', { 'class': 'sbox-modal-body' }, String(opts.body || ''));
-	const actionsNode = E('div', { 'class': 'sbox-modal-actions' });
+		: E('div', { 'class': 'cbi-section' }, String(opts.body || ''));
+	const actionsNode = E('div', { 'class': 'cbi-page-actions' });
 	let isClosed = false;
 	let observer = null;
 
@@ -51,9 +51,7 @@ function showModal(options) {
 		actionsNode.appendChild(button);
 	});
 
-	const content = E('div', {
-		'class': 'sbox-modal-content' + (opts.modalClass ? ' ' + opts.modalClass : '')
-	}, [
+	const content = E('div', opts.modalClass ? { 'class': opts.modalClass } : {}, [
 		bodyNode,
 		actionsNode
 	]);

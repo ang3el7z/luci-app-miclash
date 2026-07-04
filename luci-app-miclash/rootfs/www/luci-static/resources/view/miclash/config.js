@@ -470,7 +470,7 @@ async function openKernelModal() {
 			downloadLabel = _('Download Update');
 		}
 
-		const info = E('div', { 'class': 'sbox-modal-body' }, [
+		const info = E('div', { 'class': 'cbi-section' }, [
 			E('div', {}, _('Status: %s').format(status.installed ? _('Installed') : _('Not installed'))),
 			E('div', {}, _('Installed version: %s').format(status.installed ? status.version : _('Not installed'))),
 			E('div', {}, _('Architecture: %s').format(arch)),
@@ -895,7 +895,7 @@ async function openRulesetsModal() {
 	let currentRuleset = rulesetNames[0] || '';
 	const rulesetCache = Object.assign({}, data.contentMap || {});
 
-	const body = E('div', { 'class': 'sbox-modal-body sbox-rulesets-modal-body' });
+	const body = E('div', { 'class': 'cbi-section sbox-rulesets-modal-body' });
 	body.innerHTML = '' +
 		'<div class="sbox-rulesets-layout">' +
 			'<aside class="sbox-rulesets-sidebar">' +
@@ -2546,23 +2546,11 @@ const PAGE_CSS = `
 	animation: sbox-spin 0.65s linear infinite;
 	vertical-align: -0.1em;
 }
-.sbox-modal-body {
-	color: var(--sbox-muted);
-	font-size: 12px;
-	line-height: 1.5;
-}
-.sbox-modal-actions {
-	margin-top: 12px;
-	display: flex;
-	gap: 8px;
-	flex-wrap: wrap;
-	justify-content: flex-end;
-}
 .sbox-modal-wide {
 	width: min(96vw, 1180px);
 	max-height: 92vh;
 }
-.sbox-modal-wide .sbox-modal-body {
+.sbox-modal-wide .cbi-section {
 	max-height: calc(92vh - 104px);
 	overflow: hidden;
 }
