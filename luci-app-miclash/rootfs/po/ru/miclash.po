@@ -434,6 +434,9 @@ msgstr "Не удалось перезапустить службу Clash: %s"
 msgid "Downloading mihomo kernel..."
 msgstr "Загрузка ядра mihomo..."
 
+msgid "Updating mihomo kernel on router..."
+msgstr "Обновление ядра mihomo на роутере..."
+
 msgid "Mihomo kernel downloaded and installed successfully!"
 msgstr "Ядро Mihomo успешно загружено и установлено!"
 
@@ -959,6 +962,9 @@ msgstr "Ядро Mihomo загружено и установлено."
 
 msgid "Downloading MiClash package..."
 msgstr "Загрузка пакета MiClash..."
+
+msgid "Updating MiClash package on router..."
+msgstr "Обновление пакета MiClash на роутере..."
 
 msgid "MiClash package downloaded and installed."
 msgstr "Пакет MiClash загружен и установлен."

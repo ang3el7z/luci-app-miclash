@@ -7,7 +7,8 @@ const scripts = [
 	'luci-app-miclash/rootfs/etc/init.d/clash',
 	'luci-app-miclash/rootfs/etc/hotplug.d/iface/40-clash',
 	'luci-app-miclash/rootfs/etc/hotplug.d/net/99-clash-tun',
-	'luci-app-miclash/rootfs/opt/clash/bin/clash-rules'
+	'luci-app-miclash/rootfs/opt/clash/bin/clash-rules',
+	'luci-app-miclash/rootfs/opt/clash/bin/miclash-update'
 ];
 
 const shell = process.env.SHELL_CHECK_BIN || '/bin/sh';

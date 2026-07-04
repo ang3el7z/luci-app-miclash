@@ -115,9 +115,6 @@ const compareNumericVersions = view_miclash_release.compareNumericVersions;
 const findKernelAsset = view_miclash_release.findKernelAsset;
 const findMiClashAsset = view_miclash_release.findMiClashAsset;
 const detectPackageManager = view_miclash_package.detectPackageManager;
-const execOrThrow = view_miclash_package.execOrThrow;
-const installMiClashDependencies = view_miclash_package.installMiClashDependencies;
-const ensureCurlAvailable = view_miclash_package.ensureCurlAvailable;
 const getNetworkInterfaces = view_miclash_settings_model.getNetworkInterfaces;
 const transformProxyMode = view_miclash_settings_model.transformProxyMode;
 const detectCurrentProxyMode = view_miclash_settings_model.detectCurrentProxyMode;
@@ -389,84 +386,51 @@ async function installMiClashFromSettings(actionKind) {
 		throw new Error(_('Failed to load MiClash release information: %s').format(_('Download failed')));
 	}
 
-	const tmpPath = manager.type === 'apk' ? '/tmp/miclash-update.apk' : '/tmp/miclash-update.ipk';
 	const mode = String(actionKind || 'update');
-	const forceReinstall = mode === 'reinstall';
 
 	try {
-		notify('info', _('Downloading MiClash package...'));
-		await installMiClashDependencies(manager);
-		await execOrThrow('/usr/bin/curl', ['-L', '-fsS', asset.browser_download_url, '-o', tmpPath], _('Download failed'));
-
-		try {
-			if (manager.type === 'apk') {
-				await execOrThrow(
-					manager.bin,
-					forceReinstall
-						? ['add', '--force-reinstall', '--allow-untrusted', tmpPath]
-						: ['add', tmpPath, '--allow-untrusted'],
-					_('Failed to install MiClash package.')
-				);
-			} else {
-				await execOrThrow(
-					manager.bin,
-					forceReinstall
-						? ['--force-reinstall', 'install', tmpPath]
-						: ['install', tmpPath],
-					_('Failed to install MiClash package.')
-				);
-			}
-		} catch (e) {
-			if (!isRpcReconnectLikeError(e.message)) throw e;
+		notify('info', _('Updating MiClash package on router...'));
+		const result = await fs.exec('/opt/clash/bin/miclash-update', [
+			'app',
+			'--url', asset.browser_download_url,
+			'--mode', mode
+		]);
+		if (result.code !== 0) {
+			throw new Error(String(result.stderr || result.stdout || _('Failed to install MiClash package.')).trim());
+		}
+	} catch (e) {
+		if (isRpcReconnectLikeError(e.message)) {
 			notify('info', _('Connection interrupted while finalizing MiClash update. Reloading interface...'));
 			setTimeout(() => {
 				window.location.reload();
 			}, 3000);
 			return true;
 		}
-
-		notify('info', _('MiClash package downloaded and installed.'));
-		notify('info', _('MiClash package installed. Reloading interface...'));
-		setTimeout(() => {
-			window.location.reload();
-		}, 1500);
-		return true;
-	} finally {
-		try { await fs.remove(tmpPath); } catch (e) {}
+		throw e;
 	}
+
+	notify('info', _('MiClash package installed. Reloading interface...'));
+	setTimeout(() => {
+		window.location.reload();
+	}, 1500);
+	return true;
 }
 
 async function downloadMihomoKernel(downloadUrl, version, arch) {
-	const safeVersion = String(version || '').replace(/[^\w.-]/g, '');
-	const fileName = 'mihomo-linux-' + arch + '-' + safeVersion + '.gz';
-	const downloadPath = '/tmp/' + fileName;
-	const extractedFile = downloadPath.replace(/\.gz$/, '');
-	const targetFile = '/opt/clash/bin/clash';
-
 	try {
-		notify('info', _('Downloading mihomo kernel...'));
-
-		await ensureCurlAvailable();
-		const curlResult = await fs.exec('/usr/bin/curl', ['-L', '-fsS', downloadUrl, '-o', downloadPath]);
-		if (curlResult.code !== 0) {
-			throw new Error(String(curlResult.stderr || curlResult.stdout || _('Download failed')).trim());
+		notify('info', _('Updating mihomo kernel on router...'));
+		const result = await fs.exec('/opt/clash/bin/miclash-update', [
+			'kernel',
+			'--url', downloadUrl
+		]);
+		if (result.code !== 0) {
+			throw new Error(String(result.stderr || result.stdout || _('Kernel download failed: %s').format(_('Download failed'))).trim());
 		}
-
-		const extractResult = await fs.exec('/bin/gzip', ['-df', downloadPath]);
-		if (extractResult.code !== 0) {
-			throw new Error(String(extractResult.stderr || extractResult.stdout || _('Extraction failed')).trim());
-		}
-
-		await fs.exec('/bin/mv', [extractedFile, targetFile]);
-		await fs.exec('/bin/chmod', ['+x', targetFile]);
-
 		notify('info', _('Mihomo kernel downloaded and installed.'));
 		return true;
 	} catch (e) {
 		notify('error', _('Kernel download failed: %s').format(e.message));
 		return false;
-	} finally {
-		try { await fs.remove(downloadPath); } catch (removeErr) {}
 	}
 }
 

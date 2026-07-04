@@ -1,0 +1,159 @@
+#!/bin/sh
+
+set -u
+
+TMP_FILES=""
+
+cleanup() {
+	for file in $TMP_FILES; do
+		[ -n "$file" ] && rm -f "$file" 2>/dev/null || true
+	done
+}
+
+trap cleanup EXIT INT TERM
+
+fail() {
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+need_arg() {
+	[ $# -gt 1 ] || fail "missing value for $1"
+	printf '%s' "$2"
+}
+
+detect_pkg_manager() {
+	if command -v apk >/dev/null 2>&1; then
+		echo apk
+		return 0
+	fi
+	if command -v opkg >/dev/null 2>&1; then
+		echo opkg
+		return 0
+	fi
+	fail "no supported package manager found (apk/opkg)"
+}
+
+openwrt_major() {
+	. /etc/openwrt_release 2>/dev/null || true
+	printf '%s\n' "${DISTRIB_RELEASE:-}" | sed -n 's/^\([0-9][0-9]*\).*/\1/p'
+}
+
+install_deps() {
+	manager="$1"
+	if [ "$manager" = "apk" ]; then
+		apk update || fail "failed to update apk index"
+		apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64 || fail "failed to install dependencies"
+		return 0
+	fi
+
+	major="$(openwrt_major)"
+	tproxy_pkg="kmod-nft-tproxy"
+	if [ -n "$major" ] && [ "$major" -lt 23 ]; then
+		tproxy_pkg="iptables-mod-tproxy"
+	fi
+
+	opkg update || fail "failed to update opkg index"
+	opkg install zlib libcurl4 curl "$tproxy_pkg" kmod-tun coreutils-base64 || fail "failed to install dependencies"
+}
+
+install_app() {
+	url=""
+	mode="update"
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--url)
+				url="$(need_arg "$@")"
+				shift 2
+				;;
+			--mode)
+				mode="$(need_arg "$@")"
+				shift 2
+				;;
+			*)
+				fail "unknown app argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$url" ] || fail "missing --url"
+
+	manager="$(detect_pkg_manager)"
+	install_deps "$manager"
+
+	case "$manager" in
+		apk) tmp="/tmp/miclash-update-$$.apk" ;;
+		opkg) tmp="/tmp/miclash-update-$$.ipk" ;;
+		*) fail "unsupported package manager: $manager" ;;
+	esac
+	TMP_FILES="$TMP_FILES $tmp"
+
+	curl -L -fsS "$url" -o "$tmp" || fail "failed to download MiClash package"
+
+	if [ "$manager" = "apk" ]; then
+		if [ "$mode" = "reinstall" ]; then
+			apk add --force-reinstall --allow-untrusted "$tmp" || fail "failed to install MiClash package"
+		else
+			apk add "$tmp" --allow-untrusted || fail "failed to install MiClash package"
+		fi
+	else
+		if [ "$mode" = "reinstall" ]; then
+			opkg --force-reinstall install "$tmp" || fail "failed to install MiClash package"
+		else
+			opkg install "$tmp" || fail "failed to install MiClash package"
+		fi
+	fi
+
+	echo "MiClash package installed"
+}
+
+install_kernel() {
+	url=""
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--url)
+				url="$(need_arg "$@")"
+				shift 2
+				;;
+			*)
+				fail "unknown kernel argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$url" ] || fail "missing --url"
+
+	if ! command -v curl >/dev/null 2>&1; then
+		manager="$(detect_pkg_manager)"
+		install_deps "$manager"
+	fi
+
+	mkdir -p /opt/clash/bin || fail "failed to create /opt/clash/bin"
+
+	download="/tmp/mihomo-update-$$.gz"
+	extracted="/tmp/mihomo-update-$$"
+	TMP_FILES="$TMP_FILES $download $extracted"
+
+	curl -L -fsS "$url" -o "$download" || fail "failed to download mihomo kernel"
+	gzip -df "$download" || fail "failed to extract mihomo kernel"
+	mv "$extracted" /opt/clash/bin/clash || fail "failed to install mihomo kernel"
+	chmod +x /opt/clash/bin/clash || fail "failed to mark mihomo kernel executable"
+
+	echo "mihomo kernel installed"
+}
+
+case "${1:-}" in
+	app)
+		shift
+		install_app "$@"
+		;;
+	kernel)
+		shift
+		install_kernel "$@"
+		;;
+	*)
+		fail "usage: $0 app --url URL [--mode update|reinstall] | kernel --url URL"
+		;;
+esac
