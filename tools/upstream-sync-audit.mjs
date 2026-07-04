@@ -72,7 +72,7 @@ function pathState(file) {
 	const mapped = mapUpstreamPath(file);
 	if (mapped !== file && fs.existsSync(mapped)) return `mapped -> ${mapped}`;
 	if (intentionallyRemovedMappedPaths.has(mapped)) return 'intentionally removed local legacy path';
-	if (!upstreamPathExists(file)) return 'obsolete upstream path';
+	if (!upstreamPathExists(file)) return 'obsolete upstream path (absent locally)';
 	return 'missing';
 }
 
@@ -101,13 +101,21 @@ const reviewQueue = new Map();
 const missingPaths = new Map();
 const obsoletePaths = new Map();
 
+function hasLocalPathForUpstreamFile(file) {
+	const mapped = mapUpstreamPath(file);
+	return fs.existsSync(file) || fs.existsSync(mapped);
+}
+
 function recordReview(file, commitHash, subject) {
 	const mapped = mapUpstreamPath(file);
 	const state = pathState(file);
 	const target = mapped !== file ? mapped : file;
+	if (state.startsWith('obsolete upstream path') && !hasLocalPathForUpstreamFile(file)) {
+		return;
+	}
 	const bucket = state === 'missing'
 		? missingPaths
-		: state === 'obsolete upstream path' || state === 'intentionally removed local legacy path'
+		: state.startsWith('obsolete upstream path') || state === 'intentionally removed local legacy path'
 			? obsoletePaths
 			: reviewQueue;
 	if (!bucket.has(target)) {
