@@ -27,5 +27,8 @@ jobs:
       - name: Verify OpenWrt Shell Scripts
         run: node .github/scripts/verify-openwrt-shell.mjs
 
+      - name: Verify Update Script Behavior
+        run: node .github/scripts/verify-update-script.mjs
+
       - name: Verify Package Layout
         run: node .github/scripts/verify-package-layout.mjs
