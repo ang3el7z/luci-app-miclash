@@ -32,7 +32,6 @@ const banned = [
 	[/linear-gradient\(/i, 'custom gradient palette']
 ];
 
-const allowedNativeColorFallback = /var\([^;\n{}]*#[0-9a-fA-F]{3,8}[^;\n{}]*\)/g;
 const colorLiteral = /(?:#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))/g;
 const failures = [];
 
@@ -45,9 +44,8 @@ for (const file of files) {
 		if (match) failures.push(`${rel}: ${reason} (${match[0]})`);
 	}
 
-	const withoutAllowedFallbacks = source.replace(allowedNativeColorFallback, 'var(--native-fallback)');
-	for (const match of withoutAllowedFallbacks.matchAll(colorLiteral)) {
-		failures.push(`${rel}: hard-coded color outside native var fallback (${match[0]})`);
+	for (const match of source.matchAll(colorLiteral)) {
+		failures.push(`${rel}: hard-coded color outside native theme (${match[0]})`);
 	}
 }
 

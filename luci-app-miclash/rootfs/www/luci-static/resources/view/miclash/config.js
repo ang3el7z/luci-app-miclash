@@ -2222,10 +2222,10 @@ const PAGE_CSS = `
 	--sbox-border: var(--border-color-medium, var(--border-color-low, currentColor));
 	--sbox-text: var(--text-color-high, var(--text-color, CanvasText));
 	--sbox-muted: var(--text-color-medium, var(--text-color-low, GrayText));
-	--sbox-accent: var(--primary-color, var(--link-color, #0069d9));
-	--sbox-success: var(--success-color, #198754);
-	--sbox-danger: var(--error-color, var(--danger-color, #dc3545));
-	--sbox-warn: var(--warning-color, #b7791f);
+	--sbox-accent: var(--primary-color, var(--link-color, LinkText));
+	--sbox-success: var(--success-color, var(--color-success, currentColor));
+	--sbox-danger: var(--error-color, var(--danger-color, var(--color-error, currentColor)));
+	--sbox-warn: var(--warning-color, var(--color-warning, currentColor));
 	--sbox-log-bg: var(--background-color-low, var(--background-color, Canvas));
 	--sbox-panel-bg: var(--background-color-medium, transparent);
 	color: var(--sbox-text);

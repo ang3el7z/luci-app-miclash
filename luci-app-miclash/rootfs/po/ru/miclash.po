@@ -695,15 +695,6 @@ msgstr "Панель"
 msgid "Mode"
 msgstr "Режим"
 
-msgid "Switch theme"
-msgstr "Сменить тему"
-
-msgid "Switch to dark theme"
-msgstr "Переключить на тёмную тему"
-
-msgid "Switch to light theme"
-msgstr "Переключить на светлую тему"
-
 msgid "Config"
 msgstr "Конфиг"
 
@@ -926,9 +917,6 @@ msgstr "Не удалось сохранить список \"%s\": %s"
 
 msgid "Failed to save ruleset: %s"
 msgstr "Не удалось сохранить список правил: %s"
-
-msgid "Failed to save theme preference: %s"
-msgstr "Не удалось сохранить предпочтение темы: %s"
 
 msgid "Failed to switch proxy mode: %s"
 msgstr "Не удалось переключить режим прокси: %s"
