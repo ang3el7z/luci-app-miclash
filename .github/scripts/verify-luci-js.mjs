@@ -76,9 +76,25 @@ for (const file of files) {
 const menu = JSON.parse(fs.readFileSync(menuPath, 'utf8'));
 const acl = JSON.parse(fs.readFileSync(aclPath, 'utf8'));
 const miclashAcl = acl['luci-app-miclash'];
+const menuEntries = Object.keys(menu);
+const rootMenuEntry = menu['admin/services/miclash'];
 
 if (!miclashAcl) {
 	missing.push('ACL object luci-app-miclash');
+}
+
+if (!rootMenuEntry) {
+	missing.push('menu -> missing admin/services/miclash root entry');
+}
+
+if (rootMenuEntry?.action?.type !== 'view' || rootMenuEntry?.action?.path !== 'miclash/config') {
+	missing.push('menu -> admin/services/miclash must point directly to miclash/config');
+}
+
+for (const entry of menuEntries) {
+	if (/^admin\/services\/miclash\//.test(entry)) {
+		missing.push(`${entry} -> child LuCI menu entries would restore unwanted top tab groups`);
+	}
 }
 
 function aclFileEntries() {
