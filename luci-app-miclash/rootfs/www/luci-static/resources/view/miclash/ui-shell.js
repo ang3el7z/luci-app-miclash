@@ -114,7 +114,7 @@ function bindTabGroup(root, options) {
 
 		Object.keys(paneNodes).forEach((paneName) => {
 			const pane = paneNodes[paneName];
-			if (pane) pane.style.display = paneName === name ? '' : 'none';
+			if (pane) pane.hidden = paneName !== name;
 		});
 
 		if (opts.onChange) opts.onChange(name);

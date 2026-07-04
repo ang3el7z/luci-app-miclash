@@ -26,6 +26,7 @@ const banned = [
 	[/\bUI_THEME\b/, 'custom MiClash theme state'],
 	[/\bthemeToggle\b/, 'custom theme toggle'],
 	[/localStorage\.(?:getItem|setItem|removeItem)\([^)]*theme/i, 'persisted custom theme'],
+	[/(?:style=|['"]style['"]\s*:|\b[A-Za-z0-9_$]+\s*\.\s*style\s*\.)/i, 'inline style instead of native classes/hidden state'],
 	[/prefers-color-scheme/i, 'custom browser theme detection instead of native LuCI theme inheritance'],
 	[/\bace\.(?:edit|config)\b/i, 'Ace editor runtime instead of native LuCI themed textarea'],
 	[/tomorrow_night_bright/i, 'bundled custom dark Ace theme'],

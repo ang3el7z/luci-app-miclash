@@ -588,9 +588,7 @@ async function dispatchServiceActionsAndWaitOrThrow(actions, targetStatus) {
 function notifyDetailedError(title, detail) {
 	ui.addNotification(null, E('div', {}, [
 		E('p', String(title || '')),
-		E('pre', {
-			'style': 'margin: 6px 0 0; padding: 0 0 0 10px; font-size: 11px; line-height: 1.45; font-family: monospace; white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto; background: none; border: 0; border-left: 2px solid var(--sbox-border, currentColor);'
-		}, String(detail || _('unknown error')))
+		E('pre', { 'class': 'sbox-error-detail' }, String(detail || _('unknown error')))
 	]), 'error');
 }
 
@@ -918,19 +916,19 @@ async function openRulesetsModal() {
 					'</div>' +
 				'</div>' +
 				'<div id="sbox-ruleset-empty" class="sbox-rulesets-empty">' + safeText(_('No ruleset selected. Create one to begin.')) + '</div>' +
-				'<div id="sbox-ruleset-editor-wrap" class="sbox-ruleset-editor-wrap">' +
+				'<div id="sbox-ruleset-editor-wrap" class="sbox-ruleset-editor-wrap" hidden>' +
 					'<div id="sbox-ruleset-editor" class="sbox-ruleset-editor"></div>' +
 				'</div>' +
 				'<div class="sbox-rulesets-example">' +
-					'<div class="sbox-muted" style="margin-bottom:6px;">' + safeText(_('Example usage in config.yaml')) + '</div>' +
+					'<div class="sbox-muted sbox-rulesets-example-label">' + safeText(_('Example usage in config.yaml')) + '</div>' +
 					'<pre>rule-providers:\n  your-list:\n    behavior: classical\n    type: file\n    format: text\n    path: ./lst/your-list.txt</pre>' +
 				'</div>' +
 				(data.whitelistMode ? '' +
 					'<div class="sbox-rulesets-whitelist">' +
 						'<div class="sbox-rulesets-whitelist-head">' + safeText(_('IP-CIDR List (fake-ip whitelist mode)')) + '</div>' +
-						'<div class="sbox-muted" style="margin-bottom:8px;">' + safeText(_('One IPv4/CIDR per line. Save applies firewall update without restarting Mihomo.')) + '</div>' +
+						'<div class="sbox-muted sbox-rulesets-whitelist-note">' + safeText(_('One IPv4/CIDR per line. Save applies firewall update without restarting Mihomo.')) + '</div>' +
 						'<div id="sbox-ruleset-whitelist-editor" class="sbox-ruleset-whitelist-editor"></div>' +
-						'<div class="sbox-actions" style="margin-top:8px;">' +
+						'<div class="sbox-actions sbox-rulesets-whitelist-actions">' +
 							'<button id="sbox-ruleset-save-whitelist" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Save IP-CIDR List')) + '</button>' +
 						'</div>' +
 					'</div>'
@@ -968,8 +966,8 @@ async function openRulesetsModal() {
 		if (currentNode) currentNode.textContent = hasCurrent ? ('./lst/' + currentRuleset) : _('No file selected');
 		if (saveBtn) saveBtn.disabled = !hasCurrent;
 		if (deleteBtn) deleteBtn.disabled = !hasCurrent;
-		if (emptyNode) emptyNode.style.display = hasCurrent ? 'none' : '';
-		if (editorWrap) editorWrap.style.display = hasCurrent ? 'block' : 'none';
+		if (emptyNode) emptyNode.hidden = hasCurrent;
+		if (editorWrap) editorWrap.hidden = !hasCurrent;
 		if (hasCurrent) resizeAndFocusRulesetEditor(false);
 	}
 
@@ -1270,11 +1268,11 @@ function buildSettingsPaneHtml() {
 
 				'<section class="cbi-section sbox-settings-block">' +
 					'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
-					'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' style="display:none"') + '>' +
+					'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' hidden') + '>' +
 					'<input type="checkbox" id="sbox-auto-lan"' + (s.autoDetectLan ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Auto detect LAN bridge')) + '</span>' +
 				'</label>' +
-				'<label class="sbox-checkbox-row" id="sbox-auto-wan-row"' + (s.mode !== 'explicit' ? '' : ' style="display:none"') + '>' +
+				'<label class="sbox-checkbox-row" id="sbox-auto-wan-row"' + (s.mode !== 'explicit' ? '' : ' hidden') + '>' +
 					'<input type="checkbox" id="sbox-auto-wan"' + (s.autoDetectWan ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Auto detect WAN interface')) + '</span>' +
 				'</label>' +
@@ -1286,7 +1284,7 @@ function buildSettingsPaneHtml() {
 
 			'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
 				'<h4>' + safeText(_('Interfaces')) + '</h4>' +
-				'<div class="sbox-muted" style="margin-bottom:8px;">' +
+				'<div class="sbox-muted sbox-settings-help">' +
 					(s.mode === 'explicit'
 						? safeText(_('Choose interfaces that should go through proxy.'))
 						: safeText(_('Choose interfaces that should bypass proxy.'))
@@ -1297,7 +1295,7 @@ function buildSettingsPaneHtml() {
 
 				'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
 					'<h4>' + safeText(_('Additional')) + '</h4>' +
-					'<div id="sbox-tun-stack-row" style="margin-bottom:10px;' + (showTunStack ? '' : 'display:none;') + '">' +
+					'<div id="sbox-tun-stack-row" class="sbox-settings-field"' + (showTunStack ? '' : ' hidden') + '>' +
 						'<label>' + safeText(_('Tun stack')) + '</label>' +
 						'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
 							'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
@@ -1321,7 +1319,7 @@ function buildSettingsPaneHtml() {
 					'<input type="checkbox" id="sbox-auto-hide-notifications"' + (s.autoHideNotifications !== false ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Auto-hide notifications')) + '</span>' +
 				'</label>' +
-				'<div style="margin-bottom:10px;">' +
+				'<div class="sbox-settings-field">' +
 					'<label>' + safeText(_('Release channel')) + '</label>' +
 					'<select id="sbox-release-channel" class="cbi-input-select sbox-select">' +
 						'<option value="release"' + (normalizeReleaseChannel(s.releaseChannel) === 'release' ? ' selected' : '') + '>' + safeText(_('Release only')) + '</option>' +
@@ -1408,19 +1406,13 @@ function buildPageHtml() {
 							'<span class="sbox-dot ' + (appState.serviceRunning ? 'sbox-dot-on' : 'sbox-dot-off') + '"></span>' +
 							'<span id="sbox-status-label">' + safeText(appState.serviceRunning ? _('Service running') : _('Service stopped')) + '</span>' +
 						'</span>' +
-						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-service-button"' +
-							(appState.serviceRunning ? ' style="display:none"' : '') +
-						'>' + safeText(_('Start')) + '</button>' +
-						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' +
-							(appState.serviceRunning ? '' : ' style="display:none"') +
-						'>' + safeText(_('Stop')) + '</button>' +
-						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply"' +
-							(appState.serviceRunning ? '' : ' style="display:none"') +
-						'>' + safeText(_('Restart')) + '</button>' +
+						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-service-button"' + (appState.serviceRunning ? ' hidden' : '') + '>' + safeText(_('Start')) + '</button>' +
+						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop')) + '</button>' +
+						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
-			'<div id="sbox-pane-settings" style="display:none"></div>' +
+			'<div id="sbox-pane-settings" hidden></div>' +
 		'</div>' +
 
 		'<div class="cbi-section">' +
@@ -1440,16 +1432,14 @@ function buildPageHtml() {
 						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Validate YAML')) + '</button>' +
 						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
 						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear Editor')) + '</button>' +
-						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' +
-							(appState.selectedConfigName === MAIN_CONFIG_NAME ? ' style="display:none"' : '') +
-						'>' + safeText(_('Set as Main')) + '</button>' +
+						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
 					'</div>' +
 					'<div class="sbox-config-footer">' +
 						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Rulesets')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
-			'<div id="sbox-pane-logs" style="display:none">' +
+			'<div id="sbox-pane-logs" hidden>' +
 				'<div class="sbox-log-toolbar">' +
 					'<button id="sbox-log-refresh" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Refresh')) + '</button>' +
 					'<span id="sbox-log-updated" class="sbox-log-updated"></span>' +
@@ -1485,17 +1475,17 @@ function updateHeaderAndControlDom() {
 	}
 
 	if (startBtn) {
-		if (!serviceBusy) startBtn.style.display = appState.serviceRunning ? 'none' : '';
+		if (!serviceBusy) startBtn.hidden = appState.serviceRunning;
 		startBtn.disabled = serviceBusy || appState.serviceRunning;
 	}
 
 	if (stopBtn) {
-		if (!serviceBusy) stopBtn.style.display = appState.serviceRunning ? '' : 'none';
+		if (!serviceBusy) stopBtn.hidden = !appState.serviceRunning;
 		stopBtn.disabled = serviceBusy || !appState.serviceRunning;
 	}
 
 	if (restartBtn) {
-		if (!serviceBusy) restartBtn.style.display = appState.serviceRunning ? '' : 'none';
+		if (!serviceBusy) restartBtn.hidden = !appState.serviceRunning;
 		restartBtn.disabled = serviceBusy || !appState.serviceRunning;
 	}
 
@@ -1914,7 +1904,7 @@ async function switchConfigProfile(profileName) {
 		const setMainBtn = pageRoot.querySelector('#sbox-set-main-config');
 		if (selectEl) selectEl.value = selected;
 		if (urlEl) urlEl.value = appState.subscriptionUrl;
-		if (setMainBtn) setMainBtn.style.display = selected === MAIN_CONFIG_NAME ? 'none' : '';
+		if (setMainBtn) setMainBtn.hidden = selected === MAIN_CONFIG_NAME;
 	}
 }
 
@@ -2199,6 +2189,23 @@ const PAGE_CSS = `
 .sbox-page .main {
 	background: var(--sbox-bg);
 }
+.sbox-page [hidden] {
+	display: none !important;
+}
+.sbox-error-detail {
+	margin: 6px 0 0;
+	padding: 0 0 0 10px;
+	font-size: 11px;
+	line-height: 1.45;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 280px;
+	overflow: auto;
+	background: none;
+	border: 0;
+	border-left: 2px solid var(--sbox-border, currentColor);
+}
 .sbox-header {
 	display: flex;
 	align-items: center;
@@ -2445,6 +2452,12 @@ const PAGE_CSS = `
 .sbox-settings-block-wide {
 	grid-column: 1 / -1;
 }
+.sbox-settings-help {
+	margin-bottom: 8px;
+}
+.sbox-settings-field {
+	margin-bottom: 10px;
+}
 .sbox-radio-row,
 .sbox-checkbox-row {
 	display: flex;
@@ -2617,9 +2630,6 @@ const PAGE_CSS = `
 	display: flex;
 	gap: 8px;
 }
-.sbox-ruleset-editor-wrap {
-	display: none;
-}
 .sbox-ruleset-editor {
 	height: 48vh;
 	min-height: 320px;
@@ -2635,6 +2645,9 @@ const PAGE_CSS = `
 }
 .sbox-rulesets-example {
 	margin-top: 8px;
+}
+.sbox-rulesets-example-label {
+	margin-bottom: 6px;
 }
 .sbox-rulesets-example pre {
 	margin: 0;
@@ -2656,6 +2669,12 @@ const PAGE_CSS = `
 	font-size: 13px;
 	font-weight: 700;
 	margin-bottom: 4px;
+}
+.sbox-rulesets-whitelist-note {
+	margin-bottom: 8px;
+}
+.sbox-rulesets-whitelist-actions {
+	margin-top: 8px;
 }
 .sbox-ruleset-whitelist-editor {
 	height: 240px;
