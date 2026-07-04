@@ -1,8 +1,9 @@
 'use strict';
 'require fs';
+'require view.miclash.utils';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const SYSLOG_CLASH_RE = /^.*? ([\d:]{8}) .*?daemon\.(\w+)\s+(clash(?:-rules|-hotplug)?)\b(?:\[\d+\])?:\s*(.*)$/;
+const SYSLOG_CLASH_RE = /\w+\.(\w+)\s+(clash(?:-rules|-hotplug)?)(?:\[\d+\])?:\s*(.*)$/;
 
 async function readRaw() {
 	try {
@@ -24,17 +25,11 @@ async function readRaw() {
 	return '';
 }
 
-function normalizeMessage(message) {
-	let text = String(message || '').trim();
-	if (!text) return '';
-
-	const msgOnly = text.match(/^msg="(.*)"$/);
-	if (msgOnly) text = msgOnly[1];
-
-	const clashCore = text.match(/^time="[^"]+"\s+level=\w+\s+msg="(.*)"$/);
-	if (clashCore) text = clashCore[1];
-
-	return text.replace(/\\"/g, '"').trim();
+function extractLogTime(line) {
+	const bracket = String(line || '').match(/\[(\d{4}-\d{2}-\d{2}\s+([\d:]+))\]/);
+	if (bracket) return bracket[2] || bracket[1];
+	const classic = String(line || '').match(/\b(\d{2}:\d{2}:\d{2})\b/);
+	return classic ? classic[1] : '--:--:--';
 }
 
 function formatLine(line) {
@@ -43,22 +38,21 @@ function formatLine(line) {
 
 	const syslogMatch = raw.match(SYSLOG_CLASH_RE);
 	if (syslogMatch) {
-		const time = syslogMatch[1];
-		const level = String(syslogMatch[2] || '').toUpperCase();
-		const daemon = syslogMatch[3];
-		const message = normalizeMessage(syslogMatch[4]);
+		const level = String(syslogMatch[1] || '').toUpperCase();
+		const daemon = syslogMatch[2];
+		const message = view_miclash_utils.formatClashLogMessage(syslogMatch[3]);
 
 		return {
-			text: '[' + time + '] [' + daemon + '] [' + level + '] ' + message,
+			text: '[' + extractLogTime(raw) + '] [' + daemon + '] [' + level + '] ' + message,
 			level: level
 		};
 	}
 
-	const clashRawMatch = raw.match(/^time="([^"]+)"\s+level=(\w+)\s+msg="(.*)"$/);
+	const clashRawMatch = raw.match(/^time="([^"]+)"\s+level=(\w+)\s+msg="((?:\\.|[^"\\])*)"$/);
 	if (clashRawMatch) {
 		const isoTime = clashRawMatch[1];
 		const level = String(clashRawMatch[2] || '').toUpperCase();
-		const message = normalizeMessage(clashRawMatch[3]);
+		const message = view_miclash_utils.formatClashLogMessage('msg="' + clashRawMatch[3] + '"');
 		const time = (isoTime.match(/(\d{2}:\d{2}:\d{2})/) || [null, '--:--:--'])[1];
 
 		return {
