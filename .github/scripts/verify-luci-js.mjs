@@ -35,6 +35,7 @@ const aclPath = path.join(
 const servicePath = path.join(viewDir, 'service.js');
 const configPath = path.join(viewDir, 'config.js');
 const guardPath = path.join(viewDir, 'guard.js');
+const rulesetsPath = path.join(viewDir, 'rulesets-model.js');
 const routePath = path.join(viewDir, 'route.js');
 
 function walk(dir) {
@@ -52,6 +53,7 @@ const missing = [];
 const serviceSource = fs.readFileSync(servicePath, 'utf8');
 const configSource = fs.readFileSync(configPath, 'utf8');
 const guardSource = fs.readFileSync(guardPath, 'utf8');
+const rulesetsSource = fs.readFileSync(rulesetsPath, 'utf8');
 const routeSource = fs.existsSync(routePath) ? fs.readFileSync(routePath, 'utf8') : '';
 
 for (const [name, minValue] of [
@@ -143,6 +145,13 @@ if (!/result\.code\s*!==\s*0[\s\S]+return\s*{[\s\S]+repaired:\s*false[\s\S]+warn
 
 if (!/function\s+blockedNetworkMessage\(\)[\s\S]+Start the service or disable this option/.test(guardSource)) {
 	missing.push('guard.js -> blocked stopped-service guard message must explain the recovery action');
+}
+
+if (!/require view\.miclash\.utils/.test(rulesetsSource) ||
+	/fs\.write\(/.test(rulesetsSource) ||
+	!/view_miclash_utils\.writeFile\(\s*RULESET_PATH \+ fileName/.test(rulesetsSource) ||
+	!/view_miclash_utils\.writeFile\(\s*RULESET_PATH \+ FAKEIP_WHITELIST_FILENAME/.test(rulesetsSource)) {
+	missing.push('rulesets-model.js -> ruleset and whitelist writes must use chunked utils.writeFile');
 }
 
 if (!/async function\s+prepareNetworkUpdate\(\)[\s\S]+result\.warning[\s\S]+continuing update/.test(configSource)) {

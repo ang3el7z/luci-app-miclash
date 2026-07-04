@@ -1,5 +1,6 @@
 'use strict';
 'require fs';
+'require view.miclash.utils';
 
 const RULESET_PATH = '/opt/clash/lst/';
 const FAKEIP_WHITELIST_FILENAME = 'fakeip-whitelist-ipcidr.txt';
@@ -76,7 +77,7 @@ async function readData(configPath) {
 		const filePath = RULESET_PATH + FAKEIP_WHITELIST_FILENAME;
 		const existing = await L.resolveDefault(fs.read(filePath), null);
 		if (existing == null) {
-			await fs.write(filePath, '');
+			await view_miclash_utils.writeFile(filePath, '');
 		} else {
 			whitelistContent = existing;
 		}
@@ -91,11 +92,11 @@ async function readData(configPath) {
 }
 
 async function createFile(fileName) {
-	await fs.write(RULESET_PATH + fileName, '');
+	await view_miclash_utils.writeFile(RULESET_PATH + fileName, '');
 }
 
 async function saveFile(fileName, content) {
-	await fs.write(RULESET_PATH + fileName, String(content || ''));
+	await view_miclash_utils.writeFile(RULESET_PATH + fileName, String(content || ''));
 }
 
 async function deleteFile(fileName) {
@@ -103,7 +104,7 @@ async function deleteFile(fileName) {
 }
 
 async function saveWhitelist(content) {
-	await fs.write(RULESET_PATH + FAKEIP_WHITELIST_FILENAME, String(content || ''));
+	await view_miclash_utils.writeFile(RULESET_PATH + FAKEIP_WHITELIST_FILENAME, String(content || ''));
 	return fs.exec('/opt/clash/bin/clash-rules', ['update-ip-whitelist']);
 }
 
