@@ -140,7 +140,12 @@ function bindTabGroup(root, options) {
 
 	function setActive(name) {
 		tabs.forEach((tab) => {
-			tab.classList.toggle(activeClass, tab.getAttribute('data-' + tabAttr) === name);
+			const active = tab.getAttribute('data-' + tabAttr) === name;
+			tab.classList.toggle(activeClass, active);
+			if (tab.classList.contains('cbi-tab') || tab.classList.contains('cbi-tab-disabled')) {
+				tab.classList.toggle('cbi-tab', active);
+				tab.classList.toggle('cbi-tab-disabled', !active);
+			}
 		});
 
 		Object.keys(paneNodes).forEach((paneName) => {

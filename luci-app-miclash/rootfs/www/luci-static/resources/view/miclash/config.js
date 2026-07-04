@@ -1296,7 +1296,7 @@ function buildSettingsPaneHtml() {
 		'</div>' +
 		'<div class="sbox-settings-gap" aria-hidden="true"></div>' +
 		'<div class="sbox-settings-grid">' +
-			'<section class="sbox-settings-block">' +
+			'<section class="cbi-section sbox-settings-block">' +
 				'<h4>' + safeText(_('Traffic Scope')) + '</h4>' +
 				'<label class="sbox-radio-row">' +
 					'<input type="radio" name="sbox-interface-mode" value="exclude"' + (s.mode !== 'explicit' ? ' checked' : '') + ' />' +
@@ -1308,7 +1308,7 @@ function buildSettingsPaneHtml() {
 					'</label>' +
 				'</section>' +
 
-				'<section class="sbox-settings-block">' +
+				'<section class="cbi-section sbox-settings-block">' +
 					'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
 					'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' style="display:none"') + '>' +
 					'<input type="checkbox" id="sbox-auto-lan"' + (s.autoDetectLan ? ' checked' : '') + ' />' +
@@ -1324,7 +1324,7 @@ function buildSettingsPaneHtml() {
 				'</div>' +
 			'</section>' +
 
-			'<section class="sbox-settings-block sbox-settings-block-wide">' +
+			'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
 				'<h4>' + safeText(_('Interfaces')) + '</h4>' +
 				'<div class="sbox-muted" style="margin-bottom:8px;">' +
 					(s.mode === 'explicit'
@@ -1335,7 +1335,7 @@ function buildSettingsPaneHtml() {
 				buildInterfaceListHtml() +
 				'</section>' +
 
-				'<section class="sbox-settings-block sbox-settings-block-wide">' +
+				'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
 					'<h4>' + safeText(_('Additional')) + '</h4>' +
 					'<div id="sbox-tun-stack-row" style="margin-bottom:10px;' + (showTunStack ? '' : 'display:none;') + '">' +
 						'<label>' + safeText(_('Tun stack')) + '</label>' +
@@ -1431,15 +1431,15 @@ function buildPageHtml() {
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + '</span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
 			'</span>' +
-			'<button id="sbox-dashboard" type="button" class="cbi-button sbox-header-button sbox-btn-dashboard ' + (appState.serviceRunning ? 'sbox-btn-dashboard-on' : 'sbox-btn-dashboard-off') + '"' +
+			'<button id="sbox-dashboard" type="button" class="cbi-button ' + (appState.serviceRunning ? 'cbi-button-apply' : 'cbi-button-neutral') + ' sbox-header-button sbox-btn-dashboard"' +
 				(appState.serviceRunning ? '' : ' disabled') +
 			'>' + safeText(_('Dashboard')) + '</button>' +
 		'</div>' +
 
-		'<div class="sbox-card">' +
-			'<div class="sbox-card-tabs">' +
-				'<button type="button" class="sbox-tab sbox-tab-active" data-ctrl-tab="control">' + safeText(_('Control')) + '</button>' +
-				'<button type="button" class="sbox-tab" data-ctrl-tab="settings">' + safeText(_('Settings')) + '</button>' +
+		'<div class="cbi-section sbox-section">' +
+			'<div class="cbi-tabmenu sbox-tabs">' +
+				'<button type="button" class="cbi-tab sbox-tab sbox-tab-active" data-ctrl-tab="control">' + safeText(_('Control')) + '</button>' +
+				'<button type="button" class="cbi-tab-disabled sbox-tab" data-ctrl-tab="settings">' + safeText(_('Settings')) + '</button>' +
 			'</div>' +
 
 				'<div id="sbox-pane-control">' +
@@ -1448,13 +1448,13 @@ function buildPageHtml() {
 							'<span class="sbox-dot ' + (appState.serviceRunning ? 'sbox-dot-on' : 'sbox-dot-off') + '"></span>' +
 							'<span id="sbox-status-label">' + safeText(appState.serviceRunning ? _('Service running') : _('Service stopped')) + '</span>' +
 						'</span>' +
-						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-btn-start sbox-service-button"' +
+						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-service-button"' +
 							(appState.serviceRunning ? ' style="display:none"' : '') +
 						'>' + safeText(_('Start')) + '</button>' +
-						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-btn-stop sbox-service-button"' +
+						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' +
 							(appState.serviceRunning ? '' : ' style="display:none"') +
 						'>' + safeText(_('Stop')) + '</button>' +
-						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply sbox-btn-restart"' +
+						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply"' +
 							(appState.serviceRunning ? '' : ' style="display:none"') +
 						'>' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
@@ -1463,10 +1463,10 @@ function buildPageHtml() {
 			'<div id="sbox-pane-settings" style="display:none"></div>' +
 		'</div>' +
 
-		'<div class="sbox-card">' +
-			'<div class="sbox-card-tabs">' +
-				'<button type="button" class="sbox-tab sbox-tab-active" data-cfg-tab="config">' + safeText(_('Config')) + '</button>' +
-				'<button type="button" class="sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
+		'<div class="cbi-section sbox-section">' +
+			'<div class="cbi-tabmenu sbox-tabs">' +
+				'<button type="button" class="cbi-tab sbox-tab sbox-tab-active" data-cfg-tab="config">' + safeText(_('Config')) + '</button>' +
+				'<button type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
 			'</div>' +
 
 				'<div id="sbox-pane-config">' +
@@ -1541,8 +1541,9 @@ function updateHeaderAndControlDom() {
 
 	if (dashboardBtn) {
 		dashboardBtn.disabled = serviceBusy || !appState.serviceRunning;
-		dashboardBtn.className = 'cbi-button sbox-header-button sbox-btn-dashboard ' +
-			(appState.serviceRunning ? 'sbox-btn-dashboard-on' : 'sbox-btn-dashboard-off');
+		dashboardBtn.className = 'cbi-button ' +
+			(appState.serviceRunning ? 'cbi-button-apply' : 'cbi-button-neutral') +
+			' sbox-header-button sbox-btn-dashboard';
 	}
 
 	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
@@ -2234,7 +2235,6 @@ function bindTabEvents() {
 const PAGE_CSS = `
 .sbox-page {
 	--sbox-bg: transparent;
-	--sbox-card: var(--background-color-high, var(--background-color-medium, Canvas));
 	--sbox-border: var(--border-color-medium, var(--border-color-low, currentColor));
 	--sbox-text: var(--text-color-high, var(--text-color, CanvasText));
 	--sbox-muted: var(--text-color-medium, var(--text-color-low, GrayText));
@@ -2245,7 +2245,6 @@ const PAGE_CSS = `
 	--sbox-log-bg: var(--background-color-low, var(--background-color, Canvas));
 	--sbox-panel-bg: var(--background-color-medium, transparent);
 	--sbox-modal-bg: var(--background-color-high, Canvas);
-	--sbox-button-text: var(--button-text-color, #fff);
 	color: var(--sbox-text);
 }
 .sbox-page .main {
@@ -2302,58 +2301,23 @@ const PAGE_CSS = `
 	padding: 2px 8px;
 	min-height: 24px;
 }
-.sbox-btn-validate,
-.sbox-btn-restart,
-.sbox-btn-dashboard-on {
-	background: var(--sbox-accent) !important;
-	border-color: var(--sbox-accent) !important;
-	color: var(--sbox-button-text) !important;
-}
-.sbox-btn-start {
-	background: var(--sbox-success) !important;
-	border-color: var(--sbox-success) !important;
-	color: var(--sbox-button-text) !important;
-}
-.sbox-btn-stop,
-.sbox-btn-dashboard-off {
-	background: var(--sbox-danger) !important;
-	border-color: var(--sbox-danger) !important;
-	color: var(--sbox-button-text) !important;
-}
 .sbox-btn-dashboard:disabled {
 	cursor: not-allowed;
 	opacity: 0.8;
 }
-.sbox-card {
-	background: var(--sbox-card);
-	border: 1px solid var(--sbox-border);
-	border-radius: 10px;
-	padding: 14px;
-	margin-bottom: 10px;
+.sbox-section {
+	margin-bottom: 1em;
 }
-.sbox-card-tabs {
-	display: flex;
-	gap: 2px;
-	border-bottom: 1px solid var(--sbox-border);
+.sbox-tabs {
 	margin-bottom: 12px;
 }
 .sbox-tab {
 	appearance: none;
-	border: none;
-	background: transparent;
-	color: var(--sbox-muted);
 	text-transform: uppercase;
 	letter-spacing: 0.08em;
 	font-size: 11px;
 	font-weight: 700;
-	padding: 6px 10px;
-	border-bottom: 2px solid transparent;
 	cursor: pointer;
-}
-.sbox-tab:hover { color: var(--sbox-text); }
-.sbox-tab-active {
-	color: var(--sbox-text);
-	border-bottom-color: var(--sbox-accent);
 }
 .sbox-row {
 	display: flex;
@@ -2438,10 +2402,6 @@ const PAGE_CSS = `
 	height: 24px;
 	padding: 0 6px;
 	font-size: 11px;
-	background: var(--sbox-card);
-	color: var(--sbox-text);
-	border: 1px solid var(--sbox-border);
-	border-radius: 6px;
 }
 .sbox-mode-select:disabled {
 	opacity: 0.75;
@@ -2523,10 +2483,8 @@ const PAGE_CSS = `
 	gap: 10px;
 }
 .sbox-settings-block {
-	border: 1px solid var(--sbox-border);
-	border-radius: 8px;
 	padding: 10px;
-	background: var(--sbox-panel-bg);
+	margin: 0;
 }
 .sbox-settings-block h4 {
 	margin: 0 0 8px;
