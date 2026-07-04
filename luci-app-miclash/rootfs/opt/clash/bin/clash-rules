@@ -3173,6 +3173,60 @@ repair_policy_routing_state() {
     validate_policy_routing_state
 }
 
+traffic_rules_exist() {
+    if hash nft 2>/dev/null; then
+        nft list chain inet clash mangle >/dev/null 2>&1 || return 1
+        nft list chain inet clash output >/dev/null 2>&1 || return 1
+        case "$INTERNET_ONLY_MICLASH:$PROXY_MODE" in
+            true:tproxy|true:mixed)
+                nft list chain inet clash output_redir >/dev/null 2>&1 || return 1
+                ;;
+        esac
+        return 0
+    fi
+
+    if hash iptables 2>/dev/null; then
+        iptables -t mangle -S CLASH >/dev/null 2>&1 || return 1
+        iptables -t mangle -C PREROUTING -j CLASH >/dev/null 2>&1 || return 1
+        case "$MODE" in
+            explicit) ;;
+            *)
+                iptables -t mangle -S CLASH_LOCAL >/dev/null 2>&1 || return 1
+                iptables -t mangle -C OUTPUT -j CLASH_LOCAL >/dev/null 2>&1 || return 1
+                ;;
+        esac
+        case "$INTERNET_ONLY_MICLASH:$PROXY_MODE" in
+            true:tproxy|true:mixed)
+                iptables -t nat -S CLASH_OUTPUT_REDIRECT >/dev/null 2>&1 || return 1
+                iptables -t nat -C OUTPUT -j CLASH_OUTPUT_REDIRECT >/dev/null 2>&1 || return 1
+                ;;
+        esac
+        return 0
+    fi
+
+    return 1
+}
+
+repair_network_path() {
+    load_all_settings_once
+
+    if ! traffic_rules_exist; then
+        msg "Network path rules missing; rebuilding Clash rules"
+        cleanup_nft_runtime_rules
+        cleanup_iptables_runtime_rules
+        start || return 1
+    fi
+
+    repair_policy_routing_state || return 1
+    repair_forward_rules || return 1
+
+    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+        apply_guard_rules || return 1
+    else
+        remove_guard_rules
+    fi
+}
+
 # =============================================================================
 # SECTION: bridge-nf-call — prevent double-processing on bridged interfaces
 # =============================================================================
@@ -3482,6 +3536,15 @@ case "$1" in
             exit 1
         fi
         ;;
+    repair_network_path)
+        if repair_network_path; then
+            msg "Network path repaired successfully"
+            exit 0
+        else
+            warn "Network path repair failed"
+            exit 1
+        fi
+        ;;
     validate_forward)
         if validate_forward_state; then
             msg "Forward firewall rules are healthy"
@@ -3496,7 +3559,7 @@ case "$1" in
         exit $?
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|repair_forward_rules}"
+        echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|repair_network_path|validate_forward|repair_forward_rules}"
         exit 1
         ;;
 esac

@@ -1107,6 +1107,12 @@ msgstr "ВЫКЛ"
 msgid "Network access is blocked by \"Internet only through MiClash\". Start the service or disable this option in Settings to update."
 msgstr "Сетевой доступ заблокирован опцией \"Интернет только через MiClash\". Запустите службу или отключите эту опцию в настройках, чтобы обновить."
 
+msgid "Network path repair failed."
+msgstr "Не удалось восстановить сетевой путь."
+
+msgid "Network path repair failed, continuing update: %s"
+msgstr "Не удалось восстановить сетевой путь, продолжаю обновление: %s"
+
 msgid "Subscription URL saved. Download skipped because \"Internet only through MiClash\" is enabled while the service is stopped."
 msgstr "URL подписки сохранён. Загрузка пропущена: включена защита \"Интернет только через MiClash\", а служба остановлена."
 

@@ -373,7 +373,7 @@ function isRpcReconnectLikeError(message) {
 }
 
 async function installMiClashFromSettings(actionKind) {
-	assertNetworkUpdateAllowed();
+	await prepareNetworkUpdate();
 
 	const manager = await detectPackageManager();
 	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
@@ -416,7 +416,11 @@ async function installMiClashFromSettings(actionKind) {
 	return true;
 }
 
-async function downloadMihomoKernel(downloadUrl, version, arch) {
+async function downloadMihomoKernel(downloadUrl, version, arch, options) {
+	if (!(options && options.skipNetworkPrepare)) {
+		await prepareNetworkUpdate();
+	}
+
 	try {
 		notify('info', _('Updating mihomo kernel on router...'));
 		const result = await fs.exec('/opt/clash/bin/miclash-update', [
@@ -435,7 +439,7 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 }
 
 async function installKernelFromSettings() {
-	assertNetworkUpdateAllowed();
+	await prepareNetworkUpdate();
 
 	const arch = await detectSystemArchitecture();
 	const release = await getLatestMihomoRelease();
@@ -444,7 +448,7 @@ async function installKernelFromSettings() {
 	if (!release) throw new Error(_('Failed to load kernel information: %s').format(_('Unavailable')));
 	if (!asset || !asset.browser_download_url) throw new Error(_('Failed to load kernel information: %s').format(_('Download failed')));
 
-	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
+	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch, { skipNetworkPrepare: true });
 	if (!ok) return false;
 
 	if (await getServiceStatus()) {
@@ -645,7 +649,7 @@ async function testConfigContent(content, keepOnSuccess, targetPath) {
 }
 
 async function fetchSubscriptionAsYaml(url, targetPath) {
-	assertNetworkUpdateAllowed();
+	await prepareNetworkUpdate();
 
 	const settingsMap = await readSettingsMap();
 	const versions = await getVersions();
@@ -1579,8 +1583,12 @@ function isInternetOnlyEnabled() {
 	return view_miclash_guard.isInternetOnlyEnabled(appState.settings);
 }
 
-function assertNetworkUpdateAllowed() {
-	view_miclash_guard.assertNetworkUpdateAllowed(appState.settings, appState.serviceRunning);
+async function prepareNetworkUpdate() {
+	const result = await view_miclash_guard.prepareNetworkUpdate(appState.settings, appState.serviceRunning);
+	if (result && result.warning) {
+		notify('warning', _('Network path repair failed, continuing update: %s').format(result.warning));
+	}
+	return result;
 }
 
 function isNetworkUpdateBlocked() {

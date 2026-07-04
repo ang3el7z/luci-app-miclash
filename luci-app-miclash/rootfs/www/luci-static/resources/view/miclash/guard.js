@@ -1,4 +1,5 @@
 'use strict';
+'require fs';
 
 function isInternetOnlyEnabled(settings) {
 	return !!(settings && settings.internetOnlyMiclash);
@@ -18,9 +19,32 @@ function assertNetworkUpdateAllowed(settings, serviceRunning) {
 	}
 }
 
+function execMessage(result) {
+	return String((result && (result.stderr || result.stdout)) || '').trim();
+}
+
+async function prepareNetworkUpdate(settings, serviceRunning) {
+	assertNetworkUpdateAllowed(settings, serviceRunning);
+
+	if (!isInternetOnlyEnabled(settings) || !serviceRunning) {
+		return { repaired: false, warning: '' };
+	}
+
+	const result = await fs.exec('/opt/clash/bin/clash-rules', [ 'repair_network_path' ]);
+	if (result.code !== 0) {
+		return {
+			repaired: false,
+			warning: execMessage(result) || _('Network path repair failed.')
+		};
+	}
+
+	return { repaired: true, warning: '' };
+}
+
 return L.Class.extend({
 	isInternetOnlyEnabled: isInternetOnlyEnabled,
 	isNetworkUpdateBlocked: isNetworkUpdateBlocked,
 	blockedNetworkMessage: blockedNetworkMessage,
-	assertNetworkUpdateAllowed: assertNetworkUpdateAllowed
+	assertNetworkUpdateAllowed: assertNetworkUpdateAllowed,
+	prepareNetworkUpdate: prepareNetworkUpdate
 });
