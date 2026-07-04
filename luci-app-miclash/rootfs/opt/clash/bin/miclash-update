@@ -3,11 +3,16 @@
 set -u
 
 TMP_FILES=""
+LOCK_DIR="/tmp/miclash-update.lock"
+LOCK_ACQUIRED=0
 
 cleanup() {
 	for file in $TMP_FILES; do
 		[ -n "$file" ] && rm -f "$file" 2>/dev/null || true
 	done
+	if [ "$LOCK_ACQUIRED" = "1" ]; then
+		rm -rf "$LOCK_DIR" 2>/dev/null || true
+	fi
 }
 
 trap cleanup EXIT INT TERM
@@ -20,6 +25,29 @@ fail() {
 need_arg() {
 	[ $# -gt 1 ] || fail "missing value for $1"
 	printf '%s' "$2"
+}
+
+acquire_lock() {
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		LOCK_ACQUIRED=1
+		printf '%s\n' "$$" > "$LOCK_DIR/pid"
+		return 0
+	fi
+
+	old_pid=""
+	[ -f "$LOCK_DIR/pid" ] && old_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+	if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+		fail "another MiClash update is already running (pid $old_pid)"
+	fi
+
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		LOCK_ACQUIRED=1
+		printf '%s\n' "$$" > "$LOCK_DIR/pid"
+		return 0
+	fi
+
+	fail "failed to acquire update lock"
 }
 
 detect_pkg_manager() {
@@ -78,6 +106,10 @@ install_app() {
 	done
 
 	[ -n "$url" ] || fail "missing --url"
+	case "$mode" in
+		update|reinstall) ;;
+		*) fail "unsupported app mode: $mode" ;;
+	esac
 
 	manager="$(detect_pkg_manager)"
 	install_deps "$manager"
@@ -137,9 +169,9 @@ install_kernel() {
 	TMP_FILES="$TMP_FILES $download $extracted"
 
 	curl -L -fsS "$url" -o "$download" || fail "failed to download mihomo kernel"
-	gzip -df "$download" || fail "failed to extract mihomo kernel"
+	gzip -dc "$download" > "$extracted" || fail "failed to extract mihomo kernel"
+	chmod +x "$extracted" || fail "failed to mark mihomo kernel executable"
 	mv "$extracted" /opt/clash/bin/clash || fail "failed to install mihomo kernel"
-	chmod +x /opt/clash/bin/clash || fail "failed to mark mihomo kernel executable"
 
 	echo "mihomo kernel installed"
 }
@@ -147,10 +179,12 @@ install_kernel() {
 case "${1:-}" in
 	app)
 		shift
+		acquire_lock
 		install_app "$@"
 		;;
 	kernel)
 		shift
+		acquire_lock
 		install_kernel "$@"
 		;;
 	*)
