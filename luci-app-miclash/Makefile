@@ -61,6 +61,12 @@ define Build/Compile
 			"./rootfs/po/ru/miclash.po" \
 			"$(PKG_BUILD_DIR)/po/ru/miclash.lmo"; \
 	fi
+	@mkdir -p $(PKG_BUILD_DIR)/po/zh-cn
+	@if [ -f "./rootfs/po/zh-cn/miclash.po" ]; then \
+		$(STAGING_DIR_HOSTPKG)/bin/po2lmo \
+			"./rootfs/po/zh-cn/miclash.po" \
+			"$(PKG_BUILD_DIR)/po/zh-cn/miclash.lmo"; \
+	fi
 endef
 
 define Package/$(PKG_NAME)/conffiles
@@ -106,6 +112,11 @@ endif
 		$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n; \
 		$(INSTALL_DATA) "$(PKG_BUILD_DIR)/po/ru/miclash.lmo" \
 			"$(1)/usr/lib/lua/luci/i18n/miclash.ru.lmo"; \
+	fi
+	@if [ -f "$(PKG_BUILD_DIR)/po/zh-cn/miclash.lmo" ]; then \
+		$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n; \
+		$(INSTALL_DATA) "$(PKG_BUILD_DIR)/po/zh-cn/miclash.lmo" \
+			"$(1)/usr/lib/lua/luci/i18n/miclash.zh-cn.lmo"; \
 	fi
 endef
 

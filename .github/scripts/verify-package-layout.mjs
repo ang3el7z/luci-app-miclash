@@ -10,6 +10,8 @@ const required = [
 	'luci-app-miclash/rootfs/opt/clash/bin/clash-rules',
 	'luci-app-miclash/rootfs/opt/clash/bin/miclash-update',
 	'luci-app-miclash/rootfs/opt/clash/config.yaml',
+	'luci-app-miclash/rootfs/po/ru/miclash.po',
+	'luci-app-miclash/rootfs/po/zh-cn/miclash.po',
 	'luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json',
 	'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json',
 	'luci-app-miclash/rootfs/etc/apk/protected_paths.d/miclash.list',
@@ -59,6 +61,27 @@ for (const rel of runtimeDependencyFiles) {
 	if (!content.includes('zlib') || !content.includes('libcurl4') || !content.includes('curl')) {
 		missing.push(`${rel} must keep runtime dependency names zlib libcurl4 curl`);
 	}
+}
+
+const expectedLocaleSnippets = [
+	'./rootfs/po/ru/miclash.po',
+	'$(PKG_BUILD_DIR)/po/ru/miclash.lmo',
+	'miclash.ru.lmo',
+	'./rootfs/po/zh-cn/miclash.po',
+	'$(PKG_BUILD_DIR)/po/zh-cn/miclash.lmo',
+	'miclash.zh-cn.lmo'
+];
+
+for (const snippet of expectedLocaleSnippets) {
+	if (!makefile.includes(snippet)) missing.push(`Makefile locale snippet ${snippet}`);
+}
+
+const zhCnPo = fs.readFileSync(path.join(root, 'luci-app-miclash/rootfs/po/zh-cn/miclash.po'), 'utf8');
+if (!zhCnPo.includes('Language: zh-cn\\n')) {
+	missing.push('zh-cn locale must declare Language: zh-cn');
+}
+if (/\bSSClash\b/.test(zhCnPo) || /\bssclash\b/.test(zhCnPo)) {
+	missing.push('zh-cn locale must use MiClash naming');
 }
 
 const protectedPaths = fs
