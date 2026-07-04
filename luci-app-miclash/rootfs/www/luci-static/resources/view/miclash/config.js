@@ -1414,7 +1414,7 @@ function buildPageHtml() {
 			'>' + safeText(_('Dashboard')) + '</button>' +
 		'</div>' +
 
-		'<div class="cbi-section sbox-section">' +
+		'<div class="cbi-section">' +
 			'<div class="cbi-tabmenu sbox-tabs">' +
 				'<button type="button" class="cbi-tab sbox-tab sbox-tab-active" data-ctrl-tab="control">' + safeText(_('Control')) + '</button>' +
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-ctrl-tab="settings">' + safeText(_('Settings')) + '</button>' +
@@ -1441,7 +1441,7 @@ function buildPageHtml() {
 			'<div id="sbox-pane-settings" style="display:none"></div>' +
 		'</div>' +
 
-		'<div class="cbi-section sbox-section">' +
+		'<div class="cbi-section">' +
 			'<div class="cbi-tabmenu sbox-tabs">' +
 				'<button type="button" class="cbi-tab sbox-tab sbox-tab-active" data-cfg-tab="config">' + safeText(_('Config')) + '</button>' +
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
@@ -2272,18 +2272,10 @@ const PAGE_CSS = `
 	cursor: not-allowed;
 	opacity: 0.8;
 }
-.sbox-section {
-	margin-bottom: 1em;
-}
 .sbox-tabs {
 	margin-bottom: 12px;
 }
 .sbox-tab {
-	appearance: none;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	font-size: 11px;
-	font-weight: 700;
 	cursor: pointer;
 }
 .sbox-row {
@@ -2328,8 +2320,6 @@ const PAGE_CSS = `
 .sbox-proxy-mode-inline {
 	font-size: 11px;
 	color: var(--sbox-muted);
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
 }
 .sbox-guard-pill {
 	display: inline-flex;
@@ -2340,8 +2330,6 @@ const PAGE_CSS = `
 	border: 1px solid transparent;
 	font-size: 11px;
 	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
 	cursor: help;
 }
 .sbox-guard-on {
@@ -2357,9 +2345,6 @@ const PAGE_CSS = `
 	height: 7px;
 	border-radius: 50%;
 	flex-shrink: 0;
-}
-.sbox-guard-label {
-	letter-spacing: 0.08em;
 }
 .sbox-guard-state {
 	font-weight: 800;
@@ -2486,8 +2471,6 @@ const PAGE_CSS = `
 }
 .sbox-interface-group-title {
 	font-size: 11px;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
 	color: var(--sbox-muted);
 	margin-bottom: 4px;
 }

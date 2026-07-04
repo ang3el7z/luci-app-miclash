@@ -27,10 +27,13 @@ const banned = [
 	[/\bthemeToggle\b/, 'custom theme toggle'],
 	[/localStorage\.(?:getItem|setItem|removeItem)\([^)]*theme/i, 'persisted custom theme'],
 	[/\bsbox-card\b/, 'custom card shell instead of cbi-section'],
+	[/\bsbox-section\b/, 'custom cbi-section wrapper instead of native section styling'],
 	[/\bsbox-modal-overlay\b/, 'custom modal overlay instead of ui.showModal'],
 	[/\bsbox-modal-window\b/, 'custom modal window instead of ui.showModal'],
 	[/linear-gradient\(/i, 'custom gradient palette'],
-	[/border-radius:\s*999px/i, 'pill-shaped custom shell radius']
+	[/border-radius:\s*999px/i, 'pill-shaped custom shell radius'],
+	[/text-transform:\s*uppercase/i, 'custom uppercase tab typography'],
+	[/letter-spacing:\s*(?!0(?:[;\s]|$))/i, 'custom letter spacing']
 ];
 
 const colorLiteral = /(?:#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))/g;
