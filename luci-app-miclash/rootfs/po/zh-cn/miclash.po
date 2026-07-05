@@ -626,3 +626,559 @@ msgstr "捐赠"
 msgid "Support the author"
 msgstr "支持作者"
 
+msgid "Client devices only through MiClash (beta)"
+msgstr "客户端设备仅通过 MiClash（beta）"
+
+### Current UI translations ###
+
+msgid "%s downloaded and saved."
+msgstr "%s 已下载并保存。"
+
+msgid "%s is now main config."
+msgstr "%s 现在是主配置。"
+
+msgid "%s saved."
+msgstr "%s 已保存。"
+
+msgid "A ruleset with this name already exists."
+msgstr "已存在同名规则集。"
+
+msgid "Additional"
+msgstr "附加"
+
+msgid "Architecture: %s"
+msgstr "架构：%s"
+
+msgid "Are you sure you want to delete \"%s\"?"
+msgstr "确定要删除“%s”吗？"
+
+msgid "auto"
+msgstr "自动"
+
+msgid "Auto detect LAN bridge"
+msgstr "自动检测 LAN 桥"
+
+msgid "Auto detect WAN interface"
+msgstr "自动检测 WAN 接口"
+
+msgid "Auto Detection"
+msgstr "自动检测"
+
+msgid "Auto LAN: %s"
+msgstr "自动 LAN：%s"
+
+msgid "Auto WAN: %s"
+msgstr "自动 WAN：%s"
+
+msgid "Auto-hide notifications"
+msgstr "自动隐藏通知"
+
+msgid "Block QUIC (UDP/443)"
+msgstr "阻止 QUIC（UDP/443）"
+
+msgid "Both original URL and /mihomo returned links/base64 instead of Clash YAML. Check provider export type."
+msgstr "原始 URL 和 /mihomo 都返回了链接/base64，而不是 Clash YAML。请检查提供商的导出类型。"
+
+msgid "Cannot save proxy mode."
+msgstr "无法保存代理模式。"
+
+msgid "Checking Clash API..."
+msgstr "正在检查 Clash API..."
+
+msgid "Checking Clash service process..."
+msgstr "正在检查 Clash 服务进程..."
+
+msgid "Checking DNS..."
+msgstr "正在检查 DNS..."
+
+msgid "Checking forwarding rules..."
+msgstr "正在检查转发规则..."
+
+msgid "Checking routing policy..."
+msgstr "正在检查路由策略..."
+
+msgid "Checking TUN interface..."
+msgstr "正在检查 TUN 接口..."
+
+msgid "Choose interfaces that should bypass proxy."
+msgstr "选择应绕过代理的接口。"
+
+msgid "Choose interfaces that should go through proxy."
+msgstr "选择应通过代理的接口。"
+
+msgid "Clash API is not responding."
+msgstr "Clash API 无响应。"
+
+msgid "Clash service did not enter running state."
+msgstr "Clash 服务未进入运行状态。"
+
+msgid "clash-tun is missing"
+msgstr "缺少 clash-tun"
+
+msgid "Clear"
+msgstr "清空"
+
+msgid "Clear Editor"
+msgstr "清空编辑器"
+
+msgid "Clear editor?"
+msgstr "清空编辑器？"
+
+msgid "Close"
+msgstr "关闭"
+
+msgid "Command failed"
+msgstr "命令执行失败"
+
+msgid "Config"
+msgstr "配置"
+
+msgid "Configuration applied and service reloaded."
+msgstr "配置已应用，服务已重载。"
+
+msgid "Configuration test failed - service not reloaded. Please fix the errors below:"
+msgstr "配置测试失败，服务未重载。请修复以下错误："
+
+msgid "Connection interrupted while finalizing MiClash update. Reloading interface..."
+msgstr "完成 MiClash 更新时连接中断。正在重新加载界面..."
+
+msgid "Control"
+msgstr "控制"
+
+msgid "Dashboard"
+msgstr "控制面板"
+
+msgid "Dashboard is not configured: external-controller is missing in config.yaml."
+msgstr "控制面板未配置：config.yaml 中缺少 external-controller。"
+
+msgid "Dashboard is not configured: external-ui or external-ui-name is missing in config.yaml."
+msgstr "控制面板未配置：config.yaml 中缺少 external-ui 或 external-ui-name。"
+
+msgid "Detected LAN: %s"
+msgstr "检测到 LAN：%s"
+
+msgid "Detected WAN: %s"
+msgstr "检测到 WAN：%s"
+
+msgid "DNS listener is not ready."
+msgstr "DNS 监听器尚未就绪。"
+
+msgid "Download failed"
+msgstr "下载失败"
+
+msgid "Download Kernel"
+msgstr "下载内核"
+
+msgid "Downloaded file is empty."
+msgstr "下载的文件为空。"
+
+msgid "Downloading package..."
+msgstr "正在下载软件包..."
+
+msgid "Downloading subscription..."
+msgstr "正在下载订阅..."
+
+msgid "Error: %s"
+msgstr "错误：%s"
+
+msgid "Ethernet"
+msgstr "以太网"
+
+msgid "Example usage in config.yaml"
+msgstr "config.yaml 中的用法示例"
+
+msgid "Exclude mode: proxy all interfaces except selected ones"
+msgstr "排除模式：代理除所选接口以外的所有接口"
+
+msgid "Explicit mode: proxy only selected interfaces"
+msgstr "显式模式：仅代理所选接口"
+
+msgid "Failed to apply configuration: %s"
+msgstr "应用配置失败：%s"
+
+msgid "Failed to apply subscription: %s"
+msgstr "应用订阅失败：%s"
+
+msgid "Failed to create ruleset."
+msgstr "创建规则集失败。"
+
+msgid "Failed to initialize editor: %s"
+msgstr "初始化编辑器失败：%s"
+
+msgid "Failed to install curl."
+msgstr "安装 curl 失败。"
+
+msgid "Failed to load config profile: %s"
+msgstr "加载配置档失败：%s"
+
+msgid "Failed to load kernel information: %s"
+msgstr "加载内核信息失败：%s"
+
+msgid "Failed to load MiClash release information: %s"
+msgstr "加载 MiClash 发布信息失败：%s"
+
+msgid "Failed to open rulesets: %s"
+msgstr "打开规则集失败：%s"
+
+msgid "Failed to read update status."
+msgstr "读取更新状态失败。"
+
+msgid "Failed to save IP-CIDR list: %s"
+msgstr "保存 IP-CIDR 列表失败：%s"
+
+msgid "Failed to save ruleset: %s"
+msgstr "保存规则集失败：%s"
+
+msgid "Failed to set main config: %s"
+msgstr "设置主配置失败：%s"
+
+msgid "Failed to start update job."
+msgstr "启动更新任务失败。"
+
+msgid "Failed to switch proxy mode: %s"
+msgstr "切换代理模式失败：%s"
+
+msgid "Failed to update MiClash: %s"
+msgstr "更新 MiClash 失败：%s"
+
+msgid "Failed to update package index."
+msgstr "更新软件包索引失败。"
+
+msgid "forward validation failed"
+msgstr "转发验证失败"
+
+msgid "Forwarding rules check failed."
+msgstr "转发规则检查失败。"
+
+msgid "Guard"
+msgstr "保护"
+
+msgid "Inject HWID headers into proxy-providers"
+msgstr "向 proxy-providers 注入 HWID 请求头"
+
+msgid "Install Kernel"
+msgstr "安装内核"
+
+msgid "Install MiClash"
+msgstr "安装 MiClash"
+
+msgid "Installed version: %s"
+msgstr "已安装版本：%s"
+
+msgid "Installing dependencies..."
+msgstr "正在安装依赖..."
+
+msgid "Installing package..."
+msgstr "正在安装软件包..."
+
+msgid "Interfaces"
+msgstr "接口"
+
+msgid "Invalid name. Use letters, numbers, \"_\" or \"-\"."
+msgstr "名称无效。请使用字母、数字、“_”或“-”。"
+
+msgid "Invalid subscription URL."
+msgstr "订阅 URL 无效。"
+
+msgid "IP-CIDR List (fake-ip whitelist mode)"
+msgstr "IP-CIDR 列表（fake-ip 白名单模式）"
+
+msgid "IP-CIDR list saved and firewall rules updated."
+msgstr "IP-CIDR 列表已保存，防火墙规则已更新。"
+
+msgid "IP-CIDR list saved, but firewall update failed: %s"
+msgstr "IP-CIDR 列表已保存，但防火墙更新失败：%s"
+
+msgid "Kernel download failed: %s"
+msgstr "内核下载失败：%s"
+
+msgid "Kernel Settings"
+msgstr "内核设置"
+
+msgid "Latest"
+msgstr "最新"
+
+msgid "Latest release: %s"
+msgstr "最新发布：%s"
+
+msgid "Logs"
+msgstr "日志"
+
+msgid "Manage local .txt lists for rule-providers."
+msgstr "管理用于 rule-providers 的本地 .txt 列表。"
+
+msgid "Manual interfaces: %s"
+msgstr "手动接口：%s"
+
+msgid "MiClash package installed. Reloading interface..."
+msgstr "MiClash 软件包已安装。正在重新加载界面..."
+
+msgid "Mihomo kernel downloaded and installed."
+msgstr "Mihomo 内核已下载并安装。"
+
+msgid "Mihomo kernel is not installed."
+msgstr "Mihomo 内核未安装。"
+
+msgid "Mode"
+msgstr "模式"
+
+msgid "Mode: Exclude (proxy all except selected interfaces)"
+msgstr "模式：排除（代理除所选接口以外的所有接口）"
+
+msgid "Mode: Explicit (proxy only selected interfaces)"
+msgstr "模式：显式（仅代理所选接口）"
+
+msgid "new-list-name"
+msgstr "new-list-name"
+
+msgid "No file selected"
+msgstr "未选择文件"
+
+msgid "No interfaces detected."
+msgstr "未检测到接口。"
+
+msgid "No ruleset selected. Create one to begin."
+msgstr "未选择规则集。请先创建一个。"
+
+msgid "No rulesets yet."
+msgstr "暂无规则集。"
+
+msgid "No supported package manager found (apk/opkg)."
+msgstr "未找到受支持的软件包管理器（apk/opkg）。"
+
+msgid "Not installed"
+msgstr "未安装"
+
+msgid "OFF"
+msgstr "关"
+
+msgid "ON"
+msgstr "开"
+
+msgid "One IPv4/CIDR per line. Save applies firewall update without restarting Mihomo."
+msgstr "每行一个 IPv4/CIDR。保存会更新防火墙，无需重启 Mihomo。"
+
+msgid "Open dashboard"
+msgstr "打开控制面板"
+
+msgid "Original URL returned links/base64 and /mihomo fallback failed: %s"
+msgstr "原始 URL 返回了链接/base64，且 /mihomo 备用路径失败：%s"
+
+msgid "Other"
+msgstr "其他"
+
+msgid "policy validation failed"
+msgstr "策略验证失败"
+
+msgid "port %s is not listening"
+msgstr "端口 %s 未在监听"
+
+msgid "Pre-release"
+msgstr "预发布"
+
+msgid "Proxy mode switched to %s. Service restarted."
+msgstr "代理模式已切换为 %s。服务已重启。"
+
+msgid "Proxy mode: %s"
+msgstr "代理模式：%s"
+
+msgid "Recommendation: retry restart. If it repeats, check firewall and kmod-nft-tproxy."
+msgstr "建议：重试重启。如果问题重复出现，请检查防火墙和 kmod-nft-tproxy。"
+
+msgid "Recommendation: retry restart. If it repeats, reinstall the kernel and check TUN mode."
+msgstr "建议：重试重启。如果问题重复出现，请重新安装内核并检查 TUN 模式。"
+
+msgid "Recommendation: retry start. If it repeats, check config.yaml and external-controller port."
+msgstr "建议：重试启动。如果问题重复出现，请检查 config.yaml 和 external-controller 端口。"
+
+msgid "Recommendation: retry the action. If it repeats, check DNS settings in config.yaml or restart dnsmasq."
+msgstr "建议：重试操作。如果问题重复出现，请检查 config.yaml 中的 DNS 设置或重启 dnsmasq。"
+
+msgid "Recommendation: retry the action. If it repeats, check MiClash logs."
+msgstr "建议：重试操作。如果问题重复出现，请查看 MiClash 日志。"
+
+msgid "Recommendation: retry update. If it repeats, check internet access on the router."
+msgstr "建议：重试更新。如果问题重复出现，请检查路由器的互联网访问。"
+
+msgid "Reinstall MiClash"
+msgstr "重新安装 MiClash"
+
+msgid "Release channels"
+msgstr "发布通道"
+
+msgid "Reloading Clash service..."
+msgstr "正在重载 Clash 服务..."
+
+msgid "Remnawave blocked /mihomo path (HTTP 403). Disable \"Disable Subscription Access by Path\" in Remnawave response-rules settings."
+msgstr "Remnawave 阻止了 /mihomo 路径（HTTP 403）。请在 Remnawave response-rules 设置中关闭“Disable Subscription Access by Path”。"
+
+msgid "Restart"
+msgstr "重启"
+
+msgid "Restarting Clash service..."
+msgstr "正在重启 Clash 服务..."
+
+msgid "Routing policy check failed."
+msgstr "路由策略检查失败。"
+
+msgid "Ruleset \"%s\" created."
+msgstr "规则集“%s”已创建。"
+
+msgid "Ruleset \"%s\" deleted."
+msgstr "规则集“%s”已删除。"
+
+msgid "Ruleset \"%s\" saved."
+msgstr "规则集“%s”已保存。"
+
+msgid "Save IP-CIDR List"
+msgstr "保存 IP-CIDR 列表"
+
+msgid "Save URL / Update Config"
+msgstr "保存 URL / 更新配置"
+
+msgid "Selected config will be swapped with Main config, saved, and Clash will restart. Continue?"
+msgstr "所选配置将与主配置交换、保存，并重启 Clash。继续吗？"
+
+msgid "Service did not enter running state within %ss after: %s"
+msgstr "服务未在 %s 秒内进入运行状态，执行动作：%s"
+
+msgid "Service did not stop within %ss after: %s"
+msgstr "服务未在 %s 秒内停止，执行动作：%s"
+
+msgid "Service readiness check failed."
+msgstr "服务就绪检查失败。"
+
+msgid "Service running"
+msgstr "服务已启动"
+
+msgid "Service stopped"
+msgstr "服务已停止"
+
+msgid "Set as Main"
+msgstr "设为主配置"
+
+msgid "Settings saved and Clash service restarted."
+msgstr "设置已保存，Clash 服务已重启。"
+
+msgid "Settings saved, but failed to restart Clash service: %s"
+msgstr "设置已保存，但重启 Clash 服务失败：%s"
+
+msgid "Settings saved."
+msgstr "设置已保存。"
+
+msgid "Start"
+msgstr "启动"
+
+msgid "Start the service to open dashboard."
+msgstr "请先启动服务以打开控制面板。"
+
+msgid "Starting Clash service..."
+msgstr "正在启动 Clash 服务..."
+
+msgid "Starting update job..."
+msgstr "正在启动更新任务..."
+
+msgid "Status: %s"
+msgstr "状态：%s"
+
+msgid "Stop"
+msgstr "停止"
+
+msgid "Stopping Clash service..."
+msgstr "正在停止 Clash 服务..."
+
+msgid "Store rules/providers on tmpfs"
+msgstr "将 rules/providers 存储在 tmpfs"
+
+msgid "Subscription download failed for both original URL and /mihomo fallback: %s"
+msgstr "原始 URL 和 /mihomo 备用路径均下载订阅失败：%s"
+
+msgid "Subscription downloaded and applied (Remnawave /mihomo fallback)."
+msgstr "订阅已下载并应用（Remnawave /mihomo 备用路径）。"
+
+msgid "Subscription downloaded and applied."
+msgstr "订阅已下载并应用。"
+
+msgid "Subscription URL is empty."
+msgstr "订阅 URL 为空。"
+
+msgid "The subscription server returned links/base64 instead of Clash YAML. For Remnawave use the /mihomo subscription path."
+msgstr "订阅服务器返回了链接/base64，而不是 Clash YAML。Remnawave 请使用 /mihomo 订阅路径。"
+
+msgid "This name is reserved."
+msgstr "此名称为保留名称。"
+
+msgid "This will clear only editor content. File is not modified until you click Save."
+msgstr "这只会清空编辑器内容。点击保存前文件不会被修改。"
+
+msgid "Traffic Scope"
+msgstr "流量范围"
+
+msgid "TUN interface did not appear."
+msgstr "TUN 接口未出现。"
+
+msgid "Tun stack"
+msgstr "TUN 栈"
+
+msgid "Tun stack: %s"
+msgstr "TUN 栈：%s"
+
+msgid "Unable to read downloaded file"
+msgstr "无法读取下载的文件"
+
+msgid "Unable to start service: %s"
+msgstr "无法启动服务：%s"
+
+msgid "Unable to stop service: %s"
+msgstr "无法停止服务：%s"
+
+msgid "Unavailable"
+msgstr "不可用"
+
+msgid "Update completed."
+msgstr "更新完成。"
+
+msgid "Update exceeded timeout. Please check MiClash logs and retry."
+msgstr "更新超时。请检查 MiClash 日志并重试。"
+
+msgid "Update failed."
+msgstr "更新失败。"
+
+msgid "Update Kernel"
+msgstr "更新内核"
+
+msgid "Update MiClash"
+msgstr "更新 MiClash"
+
+msgid "Updating MiClash package on router..."
+msgstr "正在路由器上更新 MiClash 软件包..."
+
+msgid "Updating MiClash..."
+msgstr "正在更新 MiClash..."
+
+msgid "Updating mihomo kernel on router..."
+msgstr "正在路由器上更新 mihomo 内核..."
+
+msgid "Validate YAML"
+msgstr "验证 YAML"
+
+msgid "Virtual"
+msgstr "虚拟"
+
+msgid "VPN / Tunnel"
+msgstr "VPN / 隧道"
+
+msgid "WAN"
+msgstr "WAN"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "YAML validation failed: %s"
+msgstr "YAML 验证失败：%s"
+
+msgid "YAML validation failed."
+msgstr "YAML 验证失败。"
+
+msgid "YAML validation passed."
+msgstr "YAML 验证通过。"

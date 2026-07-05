@@ -449,9 +449,6 @@ async function readMiClashUpdateStatus() {
 }
 
 function formatMiClashUpdateStatus(status, fallback) {
-	const message = String(status && status.message || '').trim();
-	if (message) return message;
-
 	const phase = String(status && status.phase || '').trim();
 	const labels = {
 		queued: _('Starting update job...'),
@@ -461,7 +458,11 @@ function formatMiClashUpdateStatus(status, fallback) {
 		restart: _('Restarting Clash service...'),
 		done: _('Update completed.')
 	};
-	return labels[phase] || fallback || _('Updating MiClash...');
+	const translated = labels[phase];
+	if (translated) return translated;
+
+	const message = String(status && status.message || '').trim();
+	return message || fallback || _('Updating MiClash...');
 }
 
 async function clearMiClashUpdateStatus() {
@@ -1527,7 +1528,7 @@ function buildSettingsPaneHtml() {
 					'</label>' +
 				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Client devices only through MiClash')) + '</span>' +
+					'<span>' + safeText(_('Client devices only through MiClash (beta)')) + '</span>' +
 				'</label>' +
 				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' />' +
@@ -1622,7 +1623,7 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Client devices only through MiClash')) + '">' +
+			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Client devices only through MiClash (beta)')) + '">' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
 			'</span>' +
@@ -1777,7 +1778,7 @@ function updateHeaderAndControlDom() {
 		guardPill.classList.remove('cbi-button', 'cbi-button-apply', 'cbi-button-neutral', 'cbi-button-positive', 'cbi-button-negative');
 		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
 		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
-		guardPill.title = _('Client devices only through MiClash');
+		guardPill.title = _('Client devices only through MiClash (beta)');
 	}
 	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
 }

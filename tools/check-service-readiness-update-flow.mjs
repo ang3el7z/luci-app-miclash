@@ -41,6 +41,17 @@ check(config.includes('pollMiClashUpdateJob') && config.includes('startMiClashUp
 check(config.includes('clearOperationStatus();') && count(config, /clearOperationStatus\(\);/g) >= 3,
 	'Successful service/update operations must clear stale operation errors.');
 
+const updateStatusStart = config.indexOf('function formatMiClashUpdateStatus');
+const updateStatusEnd = config.indexOf('async function clearMiClashUpdateStatus', updateStatusStart);
+const updateStatusBlock = updateStatusStart >= 0 && updateStatusEnd > updateStatusStart
+	? config.slice(updateStatusStart, updateStatusEnd)
+	: '';
+check(
+	updateStatusBlock.indexOf('if (translated) return translated;') >= 0 &&
+		updateStatusBlock.indexOf('const message =') > updateStatusBlock.indexOf('if (translated) return translated;'),
+	'Update status UI must prefer translated phase labels before raw job messages.'
+);
+
 check(style.includes('.sbox-operation-status') &&
 	style.includes('.sbox-operation-status-error') &&
 	style.includes('.sbox-operation-status-running'),

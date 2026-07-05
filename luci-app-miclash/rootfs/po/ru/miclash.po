@@ -867,9 +867,6 @@ msgstr "Архитектура: %s"
 msgid "Are you sure you want to delete \"%s\"?"
 msgstr "Вы уверены, что хотите удалить \"%s\"?"
 
-msgid "Are you sure you want to delete the list \"%s\"? This action cannot be undone."
-msgstr "Вы уверены, что хотите удалить список \"%s\"? Это действие необратимо."
-
 msgid "Auto LAN: %s"
 msgstr "Авто LAN: %s"
 
@@ -897,9 +894,6 @@ msgstr "Пример использования в config.yaml"
 msgid "Failed to create ruleset."
 msgstr "Не удалось создать список правил."
 
-msgid "Failed to delete list \"%s\": %s"
-msgstr "Не удалось удалить список \"%s\": %s"
-
 msgid "Failed to load kernel information: %s"
 msgstr "Не удалось загрузить информацию о ядре: %s"
 
@@ -911,9 +905,6 @@ msgstr "Не удалось обновить журналы: %s"
 
 msgid "Failed to save IP-CIDR list: %s"
 msgstr "Не удалось сохранить список IP-CIDR: %s"
-
-msgid "Failed to save list \"%s\": %s"
-msgstr "Не удалось сохранить список \"%s\": %s"
 
 msgid "Failed to save ruleset: %s"
 msgstr "Не удалось сохранить список правил: %s"
@@ -938,12 +929,6 @@ msgstr "Настройки ядра"
 
 msgid "Latest release: %s"
 msgstr "Последний релиз: %s"
-
-msgid "List \"%s\" has been deleted."
-msgstr "Список \"%s\" удалён."
-
-msgid "List \"%s\" saved successfully."
-msgstr "Список \"%s\" успешно сохранён."
 
 msgid "Manage local .txt lists for rule-providers."
 msgstr "Управление локальными .txt списками для rule-providers."
@@ -992,9 +977,6 @@ msgstr "Команда завершилась ошибкой"
 
 msgid "Mode: Explicit (proxy only selected interfaces)"
 msgstr "Режим: Явный (прокси только для выбранных интерфейсов)"
-
-msgid "New list \"%s\" created."
-msgstr "Новый список \"%s\" создан."
 
 msgid "new-list-name"
 msgstr "новый-список"
@@ -1077,8 +1059,8 @@ msgstr "VPN / Туннель"
 msgid "YAML validation failed."
 msgstr "Проверка YAML завершилась ошибкой."
 
-msgid "Client devices only through MiClash"
-msgstr "Устройства только через MiClash"
+msgid "Client devices only through MiClash (beta)"
+msgstr "Устройства только через MiClash (beta)"
 
 msgid "Blocks direct external traffic from clients. If MiClash is stopped or fails, the internet is blocked while local network access remains available."
 msgstr "Блокирует прямой внешний трафик от клиентов. Если MiClash остановлен или упал, интернет блокируется, а доступ к локальной сети остаётся доступным."
@@ -1232,3 +1214,27 @@ msgstr "проверка policy завершилась ошибкой"
 
 msgid "forward validation failed"
 msgstr "проверка forward завершилась ошибкой"
+
+msgid "auto"
+msgstr "авто"
+
+msgid "Dashboard is not configured: external-controller is missing in config.yaml."
+msgstr "Панель не настроена: в config.yaml отсутствует external-controller."
+
+msgid "Dashboard is not configured: external-ui or external-ui-name is missing in config.yaml."
+msgstr "Панель не настроена: в config.yaml отсутствует external-ui или external-ui-name."
+
+msgid "Failed to install curl."
+msgstr "Не удалось установить curl."
+
+msgid "Open dashboard"
+msgstr "Открыть панель"
+
+msgid "Start the service to open dashboard."
+msgstr "Запустите службу, чтобы открыть панель."
+
+msgid "Tun stack"
+msgstr "Стек TUN"
+
+msgid "Unable to stop service: %s"
+msgstr "Не удалось остановить службу: %s"
