@@ -362,7 +362,7 @@ stop_service() {
 	# Remove firewall rules
 	remove_firewall_rules
 
-	# Keep the guard active only when "Internet only through MiClash" is enabled.
+	# Keep the client forwarding guard active only when enabled.
 	refresh_guard_rules
 
 	# Restore DNS settings

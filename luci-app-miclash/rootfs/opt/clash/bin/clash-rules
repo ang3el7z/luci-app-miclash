@@ -119,7 +119,7 @@ load_all_settings_once() {
     [ -n "$AUTO_DETECT_LAN" ] && settings_part="$settings_part, Auto-detect LAN: $AUTO_DETECT_LAN"
     [ -n "$AUTO_DETECT_WAN" ] && settings_part="$settings_part, Auto-detect WAN: $AUTO_DETECT_WAN"
     [ -n "$BLOCK_QUIC" ] && settings_part="$settings_part, Block QUIC: $BLOCK_QUIC"
-    [ -n "$INTERNET_ONLY_MICLASH" ] && settings_part="$settings_part, Internet only through MiClash: $INTERNET_ONLY_MICLASH"
+    [ -n "$INTERNET_ONLY_MICLASH" ] && settings_part="$settings_part, Client guard: $INTERNET_ONLY_MICLASH"
     [ -n "$TUN_STACK" ] && settings_part="$settings_part, TUN stack: $TUN_STACK"
     [ -n "$DETECTED_LAN" ] && settings_part="$settings_part, Detected LAN: $DETECTED_LAN"
     [ -n "$DETECTED_WAN" ] && settings_part="$settings_part, Detected WAN: $DETECTED_WAN"
@@ -1946,14 +1946,10 @@ apply_nft_clash_exclusions_output() {
     # "meta mark MARK_CLASH_ROUTING return" rule earlier in this chain, which
     # is set via routing-mark in config.yaml.
     #
-    # When the "Internet only through MiClash" guard is active, however, that
-    # bypass becomes a problem: unmarked root traffic walks straight into the
-    # guard's WAN drop rule, so LuCI helpers (curl for the subscription, the
-    # kernel/package downloader) hang with "connect timed out". In that case
-    # we want root traffic to flow through Clash instead, so it gets the
-    # routing-mark on the way out and passes the guard cleanly. DNS is not
-    # affected either way: dnsmasq runs with noresolv=1 and forwards only to
-    # 127.0.0.1#7874, so no leakage path exists outside Clash.
+    # When the client forwarding guard option is active, keep local root
+    # traffic eligible for Clash routing instead of adding a blanket root
+    # bypass. DNS is not affected either way: dnsmasq runs with noresolv=1 and
+    # forwards only to 127.0.0.1#7874, so no leakage path exists outside Clash.
     if [ "$INTERNET_ONLY_MICLASH" != "true" ]; then
         nft add rule inet clash output meta skuid 0 return
     fi
