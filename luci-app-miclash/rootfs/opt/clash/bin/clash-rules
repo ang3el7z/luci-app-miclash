@@ -1957,7 +1957,7 @@ apply_nft_clash_exclusions_output() {
     nft add rule inet clash output tcp sport {7890, 7891, 7892, 7893, 7894} return
     nft add rule inet clash output udp sport {7890, 7891, 7892, 7893, 7894} return
     if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-        msg "Clash ports excluded from proxy in output (internet-only guard active: root traffic flows through Clash)"
+        msg "Clash ports excluded from proxy in output (client guard policy enabled: root traffic flows through Clash)"
     else
         msg "Clash process and ports excluded from proxy in output"
     fi
@@ -1990,7 +1990,7 @@ apply_nft_output_redirect_rules() {
     nft add rule inet clash output_redir tcp dport {7890, 7891, 7892, 7893, 7894} return
     nft add rule inet clash output_redir tcp sport {7890, 7891, 7892, 7893, 7894} return
     nft add rule inet clash output_redir meta l4proto tcp redirect to :"$redir_port"
-    msg "OUTPUT: router TCP redirected to redir-port $redir_port (internet-only guard active)"
+    msg "OUTPUT: router TCP redirected to redir-port $redir_port (client guard policy enabled)"
 }
 
 # For nftables - apply output chain rules
@@ -2000,11 +2000,13 @@ apply_nft_output_rules() {
     local fake_ip_filter_mode="$3"
     local fake_ip_range="$4"
 
-    # With the fail-closed guard active, router-originated update traffic must
-    # not bypass output marking via WAN interface exclusions. Otherwise it
-    # reaches the guard unmarked and is dropped before Clash can handle it.
+    # When the client-only guard is enabled, router-originated maintenance
+    # traffic should not be excluded from MiClash routing just because it uses a
+    # WAN interface. The guard itself protects only FORWARD traffic, but these
+    # OUTPUT rules keep router downloads consistent with the active MiClash
+    # policy.
     if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-        msg "OUTPUT: interface exclusions skipped while internet-only guard is active"
+        msg "OUTPUT: interface exclusions skipped while client guard policy is enabled"
     else
         apply_nft_interface_exclusion_output "$excluded_interfaces"
     fi
@@ -2062,15 +2064,15 @@ apply_nft_output_rules() {
         if [ "$INTERNET_ONLY_MICLASH" = "true" ] && { [ "$PROXY_MODE" = "tproxy" ] || [ "$PROXY_MODE" = "mixed" ]; }; then
             if [ "$PROXY_MODE" = "mixed" ]; then
                 nft add rule inet clash output meta mark 0 meta l4proto udp counter meta mark set "$output_udp_mark"
-                msg "OUTPUT: TCP uses redir-port; UDP marked for clash-tun (internet-only guard active)"
+                msg "OUTPUT: TCP uses redir-port; UDP marked for clash-tun (client guard policy enabled)"
             else
-                msg "OUTPUT: TCP uses redir-port; external UDP remains blocked by guard in TPROXY mode"
+                msg "OUTPUT: TCP uses redir-port; external UDP is not routed in TPROXY client guard policy"
             fi
         else
             nft add rule inet clash output meta mark 0 meta l4proto tcp meta mark set "$MARK_TPROXY"
             nft add rule inet clash output meta mark 0 meta l4proto udp meta mark set "$output_udp_mark"
             if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-                msg "OUTPUT: Marking applied for all traffic (internet-only guard active)"
+                msg "OUTPUT: Marking applied for all traffic (client guard policy enabled)"
             else
                 msg "OUTPUT: Marking applied for all traffic"
             fi
@@ -2358,7 +2360,7 @@ apply_iptables_output_redirect_rules() {
     iptables -t nat -A CLASH_OUTPUT_REDIRECT -p tcp --dport 7890:7894 -j RETURN
     iptables -t nat -A CLASH_OUTPUT_REDIRECT -p tcp --sport 7890:7894 -j RETURN
     iptables -t nat -A CLASH_OUTPUT_REDIRECT -p tcp -j REDIRECT --to-ports "$redir_port"
-    msg "OUTPUT: router TCP redirected to redir-port $redir_port (internet-only guard active, iptables)"
+    msg "OUTPUT: router TCP redirected to redir-port $redir_port (client guard policy enabled, iptables)"
 }
 
 # For iptables - apply output chain rules
@@ -2368,11 +2370,13 @@ apply_iptables_output_rules() {
     local fake_ip_filter_mode="$3"
     local fake_ip_range="$4"
 
-    # With the fail-closed guard active, router-originated update traffic must
-    # not bypass output marking via WAN interface exclusions. Otherwise it
-    # reaches the guard unmarked and is dropped before Clash can handle it.
+    # When the client-only guard is enabled, router-originated maintenance
+    # traffic should not be excluded from MiClash routing just because it uses a
+    # WAN interface. The guard itself protects only FORWARD traffic, but these
+    # OUTPUT rules keep router downloads consistent with the active MiClash
+    # policy.
     if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-        msg "OUTPUT: interface exclusions skipped while internet-only guard is active (iptables)"
+        msg "OUTPUT: interface exclusions skipped while client guard policy is enabled (iptables)"
     else
         apply_iptables_interface_exclusion_output "$excluded_interfaces"
     fi
@@ -2415,9 +2419,9 @@ apply_iptables_output_rules() {
     if [ "$INTERNET_ONLY_MICLASH" = "true" ] && { [ "$PROXY_MODE" = "tproxy" ] || [ "$PROXY_MODE" = "mixed" ]; }; then
         if [ "$PROXY_MODE" = "mixed" ]; then
             iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p udp -j MARK --set-mark "$ipt_output_udp_mark"
-            msg "OUTPUT: TCP uses redir-port; UDP marked for clash-tun (internet-only guard active, iptables)"
+            msg "OUTPUT: TCP uses redir-port; UDP marked for clash-tun (client guard policy enabled, iptables)"
         else
-            msg "OUTPUT: TCP uses redir-port; external UDP remains blocked by guard in TPROXY mode (iptables)"
+            msg "OUTPUT: TCP uses redir-port; external UDP is not routed in TPROXY client guard policy (iptables)"
         fi
     elif [ -n "$fake_ip_range" ]; then
         iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p tcp -d "$fake_ip_range" -j MARK --set-mark "$MARK_TPROXY"
@@ -2427,7 +2431,7 @@ apply_iptables_output_rules() {
         iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p tcp -j MARK --set-mark "$MARK_TPROXY"
         iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p udp -j MARK --set-mark "$ipt_output_udp_mark"
         if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-            msg "OUTPUT: Marking applied for all traffic (internet-only guard active)"
+            msg "OUTPUT: Marking applied for all traffic (client guard policy enabled)"
         else
             msg "OUTPUT: Marking applied for all traffic"
         fi
