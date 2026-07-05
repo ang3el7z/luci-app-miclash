@@ -361,10 +361,7 @@
 }
 .sbox-rulesets-example pre {
 	margin: 0;
-	border: 1px solid var(--sbox-border);
-	border-radius: 6px;
 	padding: 8px;
-	background: var(--sbox-log-bg);
 	font-size: 11px;
 	line-height: 1.45;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;

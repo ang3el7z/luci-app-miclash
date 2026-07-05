@@ -47,6 +47,7 @@ const banned = [
 	[/--sbox-(?:accent|success|danger|warn)\b/, 'custom semantic color variables instead of native LuCI button/text classes'],
 	[/\.sbox-(?:native-)?editor\s*\{[^}]*\b(?:border|background|color)\s*:/i, 'custom editor surface styling instead of native cbi-input-text theme'],
 	[/\.sbox-ruleset-(?:whitelist-)?editor\s*\{[^}]*\b(?:border|background|color)\s*:/i, 'custom ruleset editor surface styling instead of native cbi-input-text theme'],
+	[/\.sbox-rulesets-example\s+pre\s*\{[^}]*\b(?:border|background|color)\s*:/i, 'custom ruleset example surface instead of native descriptive text'],
 	[/linear-gradient\(/i, 'custom gradient palette'],
 	[/border-radius:\s*999px/i, 'pill-shaped custom shell radius'],
 	[/transform:\s*scale\(/i, 'custom hover scaling instead of native LuCI interaction'],

@@ -924,8 +924,8 @@ async function openRulesetsModal() {
 				'<div id="sbox-ruleset-editor-wrap" class="sbox-ruleset-editor-wrap" hidden>' +
 					'<div id="sbox-ruleset-editor" class="sbox-ruleset-editor"></div>' +
 				'</div>' +
-				'<div class="sbox-rulesets-example">' +
-					'<div class="sbox-muted sbox-rulesets-example-label">' + safeText(_('Example usage in config.yaml')) + '</div>' +
+				'<div class="cbi-section-descr sbox-rulesets-example">' +
+					'<div class="sbox-rulesets-example-label">' + safeText(_('Example usage in config.yaml')) + '</div>' +
 					'<pre>rule-providers:\n  your-list:\n    behavior: classical\n    type: file\n    format: text\n    path: ./lst/your-list.txt</pre>' +
 				'</div>' +
 				(data.whitelistMode ? '' +
