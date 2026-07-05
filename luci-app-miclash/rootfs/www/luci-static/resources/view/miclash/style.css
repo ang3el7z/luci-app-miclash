@@ -128,8 +128,6 @@
 .sbox-editor {
 	width: 100%;
 	height: 560px;
-	border: 1px solid var(--sbox-border);
-	border-radius: 8px;
 }
 .sbox-native-editor {
 	display: block;
@@ -137,11 +135,8 @@
 	height: 100%;
 	min-height: inherit;
 	box-sizing: border-box;
-	border: 0;
 	margin: 0;
 	resize: none;
-	background: var(--sbox-log-bg);
-	color: var(--sbox-text);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 	font-size: 12px;
 	line-height: 1.45;
@@ -353,8 +348,6 @@
 .sbox-ruleset-editor {
 	height: 48vh;
 	min-height: 320px;
-	border: 1px solid var(--sbox-border);
-	border-radius: 8px;
 }
 .sbox-rulesets-empty {
 	padding: 16px;
@@ -393,8 +386,6 @@
 }
 .sbox-ruleset-whitelist-editor {
 	height: 240px;
-	border: 1px solid var(--sbox-border);
-	border-radius: 8px;
 }
 @media (max-width: 980px) {
 	.sbox-config-toolbar {
