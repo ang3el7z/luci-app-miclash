@@ -21,7 +21,6 @@ readonly RESERVED_NETWORKS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.2
 readonly RESERVED_NETWORKS6="::/128 ::1/128 fc00::/7 fe80::/10 ff00::/8"
 readonly GUARD_NFT_TABLE="miclash_guard"
 readonly GUARD_FORWARD_CHAIN="MICLASH_GUARD_FORWARD"
-readonly GUARD_OUTPUT_CHAIN="MICLASH_GUARD_OUTPUT"
 # Fake-ip whitelist IP-CIDR technical list (used only by the firewall, not by config.yaml)
 readonly FAKEIP_WHITELIST_FILE="/opt/clash/lst/fakeip-whitelist-ipcidr.txt"
 readonly FAKEIP_IPSET_NAME="clash_fakeip_whitelist"
@@ -1444,7 +1443,7 @@ get_wan6_interface() {
     echo "$wan6_interface"
 }
 
-# Internet-only guard: interfaces considered external for fail-closed blocking.
+# Internet-only client guard: interfaces considered external for fail-closed blocking.
 get_guard_wan_interfaces() {
     local detected_list=""
     local user_selected_list=""
@@ -1492,7 +1491,6 @@ apply_nft_guard_rules() {
     [ -n "$local6_elements" ] && nft add element inet "$GUARD_NFT_TABLE" local6 "{ $local6_elements }"
 
     nft add chain inet "$GUARD_NFT_TABLE" forward '{ type filter hook forward priority 1; policy accept; }' || return 1
-    nft add chain inet "$GUARD_NFT_TABLE" output '{ type filter hook output priority 1; policy accept; }' || return 1
 
     nft add rule inet "$GUARD_NFT_TABLE" forward ct state established,related accept
     nft add rule inet "$GUARD_NFT_TABLE" forward iifname "clash-tun" accept
@@ -1503,30 +1501,19 @@ apply_nft_guard_rules() {
     nft add rule inet "$GUARD_NFT_TABLE" forward ip daddr @local4 accept
     nft add rule inet "$GUARD_NFT_TABLE" forward ip6 daddr @local6 accept
 
-    nft add rule inet "$GUARD_NFT_TABLE" output ct state established,related accept
-    nft add rule inet "$GUARD_NFT_TABLE" output oifname "lo" accept
-    nft add rule inet "$GUARD_NFT_TABLE" output meta mark "$MARK_CLASH_ROUTING" accept
-    nft add rule inet "$GUARD_NFT_TABLE" output meta mark "$MARK_TPROXY" accept
-    nft add rule inet "$GUARD_NFT_TABLE" output meta mark "$MARK_TUN_UDP" accept
-    nft add rule inet "$GUARD_NFT_TABLE" output ip daddr @local4 accept
-    nft add rule inet "$GUARD_NFT_TABLE" output ip6 daddr @local6 accept
-
     if [ -n "$wan_interfaces" ]; then
-        msg "Internet-only guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')"
+        msg "Internet-only client guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')"
         echo "$wan_interfaces" | while IFS= read -r iface; do
             [ -n "$iface" ] || continue
             nft add rule inet "$GUARD_NFT_TABLE" forward oifname "$iface" drop comment "miclash-guard"
-            nft add rule inet "$GUARD_NFT_TABLE" output oifname "$iface" drop comment "miclash-guard"
         done
     else
-        warn "Internet-only guard could not detect WAN interfaces; falling back to blocking all non-local forwarding/output"
+        warn "Internet-only client guard could not detect WAN interfaces; falling back to blocking all non-local forwarding"
         nft add rule inet "$GUARD_NFT_TABLE" forward meta nfproto ipv4 drop comment "miclash-guard"
         nft add rule inet "$GUARD_NFT_TABLE" forward meta nfproto ipv6 drop comment "miclash-guard"
-        nft add rule inet "$GUARD_NFT_TABLE" output meta nfproto ipv4 drop comment "miclash-guard"
-        nft add rule inet "$GUARD_NFT_TABLE" output meta nfproto ipv6 drop comment "miclash-guard"
     fi
 
-    msg "Internet-only guard enabled (nftables)"
+    msg "Internet-only client guard enabled (nftables)"
 }
 
 remove_iptables_guard_for_cmd() {
@@ -1535,11 +1522,26 @@ remove_iptables_guard_for_cmd() {
     command -v "$cmd" >/dev/null 2>&1 || return 0
 
     while $cmd -t filter -D FORWARD -j "$GUARD_FORWARD_CHAIN" 2>/dev/null; do :; done
-    while $cmd -t filter -D OUTPUT -j "$GUARD_OUTPUT_CHAIN" 2>/dev/null; do :; done
     $cmd -t filter -F "$GUARD_FORWARD_CHAIN" 2>/dev/null
     $cmd -t filter -X "$GUARD_FORWARD_CHAIN" 2>/dev/null
-    $cmd -t filter -F "$GUARD_OUTPUT_CHAIN" 2>/dev/null
-    $cmd -t filter -X "$GUARD_OUTPUT_CHAIN" 2>/dev/null
+    remove_iptables_legacy_output_guard_for_cmd "$cmd"
+}
+
+remove_iptables_legacy_output_guard_for_cmd() {
+    local cmd="$1"
+    local legacy_output_chain="MICLASH_GUARD_OUTPUT"
+
+    command -v "$cmd" >/dev/null 2>&1 || return 0
+
+    # Remove stale pre-client-only guard runtime state from older installs.
+    while $cmd -t filter -D OUTPUT -j "$legacy_output_chain" 2>/dev/null; do :; done
+    $cmd -t filter -F "$legacy_output_chain" 2>/dev/null
+    $cmd -t filter -X "$legacy_output_chain" 2>/dev/null
+}
+
+remove_iptables_legacy_output_guard_rules() {
+    remove_iptables_legacy_output_guard_for_cmd iptables
+    remove_iptables_legacy_output_guard_for_cmd ip6tables
 }
 
 ensure_iptables_guard_chain() {
@@ -1563,7 +1565,6 @@ apply_iptables_guard_for_cmd() {
 
     remove_iptables_guard_for_cmd "$cmd"
     ensure_iptables_guard_chain "$cmd" FORWARD "$GUARD_FORWARD_CHAIN" || return 1
-    ensure_iptables_guard_chain "$cmd" OUTPUT "$GUARD_OUTPUT_CHAIN" || return 1
 
     $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
     $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -i clash-tun -j RETURN
@@ -1576,29 +1577,16 @@ apply_iptables_guard_for_cmd() {
         $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -d "$network" -j RETURN 2>/dev/null
     done
 
-    $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-    $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -o lo -j RETURN
-    $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -m mark --mark "$MARK_CLASH_ROUTING" -j RETURN
-    $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -m mark --mark "$MARK_TPROXY" -j RETURN
-    $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -m mark --mark "$MARK_TUN_UDP" -j RETURN
-
-    for network in $reserved_networks; do
-        $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -d "$network" -j RETURN 2>/dev/null
-    done
-
     if [ -n "$wan_interfaces" ]; then
         echo "$wan_interfaces" | while IFS= read -r iface; do
             [ -n "$iface" ] || continue
             $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -o "$iface" -j DROP
-            $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -o "$iface" -j DROP
         done
     else
         $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -j DROP
-        $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -j DROP
     fi
 
     $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -j RETURN
-    $cmd -t filter -A "$GUARD_OUTPUT_CHAIN" -j RETURN
 }
 
 remove_iptables_guard_rules() {
@@ -1610,8 +1598,8 @@ apply_iptables_guard_rules() {
     local wan_interfaces
 
     wan_interfaces=$(get_guard_wan_interfaces)
-    [ -n "$wan_interfaces" ] && msg "Internet-only guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')" || \
-        warn "Internet-only guard could not detect WAN interfaces; falling back to blocking all non-local forwarding/output"
+    [ -n "$wan_interfaces" ] && msg "Internet-only client guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')" || \
+        warn "Internet-only client guard could not detect WAN interfaces; falling back to blocking all non-local forwarding"
 
     apply_iptables_guard_for_cmd iptables ipv4 "$wan_interfaces" "$RESERVED_NETWORKS" || return 1
 
@@ -1621,10 +1609,13 @@ apply_iptables_guard_rules() {
         warn "ip6tables not found; IPv6 guard rules cannot be installed on the iptables backend"
     fi
 
-    msg "Internet-only guard enabled (iptables)"
+    msg "Internet-only client guard enabled (iptables)"
 }
 
 apply_guard_rules() {
+    # Migration cleanup: remove stale pre-client-only iptables guard state even when nftables is active.
+    remove_iptables_legacy_output_guard_rules
+
     if hash nft 2>/dev/null; then
         apply_nft_guard_rules
     elif hash iptables 2>/dev/null; then
@@ -1638,7 +1629,7 @@ apply_guard_rules() {
 remove_guard_rules() {
     remove_nft_guard_rules
     remove_iptables_guard_rules
-    msg "Internet-only guard disabled"
+    msg "Internet-only client guard disabled"
 }
 
 refresh_guard_rules() {
@@ -3173,60 +3164,6 @@ repair_policy_routing_state() {
     validate_policy_routing_state
 }
 
-traffic_rules_exist() {
-    if hash nft 2>/dev/null; then
-        nft list chain inet clash mangle >/dev/null 2>&1 || return 1
-        nft list chain inet clash output >/dev/null 2>&1 || return 1
-        case "$INTERNET_ONLY_MICLASH:$PROXY_MODE" in
-            true:tproxy|true:mixed)
-                nft list chain inet clash output_redir >/dev/null 2>&1 || return 1
-                ;;
-        esac
-        return 0
-    fi
-
-    if hash iptables 2>/dev/null; then
-        iptables -t mangle -S CLASH >/dev/null 2>&1 || return 1
-        iptables -t mangle -C PREROUTING -j CLASH >/dev/null 2>&1 || return 1
-        case "$MODE" in
-            explicit) ;;
-            *)
-                iptables -t mangle -S CLASH_LOCAL >/dev/null 2>&1 || return 1
-                iptables -t mangle -C OUTPUT -j CLASH_LOCAL >/dev/null 2>&1 || return 1
-                ;;
-        esac
-        case "$INTERNET_ONLY_MICLASH:$PROXY_MODE" in
-            true:tproxy|true:mixed)
-                iptables -t nat -S CLASH_OUTPUT_REDIRECT >/dev/null 2>&1 || return 1
-                iptables -t nat -C OUTPUT -j CLASH_OUTPUT_REDIRECT >/dev/null 2>&1 || return 1
-                ;;
-        esac
-        return 0
-    fi
-
-    return 1
-}
-
-repair_network_path() {
-    load_all_settings_once
-
-    if ! traffic_rules_exist; then
-        msg "Network path rules missing; rebuilding Clash rules"
-        cleanup_nft_runtime_rules
-        cleanup_iptables_runtime_rules
-        start || return 1
-    fi
-
-    repair_policy_routing_state || return 1
-    repair_forward_rules || return 1
-
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-        apply_guard_rules || return 1
-    else
-        remove_guard_rules
-    fi
-}
-
 # =============================================================================
 # SECTION: bridge-nf-call — prevent double-processing on bridged interfaces
 # =============================================================================
@@ -3536,15 +3473,6 @@ case "$1" in
             exit 1
         fi
         ;;
-    repair_network_path)
-        if repair_network_path; then
-            msg "Network path repaired successfully"
-            exit 0
-        else
-            warn "Network path repair failed"
-            exit 1
-        fi
-        ;;
     validate_forward)
         if validate_forward_state; then
             msg "Forward firewall rules are healthy"
@@ -3559,7 +3487,7 @@ case "$1" in
         exit $?
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|repair_network_path|validate_forward|repair_forward_rules}"
+        echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|repair_forward_rules}"
         exit 1
         ;;
 esac
