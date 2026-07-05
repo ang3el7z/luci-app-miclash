@@ -24,6 +24,7 @@ const required = [
 const missing = required.filter((rel) => !fs.existsSync(path.join(root, rel)));
 
 const makefile = fs.readFileSync(path.join(root, 'luci-app-miclash/Makefile'), 'utf8');
+const buildWorkflow = fs.readFileSync(path.join(root, '.github/workflows/makefile.yml'), 'utf8');
 const runtimeDependencyFiles = [
 	'install-miclash.sh',
 	'luci-app-miclash/rootfs/opt/clash/bin/miclash-update',
@@ -53,6 +54,19 @@ if (!/^LUCI_DEPENDS:=.*\+zlib\b.*\+libcurl\b.*\+curl\b/m.test(makefile)) {
 
 if (/^LUCI_DEPENDS:=.*\+libcurl4\b/m.test(makefile)) {
 	missing.push('Makefile LUCI_DEPENDS must not use runtime package name +libcurl4');
+}
+
+const expectedPackageInspectionSnippets = [
+	'list_package_entries()',
+	'www/luci-static/resources/view/miclash/style.css',
+	'usr/share/luci/menu.d/luci-app-miclash.json',
+	'opt/clash/bin/miclash-update'
+];
+
+for (const snippet of expectedPackageInspectionSnippets) {
+	if (!buildWorkflow.includes(snippet)) {
+		missing.push(`makefile workflow package inspection snippet ${snippet}`);
+	}
 }
 
 for (const rel of runtimeDependencyFiles) {

@@ -237,6 +237,39 @@ jobs:
             exit 1
           fi
 
+          list_package_entries() {
+            local pkg="$1"
+            local out="$2"
+            local work
+            work="$(mktemp -d)"
+
+            if tar -tf "$pkg" > "$out" 2>/dev/null; then
+              rm -rf "$work"
+              return 0
+            fi
+
+            if ar t "$pkg" >/dev/null 2>&1; then
+              (cd "$work" && ar x "$pkg")
+              for payload in "$work"/data.tar "$work"/data.tar.*; do
+                if [ -f "$payload" ] && tar -tf "$payload" > "$out" 2>/dev/null; then
+                  rm -rf "$work"
+                  return 0
+                fi
+              done
+            fi
+
+            echo "Cannot inspect package contents: $pkg" >&2
+            file "$pkg" >&2 || true
+            rm -rf "$work"
+            return 1
+          }
+
+          package_entries="$(mktemp)"
+          list_package_entries "$src" "$package_entries"
+          grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/style.css$' "$package_entries"
+          grep -Eq '(^|[.]/)usr/share/luci/menu.d/luci-app-miclash.json$' "$package_entries"
+          grep -Eq '(^|[.]/)opt/clash/bin/miclash-update$' "$package_entries"
+
           cp -v -f "$src" "$dst"
           ls -lah "$dst"
 
