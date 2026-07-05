@@ -1,3 +1,7 @@
+<p align="right">
+Читать на: <a href="README.md">English</a> | <strong>Русский</strong> | <a href="README.zh-cn.md">中文</a>
+</p>
+
 # MiClash
 
 LuCI-приложение для управления Mihomo/Clash на OpenWrt.
