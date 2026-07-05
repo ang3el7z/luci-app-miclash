@@ -117,7 +117,7 @@ async function createEditor(host, content, options) {
 		editor.session.setMode('ace/mode/' + (opts.mode || 'yaml'));
 		installLuciAceTheme();
 		editor.setTheme('ace/theme/miclash_luci');
-		editor.container.classList.add('cbi-input-text', 'sbox-ace-editor');
+		editor.container.classList.add('sbox-ace-editor');
 		editor.setValue(String(content || ''), -1);
 		return editor;
 	} catch (e) {

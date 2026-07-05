@@ -573,6 +573,48 @@ function computeUiPath(externalUiName, externalUi) {
 	return '/ui/';
 }
 
+function getDashboardConfigIssue(config) {
+	const ec = parseYamlValue(config, 'external-controller');
+	const ecTls = parseYamlValue(config, 'external-controller-tls');
+	const externalUi = parseYamlValue(config, 'external-ui');
+	const externalUiName = parseYamlValue(config, 'external-ui-name');
+
+	if (!ec && !ecTls) {
+		return _('Dashboard is not configured: external-controller is missing in config.yaml.');
+	}
+
+	if (!externalUi && !externalUiName) {
+		return _('Dashboard is not configured: external-ui or external-ui-name is missing in config.yaml.');
+	}
+
+	return '';
+}
+
+function resolveDashboardButtonState() {
+	if (!appState.serviceRunning) {
+		return {
+			disabled: true,
+			className: 'cbi-button-neutral',
+			title: _('Start the service to open dashboard.')
+		};
+	}
+
+	const issue = getDashboardConfigIssue(appState.configContent || '');
+	if (issue) {
+		return {
+			disabled: false,
+			className: 'cbi-button-negative',
+			title: issue
+		};
+	}
+
+	return {
+		disabled: false,
+		className: 'cbi-button-positive',
+		title: _('Open dashboard')
+	};
+}
+
 async function getServiceStatus() {
 	return view_miclash_service.getStatus();
 }
@@ -701,6 +743,12 @@ async function openDashboard() {
 		}
 
 		const config = await fs.read(CONFIG_PATH);
+		const configIssue = getDashboardConfigIssue(config);
+		if (configIssue) {
+			notify('error', configIssue);
+			return;
+		}
+
 		const ec = parseYamlValue(config, 'external-controller');
 		const ecTls = parseYamlValue(config, 'external-controller-tls');
 		const secret = parseYamlValue(config, 'secret');
@@ -836,6 +884,18 @@ async function initializeConfigEditor(content) {
 	if (!editorHost) throw new Error('editor container #miclash-editor not found');
 	editor = await view_miclash_editor.createEditor(editorHost, content, { mode: 'yaml' });
 	editor.clearSelection();
+	resizeConfigEditor();
+}
+
+function resizeConfigEditor() {
+	if (!editor || typeof editor.resize !== 'function') return;
+	const resize = function() {
+		try { editor.resize(true); } catch (e) {}
+	};
+	window.requestAnimationFrame(resize);
+	window.setTimeout(resize, 50);
+	window.setTimeout(resize, 250);
+	window.setTimeout(resize, 750);
 }
 
 function destroyRulesetEditors() {
@@ -1323,6 +1383,7 @@ function buildConfigOptionsHtml() {
 function buildPageHtml() {
 	const appActionState = resolveAppActionState();
 	const kernelActionState = resolveKernelActionState();
+	const dashboardButtonState = resolveDashboardButtonState();
 	const versionApp = safeText(appState.versions.app || _('unknown'));
 	const versionKernel = safeText(
 		appState.kernelStatus && appState.kernelStatus.installed
@@ -1346,12 +1407,12 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="cbi-button ' + (isInternetOnlyEnabled() ? 'cbi-button-apply' : 'cbi-button-neutral') + ' sbox-guard-state-label" title="' + safeText(_('Internet only through MiClash')) + '">' +
+			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Internet only through MiClash')) + '">' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
 			'</span>' +
-			'<button id="sbox-dashboard" type="button" class="cbi-button ' + (appState.serviceRunning ? 'cbi-button-apply' : 'cbi-button-neutral') + ' sbox-header-button sbox-btn-dashboard"' +
-				(appState.serviceRunning ? '' : ' disabled') +
+			'<button id="sbox-dashboard" type="button" class="cbi-button ' + dashboardButtonState.className + ' sbox-header-button sbox-btn-dashboard"' +
+				(dashboardButtonState.disabled ? ' disabled' : '') +
 			'>' + safeText(_('Dashboard')) + '</button>' +
 		'</div>' +
 
@@ -1363,7 +1424,7 @@ function buildPageHtml() {
 
 				'<div id="sbox-pane-control">' +
 					'<div class="sbox-row">' +
-						'<span id="sbox-status" class="cbi-button ' + (appState.serviceRunning ? 'cbi-button-apply' : 'cbi-button-negative') + ' sbox-status">' +
+						'<span id="sbox-status" class="sbox-status ' + (appState.serviceRunning ? 'sbox-status-on' : 'sbox-status-off') + '">' +
 							'<span id="sbox-status-label">' + safeText(appState.serviceRunning ? _('Service running') : _('Service stopped')) + '</span>' +
 						'</span>' +
 						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-service-button"' + (appState.serviceRunning ? ' hidden' : '') + '>' + safeText(_('Start')) + '</button>' +
@@ -1426,8 +1487,8 @@ function updateHeaderAndControlDom() {
 	const serviceBusy = !!appState.serviceActionBusy;
 
 	if (status && statusLabel) {
-		status.classList.toggle('cbi-button-apply', appState.serviceRunning);
-		status.classList.toggle('cbi-button-negative', !appState.serviceRunning);
+		status.classList.toggle('sbox-status-on', appState.serviceRunning);
+		status.classList.toggle('sbox-status-off', !appState.serviceRunning);
 		statusLabel.textContent = appState.serviceRunning ? _('Service running') : _('Service stopped');
 	}
 
@@ -1447,10 +1508,13 @@ function updateHeaderAndControlDom() {
 	}
 
 	if (dashboardBtn) {
-		dashboardBtn.disabled = serviceBusy || !appState.serviceRunning;
+		const dashboardState = resolveDashboardButtonState();
+		dashboardBtn.disabled = serviceBusy || dashboardState.disabled;
 		dashboardBtn.className = 'cbi-button ' +
-			(appState.serviceRunning ? 'cbi-button-apply' : 'cbi-button-neutral') +
+			dashboardState.className +
 			' sbox-header-button sbox-btn-dashboard';
+		dashboardBtn.removeAttribute('title');
+		dashboardBtn.removeAttribute('aria-label');
 	}
 
 	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
@@ -1481,8 +1545,10 @@ function updateHeaderAndControlDom() {
 	const guardState = pageRoot.querySelector('#sbox-guard-state');
 	const guardEnabled = isInternetOnlyEnabled();
 	if (guardPill) {
-		guardPill.classList.toggle('cbi-button-apply', guardEnabled);
-		guardPill.classList.toggle('cbi-button-neutral', !guardEnabled);
+		guardPill.classList.remove('cbi-button', 'cbi-button-apply', 'cbi-button-neutral', 'cbi-button-positive', 'cbi-button-negative');
+		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
+		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
+		guardPill.title = _('Internet only through MiClash');
 	}
 	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
 }
@@ -2131,6 +2197,7 @@ function bindTabEvents() {
 				startLogPolling();
 			} else {
 				stopLogPolling();
+				resizeConfigEditor();
 			}
 		}
 	});
