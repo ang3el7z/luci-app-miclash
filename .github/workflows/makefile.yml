@@ -240,12 +240,24 @@ jobs:
           list_package_entries() {
             local pkg="$1"
             local out="$2"
+            local outer="$3"
             local work
             work="$(mktemp -d)"
 
-            if tar -tf "$pkg" > "$out" 2>/dev/null; then
-              rm -rf "$work"
-              return 0
+            if tar -tf "$pkg" > "$outer" 2>/dev/null; then
+              if grep -Eq '(^|/)data\.tar(\.|$)' "$outer"; then
+                tar -xf "$pkg" -C "$work"
+                for payload in "$work"/data.tar "$work"/data.tar.*; do
+                  if [ -f "$payload" ] && tar -tf "$payload" > "$out" 2>/dev/null; then
+                    rm -rf "$work"
+                    return 0
+                  fi
+                done
+              else
+                cp "$outer" "$out"
+                rm -rf "$work"
+                return 0
+              fi
             fi
 
             if ar t "$pkg" >/dev/null 2>&1; then
@@ -265,7 +277,8 @@ jobs:
           }
 
           package_entries="$(mktemp)"
-          list_package_entries "$src" "$package_entries"
+          package_outer_entries="$(mktemp)"
+          list_package_entries "$src" "$package_entries" "$package_outer_entries"
           grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/style.css$' "$package_entries"
           grep -Eq '(^|[.]/)usr/share/luci/menu.d/luci-app-miclash.json$' "$package_entries"
           grep -Eq '(^|[.]/)opt/clash/bin/miclash-update$' "$package_entries"
