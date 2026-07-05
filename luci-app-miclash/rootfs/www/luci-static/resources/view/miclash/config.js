@@ -13,6 +13,7 @@
 'require view.miclash.ui-shell';
 'require view.miclash.subscription';
 'require view.miclash.guard';
+'require view.miclash.editor';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
@@ -830,53 +831,10 @@ function formatLogHtml(raw) {
 	return rows.map((item) => safeText(item.text)).join('\n');
 }
 
-function createNativeEditor(host, content) {
-	const target = typeof host === 'string' ? document.getElementById(host) : host;
-	if (!target) throw new Error('editor container not found');
-	target.textContent = '';
-
-	const textarea = E('textarea', {
-		'class': 'cbi-input-text sbox-native-editor',
-		'spellcheck': 'false',
-		'wrap': 'off'
-	});
-	target.appendChild(textarea);
-
-	const api = {
-		container: target,
-		session: {
-			setMode: function() {}
-		},
-		setOptions: function() {},
-		setValue: function(value) {
-			textarea.value = String(value || '');
-		},
-		getValue: function() {
-			return textarea.value;
-		},
-		clearSelection: function() {
-			try {
-				textarea.selectionStart = 0;
-				textarea.selectionEnd = 0;
-			} catch (e) {}
-		},
-		resize: function() {},
-		focus: function() {
-			textarea.focus();
-		},
-		destroy: function() {
-			target.textContent = '';
-		}
-	};
-
-	api.setValue(content);
-	return api;
-}
-
-async function initializeNativeEditor(content) {
+async function initializeConfigEditor(content) {
 	const editorHost = (pageRoot && pageRoot.querySelector('#miclash-editor')) || document.getElementById('miclash-editor');
 	if (!editorHost) throw new Error('editor container #miclash-editor not found');
-	editor = createNativeEditor(editorHost, content);
+	editor = await view_miclash_editor.createEditor(editorHost, content, { mode: 'yaml' });
 	editor.clearSelection();
 }
 
@@ -951,9 +909,9 @@ async function openRulesetsModal() {
 	const createInput = body.querySelector('#sbox-ruleset-new-name');
 	const saveWhitelistBtn = body.querySelector('#sbox-ruleset-save-whitelist');
 
-	function ensureRulesetEditor() {
+	async function ensureRulesetEditor() {
 		if (rulesetMainEditor) return;
-		rulesetMainEditor = createNativeEditor('sbox-ruleset-editor', '');
+		rulesetMainEditor = await view_miclash_editor.createEditor('sbox-ruleset-editor', '', { mode: 'text' });
 	}
 
 	function resizeAndFocusRulesetEditor(shouldFocus) {
@@ -995,7 +953,7 @@ async function openRulesetsModal() {
 				currentRuleset = name;
 				renderRulesetList();
 				refreshToolbarState();
-				ensureRulesetEditor();
+				await ensureRulesetEditor();
 				const content = rulesetCache[currentRuleset] != null
 					? rulesetCache[currentRuleset]
 					: await L.resolveDefault(fs.read(RULESET_PATH + currentRuleset), '');
@@ -1026,7 +984,7 @@ async function openRulesetsModal() {
 	renderRulesetList();
 
 	if (currentRuleset) {
-		ensureRulesetEditor();
+		await ensureRulesetEditor();
 		rulesetMainEditor.setValue(String(rulesetCache[currentRuleset] || ''), -1);
 		rulesetMainEditor.clearSelection();
 		resizeAndFocusRulesetEditor(false);
@@ -1056,7 +1014,7 @@ async function openRulesetsModal() {
 
 			renderRulesetList();
 			refreshToolbarState();
-			ensureRulesetEditor();
+			await ensureRulesetEditor();
 			rulesetMainEditor.setValue('', -1);
 			rulesetMainEditor.clearSelection();
 			resizeAndFocusRulesetEditor(true);
@@ -1124,7 +1082,7 @@ async function openRulesetsModal() {
 	}
 
 	if (data.whitelistMode && saveWhitelistBtn) {
-		rulesetWhitelistEditor = createNativeEditor('sbox-ruleset-whitelist-editor', data.whitelistContent || '');
+		rulesetWhitelistEditor = await view_miclash_editor.createEditor('sbox-ruleset-whitelist-editor', data.whitelistContent || '', { mode: 'text' });
 		rulesetWhitelistEditor.clearSelection();
 
 		saveWhitelistBtn.addEventListener('click', () => withButtons(saveWhitelistBtn, async () => {
@@ -2221,7 +2179,7 @@ return view.extend({
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
 
 		try {
-			await initializeNativeEditor(appState.configContent);
+			await initializeConfigEditor(appState.configContent);
 		} catch (e) {
 			notify('error', _('Failed to initialize editor: %s').format(e.message));
 		}

@@ -18,6 +18,10 @@ const required = [
 	'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json',
 	'luci-app-miclash/rootfs/etc/apk/protected_paths.d/miclash.list',
 	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js',
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/editor.js',
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/ace/ace.js',
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/ace/mode-yaml.js',
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/ace/mode-text.js',
 	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css'
 ];
 
@@ -58,6 +62,10 @@ if (/^LUCI_DEPENDS:=.*\+libcurl4\b/m.test(makefile)) {
 
 const expectedPackageInspectionSnippets = [
 	'list_package_entries()',
+	'www/luci-static/resources/view/miclash/editor.js',
+	'www/luci-static/resources/view/miclash/ace/ace.js',
+	'www/luci-static/resources/view/miclash/ace/mode-yaml.js',
+	'www/luci-static/resources/view/miclash/ace/mode-text.js',
 	'www/luci-static/resources/view/miclash/style.css',
 	'usr/share/luci/menu.d/luci-app-miclash.json',
 	'opt/clash/bin/miclash-update'

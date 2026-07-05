@@ -14,6 +14,7 @@ const viewDir = path.join(
 
 const files = [
 	'config.js',
+	'editor.js',
 	'ui-shell.js',
 	'guard.js',
 	'service.js',
@@ -29,8 +30,9 @@ const banned = [
 	[/localStorage\.(?:getItem|setItem|removeItem)\([^)]*theme/i, 'persisted custom theme'],
 	[/(?:style=|['"]style['"]\s*:|\b[A-Za-z0-9_$]+\s*\.\s*style\s*\.)/i, 'inline style instead of native classes/hidden state'],
 	[/prefers-color-scheme/i, 'custom browser theme detection instead of native LuCI theme inheritance'],
-	[/\bace\.(?:edit|config)\b/i, 'Ace editor runtime instead of native LuCI themed textarea'],
 	[/tomorrow_night_bright/i, 'bundled custom dark Ace theme'],
+	[/ace\/theme\/(?!miclash_luci\b)[A-Za-z0-9_-]+/i, 'Ace theme must use the LuCI-derived MiClash theme'],
+	[/theme-[A-Za-z0-9_-]+\.js/i, 'bundled Ace theme asset instead of LuCI-derived theme'],
 	[/\bsbox-card\b/, 'custom card shell instead of cbi-section'],
 	[/\bsbox-section\b/, 'custom cbi-section wrapper instead of native section styling'],
 	[/\bsbox-modal-overlay\b/, 'custom modal overlay instead of ui.showModal'],
@@ -88,8 +90,24 @@ if (!/ui\.showModal\(/.test(uiShell) || !/ui\.hideModal\(/.test(uiShell)) {
 if (fs.existsSync(path.join(viewDir, 'ace', 'theme-tomorrow_night_bright.js'))) {
 	failures.push('ace/theme-tomorrow_night_bright.js: custom dark editor palette must not be packaged');
 }
-if (fs.existsSync(path.join(viewDir, 'ace', 'ace.js'))) {
-	failures.push('ace/ace.js: custom editor palette/runtime must not be packaged');
+for (const aceRuntime of ['ace.js', 'mode-yaml.js', 'mode-text.js']) {
+	if (!fs.existsSync(path.join(viewDir, 'ace', aceRuntime))) {
+		failures.push(`ace/${aceRuntime}: Ace runtime/mode must be packaged for the config editor`);
+	}
+}
+
+const editor = fs.readFileSync(path.join(viewDir, 'editor.js'), 'utf8');
+if (!/function\s+createTextareaEditor\b/.test(editor)) {
+	failures.push('editor.js: missing native textarea fallback when Ace cannot load');
+}
+if (!/ACE_BASE\s*\+\s*['"]ace\.js['"]/.test(editor)) {
+	failures.push('editor.js: Ace must load through LuCI resource path wrapper');
+}
+if (!/ace\/theme\/miclash_luci/.test(editor) || !/var\(--sbox-text\)/.test(editor)) {
+	failures.push('editor.js: Ace theme must be derived from LuCI/MiClash CSS variables');
+}
+if (!/useWorker:\s*false/.test(editor) || !/setUseWorker\(false\)/.test(editor)) {
+	failures.push('editor.js: Ace background workers must stay disabled for OpenWrt packaging');
 }
 for (const legacyView of ['settings.js', 'rulesets.js', 'log.js', 'route.js']) {
 	if (fs.existsSync(path.join(viewDir, legacyView))) {
