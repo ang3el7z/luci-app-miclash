@@ -318,7 +318,8 @@ function defaultOperationalSettings() {
 		internetOnlyMiclash: false,
 		useTmpfsRules: true,
 		autoHideNotifications: true,
-		releaseChannel: 'release',
+		miclashReleaseChannel: 'release',
+		mihomoReleaseChannel: 'release',
 		detectedLan: '',
 		detectedWan: '',
 		includedInterfaces: [],
@@ -350,7 +351,8 @@ async function loadOperationalSettings() {
 				case 'INTERNET_ONLY_MICLASH': settings.internetOnlyMiclash = value === 'true'; break;
 				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
 				case 'AUTO_HIDE_NOTIFICATIONS': settings.autoHideNotifications = value !== 'false'; break;
-				case 'RELEASE_CHANNEL': settings.releaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
+				case 'MICLASH_RELEASE_CHANNEL': settings.miclashReleaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
+				case 'MIHOMO_RELEASE_CHANNEL': settings.mihomoReleaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
 				case 'DETECTED_LAN': settings.detectedLan = value; break;
 				case 'DETECTED_WAN': settings.detectedWan = value; break;
 				case 'INCLUDED_INTERFACES':
@@ -448,7 +450,7 @@ async function detectWanInterface() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, releaseChannel) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel) {
 	let detectedLan = '';
 	let detectedWan = '';
 
@@ -475,7 +477,8 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 		'INTERNET_ONLY_MICLASH=' + internetOnlyMiclash,
 		'USE_TMPFS_RULES=' + useTmpfsRules,
 		'AUTO_HIDE_NOTIFICATIONS=' + (autoHideNotifications !== false),
-		'RELEASE_CHANNEL=' + view_miclash_release.normalizeReleaseChannel(releaseChannel),
+		'MICLASH_RELEASE_CHANNEL=' + view_miclash_release.normalizeReleaseChannel(miclashReleaseChannel),
+		'MIHOMO_RELEASE_CHANNEL=' + view_miclash_release.normalizeReleaseChannel(mihomoReleaseChannel),
 		'DETECTED_LAN=' + detectedLan,
 		'DETECTED_WAN=' + detectedWan,
 		'INCLUDED_INTERFACES=' + includedInterfaces.join(','),

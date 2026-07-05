@@ -300,16 +300,20 @@ async function ensureMihomoKernelInstalled() {
 	return status;
 }
 
-function includePrereleases() {
-	return normalizeReleaseChannel(appState.settings && appState.settings.releaseChannel) === 'prerelease';
+function includeMiClashPrereleases() {
+	return normalizeReleaseChannel(appState.settings && appState.settings.miclashReleaseChannel) === 'prerelease';
+}
+
+function includeMihomoPrereleases() {
+	return normalizeReleaseChannel(appState.settings && appState.settings.mihomoReleaseChannel) === 'prerelease';
 }
 
 async function getLatestMihomoRelease() {
-	return view_miclash_release.getLatestMihomoRelease(includePrereleases());
+	return view_miclash_release.getLatestMihomoRelease(includeMihomoPrereleases());
 }
 
 async function getLatestMiClashRelease() {
-	return view_miclash_release.getLatestMiClashRelease(includePrereleases());
+	return view_miclash_release.getLatestMiClashRelease(includeMiClashPrereleases());
 }
 
 function resolveAppActionState() {
@@ -939,7 +943,7 @@ async function openDashboard() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, releaseChannel, options) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, options) {
 	const opts = options || {};
 	try {
 		await view_miclash_settings_model.saveOperationalSettings(
@@ -956,7 +960,8 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			hwidUserAgent,
 			hwidDeviceOS,
 			autoHideNotifications,
-			releaseChannel
+			miclashReleaseChannel,
+			mihomoReleaseChannel
 		);
 
 		if (!opts.silent) {
@@ -995,7 +1000,8 @@ async function switchProxyModeFromHeader(targetMode) {
 		current.hwidUserAgent || 'MiClash',
 		current.hwidDeviceOS || 'OpenWrt',
 		current.autoHideNotifications !== false,
-		current.releaseChannel || 'release',
+		current.miclashReleaseChannel || 'release',
+		current.mihomoReleaseChannel || 'release',
 		{ silent: true }
 	);
 
@@ -1450,7 +1456,8 @@ function buildSettingsPaneHtml() {
 		internetOnlyMiclash: false,
 		useTmpfsRules: true,
 		autoHideNotifications: true,
-		releaseChannel: 'release',
+		miclashReleaseChannel: 'release',
+		mihomoReleaseChannel: 'release',
 		enableHwid: false,
 		hwidUserAgent: 'MiClash',
 		hwidDeviceOS: 'OpenWrt'
@@ -1531,11 +1538,31 @@ function buildSettingsPaneHtml() {
 					'<span>' + safeText(_('Auto-hide notifications')) + '</span>' +
 				'</label>' +
 				'<div class="sbox-settings-field">' +
-					'<label>' + safeText(_('Release channel')) + '</label>' +
-					'<select id="sbox-release-channel" class="cbi-input-select sbox-select">' +
-						'<option value="release"' + (normalizeReleaseChannel(s.releaseChannel) === 'release' ? ' selected' : '') + '>' + safeText(_('Release only')) + '</option>' +
-						'<option value="prerelease"' + (normalizeReleaseChannel(s.releaseChannel) === 'prerelease' ? ' selected' : '') + '>' + safeText(_('Release + pre-release')) + '</option>' +
-					'</select>' +
+					'<label>' + safeText(_('Release channels')) + '</label>' +
+					'<div class="sbox-release-channel-grid">' +
+						'<div class="sbox-release-channel-column">' +
+							'<div class="sbox-release-channel-title">MiClash</div>' +
+							'<label class="sbox-radio-row">' +
+								'<input type="radio" name="sbox-miclash-release-channel" value="release"' + (normalizeReleaseChannel(s.miclashReleaseChannel) === 'release' ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Latest')) + '</span>' +
+							'</label>' +
+							'<label class="sbox-radio-row">' +
+								'<input type="radio" name="sbox-miclash-release-channel" value="prerelease"' + (normalizeReleaseChannel(s.miclashReleaseChannel) === 'prerelease' ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Pre-release')) + '</span>' +
+							'</label>' +
+						'</div>' +
+						'<div class="sbox-release-channel-column">' +
+							'<div class="sbox-release-channel-title">Mihomo</div>' +
+							'<label class="sbox-radio-row">' +
+								'<input type="radio" name="sbox-mihomo-release-channel" value="release"' + (normalizeReleaseChannel(s.mihomoReleaseChannel) === 'release' ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Latest')) + '</span>' +
+							'</label>' +
+							'<label class="sbox-radio-row">' +
+								'<input type="radio" name="sbox-mihomo-release-channel" value="prerelease"' + (normalizeReleaseChannel(s.mihomoReleaseChannel) === 'prerelease' ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Pre-release')) + '</span>' +
+							'</label>' +
+						'</div>' +
+					'</div>' +
 				'</div>' +
 				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' />' +
@@ -1809,10 +1836,15 @@ async function collectSettingsFormState() {
 	const useTmpfsRules = !!pane.querySelector('#sbox-tmpfs')?.checked;
 	const autoHideNotificationsEl = pane.querySelector('#sbox-auto-hide-notifications');
 	const autoHideNotifications = autoHideNotificationsEl ? !!autoHideNotificationsEl.checked : true;
-	const releaseChannel = normalizeReleaseChannel(pane.querySelector('#sbox-release-channel')?.value || 'release');
 	const enableHwid = !!pane.querySelector('#sbox-enable-hwid')?.checked;
 	const hwidUserAgent = String(pane.querySelector('#sbox-hwid-user-agent')?.value || 'MiClash').trim() || 'MiClash';
 	const hwidDeviceOS = String(pane.querySelector('#sbox-hwid-device-os')?.value || 'OpenWrt').trim() || 'OpenWrt';
+	const miclashReleaseChannel = normalizeReleaseChannel(
+		pane.querySelector('input[name="sbox-miclash-release-channel"]:checked')?.value || 'release'
+	);
+	const mihomoReleaseChannel = normalizeReleaseChannel(
+		pane.querySelector('input[name="sbox-mihomo-release-channel"]:checked')?.value || 'release'
+	);
 
 	const selected = [];
 	pane.querySelectorAll('.sbox-interface-check:checked').forEach((cb) => {
@@ -1829,11 +1861,12 @@ async function collectSettingsFormState() {
 		internetOnlyMiclash,
 		useTmpfsRules,
 		autoHideNotifications,
-		releaseChannel,
 		selected,
 		enableHwid,
 		hwidUserAgent,
-		hwidDeviceOS
+		hwidDeviceOS,
+		miclashReleaseChannel,
+		mihomoReleaseChannel
 	};
 }
 
@@ -1854,7 +1887,8 @@ function bindSettingsPaneEvents() {
 		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
 			const formState = await collectSettingsFormState();
 			if (!formState) return;
-			const previousReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.releaseChannel);
+			const previousMiClashReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.miclashReleaseChannel);
+			const previousMihomoReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.mihomoReleaseChannel);
 
 			const ok = await saveOperationalSettings(
 				formState.mode,
@@ -1870,7 +1904,8 @@ function bindSettingsPaneEvents() {
 				formState.hwidUserAgent,
 				formState.hwidDeviceOS,
 				formState.autoHideNotifications,
-				formState.releaseChannel,
+				formState.miclashReleaseChannel,
+				formState.mihomoReleaseChannel,
 				{ silent: true }
 			);
 
@@ -1896,7 +1931,9 @@ function bindSettingsPaneEvents() {
 				appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
 				appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
 				appState.serviceRunning = await getServiceStatus();
-				const releaseChannelChanged = normalizeReleaseChannel(appState.settings.releaseChannel) !== previousReleaseChannel;
+				const releaseChannelChanged =
+					normalizeReleaseChannel(appState.settings.miclashReleaseChannel) !== previousMiClashReleaseChannel ||
+					normalizeReleaseChannel(appState.settings.mihomoReleaseChannel) !== previousMihomoReleaseChannel;
 
 				const freshConfig = await L.resolveDefault(
 					fs.read(getConfigPathByName(appState.selectedConfigName)),

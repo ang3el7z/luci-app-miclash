@@ -1098,6 +1098,15 @@ msgstr "Автоматически скрывать уведомления"
 msgid "Release channel"
 msgstr "Канал релизов"
 
+msgid "Release channels"
+msgstr "Каналы релизов"
+
+msgid "Latest"
+msgstr "Latest"
+
+msgid "Pre-release"
+msgstr "Pre-release"
+
 msgid "Release only"
 msgstr "Только релизы"
 

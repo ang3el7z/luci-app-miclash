@@ -461,6 +461,20 @@
 .sbox-settings-field {
 	margin-bottom: 10px;
 }
+.sbox-release-channel-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px;
+}
+.sbox-release-channel-column {
+	min-width: 0;
+}
+.sbox-release-channel-title {
+	margin-bottom: 5px;
+	font-size: 12px;
+	font-weight: 800;
+	color: var(--sbox-text);
+}
 .sbox-radio-row,
 .sbox-checkbox-row {
 	display: flex;
