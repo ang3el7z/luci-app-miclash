@@ -244,6 +244,14 @@ jobs:
             local work
             work="$(mktemp -d)"
 
+            if [ "${pkg##*.}" = "apk" ] && [ -x "$SDK_HOME/staging_dir/host/bin/apk" ]; then
+              mkdir -p "$work/extract"
+              "$SDK_HOME/staging_dir/host/bin/apk" extract --allow-untrusted --destination "$work/extract" "$pkg" >/dev/null
+              (cd "$work/extract" && find . -type f,l | sort) > "$out"
+              rm -rf "$work"
+              return 0
+            fi
+
             if tar -tf "$pkg" > "$outer" 2>/dev/null; then
               if grep -Eq '(^|/)data\.tar(\.|$)' "$outer"; then
                 tar -xf "$pkg" -C "$work"

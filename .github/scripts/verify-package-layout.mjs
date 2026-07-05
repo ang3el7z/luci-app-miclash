@@ -62,6 +62,8 @@ if (/^LUCI_DEPENDS:=.*\+libcurl4\b/m.test(makefile)) {
 
 const expectedPackageInspectionSnippets = [
 	'list_package_entries()',
+	'apk" ] && [ -x "$SDK_HOME/staging_dir/host/bin/apk"',
+	'apk" extract --allow-untrusted --destination',
 	'www/luci-static/resources/view/miclash/editor.js',
 	'www/luci-static/resources/view/miclash/ace/ace.js',
 	'www/luci-static/resources/view/miclash/ace/mode-yaml.js',
