@@ -149,6 +149,62 @@
 .sbox-service-button {
 	min-width: 72px;
 }
+.sbox-operation-status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 24px;
+	margin-top: 8px;
+	padding: 5px 10px;
+	box-sizing: border-box;
+	border: 1px solid var(--sbox-border);
+	border-radius: 6px;
+	background: var(--sbox-panel-soft);
+	color: var(--sbox-muted);
+	font-size: 12px;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+.sbox-operation-status[hidden] {
+	display: none !important;
+}
+.sbox-operation-status::before {
+	content: "";
+	width: 10px;
+	height: 10px;
+	flex: 0 0 auto;
+	border: 2px solid currentColor;
+	border-top-color: transparent;
+	border-radius: 50%;
+}
+.sbox-operation-status-running {
+	color: var(--sbox-accent);
+	border-color: color-mix(in srgb, var(--sbox-accent) 34%, var(--sbox-border));
+	background: color-mix(in srgb, var(--sbox-accent) 7%, transparent);
+}
+.sbox-operation-status-running::before {
+	animation: sbox-spin 0.65s linear infinite;
+}
+.sbox-operation-status-error {
+	color: var(--sbox-danger);
+	border-color: color-mix(in srgb, var(--sbox-danger) 34%, var(--sbox-border));
+	background: color-mix(in srgb, var(--sbox-danger) 7%, transparent);
+	font-weight: 600;
+}
+.sbox-operation-status-error::before {
+	border: 0;
+	background: currentColor;
+}
+.sbox-operation-status-success {
+	color: var(--sbox-success);
+	border-color: color-mix(in srgb, var(--sbox-success) 34%, var(--sbox-border));
+	background: color-mix(in srgb, var(--sbox-success) 7%, transparent);
+}
+.sbox-operation-status-success::before {
+	border: 0;
+	background: currentColor;
+}
 .sbox-status {
 	display: inline-flex;
 	align-items: center;

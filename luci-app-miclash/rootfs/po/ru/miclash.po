@@ -1106,3 +1106,120 @@ msgstr "Релизы + pre-release"
 
 msgid "Support the author"
 msgstr "Поддержать автора"
+
+msgid "Starting Clash service..."
+msgstr "Запуск службы Clash..."
+
+msgid "Stopping Clash service..."
+msgstr "Остановка службы Clash..."
+
+msgid "Restarting Clash service..."
+msgstr "Перезапуск службы Clash..."
+
+msgid "Reloading Clash service..."
+msgstr "Перезагрузка службы Clash..."
+
+msgid "Downloading subscription..."
+msgstr "Загрузка подписки..."
+
+msgid "Error: %s"
+msgstr "Ошибка: %s"
+
+msgid "Recommendation: retry the action. If it repeats, check DNS settings in config.yaml or restart dnsmasq."
+msgstr "Рекомендация: повторите действие. Если ошибка повторяется, проверьте DNS в config.yaml или перезапустите dnsmasq."
+
+msgid "Recommendation: retry restart. If it repeats, reinstall the kernel and check TUN mode."
+msgstr "Рекомендация: повторите перезапуск. Если ошибка повторяется, переустановите ядро и проверьте режим TUN."
+
+msgid "Recommendation: retry restart. If it repeats, check firewall and kmod-nft-tproxy."
+msgstr "Рекомендация: повторите перезапуск. Если ошибка повторяется, проверьте firewall и kmod-nft-tproxy."
+
+msgid "Recommendation: retry start. If it repeats, check config.yaml and external-controller port."
+msgstr "Рекомендация: повторите запуск. Если ошибка повторяется, проверьте config.yaml и порт external-controller."
+
+msgid "Recommendation: retry update. If it repeats, check internet access on the router."
+msgstr "Рекомендация: повторите обновление. Если ошибка повторяется, проверьте интернет на роутере."
+
+msgid "Recommendation: retry the action. If it repeats, check MiClash logs."
+msgstr "Рекомендация: повторите действие. Если ошибка повторяется, проверьте логи MiClash."
+
+msgid "Starting update job..."
+msgstr "Запуск задания обновления..."
+
+msgid "Installing dependencies..."
+msgstr "Установка зависимостей..."
+
+msgid "Downloading package..."
+msgstr "Загрузка пакета..."
+
+msgid "Installing package..."
+msgstr "Установка пакета..."
+
+msgid "Update completed."
+msgstr "Обновление завершено."
+
+msgid "Failed to read update status."
+msgstr "Не удалось прочитать статус обновления."
+
+msgid "Failed to start update job."
+msgstr "Не удалось запустить задание обновления."
+
+msgid "Update failed."
+msgstr "Обновление завершилось ошибкой."
+
+msgid "Updating MiClash..."
+msgstr "Обновление MiClash..."
+
+msgid "Update exceeded timeout. Please check MiClash logs and retry."
+msgstr "Обновление превысило таймаут. Проверьте логи MiClash и повторите попытку."
+
+msgid "Checking Clash service process..."
+msgstr "Проверка процесса службы Clash..."
+
+msgid "Checking Clash API..."
+msgstr "Проверка Clash API..."
+
+msgid "Checking DNS..."
+msgstr "Проверка DNS..."
+
+msgid "Checking TUN interface..."
+msgstr "Проверка интерфейса TUN..."
+
+msgid "Checking routing policy..."
+msgstr "Проверка политики маршрутизации..."
+
+msgid "Checking forwarding rules..."
+msgstr "Проверка правил forwarding..."
+
+msgid "Clash service did not enter running state."
+msgstr "Служба Clash не перешла в состояние запуска."
+
+msgid "Clash API is not responding."
+msgstr "Clash API не отвечает."
+
+msgid "DNS listener is not ready."
+msgstr "DNS listener не готов."
+
+msgid "TUN interface did not appear."
+msgstr "Интерфейс TUN не появился."
+
+msgid "Routing policy check failed."
+msgstr "Проверка политики маршрутизации завершилась ошибкой."
+
+msgid "Forwarding rules check failed."
+msgstr "Проверка правил forwarding завершилась ошибкой."
+
+msgid "Service readiness check failed."
+msgstr "Проверка готовности службы завершилась ошибкой."
+
+msgid "port %s is not listening"
+msgstr "порт %s не слушается"
+
+msgid "clash-tun is missing"
+msgstr "clash-tun отсутствует"
+
+msgid "policy validation failed"
+msgstr "проверка policy завершилась ошибкой"
+
+msgid "forward validation failed"
+msgstr "проверка forward завершилась ошибкой"

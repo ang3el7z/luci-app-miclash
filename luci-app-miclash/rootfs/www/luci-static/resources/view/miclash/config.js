@@ -22,6 +22,8 @@ const FAKEIP_WHITELIST_FILENAME = view_miclash_rulesets_model.FAKEIP_WHITELIST_F
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
 const LOG_POLL_MS = 5000;
 const STATUS_POLL_MS = 5000;
+const UPDATE_JOB_POLL_MS = 1000;
+const UPDATE_JOB_TIMEOUT_MS = 7 * 60 * 1000;
 
 let editor = null;
 let pageRoot = null;
@@ -50,6 +52,7 @@ const appState = {
 	activeCtrlTab: 'control',
 	activeCfgTab: 'config',
 	logsRaw: '',
+	operationStatus: null,
 	releaseMeta: {
 		appVersion: '',
 		kernelVersion: '',
@@ -80,6 +83,64 @@ async function logUiAction(level, message) {
 	try {
 		await fs.exec('/usr/bin/logger', ['-p', 'daemon.' + cleanLevel, '-t', 'miclash', String(message || '')]);
 	} catch (e) {}
+}
+
+function delay(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getOperationMessage(error) {
+	const raw = String(error && error.message ? error.message : (error || '')).trim();
+	const firstLine = raw.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)[0] || _('unknown error');
+	return firstLine.length > 180 ? firstLine.slice(0, 177) + '...' : firstLine;
+}
+
+function getOperationRecommendation(error) {
+	const text = String(error && error.message ? error.message : (error || '')).toLowerCase();
+
+	if (text.indexOf('dns') !== -1) {
+		return _('Recommendation: retry the action. If it repeats, check DNS settings in config.yaml or restart dnsmasq.');
+	}
+	if (text.indexOf('tun') !== -1 || text.indexOf('clash-tun') !== -1) {
+		return _('Recommendation: retry restart. If it repeats, reinstall the kernel and check TUN mode.');
+	}
+	if (text.indexOf('policy') !== -1 || text.indexOf('routing') !== -1 || text.indexOf('forward') !== -1 || text.indexOf('firewall') !== -1) {
+		return _('Recommendation: retry restart. If it repeats, check firewall and kmod-nft-tproxy.');
+	}
+	if (text.indexOf('api') !== -1 || text.indexOf('external-controller') !== -1 || text.indexOf('9090') !== -1) {
+		return _('Recommendation: retry start. If it repeats, check config.yaml and external-controller port.');
+	}
+	if (text.indexOf('download') !== -1 || text.indexOf('update') !== -1 || text.indexOf('install') !== -1 || text.indexOf('curl') !== -1) {
+		return _('Recommendation: retry update. If it repeats, check internet access on the router.');
+	}
+
+	return _('Recommendation: retry the action. If it repeats, check MiClash logs.');
+}
+
+function setOperationStatus(type, message) {
+	appState.operationStatus = {
+		type: type || 'running',
+		message: String(message || '')
+	};
+	updateHeaderAndControlDom();
+}
+
+function clearOperationStatus() {
+	appState.operationStatus = null;
+	updateHeaderAndControlDom();
+}
+
+function setOperationError(error) {
+	const message = getOperationMessage(error);
+	setOperationStatus('error', _('Error: %s').format(message) + ' ' + getOperationRecommendation(error));
+}
+
+function operationStageOptions(initialMessage) {
+	return {
+		onStage: (message) => setOperationStatus('running', message || initialMessage)
+	};
 }
 
 function safeText(value) {
@@ -364,6 +425,107 @@ function isRpcReconnectLikeError(message) {
 	return false;
 }
 
+function parseMiClashUpdateStatus(raw) {
+	const status = {};
+	String(raw || '').split(/\r?\n/).forEach((line) => {
+		const idx = line.indexOf('=');
+		if (idx <= 0) return;
+		status[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+	});
+	if (!status.state) status.state = 'idle';
+	return status;
+}
+
+async function readMiClashUpdateStatus() {
+	const result = await fs.exec('/opt/clash/bin/miclash-update', ['status']);
+	if (result.code !== 0) {
+		throw new Error(String(result.stderr || result.stdout || _('Failed to read update status.')).trim());
+	}
+	return parseMiClashUpdateStatus(result.stdout || '');
+}
+
+function formatMiClashUpdateStatus(status, fallback) {
+	const message = String(status && status.message || '').trim();
+	if (message) return message;
+
+	const phase = String(status && status.phase || '').trim();
+	const labels = {
+		queued: _('Starting update job...'),
+		dependencies: _('Installing dependencies...'),
+		download: _('Downloading package...'),
+		install: _('Installing package...'),
+		restart: _('Restarting Clash service...'),
+		done: _('Update completed.')
+	};
+	return labels[phase] || fallback || _('Updating MiClash...');
+}
+
+async function clearMiClashUpdateStatus() {
+	await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-update', ['clear-status']), null);
+}
+
+async function startMiClashUpdateJob(kind, args) {
+	await clearMiClashUpdateStatus();
+	const result = await fs.exec('/opt/clash/bin/miclash-update', ['job', kind].concat(args || []));
+	if (result.code !== 0) {
+		throw new Error(String(result.stderr || result.stdout || _('Failed to start update job.')).trim());
+	}
+	return true;
+}
+
+async function pollMiClashUpdateJob(initialMessage, options) {
+	const opts = options || {};
+	const timeoutMs = opts.timeoutMs || UPDATE_JOB_TIMEOUT_MS;
+	const startedAt = Date.now();
+	const fallback = initialMessage || _('Updating MiClash...');
+
+	setOperationStatus('running', fallback);
+
+	while (Date.now() - startedAt < timeoutMs) {
+		await delay(UPDATE_JOB_POLL_MS);
+
+		let status;
+		try {
+			status = await readMiClashUpdateStatus();
+		} catch (e) {
+			if (isRpcReconnectLikeError(e.message)) throw e;
+			setOperationStatus('running', fallback);
+			continue;
+		}
+
+		const state = String(status.state || 'idle');
+		if (state === 'success') {
+			clearOperationStatus();
+			return status;
+		}
+		if (state === 'failed') {
+			throw new Error(status.message || _('Update failed.'));
+		}
+		if (state === 'running') {
+			setOperationStatus('running', formatMiClashUpdateStatus(status, fallback));
+		}
+	}
+
+	throw new Error(_('Update exceeded timeout. Please check MiClash logs and retry.'));
+}
+
+async function resumeMiClashUpdateJobStatus() {
+	const status = await readMiClashUpdateStatus();
+	const state = String(status.state || 'idle');
+
+	if (state === 'running') {
+		await pollMiClashUpdateJob(formatMiClashUpdateStatus(status, _('Updating MiClash...')));
+		return;
+	}
+	if (state === 'failed') {
+		setOperationError(new Error(status.message || _('Update failed.')));
+		return;
+	}
+	if (state === 'success') {
+		clearOperationStatus();
+	}
+}
+
 async function installMiClashFromSettings(actionKind) {
 	const manager = await detectPackageManager();
 	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
@@ -381,14 +543,8 @@ async function installMiClashFromSettings(actionKind) {
 	try {
 		await logUiAction('info', 'MiClash package update started');
 		notify('info', _('Updating MiClash package on router...'));
-		const result = await fs.exec('/opt/clash/bin/miclash-update', [
-			'app',
-			'--url', asset.browser_download_url,
-			'--mode', mode
-		]);
-		if (result.code !== 0) {
-			throw new Error(String(result.stderr || result.stdout || _('Failed to install MiClash package.')).trim());
-		}
+		await startMiClashUpdateJob('app', ['--url', asset.browser_download_url, '--mode', mode]);
+		await pollMiClashUpdateJob(_('Updating MiClash package on router...'));
 	} catch (e) {
 		if (isRpcReconnectLikeError(e.message)) {
 			notify('info', _('Connection interrupted while finalizing MiClash update. Reloading interface...'));
@@ -397,6 +553,7 @@ async function installMiClashFromSettings(actionKind) {
 			}, 3000);
 			return true;
 		}
+		setOperationError(e);
 		throw e;
 	}
 
@@ -412,18 +569,15 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 	try {
 		await logUiAction('info', 'mihomo kernel update started');
 		notify('info', _('Updating mihomo kernel on router...'));
-		const result = await fs.exec('/opt/clash/bin/miclash-update', [
-			'kernel',
-			'--url', downloadUrl
-		]);
-		if (result.code !== 0) {
-			throw new Error(String(result.stderr || result.stdout || _('Kernel download failed: %s').format(_('Download failed'))).trim());
-		}
-		const message = String(result.stdout || '').trim();
+		await startMiClashUpdateJob('kernel', ['--url', downloadUrl]);
+		const status = await pollMiClashUpdateJob(_('Updating mihomo kernel on router...'));
+		const message = String(status.message || '').trim();
 		await logUiAction('info', message || 'mihomo kernel installed');
 		notify('info', message || _('Mihomo kernel downloaded and installed.'));
+		clearOperationStatus();
 		return true;
 	} catch (e) {
+		setOperationError(e);
 		await logUiAction('err', 'mihomo kernel update failed: ' + e.message);
 		notify('error', _('Kernel download failed: %s').format(e.message));
 		return false;
@@ -537,7 +691,13 @@ async function withServiceButtons(activeBtn, inactiveBtn, fn) {
 			activeBtn.innerHTML = activeHtml;
 		}
 		if (inactiveBtn && inactiveBtn.isConnected) inactiveBtn.disabled = inactiveDisabled;
+		updateHeaderAndControlDom();
 	}
+}
+
+async function withRestartButtonFeedback(fn) {
+	const restartBtn = pageRoot ? pageRoot.querySelector('#sbox-restart') : null;
+	return withServiceButtons(restartBtn, null, fn);
 }
 
 function parseYamlValue(yaml, key) {
@@ -621,12 +781,12 @@ async function getServiceStatus() {
 	return view_miclash_service.getStatus();
 }
 
-async function restartOrReloadServiceOrThrow(action) {
-	return view_miclash_service.restartOrReloadOrThrow(action);
+async function restartOrReloadServiceOrThrow(action, options) {
+	return view_miclash_service.dispatchActionsAndWaitReadyOrThrow([action], true, options || {});
 }
 
-async function dispatchServiceActionsAndWaitOrThrow(actions, targetStatus) {
-	return view_miclash_service.dispatchActionsAndWaitOrThrow(actions, targetStatus);
+async function dispatchServiceActionsAndWaitOrThrow(actions, targetStatus, options) {
+	return view_miclash_service.dispatchActionsAndWaitReadyOrThrow(actions, targetStatus, options || {});
 }
 
 function notifyDetailedError(title, detail) {
@@ -842,7 +1002,8 @@ async function switchProxyModeFromHeader(targetMode) {
 	if (!ok) throw new Error(_('Cannot save proxy mode.'));
 
 	if (!(await validateMainConfigBeforeStart())) return;
-	await restartOrReloadServiceOrThrow('restart');
+	setOperationStatus('running', _('Restarting Clash service...'));
+	await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
 
 	appState.settings = await loadOperationalSettings();
 	appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
@@ -863,6 +1024,7 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	updateHeaderAndControlDom();
 	if (appState.activeCtrlTab === 'settings') renderSettingsPane();
+	clearOperationStatus();
 	notify('info', _('Proxy mode switched to %s. Service restarted.').format(appState.proxyMode));
 }
 
@@ -1457,6 +1619,7 @@ function buildPageHtml() {
 						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop')) + '</button>' +
 						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
+					'<div id="sbox-operation-status" class="sbox-operation-status" hidden></div>' +
 				'</div>' +
 
 			'<div id="sbox-pane-settings" hidden></div>' +
@@ -1501,6 +1664,7 @@ function updateHeaderAndControlDom() {
 	const stopBtn = pageRoot.querySelector('#sbox-stop');
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
 	const dashboardBtn = pageRoot.querySelector('#sbox-dashboard');
+	const operationStatus = pageRoot.querySelector('#sbox-operation-status');
 	const appVersion = pageRoot.querySelector('#sbox-app-version');
 	const appAction = pageRoot.querySelector('#sbox-app-action');
 	const kernelVersion = pageRoot.querySelector('#sbox-kernel-version');
@@ -1527,6 +1691,22 @@ function updateHeaderAndControlDom() {
 	if (restartBtn) {
 		if (!serviceBusy) restartBtn.hidden = !appState.serviceRunning;
 		restartBtn.disabled = serviceBusy || !appState.serviceRunning;
+	}
+
+	if (operationStatus) {
+		const state = appState.operationStatus;
+		if (!state || !state.message) {
+			operationStatus.hidden = true;
+			operationStatus.textContent = '';
+			operationStatus.className = 'sbox-operation-status';
+			operationStatus.removeAttribute('title');
+		} else {
+			const type = /^(running|error|success)$/.test(String(state.type || '')) ? state.type : 'running';
+			operationStatus.hidden = false;
+			operationStatus.className = 'sbox-operation-status sbox-operation-status-' + type;
+			operationStatus.textContent = state.message;
+			operationStatus.title = state.message;
+		}
 	}
 
 	if (dashboardBtn) {
@@ -1697,10 +1877,15 @@ function bindSettingsPaneEvents() {
 				if (!ok) return;
 				if (!(await validateMainConfigBeforeStart())) return;
 				try {
-					await restartOrReloadServiceOrThrow('restart');
+					await withRestartButtonFeedback(async () => {
+						setOperationStatus('running', _('Restarting Clash service...'));
+						await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
+					});
 					await logUiAction('info', 'Settings saved and Clash service restarted');
 					notify('info', _('Settings saved and Clash service restarted.'));
+					clearOperationStatus();
 				} catch (e) {
+					setOperationError(e);
 					await logUiAction('err', 'Settings saved, but Clash service restart failed: ' + e.message);
 					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
 				}
@@ -1730,6 +1915,7 @@ function bindSettingsPaneEvents() {
 				renderSettingsPane();
 				updateHeaderAndControlDom();
 			}).catch((e) => {
+				setOperationError(e);
 				notify('error', _('Failed to save settings: %s').format(e.message));
 			}));
 	}
@@ -1786,6 +1972,7 @@ function bindControlAndHeaderEvents() {
 			appAction.innerHTML = '<span class="sbox-spinner"></span>';
 
 			installMiClashFromSettings(appActionKind).catch((e) => {
+				setOperationError(e);
 				notify('error', _('Failed to update MiClash: %s').format(e.message));
 			}).finally(async () => {
 				if (appAction && appAction.isConnected) {
@@ -1817,6 +2004,7 @@ function bindControlAndHeaderEvents() {
 			installKernelFromSettings().then(() => {
 				renderSettingsPane();
 			}).catch((e) => {
+				setOperationError(e);
 				notify('error', _('Failed to load kernel information: %s').format(e.message));
 			}).finally(() => {
 				if (kernelAction && kernelAction.isConnected) {
@@ -1848,6 +2036,7 @@ function bindControlAndHeaderEvents() {
 				await switchProxyModeFromHeader(nextMode);
 			} catch (e) {
 				appState.proxyMode = previousMode;
+				setOperationError(e);
 				updateHeaderAndControlDom();
 				notify('error', _('Failed to switch proxy mode: %s').format(e.message));
 			} finally {
@@ -1863,12 +2052,19 @@ function bindControlAndHeaderEvents() {
 			try {
 				await withServiceButtons(startBtn, stopBtn, async () => {
 					if (!(await validateMainConfigBeforeStart())) return;
-					await dispatchServiceActionsAndWaitOrThrow(['enable', 'start'], true);
+					setOperationStatus('running', _('Starting Clash service...'));
+					await dispatchServiceActionsAndWaitOrThrow(
+						['enable', 'start'],
+						true,
+						operationStageOptions(_('Starting Clash service...'))
+					);
 					await logUiAction('info', 'Clash service started');
+					clearOperationStatus();
 				});
 				await refreshHeaderAndControlSafe();
 			} catch (e) {
 				await refreshHeaderAndControlSafe();
+				setOperationError(e);
 				await logUiAction('err', 'Unable to start service: ' + e.message);
 				notify('error', _('Unable to start service: %s').format(e.message));
 			}
@@ -1879,12 +2075,15 @@ function bindControlAndHeaderEvents() {
 		stopBtn.addEventListener('click', async () => {
 			try {
 				await withServiceButtons(stopBtn, startBtn, async () => {
+					setOperationStatus('running', _('Stopping Clash service...'));
 					await dispatchServiceActionsAndWaitOrThrow(['stop', 'disable'], false);
 					await logUiAction('info', 'Clash service stopped');
+					clearOperationStatus();
 				});
 				await refreshHeaderAndControlSafe();
 			} catch (e) {
 				await refreshHeaderAndControlSafe();
+				setOperationError(e);
 				await logUiAction('err', 'Unable to stop service: ' + e.message);
 				notify('error', _('Unable to stop service: %s').format(e.message));
 			}
@@ -1893,13 +2092,16 @@ function bindControlAndHeaderEvents() {
 
 	const restartBtn = pageRoot.querySelector('#sbox-restart');
 	if (restartBtn) {
-		restartBtn.addEventListener('click', () => withButtons(restartBtn, async () => {
+		restartBtn.addEventListener('click', () => withRestartButtonFeedback(async () => {
 			if (!(await validateMainConfigBeforeStart())) return;
-			await restartOrReloadServiceOrThrow('restart');
+			setOperationStatus('running', _('Restarting Clash service...'));
+			await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
 			await logUiAction('info', 'Clash service restarted');
 			notify('info', _('Clash service restarted successfully.'));
+			clearOperationStatus();
 			await refreshHeaderAndControl();
 		}).catch((e) => {
+			setOperationError(e);
 			logUiAction('err', 'Failed to restart Clash service: ' + e.message);
 			notify('error', _('Failed to restart Clash service: %s').format(e.message));
 		}));
@@ -1960,10 +2162,12 @@ async function setSelectedConfigAsMain() {
 	await saveSubscriptionUrl(selectedUrl, MAIN_CONFIG_NAME);
 	await saveSubscriptionUrl(mainUrl, selected);
 
-	await restartOrReloadServiceOrThrow('restart');
+	setOperationStatus('running', _('Restarting Clash service...'));
+	await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
 	appState.serviceRunning = await getServiceStatus();
 	await switchConfigProfile(MAIN_CONFIG_NAME);
 	await refreshHeaderAndControl();
+	clearOperationStatus();
 
 	notify('info', _('%s is now main config.').format(_(getConfigLabel(selected))));
 }
@@ -2011,6 +2215,7 @@ function bindConfigEvents() {
 				]
 			});
 		}).catch((e) => {
+			setOperationError(e);
 			notify('error', _('Failed to set main config: %s').format(e.message));
 		}));
 	}
@@ -2031,6 +2236,7 @@ function bindConfigEvents() {
 
 				await ensureMihomoKernelInstalled();
 				await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
+				setOperationStatus('running', _('Downloading subscription...'));
 
 				const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
 				const currentSettings = appState.settings || await loadOperationalSettings();
@@ -2052,7 +2258,8 @@ function bindConfigEvents() {
 				let serviceReloaded = false;
 				if (selectedConfig === MAIN_CONFIG_NAME) {
 					if (await getServiceStatus()) {
-						await restartOrReloadServiceOrThrow('reload');
+						setOperationStatus('running', _('Reloading Clash service...'));
+						await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Clash service...')));
 						serviceReloaded = true;
 					}
 					appState.serviceRunning = await getServiceStatus();
@@ -2069,7 +2276,9 @@ function bindConfigEvents() {
 					await logUiAction('info', getConfigLabel(selectedConfig) + ' downloaded and saved');
 					notify('info', _('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
 				}
+				clearOperationStatus();
 			}).catch((e) => {
+				setOperationError(e);
 				logUiAction('err', 'Failed to apply subscription: ' + e.message);
 				notify('error', _('Failed to apply subscription: %s').format(e.message));
 			}).finally(async () => {
@@ -2116,17 +2325,20 @@ function bindConfigEvents() {
 			if (selectedConfig === MAIN_CONFIG_NAME) {
 				const wasRunning = await getServiceStatus();
 				if (wasRunning) {
-					await restartOrReloadServiceOrThrow('reload');
+					setOperationStatus('running', _('Reloading Clash service...'));
+					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Clash service...')));
 				}
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();
 				await logUiAction('info', wasRunning ? 'Configuration applied and service reloaded' : getConfigLabel(selectedConfig) + ' saved');
 				notify('info', wasRunning ? _('Configuration applied and service reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
+				if (wasRunning) clearOperationStatus();
 			} else {
 				await logUiAction('info', getConfigLabel(selectedConfig) + ' saved');
 				notify('info', _('%s saved.').format(_(getConfigLabel(selectedConfig))));
 			}
 		}).catch((e) => {
+			setOperationError(e);
 			logUiAction('err', 'Failed to apply configuration: ' + e.message);
 			notify('error', _('Failed to apply configuration: %s').format(e.message));
 		}));
@@ -2261,6 +2473,7 @@ return view.extend({
 
 		startControlPolling();
 		startUpdatePolling();
+		resumeMiClashUpdateJobStatus().catch(() => {});
 
 		document.addEventListener('visibilitychange', () => {
 			if (document.hidden) {
