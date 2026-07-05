@@ -153,28 +153,6 @@ get_config_routing_mark() {
     [ -n "$mark" ] && echo "$mark" || echo "2"
 }
 
-# Parse redir-port from config.yaml (defaults to 7892 if absent).
-get_config_redir_port() {
-    [ -f "$CONFIG_FILE" ] || {
-        echo "7892"
-        return
-    }
-    local port
-    port=$(awk '
-        /^[[:space:]]*redir-port:[[:space:]]*/ {
-            gsub(/^[[:space:]]*redir-port:[[:space:]]*/, "")
-            sub(/[[:space:]]*#.*/, "")
-            gsub(/[[:space:]]+$/, "")
-            gsub(/["'"'"']/, "")
-            print $0
-            exit
-        }' "$CONFIG_FILE")
-    case "$port" in
-        ''|*[!0-9]*) echo "7892" ;;
-        *) echo "$port" ;;
-    esac
-}
-
 preflight_check_tun_stack() {
     case "$PROXY_MODE" in
         "tun"|"mixed") ;;
@@ -1945,52 +1923,11 @@ apply_nft_clash_exclusions_output() {
     # boundary: loop prevention for mihomo itself is already guaranteed by the
     # "meta mark MARK_CLASH_ROUTING return" rule earlier in this chain, which
     # is set via routing-mark in config.yaml.
-    #
-    # When the client forwarding guard option is active, keep local root
-    # traffic eligible for Clash routing instead of adding a blanket root
-    # bypass. DNS is not affected either way: dnsmasq runs with noresolv=1 and
-    # forwards only to 127.0.0.1#7874, so no leakage path exists outside Clash.
-    if [ "$INTERNET_ONLY_MICLASH" != "true" ]; then
-        nft add rule inet clash output meta skuid 0 return
-    fi
+    nft add rule inet clash output meta skuid 0 return
     # Exclude specific ports used by Clash
     nft add rule inet clash output tcp sport {7890, 7891, 7892, 7893, 7894} return
     nft add rule inet clash output udp sport {7890, 7891, 7892, 7893, 7894} return
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-        msg "Clash ports excluded from proxy in output (client guard policy enabled: root traffic flows through Clash)"
-    else
-        msg "Clash process and ports excluded from proxy in output"
-    fi
-}
-
-apply_nft_output_redirect_rules() {
-    local server_ips="$1"
-
-    [ "$INTERNET_ONLY_MICLASH" = "true" ] || return 0
-    case "$PROXY_MODE" in
-        "tproxy"|"mixed") ;;
-        *) return 0 ;;
-    esac
-
-    local redir_port
-    redir_port=$(get_config_redir_port)
-
-    nft add chain inet clash output_redir '{ type nat hook output priority dstnat; policy accept; }' || return 1
-    nft add rule inet clash output_redir meta mark "$MARK_CLASH_ROUTING" return
-    nft add rule inet clash output_redir meta mark and 0xff00 != 0 return
-
-    for network in $RESERVED_NETWORKS; do
-        nft add rule inet clash output_redir ip daddr "$network" return
-    done
-
-    if [ -n "$server_ips" ]; then
-        nft add rule inet clash output_redir ip daddr @proxy_servers return
-    fi
-
-    nft add rule inet clash output_redir tcp dport {7890, 7891, 7892, 7893, 7894} return
-    nft add rule inet clash output_redir tcp sport {7890, 7891, 7892, 7893, 7894} return
-    nft add rule inet clash output_redir meta l4proto tcp redirect to :"$redir_port"
-    msg "OUTPUT: router TCP redirected to redir-port $redir_port (client guard policy enabled)"
+    msg "Clash process and ports excluded from proxy in output"
 }
 
 # For nftables - apply output chain rules
@@ -2000,16 +1937,7 @@ apply_nft_output_rules() {
     local fake_ip_filter_mode="$3"
     local fake_ip_range="$4"
 
-    # When the client-only guard is enabled, router-originated maintenance
-    # traffic should not be excluded from MiClash routing just because it uses a
-    # WAN interface. The guard itself protects only FORWARD traffic, but these
-    # OUTPUT rules keep router downloads consistent with the active MiClash
-    # policy.
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-        msg "OUTPUT: interface exclusions skipped while client guard policy is enabled"
-    else
-        apply_nft_interface_exclusion_output "$excluded_interfaces"
-    fi
+    apply_nft_interface_exclusion_output "$excluded_interfaces"
 
     # Exclude already marked packets
     nft add rule inet clash output meta mark "$MARK_CLASH_ROUTING" return
@@ -2061,28 +1989,9 @@ apply_nft_output_rules() {
     apply_nft_clash_exclusions_output
 
     if [ -z "$fake_ip_range" ]; then
-        if [ "$INTERNET_ONLY_MICLASH" = "true" ] && { [ "$PROXY_MODE" = "tproxy" ] || [ "$PROXY_MODE" = "mixed" ]; }; then
-            if [ "$PROXY_MODE" = "mixed" ]; then
-                nft add rule inet clash output meta mark 0 meta l4proto udp counter meta mark set "$output_udp_mark"
-                msg "OUTPUT: TCP uses redir-port; UDP marked for clash-tun (client guard policy enabled)"
-            else
-                msg "OUTPUT: TCP uses redir-port; external UDP is not routed in TPROXY client guard policy"
-            fi
-        else
-            nft add rule inet clash output meta mark 0 meta l4proto tcp meta mark set "$MARK_TPROXY"
-            nft add rule inet clash output meta mark 0 meta l4proto udp meta mark set "$output_udp_mark"
-            if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-                msg "OUTPUT: Marking applied for all traffic (client guard policy enabled)"
-            else
-                msg "OUTPUT: Marking applied for all traffic"
-            fi
-        fi
-        if { [ "$fake_ip_filter_mode" = "whitelist" ] || [ "$fake_ip_filter_mode" = "rule" ]; } && [ -n "$FAKEIP_WHITELIST_IPS" ]; then
-            if [ "$INTERNET_ONLY_MICLASH" = "true" ] && [ "$PROXY_MODE" = "mixed" ]; then
-                nft add rule inet clash output ip daddr @fakeip_whitelist meta l4proto udp counter meta mark set "$output_udp_mark"
-                msg "OUTPUT: fakeip whitelist UDP marked for clash-tun; TCP handled by redir-port"
-            fi
-        fi
+        nft add rule inet clash output meta mark 0 meta l4proto tcp meta mark set "$MARK_TPROXY"
+        nft add rule inet clash output meta mark 0 meta l4proto udp meta mark set "$output_udp_mark"
+        msg "OUTPUT: Marking applied for all traffic"
     fi
 
     msg "Output chain rules applied"
@@ -2327,42 +2236,6 @@ apply_iptables_interface_exclusion_output() {
     fi
 }
 
-apply_iptables_output_redirect_rules() {
-    local server_ips="$1"
-
-    [ "$INTERNET_ONLY_MICLASH" = "true" ] || return 0
-    case "$PROXY_MODE" in
-        "tproxy"|"mixed") ;;
-        *) return 0 ;;
-    esac
-
-    local redir_port
-    redir_port=$(get_config_redir_port)
-
-    iptables -t nat -N CLASH_OUTPUT_REDIRECT 2>/dev/null
-    iptables -t nat -F CLASH_OUTPUT_REDIRECT 2>/dev/null
-    while iptables -t nat -D OUTPUT -j CLASH_OUTPUT_REDIRECT 2>/dev/null; do :; done
-    iptables -t nat -A OUTPUT -j CLASH_OUTPUT_REDIRECT || return 1
-
-    iptables -t nat -A CLASH_OUTPUT_REDIRECT -m mark --mark "$MARK_CLASH_ROUTING" -j RETURN
-    iptables -t nat -A CLASH_OUTPUT_REDIRECT -m mark --mark 0xff00/0xff00 -j RETURN
-
-    for network in $RESERVED_NETWORKS; do
-        iptables -t nat -A CLASH_OUTPUT_REDIRECT -d "$network" -j RETURN 2>/dev/null
-    done
-
-    if [ -n "$server_ips" ]; then
-        echo "$server_ips" | while IFS= read -r ip; do
-            [ -n "$ip" ] && iptables -t nat -A CLASH_OUTPUT_REDIRECT -d "$ip/32" -j RETURN 2>/dev/null
-        done
-    fi
-
-    iptables -t nat -A CLASH_OUTPUT_REDIRECT -p tcp --dport 7890:7894 -j RETURN
-    iptables -t nat -A CLASH_OUTPUT_REDIRECT -p tcp --sport 7890:7894 -j RETURN
-    iptables -t nat -A CLASH_OUTPUT_REDIRECT -p tcp -j REDIRECT --to-ports "$redir_port"
-    msg "OUTPUT: router TCP redirected to redir-port $redir_port (client guard policy enabled, iptables)"
-}
-
 # For iptables - apply output chain rules
 apply_iptables_output_rules() {
     local server_ips="$1"
@@ -2370,16 +2243,7 @@ apply_iptables_output_rules() {
     local fake_ip_filter_mode="$3"
     local fake_ip_range="$4"
 
-    # When the client-only guard is enabled, router-originated maintenance
-    # traffic should not be excluded from MiClash routing just because it uses a
-    # WAN interface. The guard itself protects only FORWARD traffic, but these
-    # OUTPUT rules keep router downloads consistent with the active MiClash
-    # policy.
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-        msg "OUTPUT: interface exclusions skipped while client guard policy is enabled (iptables)"
-    else
-        apply_iptables_interface_exclusion_output "$excluded_interfaces"
-    fi
+    apply_iptables_interface_exclusion_output "$excluded_interfaces"
 
     # Exclude already marked packets
     iptables -t mangle -A CLASH_LOCAL -m mark --mark "$MARK_CLASH_ROUTING" -j RETURN
@@ -2416,39 +2280,21 @@ apply_iptables_output_rules() {
         ipt_output_udp_mark="$MARK_TUN_UDP"
     fi
 
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ] && { [ "$PROXY_MODE" = "tproxy" ] || [ "$PROXY_MODE" = "mixed" ]; }; then
-        if [ "$PROXY_MODE" = "mixed" ]; then
-            iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p udp -j MARK --set-mark "$ipt_output_udp_mark"
-            msg "OUTPUT: TCP uses redir-port; UDP marked for clash-tun (client guard policy enabled, iptables)"
-        else
-            msg "OUTPUT: TCP uses redir-port; external UDP is not routed in TPROXY client guard policy (iptables)"
-        fi
-    elif [ -n "$fake_ip_range" ]; then
+    if [ -n "$fake_ip_range" ]; then
         iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p tcp -d "$fake_ip_range" -j MARK --set-mark "$MARK_TPROXY"
         iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p udp -d "$fake_ip_range" -j MARK --set-mark "$ipt_output_udp_mark"
         msg "OUTPUT: Marking applied only for fake-ip range: $fake_ip_range"
     else
         iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p tcp -j MARK --set-mark "$MARK_TPROXY"
         iptables -t mangle -A CLASH_LOCAL -m mark --mark 0 -p udp -j MARK --set-mark "$ipt_output_udp_mark"
-        if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-            msg "OUTPUT: Marking applied for all traffic (client guard policy enabled)"
-        else
-            msg "OUTPUT: Marking applied for all traffic"
-        fi
+        msg "OUTPUT: Marking applied for all traffic"
     fi
     # Additionally mark locally generated traffic to fakeip whitelist IP-CIDR entries
     # (applies in both whitelist and rule fake-ip-filter-mode values)
     if { [ "$fake_ip_filter_mode" = "whitelist" ] || [ "$fake_ip_filter_mode" = "rule" ]; } && [ -n "$FAKEIP_WHITELIST_IPS" ]; then
-        if [ "$INTERNET_ONLY_MICLASH" = "true" ] && { [ "$PROXY_MODE" = "tproxy" ] || [ "$PROXY_MODE" = "mixed" ]; }; then
-            if [ "$PROXY_MODE" = "mixed" ]; then
-                iptables -t mangle -A CLASH_LOCAL -m set --match-set "$FAKEIP_IPSET_NAME" dst -p udp -j MARK --set-mark "$ipt_output_udp_mark"
-                msg "OUTPUT: fakeip whitelist UDP marked for clash-tun; TCP handled by redir-port (iptables)"
-            fi
-        else
-            iptables -t mangle -A CLASH_LOCAL -m set --match-set "$FAKEIP_IPSET_NAME" dst -p tcp -j MARK --set-mark "$MARK_TPROXY"
-            iptables -t mangle -A CLASH_LOCAL -m set --match-set "$FAKEIP_IPSET_NAME" dst -p udp -j MARK --set-mark "$ipt_output_udp_mark"
-            msg "OUTPUT: fakeip whitelist ipset rules applied"
-        fi
+        iptables -t mangle -A CLASH_LOCAL -m set --match-set "$FAKEIP_IPSET_NAME" dst -p tcp -j MARK --set-mark "$MARK_TPROXY"
+        iptables -t mangle -A CLASH_LOCAL -m set --match-set "$FAKEIP_IPSET_NAME" dst -p udp -j MARK --set-mark "$ipt_output_udp_mark"
+        msg "OUTPUT: fakeip whitelist ipset rules applied"
     fi
 
     msg "Output chain rules applied"
@@ -2547,7 +2393,6 @@ apply_nft_rules() {
             nft add rule inet clash mangle jump CLASH_MARK
 
             # In exclude mode, we also need to process locally generated traffic
-            apply_nft_output_redirect_rules "$server_ips" || return 1
             apply_nft_output_rules "$server_ips" "$excluded_interfaces" "$fake_ip_filter_mode" "$fake_ip_range"
             msg "nftables output rules applied (exclude mode)"
             ;;
@@ -2614,7 +2459,6 @@ apply_iptables_rules() {
             iptables -t mangle -A CLASH -j CLASH_PROCESS
 
             # In exclude mode, we also need to process locally generated traffic
-            apply_iptables_output_redirect_rules "$server_ips" || return 1
             apply_iptables_output_rules "$server_ips" "$excluded_interfaces" "$fake_ip_filter_mode" "$fake_ip_range"
             msg "iptables output rules applied (exclude mode)"
             ;;
@@ -3234,9 +3078,11 @@ cleanup_iptables_runtime_rules() {
     while iptables -t mangle -D OUTPUT -j CLASH_LOCAL 2>/dev/null; do :; done
     iptables -t mangle -F CLASH_LOCAL 2>/dev/null
     iptables -t mangle -X CLASH_LOCAL 2>/dev/null
-    while iptables -t nat -D OUTPUT -j CLASH_OUTPUT_REDIRECT 2>/dev/null; do :; done
-    iptables -t nat -F CLASH_OUTPUT_REDIRECT 2>/dev/null
-    iptables -t nat -X CLASH_OUTPUT_REDIRECT 2>/dev/null
+    # Migration cleanup for the removed router-OUTPUT redirect policy.
+    local legacy_output_redirect_chain="CLASH_OUTPUT_REDIRECT"
+    while iptables -t nat -D OUTPUT -j "$legacy_output_redirect_chain" 2>/dev/null; do :; done
+    iptables -t nat -F "$legacy_output_redirect_chain" 2>/dev/null
+    iptables -t nat -X "$legacy_output_redirect_chain" 2>/dev/null
     msg "iptables rules removed successfully"
 }
 

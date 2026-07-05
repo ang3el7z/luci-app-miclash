@@ -96,7 +96,7 @@ Run:
 rg -n 'apply_nft_output_redirect_rules|apply_iptables_output_redirect_rules|output_redir|CLASH_OUTPUT_REDIRECT|client guard policy enabled|client forwarding guard option is active|root traffic flows through Clash' luci-app-miclash/rootfs/opt/clash/bin/clash-rules
 ```
 
-Expected after implementation: no matches.
+Expected after implementation: no matches, except removal-only `CLASH_OUTPUT_REDIRECT` cleanup inside `cleanup_iptables_runtime_rules()`.
 
 ### Task 2: Verify And Commit
 

@@ -37,7 +37,8 @@ Router-originated OUTPUT routing must follow the normal MiClash routing behavior
 
 - No executable code uses `INTERNET_ONLY_MICLASH` inside OUTPUT routing helpers except unrelated global setting reads.
 - `apply_nft_output_redirect_rules` and `apply_iptables_output_redirect_rules` are removed if they only exist for client guard OUTPUT redirect behavior.
-- No `output_redir` or `CLASH_OUTPUT_REDIRECT` rules remain.
+- No active `output_redir` or `CLASH_OUTPUT_REDIRECT` routing rules remain.
+- Removal-only cleanup for stale `CLASH_OUTPUT_REDIRECT` rules remains allowed for upgrades from intermediate builds.
 - No OUTPUT log/comment says `client guard policy enabled`.
 - FORWARD guard rules and legacy `MICLASH_GUARD_OUTPUT` cleanup remain.
 - Shell syntax checks pass for `clash-rules` and `init.d/clash`.
