@@ -1,4 +1,4 @@
-<img width="972" height="858" alt="image" src="https://github.com/user-attachments/assets/45e45cd6-e76b-464d-8a19-0f9e7d861b61" />
+<img width="881" height="889" alt="image" src="https://github.com/user-attachments/assets/c53492ae-5318-4f34-802e-393306c109f3" />
 
 # Auto install
 
