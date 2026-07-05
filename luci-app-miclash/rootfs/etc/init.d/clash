@@ -276,9 +276,9 @@ remove_firewall_rules() {
 refresh_guard_rules() {
 	if [ -f "$CLASH_RULES" ]; then
 		if "$CLASH_RULES" guard_refresh; then
-			msg "Internet-only guard refreshed"
+			msg "Client forwarding guard refreshed"
 		else
-			msg "WARNING: Failed to refresh internet-only guard"
+			msg "WARNING: Failed to refresh client forwarding guard"
 		fi
 	fi
 }

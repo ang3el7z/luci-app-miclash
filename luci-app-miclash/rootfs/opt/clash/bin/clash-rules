@@ -1443,7 +1443,7 @@ get_wan6_interface() {
     echo "$wan6_interface"
 }
 
-# Internet-only client guard: interfaces considered external for fail-closed blocking.
+# Client forwarding guard: interfaces considered external for fail-closed blocking.
 get_guard_wan_interfaces() {
     local detected_list=""
     local user_selected_list=""
@@ -1502,18 +1502,18 @@ apply_nft_guard_rules() {
     nft add rule inet "$GUARD_NFT_TABLE" forward ip6 daddr @local6 accept
 
     if [ -n "$wan_interfaces" ]; then
-        msg "Internet-only client guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')"
+        msg "Client forwarding guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')"
         echo "$wan_interfaces" | while IFS= read -r iface; do
             [ -n "$iface" ] || continue
             nft add rule inet "$GUARD_NFT_TABLE" forward oifname "$iface" drop comment "miclash-guard"
         done
     else
-        warn "Internet-only client guard could not detect WAN interfaces; falling back to blocking all non-local forwarding"
+        warn "Client forwarding guard could not detect WAN interfaces; falling back to blocking all non-local forwarding"
         nft add rule inet "$GUARD_NFT_TABLE" forward meta nfproto ipv4 drop comment "miclash-guard"
         nft add rule inet "$GUARD_NFT_TABLE" forward meta nfproto ipv6 drop comment "miclash-guard"
     fi
 
-    msg "Internet-only client guard enabled (nftables)"
+    msg "Client forwarding guard enabled (nftables)"
 }
 
 remove_iptables_guard_for_cmd() {
@@ -1598,8 +1598,8 @@ apply_iptables_guard_rules() {
     local wan_interfaces
 
     wan_interfaces=$(get_guard_wan_interfaces)
-    [ -n "$wan_interfaces" ] && msg "Internet-only client guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')" || \
-        warn "Internet-only client guard could not detect WAN interfaces; falling back to blocking all non-local forwarding"
+    [ -n "$wan_interfaces" ] && msg "Client forwarding guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')" || \
+        warn "Client forwarding guard could not detect WAN interfaces; falling back to blocking all non-local forwarding"
 
     apply_iptables_guard_for_cmd iptables ipv4 "$wan_interfaces" "$RESERVED_NETWORKS" || return 1
 
@@ -1609,7 +1609,7 @@ apply_iptables_guard_rules() {
         warn "ip6tables not found; IPv6 guard rules cannot be installed on the iptables backend"
     fi
 
-    msg "Internet-only client guard enabled (iptables)"
+    msg "Client forwarding guard enabled (iptables)"
 }
 
 apply_guard_rules() {
@@ -1621,7 +1621,7 @@ apply_guard_rules() {
     elif hash iptables 2>/dev/null; then
         apply_iptables_guard_rules
     else
-        msg "ERROR: Neither nftables nor iptables found for internet-only guard"
+        msg "ERROR: Neither nftables nor iptables found for client forwarding guard"
         return 1
     fi
 }
@@ -1629,7 +1629,7 @@ apply_guard_rules() {
 remove_guard_rules() {
     remove_nft_guard_rules
     remove_iptables_guard_rules
-    msg "Internet-only client guard disabled"
+    msg "Client forwarding guard disabled"
 }
 
 refresh_guard_rules() {
@@ -3255,7 +3255,7 @@ start() {
 
     if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
         apply_guard_rules || {
-            msg "ERROR: Failed to apply internet-only guard"
+            msg "ERROR: Failed to apply client forwarding guard"
             return 1
         }
     else
@@ -3385,7 +3385,7 @@ stop() {
     teardown_routing_rules
 
     if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-        apply_guard_rules || warn "Failed to refresh internet-only guard during stop"
+        apply_guard_rules || warn "Failed to refresh client forwarding guard during stop"
     else
         remove_guard_rules
     fi
