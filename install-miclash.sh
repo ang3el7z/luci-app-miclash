@@ -65,10 +65,8 @@ detect_openwrt() {
 
     if [ "${OW_MAJOR:-0}" -le 21 ] 2>/dev/null; then
         TPROXY_PKG="iptables-mod-tproxy"
-        NAT_PKG="kmod-ipt-nat"
     else
         TPROXY_PKG="kmod-nft-tproxy"
-        NAT_PKG="kmod-nft-nat"
     fi
 
     info "Transparent proxy pkg: ${B}${TPROXY_PKG}${N}"
@@ -110,10 +108,10 @@ pkg_update() {
 install_deps() {
     log "Installing dependencies..."
     if [ "$PKG_MGR" = "apk" ]; then
-        apk add zlib libcurl4 curl "$TPROXY_PKG" "$NAT_PKG" kmod-tun coreutils-base64 \
+        apk add zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
             || die "Dependency installation failed"
     else
-        opkg install zlib libcurl4 curl "$TPROXY_PKG" "$NAT_PKG" kmod-tun coreutils-base64 \
+        opkg install zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
             || die "Dependency installation failed"
     fi
 }
@@ -376,11 +374,6 @@ main() {
     choose_install_action
     sep
 
-    if [ "$INSTALL_ACTION" = "skip" ]; then
-        log "MiClash already up to date, nothing to do"
-        exit 0
-    fi
-
     if [ "$INSTALL_ACTION" = "remove" ]; then
         remove_miclash
         sep
@@ -400,7 +393,11 @@ main() {
         info "clash service was enabled before update"
     fi
 
-    install_miclash
+    if [ "$INSTALL_ACTION" = "skip" ]; then
+        log "MiClash package already up to date, skipping package install"
+    else
+        install_miclash
+    fi
 
     if [ "$CLASH_WAS_ENABLED" = "1" ] && [ -x /etc/init.d/clash ]; then
         log "Restoring clash service enable state..."

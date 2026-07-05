@@ -1,0 +1,308 @@
+#!/bin/sh
+
+set -u
+
+TMP_FILES=""
+LOCK_DIR="/tmp/miclash-update.lock"
+LOCK_ACQUIRED=0
+STATUS_DIR="/tmp/miclash-update"
+STATUS_FILE="/tmp/miclash-update/status"
+STATUS_OUT="/tmp/miclash-update/stdout"
+STATUS_ERR="/tmp/miclash-update/stderr"
+CURL_CONNECT_TIMEOUT=15
+CURL_MAX_TIME=300
+CURL_RETRY=2
+
+cleanup() {
+	for file in $TMP_FILES; do
+		[ -n "$file" ] && rm -f "$file" 2>/dev/null || true
+	done
+	if [ "$LOCK_ACQUIRED" = "1" ]; then
+		rm -rf "$LOCK_DIR" 2>/dev/null || true
+	fi
+}
+
+trap cleanup EXIT INT TERM
+
+status_text() {
+	printf '%s' "$*" | tr '\r\n' '  '
+}
+
+write_status() {
+	state="$1"
+	phase="$2"
+	shift 2 || true
+	message="$(status_text "$*")"
+
+	mkdir -p "$STATUS_DIR" 2>/dev/null || true
+	{
+		printf 'state=%s\n' "$state"
+		printf 'phase=%s\n' "$phase"
+		printf 'message=%s\n' "$message"
+		printf 'updated_at=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+	} > "$STATUS_FILE.tmp.$$" 2>/dev/null && mv "$STATUS_FILE.tmp.$$" "$STATUS_FILE" 2>/dev/null || true
+}
+
+print_status() {
+	if [ -f "$STATUS_FILE" ]; then
+		cat "$STATUS_FILE"
+	else
+		echo "state=idle"
+	fi
+}
+
+clear_status() {
+	rm -f "$STATUS_FILE" "$STATUS_OUT" "$STATUS_ERR" 2>/dev/null || true
+}
+
+last_status_line() {
+	file="$1"
+	[ -f "$file" ] || return 0
+	tail -n 1 "$file" 2>/dev/null || true
+}
+
+run_job() {
+	[ $# -gt 0 ] || fail "missing update job command"
+
+	clear_status
+	write_status running queued "Starting MiClash update job"
+
+	(
+		"$0" "$@" > "$STATUS_OUT" 2> "$STATUS_ERR"
+		code="$?"
+		if [ "$code" -eq 0 ]; then
+			msg="$(last_status_line "$STATUS_OUT")"
+			[ -n "$msg" ] || msg="Update completed"
+			write_status success done "$msg"
+		else
+			msg="$(last_status_line "$STATUS_ERR")"
+			[ -n "$msg" ] || msg="$(last_status_line "$STATUS_OUT")"
+			[ -n "$msg" ] || msg="Update failed"
+			write_status failed error "$msg"
+		fi
+	) >/dev/null 2>&1 &
+
+	echo "MiClash update job started"
+}
+
+fail() {
+	write_status failed error "ERROR: $*"
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+need_arg() {
+	[ $# -gt 1 ] || fail "missing value for $1"
+	printf '%s' "$2"
+}
+
+acquire_lock() {
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		LOCK_ACQUIRED=1
+		printf '%s\n' "$$" > "$LOCK_DIR/pid"
+		return 0
+	fi
+
+	old_pid=""
+	[ -f "$LOCK_DIR/pid" ] && old_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+	if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+		fail "another MiClash update is already running (pid $old_pid)"
+	fi
+
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		LOCK_ACQUIRED=1
+		printf '%s\n' "$$" > "$LOCK_DIR/pid"
+		return 0
+	fi
+
+	fail "failed to acquire update lock"
+}
+
+detect_pkg_manager() {
+	if command -v apk >/dev/null 2>&1; then
+		echo apk
+		return 0
+	fi
+	if command -v opkg >/dev/null 2>&1; then
+		echo opkg
+		return 0
+	fi
+	fail "no supported package manager found (apk/opkg)"
+}
+
+openwrt_major() {
+	. /etc/openwrt_release 2>/dev/null || true
+	printf '%s\n' "${DISTRIB_RELEASE:-}" | sed -n 's/^\([0-9][0-9]*\).*/\1/p'
+}
+
+install_deps() {
+	manager="$1"
+	write_status running dependencies "Installing dependencies"
+	if [ "$manager" = "apk" ]; then
+		apk update || fail "failed to update apk index"
+		apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64 || fail "failed to install dependencies"
+		return 0
+	fi
+
+	major="$(openwrt_major)"
+	tproxy_pkg="kmod-nft-tproxy"
+	if [ -n "$major" ] && [ "$major" -lt 23 ]; then
+		tproxy_pkg="iptables-mod-tproxy"
+	fi
+
+	opkg update || fail "failed to update opkg index"
+	opkg install zlib libcurl4 curl "$tproxy_pkg" kmod-tun coreutils-base64 || fail "failed to install dependencies"
+}
+
+download_file() {
+	url="$1"
+	target="$2"
+	label="$3"
+
+	write_status running download "Downloading $label"
+	curl -L -fsS \
+		--retry "$CURL_RETRY" \
+		--connect-timeout "$CURL_CONNECT_TIMEOUT" \
+		--max-time "$CURL_MAX_TIME" \
+		"$url" -o "$target" || fail "failed to download $label"
+}
+
+install_app() {
+	url=""
+	mode="update"
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--url)
+				url="$(need_arg "$@")"
+				shift 2
+				;;
+			--mode)
+				mode="$(need_arg "$@")"
+				shift 2
+				;;
+			*)
+				fail "unknown app argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$url" ] || fail "missing --url"
+	case "$mode" in
+		update|reinstall) ;;
+		*) fail "unsupported app mode: $mode" ;;
+	esac
+
+	manager="$(detect_pkg_manager)"
+	install_deps "$manager"
+	write_status running install "Preparing MiClash package install"
+
+	case "$manager" in
+		apk) tmp="/tmp/miclash-update-$$.apk" ;;
+		opkg) tmp="/tmp/miclash-update-$$.ipk" ;;
+		*) fail "unsupported package manager: $manager" ;;
+	esac
+	TMP_FILES="$TMP_FILES $tmp"
+
+	download_file "$url" "$tmp" "MiClash package"
+
+	if [ "$manager" = "apk" ]; then
+		write_status running install "Installing MiClash package"
+		if [ "$mode" = "reinstall" ]; then
+			apk add --force-reinstall --allow-untrusted "$tmp" || fail "failed to install MiClash package"
+		else
+			apk add "$tmp" --allow-untrusted || fail "failed to install MiClash package"
+		fi
+	else
+		write_status running install "Installing MiClash package"
+		if [ "$mode" = "reinstall" ]; then
+			opkg --force-reinstall install "$tmp" || fail "failed to install MiClash package"
+		else
+			opkg install "$tmp" || fail "failed to install MiClash package"
+		fi
+	fi
+
+	write_status success done "MiClash package installed"
+	echo "MiClash package installed"
+}
+
+install_kernel() {
+	url=""
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--url)
+				url="$(need_arg "$@")"
+				shift 2
+				;;
+			*)
+				fail "unknown kernel argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$url" ] || fail "missing --url"
+
+	if ! command -v curl >/dev/null 2>&1; then
+		manager="$(detect_pkg_manager)"
+		install_deps "$manager"
+	fi
+
+	mkdir -p /opt/clash/bin || fail "failed to create /opt/clash/bin"
+
+	download="/tmp/mihomo-update-$$.gz"
+	extracted="/tmp/mihomo-update-$$"
+	TMP_FILES="$TMP_FILES $download $extracted"
+
+	download_file "$url" "$download" "mihomo kernel"
+	write_status running install "Extracting mihomo kernel"
+	gzip -dc "$download" > "$extracted" || fail "failed to extract mihomo kernel"
+	chmod +x "$extracted" || fail "failed to mark mihomo kernel executable"
+
+	was_running=0
+	if pidof clash >/dev/null 2>&1; then
+		was_running=1
+		write_status running restart "Stopping Clash service before replacing mihomo kernel"
+		/etc/init.d/clash stop || fail "failed to stop Clash service before replacing mihomo kernel"
+	fi
+
+	write_status running install "Installing mihomo kernel"
+	mv "$extracted" /opt/clash/bin/clash || fail "failed to install mihomo kernel"
+
+	if [ "$was_running" = "1" ]; then
+		write_status running restart "Starting Clash service after mihomo kernel install"
+		/etc/init.d/clash start || fail "mihomo kernel installed, but failed to restart Clash service"
+		write_status success done "mihomo kernel installed and Clash service restarted"
+		echo "mihomo kernel installed and Clash service restarted"
+	else
+		write_status success done "mihomo kernel installed"
+		echo "mihomo kernel installed"
+	fi
+}
+
+case "${1:-}" in
+	status)
+		print_status
+		;;
+	clear-status)
+		clear_status
+		;;
+	job)
+		shift
+		run_job "$@"
+		;;
+	app)
+		shift
+		acquire_lock
+		install_app "$@"
+		;;
+	kernel)
+		shift
+		acquire_lock
+		install_kernel "$@"
+		;;
+	*)
+		fail "usage: $0 app --url URL [--mode update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
+		;;
+esac

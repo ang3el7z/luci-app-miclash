@@ -4,12 +4,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=0.5.0
+PKG_VERSION:=0.6.5
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
 LUCI_TITLE:=LuCI Support for MiClash
-LUCI_DEPENDS:=+luci-base +zlib +libcurl4 +curl +coreutils-base64 +kmod-tun
+LUCI_DEPENDS:=+luci-base +zlib +libcurl +curl +coreutils-base64 +kmod-tun
 LUCI_PKGARCH:=all
 
 PKG_CONFIG_DEPENDS:= \
@@ -37,12 +37,10 @@ choice
 
 config PACKAGE_$(PKG_NAME)_Iptables_Transparent_Proxy
 	bool "Iptables Transparent Proxy"
-	select PACKAGE_kmod-ipt-nat
 	select PACKAGE_iptables-mod-tproxy
 
 config PACKAGE_$(PKG_NAME)_Nftables_Transparent_Proxy
 	bool "Nftables Transparent Proxy"
-	select PACKAGE_kmod-nft-nat
 	select PACKAGE_kmod-nft-tproxy
 
 endchoice
@@ -63,6 +61,12 @@ define Build/Compile
 			"./rootfs/po/ru/miclash.po" \
 			"$(PKG_BUILD_DIR)/po/ru/miclash.lmo"; \
 	fi
+	@mkdir -p $(PKG_BUILD_DIR)/po/zh-cn
+	@if [ -f "./rootfs/po/zh-cn/miclash.po" ]; then \
+		$(STAGING_DIR_HOSTPKG)/bin/po2lmo \
+			"./rootfs/po/zh-cn/miclash.po" \
+			"$(PKG_BUILD_DIR)/po/zh-cn/miclash.lmo"; \
+	fi
 endef
 
 define Package/$(PKG_NAME)/conffiles
@@ -80,6 +84,7 @@ define Package/$(PKG_NAME)/install
 
 	$(INSTALL_DIR) $(1)/opt/clash/bin
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/clash-rules $(1)/opt/clash/bin/
+	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-update $(1)/opt/clash/bin/
 
 	$(INSTALL_DIR) $(1)/opt/clash
 	$(INSTALL_DATA) ./rootfs/opt/clash/config.yaml $(1)/opt/clash/
@@ -107,6 +112,11 @@ endif
 		$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n; \
 		$(INSTALL_DATA) "$(PKG_BUILD_DIR)/po/ru/miclash.lmo" \
 			"$(1)/usr/lib/lua/luci/i18n/miclash.ru.lmo"; \
+	fi
+	@if [ -f "$(PKG_BUILD_DIR)/po/zh-cn/miclash.lmo" ]; then \
+		$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n; \
+		$(INSTALL_DATA) "$(PKG_BUILD_DIR)/po/zh-cn/miclash.lmo" \
+			"$(1)/usr/lib/lua/luci/i18n/miclash.zh-cn.lmo"; \
 	fi
 endef
 

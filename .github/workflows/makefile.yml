@@ -222,6 +222,64 @@ jobs:
             exit 1
           fi
 
+          list_package_entries() {
+            local pkg="$1"
+            local out="$2"
+            local outer="$3"
+            local work
+            work="$(mktemp -d)"
+
+            if [ "${pkg##*.}" = "apk" ] && [ -x "$SDK_HOME/staging_dir/host/bin/apk" ]; then
+              mkdir -p "$work/extract"
+              "$SDK_HOME/staging_dir/host/bin/apk" extract --allow-untrusted --destination "$work/extract" "$pkg" >/dev/null
+              (cd "$work/extract" && find . -type f,l | sort) > "$out"
+              rm -rf "$work"
+              return 0
+            fi
+
+            if tar -tf "$pkg" > "$outer" 2>/dev/null; then
+              if grep -Eq '(^|/)data\.tar(\.|$)' "$outer"; then
+                tar -xf "$pkg" -C "$work"
+                for payload in "$work"/data.tar "$work"/data.tar.*; do
+                  if [ -f "$payload" ] && tar -tf "$payload" > "$out" 2>/dev/null; then
+                    rm -rf "$work"
+                    return 0
+                  fi
+                done
+              else
+                cp "$outer" "$out"
+                rm -rf "$work"
+                return 0
+              fi
+            fi
+
+            if ar t "$pkg" >/dev/null 2>&1; then
+              (cd "$work" && ar x "$pkg")
+              for payload in "$work"/data.tar "$work"/data.tar.*; do
+                if [ -f "$payload" ] && tar -tf "$payload" > "$out" 2>/dev/null; then
+                  rm -rf "$work"
+                  return 0
+                fi
+              done
+            fi
+
+            echo "Cannot inspect package contents: $pkg" >&2
+            file "$pkg" >&2 || true
+            rm -rf "$work"
+            return 1
+          }
+
+          package_entries="$(mktemp)"
+          package_outer_entries="$(mktemp)"
+          list_package_entries "$src" "$package_entries" "$package_outer_entries"
+          grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/editor.js$' "$package_entries"
+          grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/ace/ace.js$' "$package_entries"
+          grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/ace/mode-yaml.js$' "$package_entries"
+          grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/ace/mode-text.js$' "$package_entries"
+          grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/style.css$' "$package_entries"
+          grep -Eq '(^|[.]/)usr/share/luci/menu.d/luci-app-miclash.json$' "$package_entries"
+          grep -Eq '(^|[.]/)opt/clash/bin/miclash-update$' "$package_entries"
+
           cp -v -f "$src" "$dst"
           ls -lah "$dst"
 
@@ -239,6 +297,11 @@ jobs:
       - sync-version
       - build
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -253,10 +316,32 @@ jobs:
 
           ls -lah release_files
 
+      - name: Generate Release Notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          current_tag="${{ github.ref_name }}"
+          previous_tag="$(git tag --sort=-creatordate | grep -v -F "$current_tag" | head -n 1 || true)"
+
+          if [ -n "$previous_tag" ]; then
+            commit_subjects="$(git log --no-merges --pretty=format:'%s' "${previous_tag}..HEAD")"
+          else
+            commit_subjects="$(git log --no-merges --pretty=format:'%s')"
+          fi
+
+          echo "## Release ${{ github.ref_name }}" > release_notes.md
+          if [ -n "$commit_subjects" ]; then
+            echo "" >> release_notes.md
+            printf '%s\n' "$commit_subjects" >> release_notes.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           files: release_files/*
+          body_path: release_notes.md
           draft: false
           prerelease: false

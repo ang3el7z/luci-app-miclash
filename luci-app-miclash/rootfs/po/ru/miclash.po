@@ -83,6 +83,12 @@ msgstr "Не удалось запустить службу: %s"
 msgid "Unable to stop and disable service: %s"
 msgstr "Не удалось остановить и отключить службу: %s"
 
+msgid "Service did not enter running state within %ss after: %s"
+msgstr "Служба не перешла в состояние запуска за %s с после: %s"
+
+msgid "Service did not stop within %ss after: %s"
+msgstr "Служба не остановилась за %s с после: %s"
+
 msgid "Popup was blocked. Please allow popups for this site."
 msgstr "Всплывающее окно заблокировано. Пожалуйста, разрешите всплывающие окна для этого сайта."
 
@@ -98,7 +104,7 @@ msgstr "Не удалось открыть панель управления: %s
 msgid "Configuration saved successfully."
 msgstr "Конфигурация успешно сохранена."
 
-msgid "Configuration test failed — service not reloaded. Please fix the errors below:"
+msgid "Configuration test failed - service not reloaded. Please fix the errors below:"
 msgstr "Проверка конфигурации завершилась с ошибкой — служба не была перезагружена. Пожалуйста, исправьте следующие ошибки:"
 
 msgid "unknown error"
@@ -116,7 +122,7 @@ msgstr "Служба всё ещё перезапускается — на ме�
 msgid "Unable to save contents: %s"
 msgstr "Не удалось сохранить содержимое: %s"
 
-### Модуль log.js ###
+### Раздел журнала ###
 
 msgid "--- Log truncated, skipped %d older lines ---"
 msgstr "--- Лог урезан, пропущено %d старых строк ---"
@@ -127,7 +133,7 @@ msgstr "Ошибка выполнения logread:"
 msgid "Error reading logs: %s"
 msgstr "Ошибка чтения логов: %s"
 
-### Модуль rulesets.js ###
+### Раздел списков правил ###
 
 msgid "Local Rulesets"
 msgstr "Локальные списки правил"
@@ -204,7 +210,7 @@ msgstr "Белый список IP-CIDR сохранён, но обновлен�
 msgid "Failed to save IP-CIDR whitelist: %s"
 msgstr "Не удалось сохранить белый список IP-CIDR: %s"
 
-### Модуль settings.js ###
+### Раздел настроек ###
 
 msgid "WAN Interfaces"
 msgstr "WAN-интерфейсы"
@@ -433,6 +439,9 @@ msgstr "Не удалось перезапустить службу Clash: %s"
 
 msgid "Downloading mihomo kernel..."
 msgstr "Загрузка ядра mihomo..."
+
+msgid "Updating mihomo kernel on router..."
+msgstr "Обновление ядра mihomo на роутере..."
 
 msgid "Mihomo kernel downloaded and installed successfully!"
 msgstr "Ядро Mihomo успешно загружено и установлено!"
@@ -686,15 +695,6 @@ msgstr "Панель"
 msgid "Mode"
 msgstr "Режим"
 
-msgid "Switch theme"
-msgstr "Сменить тему"
-
-msgid "Switch to dark theme"
-msgstr "Переключить на тёмную тему"
-
-msgid "Switch to light theme"
-msgstr "Переключить на светлую тему"
-
 msgid "Config"
 msgstr "Конфиг"
 
@@ -867,9 +867,6 @@ msgstr "Архитектура: %s"
 msgid "Are you sure you want to delete \"%s\"?"
 msgstr "Вы уверены, что хотите удалить \"%s\"?"
 
-msgid "Are you sure you want to delete the list \"%s\"? This action cannot be undone."
-msgstr "Вы уверены, что хотите удалить список \"%s\"? Это действие необратимо."
-
 msgid "Auto LAN: %s"
 msgstr "Авто LAN: %s"
 
@@ -897,9 +894,6 @@ msgstr "Пример использования в config.yaml"
 msgid "Failed to create ruleset."
 msgstr "Не удалось создать список правил."
 
-msgid "Failed to delete list \"%s\": %s"
-msgstr "Не удалось удалить список \"%s\": %s"
-
 msgid "Failed to load kernel information: %s"
 msgstr "Не удалось загрузить информацию о ядре: %s"
 
@@ -912,14 +906,8 @@ msgstr "Не удалось обновить журналы: %s"
 msgid "Failed to save IP-CIDR list: %s"
 msgstr "Не удалось сохранить список IP-CIDR: %s"
 
-msgid "Failed to save list \"%s\": %s"
-msgstr "Не удалось сохранить список \"%s\": %s"
-
 msgid "Failed to save ruleset: %s"
 msgstr "Не удалось сохранить список правил: %s"
-
-msgid "Failed to save theme preference: %s"
-msgstr "Не удалось сохранить предпочтение темы: %s"
 
 msgid "Failed to switch proxy mode: %s"
 msgstr "Не удалось переключить режим прокси: %s"
@@ -942,12 +930,6 @@ msgstr "Настройки ядра"
 msgid "Latest release: %s"
 msgstr "Последний релиз: %s"
 
-msgid "List \"%s\" has been deleted."
-msgstr "Список \"%s\" удалён."
-
-msgid "List \"%s\" saved successfully."
-msgstr "Список \"%s\" успешно сохранён."
-
 msgid "Manage local .txt lists for rule-providers."
 msgstr "Управление локальными .txt списками для rule-providers."
 
@@ -959,6 +941,9 @@ msgstr "Ядро Mihomo загружено и установлено."
 
 msgid "Downloading MiClash package..."
 msgstr "Загрузка пакета MiClash..."
+
+msgid "Updating MiClash package on router..."
+msgstr "Обновление пакета MiClash на роутере..."
 
 msgid "MiClash package downloaded and installed."
 msgstr "Пакет MiClash загружен и установлен."
@@ -992,9 +977,6 @@ msgstr "Команда завершилась ошибкой"
 
 msgid "Mode: Explicit (proxy only selected interfaces)"
 msgstr "Режим: Явный (прокси только для выбранных интерфейсов)"
-
-msgid "New list \"%s\" created."
-msgstr "Новый список \"%s\" создан."
 
 msgid "new-list-name"
 msgstr "новый-список"
@@ -1077,8 +1059,8 @@ msgstr "VPN / Туннель"
 msgid "YAML validation failed."
 msgstr "Проверка YAML завершилась ошибкой."
 
-msgid "Internet only through MiClash"
-msgstr "Интернет только через MiClash"
+msgid "Client devices only through MiClash (beta)"
+msgstr "Устройства только через MiClash (beta)"
 
 msgid "Blocks direct external traffic from clients. If MiClash is stopped or fails, the internet is blocked while local network access remains available."
 msgstr "Блокирует прямой внешний трафик от клиентов. Если MiClash остановлен или упал, интернет блокируется, а доступ к локальной сети остаётся доступным."
@@ -1092,14 +1074,20 @@ msgstr "ВКЛ"
 msgid "OFF"
 msgstr "ВЫКЛ"
 
-msgid "Network access is blocked by \"Internet only through MiClash\". Start the service or disable this option in Settings to update."
-msgstr "Сетевой доступ заблокирован опцией \"Интернет только через MiClash\". Запустите службу или отключите эту опцию в настройках, чтобы обновить."
-
 msgid "Auto-hide notifications"
 msgstr "Автоматически скрывать уведомления"
 
 msgid "Release channel"
 msgstr "Канал релизов"
+
+msgid "Release channels"
+msgstr "Каналы релизов"
+
+msgid "Latest"
+msgstr "Latest"
+
+msgid "Pre-release"
+msgstr "Pre-release"
 
 msgid "Release only"
 msgstr "Только релизы"
@@ -1109,3 +1097,144 @@ msgstr "Релизы + pre-release"
 
 msgid "Support the author"
 msgstr "Поддержать автора"
+
+msgid "Starting Clash service..."
+msgstr "Запуск службы Clash..."
+
+msgid "Stopping Clash service..."
+msgstr "Остановка службы Clash..."
+
+msgid "Restarting Clash service..."
+msgstr "Перезапуск службы Clash..."
+
+msgid "Reloading Clash service..."
+msgstr "Перезагрузка службы Clash..."
+
+msgid "Downloading subscription..."
+msgstr "Загрузка подписки..."
+
+msgid "Error: %s"
+msgstr "Ошибка: %s"
+
+msgid "Recommendation: retry the action. If it repeats, check DNS settings in config.yaml or restart dnsmasq."
+msgstr "Рекомендация: повторите действие. Если ошибка повторяется, проверьте DNS в config.yaml или перезапустите dnsmasq."
+
+msgid "Recommendation: retry restart. If it repeats, reinstall the kernel and check TUN mode."
+msgstr "Рекомендация: повторите перезапуск. Если ошибка повторяется, переустановите ядро и проверьте режим TUN."
+
+msgid "Recommendation: retry restart. If it repeats, check firewall and kmod-nft-tproxy."
+msgstr "Рекомендация: повторите перезапуск. Если ошибка повторяется, проверьте firewall и kmod-nft-tproxy."
+
+msgid "Recommendation: retry start. If it repeats, check config.yaml and external-controller port."
+msgstr "Рекомендация: повторите запуск. Если ошибка повторяется, проверьте config.yaml и порт external-controller."
+
+msgid "Recommendation: retry update. If it repeats, check internet access on the router."
+msgstr "Рекомендация: повторите обновление. Если ошибка повторяется, проверьте интернет на роутере."
+
+msgid "Recommendation: retry the action. If it repeats, check MiClash logs."
+msgstr "Рекомендация: повторите действие. Если ошибка повторяется, проверьте логи MiClash."
+
+msgid "Starting update job..."
+msgstr "Запуск задания обновления..."
+
+msgid "Installing dependencies..."
+msgstr "Установка зависимостей..."
+
+msgid "Downloading package..."
+msgstr "Загрузка пакета..."
+
+msgid "Installing package..."
+msgstr "Установка пакета..."
+
+msgid "Update completed."
+msgstr "Обновление завершено."
+
+msgid "Failed to read update status."
+msgstr "Не удалось прочитать статус обновления."
+
+msgid "Failed to start update job."
+msgstr "Не удалось запустить задание обновления."
+
+msgid "Update failed."
+msgstr "Обновление завершилось ошибкой."
+
+msgid "Updating MiClash..."
+msgstr "Обновление MiClash..."
+
+msgid "Update exceeded timeout. Please check MiClash logs and retry."
+msgstr "Обновление превысило таймаут. Проверьте логи MiClash и повторите попытку."
+
+msgid "Checking Clash service process..."
+msgstr "Проверка процесса службы Clash..."
+
+msgid "Checking Clash API..."
+msgstr "Проверка Clash API..."
+
+msgid "Checking DNS..."
+msgstr "Проверка DNS..."
+
+msgid "Checking TUN interface..."
+msgstr "Проверка интерфейса TUN..."
+
+msgid "Checking routing policy..."
+msgstr "Проверка политики маршрутизации..."
+
+msgid "Checking forwarding rules..."
+msgstr "Проверка правил forwarding..."
+
+msgid "Clash service did not enter running state."
+msgstr "Служба Clash не перешла в состояние запуска."
+
+msgid "Clash API is not responding."
+msgstr "Clash API не отвечает."
+
+msgid "DNS listener is not ready."
+msgstr "DNS listener не готов."
+
+msgid "TUN interface did not appear."
+msgstr "Интерфейс TUN не появился."
+
+msgid "Routing policy check failed."
+msgstr "Проверка политики маршрутизации завершилась ошибкой."
+
+msgid "Forwarding rules check failed."
+msgstr "Проверка правил forwarding завершилась ошибкой."
+
+msgid "Service readiness check failed."
+msgstr "Проверка готовности службы завершилась ошибкой."
+
+msgid "port %s is not listening"
+msgstr "порт %s не слушается"
+
+msgid "clash-tun is missing"
+msgstr "clash-tun отсутствует"
+
+msgid "policy validation failed"
+msgstr "проверка policy завершилась ошибкой"
+
+msgid "forward validation failed"
+msgstr "проверка forward завершилась ошибкой"
+
+msgid "auto"
+msgstr "авто"
+
+msgid "Dashboard is not configured: external-controller is missing in config.yaml."
+msgstr "Панель не настроена: в config.yaml отсутствует external-controller."
+
+msgid "Dashboard is not configured: external-ui or external-ui-name is missing in config.yaml."
+msgstr "Панель не настроена: в config.yaml отсутствует external-ui или external-ui-name."
+
+msgid "Failed to install curl."
+msgstr "Не удалось установить curl."
+
+msgid "Open dashboard"
+msgstr "Открыть панель"
+
+msgid "Start the service to open dashboard."
+msgstr "Запустите службу, чтобы открыть панель."
+
+msgid "Tun stack"
+msgstr "Стек TUN"
+
+msgid "Unable to stop service: %s"
+msgstr "Не удалось остановить службу: %s"

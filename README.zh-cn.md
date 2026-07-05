@@ -1,21 +1,21 @@
 <p align="right">
-Read in: <strong>English</strong> | <a href="README.ru.md">Русский</a> | <a href="README.zh-cn.md">中文</a>
+阅读语言：<a href="README.md">English</a> | <a href="README.ru.md">Русский</a> | <strong>中文</strong>
 </p>
 
 <img width="881" height="889" alt="MiClash screenshot" src="https://github.com/user-attachments/assets/c53492ae-5318-4f34-802e-393306c109f3" />
 
 # MiClash
 
-LuCI application for managing Mihomo/Clash on OpenWrt.
+用于在 OpenWrt 上管理 Mihomo/Clash 的 LuCI 应用。
 
-## Auto Install
+## 自动安装
 
 ```sh
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-If `luci-app-miclash` is already installed, the interactive installer will offer `update / reinstall / delete / skip`.
-When started through `wget ... | ash` without a TTY, deletion is not performed automatically: the script will choose the safe `update` or `skip` path.
+如果已经安装了 `luci-app-miclash`，交互式安装脚本会提供 `update / reinstall / delete / skip` 选项。
+通过 `wget ... | ash` 且没有 TTY 运行时，脚本不会自动删除软件包；它会选择更安全的 `update` 或 `skip`。
 
 ## OpenWrt 25.x
 
@@ -39,14 +39,14 @@ opkg install /tmp/luci-app-miclash.ipk
 rm -f /tmp/luci-app-miclash.ipk
 ```
 
-For older OpenWrt builds using `firewall3`, install `iptables-mod-tproxy` instead of `kmod-nft-tproxy`.
+对于使用 `firewall3` 的旧版 OpenWrt，请安装 `iptables-mod-tproxy`，而不是 `kmod-nft-tproxy`。
 
 ## Mihomo
 
-After installing MiClash, open LuCI -> Services -> MiClash -> Settings -> Kernel and install the Mihomo core from the interface.
-MiClash detects the router architecture, downloads the matching archive, replaces `/opt/clash/bin/clash`, and restarts the service if it was running.
+安装 MiClash 后，打开 LuCI -> Services -> MiClash -> Settings -> Kernel，并在界面中安装 Mihomo 内核。
+MiClash 会检测路由器架构，下载匹配的压缩包，替换 `/opt/clash/bin/clash`，并在服务已运行时重启服务。
 
-Manual installation is also possible:
+也可以手动安装：
 
 ```sh
 mkdir -p /opt/clash/bin
@@ -57,19 +57,19 @@ chmod 0755 /opt/clash/bin/clash
 rm -f /tmp/clash.gz
 ```
 
-For other architectures, choose the matching file on the Mihomo releases page: <https://github.com/MetaCubeX/mihomo/releases>.
+其他架构请在 Mihomo releases 页面选择对应文件：<https://github.com/MetaCubeX/mihomo/releases>。
 
-## Features
+## 功能
 
-- Native MiClash LuCI page without a separate custom theme switcher.
-- Clash service controls: start, stop, restart, reload.
-- YAML config editor with validation before applying changes.
-- Subscription download into `/opt/clash/config.yaml`.
-- Local rulesets in `/opt/clash/lst`.
-- TPROXY/TUN/MIXED modes, interface selection, QUIC blocking, tmpfs for rules/providers.
-- MiClash and Mihomo updates through router-side scripts so LuCI does not keep long operations in the UI.
+- 原生 MiClash LuCI 页面，不需要单独的自定义主题开关。
+- Clash 服务控制：start、stop、restart、reload。
+- YAML 配置编辑器，应用前会进行验证。
+- 将订阅下载到 `/opt/clash/config.yaml`。
+- 本地 rulesets 存放在 `/opt/clash/lst`。
+- 支持 TPROXY/TUN/MIXED、接口选择、QUIC 阻断、rules/providers 使用 tmpfs。
+- 通过路由器端脚本更新 MiClash 和 Mihomo，避免 LuCI 在 UI 中长时间等待操作完成。
 
-## Removal
+## 卸载
 
 ```sh
 # OpenWrt 25.x:
