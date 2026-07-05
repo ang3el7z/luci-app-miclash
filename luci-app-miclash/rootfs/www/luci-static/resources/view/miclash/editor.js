@@ -51,8 +51,12 @@ function installLuciAceTheme() {
 			'.ace-miclash-luci .ace_marker-layer .ace_selection { background: Highlight; }',
 			'.ace-miclash-luci .ace_marker-layer .ace_active-line { background: transparent; }',
 			'.ace-miclash-luci .ace_print-margin { display: none; }',
-			'.ace-miclash-luci .ace_comment { color: var(--sbox-muted); }',
-			'.ace-miclash-luci .ace_keyword, .ace-miclash-luci .ace_constant, .ace-miclash-luci .ace_string { font-weight: 700; }'
+			'.ace-miclash-luci .ace_comment { color: var(--sbox-muted); font-style: italic; }',
+			'.ace-miclash-luci .ace_entity.ace_name.ace_tag, .ace-miclash-luci .ace_meta.ace_tag { color: var(--sbox-code-key); font-weight: 700; }',
+			'.ace-miclash-luci .ace_string { color: var(--sbox-code-string); }',
+			'.ace-miclash-luci .ace_constant.ace_numeric { color: var(--sbox-code-number); font-weight: 700; }',
+			'.ace-miclash-luci .ace_constant.ace_language, .ace-miclash-luci .ace_keyword { color: var(--sbox-code-bool); font-weight: 700; }',
+			'.ace-miclash-luci .ace_marker-layer .ace_selected-word { border: 1px solid var(--sbox-border); background: var(--sbox-panel-soft); }'
 		].join('\n');
 
 		require('../lib/dom').importCssString(exports.cssText, exports.cssClass);

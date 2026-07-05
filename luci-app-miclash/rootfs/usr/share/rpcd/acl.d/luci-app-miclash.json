@@ -61,7 +61,8 @@
                 "/opt/clash/config2.yaml": [ "write" ],
                 "/opt/clash/config3.yaml": [ "write" ],
                 "/tmp/miclash-*": [ "write", "remove" ],
-                "/usr/bin/chmod": [ "exec" ]
+                "/usr/bin/chmod": [ "exec" ],
+                "/usr/bin/logger": [ "exec" ]
             },
             "ubus": {
                 "file": [ "write", "exec" ]

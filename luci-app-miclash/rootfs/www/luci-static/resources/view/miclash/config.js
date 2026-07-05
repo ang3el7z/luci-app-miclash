@@ -51,7 +51,6 @@ const appState = {
 	activeCtrlTab: 'control',
 	activeCfgTab: 'config',
 	logsRaw: '',
-	logsUpdatedAt: 0,
 	releaseMeta: {
 		appVersion: '',
 		kernelVersion: '',
@@ -75,6 +74,13 @@ function notify(type, message) {
 			} catch (e) {}
 		}, timeout);
 	}
+}
+
+async function logUiAction(level, message) {
+	const cleanLevel = /^(info|warn|err)$/.test(String(level || '')) ? level : 'info';
+	try {
+		await fs.exec('/usr/bin/logger', ['-p', 'daemon.' + cleanLevel, '-t', 'miclash', String(message || '')]);
+	} catch (e) {}
 }
 
 function safeText(value) {
@@ -376,6 +382,7 @@ async function installMiClashFromSettings(actionKind) {
 	const mode = String(actionKind || 'update');
 
 	try {
+		await logUiAction('info', 'MiClash package update started');
 		notify('info', _('Updating MiClash package on router...'));
 		const result = await fs.exec('/opt/clash/bin/miclash-update', [
 			'app',
@@ -396,6 +403,7 @@ async function installMiClashFromSettings(actionKind) {
 		throw e;
 	}
 
+	await logUiAction('info', 'MiClash package installed');
 	notify('info', _('MiClash package installed. Reloading interface...'));
 	setTimeout(() => {
 		window.location.reload();
@@ -409,6 +417,7 @@ async function downloadMihomoKernel(downloadUrl, version, arch, options) {
 	}
 
 	try {
+		await logUiAction('info', 'mihomo kernel update started');
 		notify('info', _('Updating mihomo kernel on router...'));
 		const result = await fs.exec('/opt/clash/bin/miclash-update', [
 			'kernel',
@@ -418,9 +427,11 @@ async function downloadMihomoKernel(downloadUrl, version, arch, options) {
 			throw new Error(String(result.stderr || result.stdout || _('Kernel download failed: %s').format(_('Download failed'))).trim());
 		}
 		const message = String(result.stdout || '').trim();
+		await logUiAction('info', message || 'mihomo kernel installed');
 		notify('info', message || _('Mihomo kernel downloaded and installed.'));
 		return true;
 	} catch (e) {
+		await logUiAction('err', 'mihomo kernel update failed: ' + e.message);
 		notify('error', _('Kernel download failed: %s').format(e.message));
 		return false;
 	}
@@ -802,8 +813,10 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 		if (!opts.silent) {
 			notify('info', _('Settings saved.'));
 		}
+		await logUiAction('info', 'Settings saved');
 		return true;
 	} catch (e) {
+		await logUiAction('err', 'Failed to save settings: ' + e.message);
 		notify('error', _('Failed to save settings: %s').format(e.message));
 		return false;
 	}
@@ -873,10 +886,34 @@ function formatLogHtml(raw) {
 
 	const rows = String(raw || '').split('\n')
 		.map((line) => view_miclash_logs.formatLine(line))
-		.filter((item) => !!item && !!item.text);
+		.map((item) => {
+			if (!item || !item.text) return null;
+			if (item.daemon && item.time && item.level) return item;
+
+			const legacy = String(item.text || '').match(/^\[([^\]]+)\]\s+\[((?:clash(?:-rules|-hotplug)?)|miclash)\]\s+\[([^\]]+)\]\s+(.*)$/);
+			if (!legacy) return null;
+			const level = String(legacy[3] || 'MUTED').toUpperCase();
+			const daemon = legacy[2];
+			return {
+				time: legacy[1],
+				daemon: daemon,
+				level: level,
+				message: legacy[4],
+				levelClass: 'sbox-log-level-' + level.toLowerCase(),
+				daemonClass: 'sbox-log-daemon-' + daemon
+			};
+		})
+		.filter((item) => !!item && !!item.message);
 
 	if (!rows.length) return '<span class="sbox-log-muted">No logs yet.</span>';
-	return rows.map((item) => safeText(item.text)).join('\n');
+	return rows.map((item) => {
+		return '<span class="sbox-log-line ' + safeText(item.levelClass || '') + ' ' + safeText(item.daemonClass || '') + '">' +
+			'<span class="sbox-log-time">' + safeText(item.time || '--:--:--') + '</span>' +
+			'<span class="sbox-log-daemon">' + safeText(item.daemon || 'clash') + '</span>' +
+			'<span class="sbox-log-level">' + safeText(item.level || 'MUTED') + '</span>' +
+			'<span class="sbox-log-message">' + safeText(item.message || item.text) + '</span>' +
+		'</span>';
+	}).join('\n');
 }
 
 async function initializeConfigEditor(content) {
@@ -1461,10 +1498,6 @@ function buildPageHtml() {
 				'</div>' +
 
 			'<div id="sbox-pane-logs" hidden>' +
-				'<div class="sbox-log-toolbar">' +
-					'<button id="sbox-log-refresh" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Refresh')) + '</button>' +
-					'<span id="sbox-log-updated" class="sbox-log-updated"></span>' +
-				'</div>' +
 				'<pre id="sbox-log-content" class="sbox-log-content"></pre>' +
 			'</div>' +
 		'</div>';
@@ -1696,8 +1729,10 @@ function bindSettingsPaneEvents() {
 				if (!(await validateMainConfigBeforeStart())) return;
 				try {
 					await restartOrReloadServiceOrThrow('restart');
+					await logUiAction('info', 'Settings saved and Clash service restarted');
 					notify('info', _('Settings saved and Clash service restarted.'));
 				} catch (e) {
+					await logUiAction('err', 'Settings saved, but Clash service restart failed: ' + e.message);
 					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
 				}
 
@@ -1734,17 +1769,13 @@ function bindSettingsPaneEvents() {
 async function refreshLogs() {
 	const raw = await loadClashLogs();
 	appState.logsRaw = raw;
-	appState.logsUpdatedAt = Date.now();
 
 	const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
-	const updated = pageRoot && pageRoot.querySelector('#sbox-log-updated');
 
-	if (content) content.innerHTML = formatLogHtml(raw);
-	if (updated) {
-		const text = appState.logsUpdatedAt
-			? new Date(appState.logsUpdatedAt).toLocaleString()
-			: '-';
-		updated.textContent = _('Updated: %s').format(text);
+	if (content) {
+		const nearBottom = (content.scrollHeight - content.scrollTop - content.clientHeight) < 48;
+		content.innerHTML = formatLogHtml(raw);
+		if (nearBottom) content.scrollTop = content.scrollHeight;
 	}
 }
 
@@ -1864,10 +1895,12 @@ function bindControlAndHeaderEvents() {
 				await withServiceButtons(startBtn, stopBtn, async () => {
 					if (!(await validateMainConfigBeforeStart())) return;
 					await dispatchServiceActionsAndWaitOrThrow(['enable', 'start'], true);
+					await logUiAction('info', 'Clash service started');
 				});
 				await refreshHeaderAndControlSafe();
 			} catch (e) {
 				await refreshHeaderAndControlSafe();
+				await logUiAction('err', 'Unable to start service: ' + e.message);
 				notify('error', _('Unable to start service: %s').format(e.message));
 			}
 		});
@@ -1878,10 +1911,12 @@ function bindControlAndHeaderEvents() {
 			try {
 				await withServiceButtons(stopBtn, startBtn, async () => {
 					await dispatchServiceActionsAndWaitOrThrow(['stop', 'disable'], false);
+					await logUiAction('info', 'Clash service stopped');
 				});
 				await refreshHeaderAndControlSafe();
 			} catch (e) {
 				await refreshHeaderAndControlSafe();
+				await logUiAction('err', 'Unable to stop service: ' + e.message);
 				notify('error', _('Unable to stop service: %s').format(e.message));
 			}
 		});
@@ -1892,9 +1927,11 @@ function bindControlAndHeaderEvents() {
 		restartBtn.addEventListener('click', () => withButtons(restartBtn, async () => {
 			if (!(await validateMainConfigBeforeStart())) return;
 			await restartOrReloadServiceOrThrow('restart');
+			await logUiAction('info', 'Clash service restarted');
 			notify('info', _('Clash service restarted successfully.'));
 			await refreshHeaderAndControl();
 		}).catch((e) => {
+			logUiAction('err', 'Failed to restart Clash service: ' + e.message);
 			notify('error', _('Failed to restart Clash service: %s').format(e.message));
 		}));
 	}
@@ -2029,6 +2066,7 @@ function bindConfigEvents() {
 				}
 
 				await ensureMihomoKernelInstalled();
+				await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
 
 				const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
 				const currentSettings = appState.settings || await loadOperationalSettings();
@@ -2058,13 +2096,17 @@ function bindConfigEvents() {
 				}
 
 				if (downloadedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
+					await logUiAction('info', 'Subscription downloaded and applied with Remnawave fallback');
 					notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
 				} else if (serviceReloaded) {
+					await logUiAction('info', 'Subscription downloaded and applied');
 					notify('info', _('Subscription downloaded and applied.'));
 				} else {
+					await logUiAction('info', getConfigLabel(selectedConfig) + ' downloaded and saved');
 					notify('info', _('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
 				}
 			}).catch((e) => {
+				logUiAction('err', 'Failed to apply subscription: ' + e.message);
 				notify('error', _('Failed to apply subscription: %s').format(e.message));
 			}).finally(async () => {
 				await view_miclash_subscription.cleanupTemp();
@@ -2114,11 +2156,14 @@ function bindConfigEvents() {
 				}
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();
+				await logUiAction('info', wasRunning ? 'Configuration applied and service reloaded' : getConfigLabel(selectedConfig) + ' saved');
 				notify('info', wasRunning ? _('Configuration applied and service reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
 			} else {
+				await logUiAction('info', getConfigLabel(selectedConfig) + ' saved');
 				notify('info', _('%s saved.').format(_(getConfigLabel(selectedConfig))));
 			}
 		}).catch((e) => {
+			logUiAction('err', 'Failed to apply configuration: ' + e.message);
 			notify('error', _('Failed to apply configuration: %s').format(e.message));
 		}));
 	}
@@ -2159,14 +2204,6 @@ function bindConfigEvents() {
 		}));
 	}
 
-	const logRefreshBtn = pageRoot.querySelector('#sbox-log-refresh');
-	if (logRefreshBtn) {
-		logRefreshBtn.addEventListener('click', () => withButtons(logRefreshBtn, async () => {
-			await refreshLogs();
-		}).catch((e) => {
-			notify('error', _('Failed to refresh logs: %s').format(e.message));
-		}));
-	}
 }
 
 function bindTabEvents() {
