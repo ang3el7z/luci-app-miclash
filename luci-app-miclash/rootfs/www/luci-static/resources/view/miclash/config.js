@@ -12,7 +12,6 @@
 'require view.miclash.rulesets-model';
 'require view.miclash.ui-shell';
 'require view.miclash.subscription';
-'require view.miclash.guard';
 'require view.miclash.editor';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
@@ -366,8 +365,6 @@ function isRpcReconnectLikeError(message) {
 }
 
 async function installMiClashFromSettings(actionKind) {
-	await prepareNetworkUpdate();
-
 	const manager = await detectPackageManager();
 	if (!manager) throw new Error(_('No supported package manager found (apk/opkg).'));
 
@@ -411,11 +408,7 @@ async function installMiClashFromSettings(actionKind) {
 	return true;
 }
 
-async function downloadMihomoKernel(downloadUrl, version, arch, options) {
-	if (!(options && options.skipNetworkPrepare)) {
-		await prepareNetworkUpdate();
-	}
-
+async function downloadMihomoKernel(downloadUrl, version, arch) {
 	try {
 		await logUiAction('info', 'mihomo kernel update started');
 		notify('info', _('Updating mihomo kernel on router...'));
@@ -438,8 +431,6 @@ async function downloadMihomoKernel(downloadUrl, version, arch, options) {
 }
 
 async function installKernelFromSettings() {
-	await prepareNetworkUpdate();
-
 	const arch = await detectSystemArchitecture();
 	const release = await getLatestMihomoRelease();
 	const asset = findKernelAsset(release, arch);
@@ -447,7 +438,7 @@ async function installKernelFromSettings() {
 	if (!release) throw new Error(_('Failed to load kernel information: %s').format(_('Unavailable')));
 	if (!asset || !asset.browser_download_url) throw new Error(_('Failed to load kernel information: %s').format(_('Download failed')));
 
-	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch, { skipNetworkPrepare: true });
+	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
 	if (!ok) return false;
 
 	appState.kernelStatus = await getMihomoStatus();
@@ -683,8 +674,6 @@ async function validateMainConfigBeforeStart() {
 }
 
 async function fetchSubscriptionAsYaml(url, targetPath) {
-	await prepareNetworkUpdate();
-
 	const settingsMap = await readSettingsMap();
 	const versions = await getVersions();
 	const profile = buildSubscriptionClientProfile(settingsMap, versions.app);
@@ -1587,27 +1576,7 @@ function updateHeaderAndControlDom() {
 }
 
 function isInternetOnlyEnabled() {
-	return view_miclash_guard.isInternetOnlyEnabled(appState.settings);
-}
-
-async function prepareNetworkUpdate() {
-	const serviceRunning = await getServiceStatus();
-	appState.serviceRunning = !!serviceRunning;
-	updateHeaderAndControlDom();
-
-	const result = await view_miclash_guard.prepareNetworkUpdate(appState.settings, appState.serviceRunning);
-	if (result && result.warning) {
-		notify('warning', _('Network path repair failed, continuing update: %s').format(result.warning));
-	}
-	return result;
-}
-
-function isNetworkUpdateBlocked() {
-	return view_miclash_guard.isNetworkUpdateBlocked(appState.settings, appState.serviceRunning);
-}
-
-function shouldSkipSubscriptionDownload() {
-	return view_miclash_guard.shouldSkipSubscriptionDownload(appState.settings, appState.serviceRunning);
+	return !!(appState.settings && appState.settings.internetOnlyMiclash);
 }
 
 async function refreshHeaderAndControl() {
@@ -2059,11 +2028,6 @@ function bindConfigEvents() {
 				appState.subscriptionUrl = url;
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();
-
-				if (shouldSkipSubscriptionDownload()) {
-					notify('warning', view_miclash_guard.skippedSubscriptionMessage());
-					return;
-				}
 
 				await ensureMihomoKernelInstalled();
 				await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
