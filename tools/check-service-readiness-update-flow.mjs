@@ -6,6 +6,7 @@ const files = {
 	serviceJob: 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service',
 	rules: 'luci-app-miclash/rootfs/opt/clash/bin/clash-rules',
 	update: 'luci-app-miclash/rootfs/opt/clash/bin/miclash-update',
+	acl: 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json',
 	style: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css',
 	makefile: 'luci-app-miclash/Makefile'
 };
@@ -14,6 +15,7 @@ const config = readFileSync(files.config, 'utf8');
 const serviceJob = existsSync(files.serviceJob) ? readFileSync(files.serviceJob, 'utf8') : '';
 const rules = readFileSync(files.rules, 'utf8');
 const update = readFileSync(files.update, 'utf8');
+const acl = readFileSync(files.acl, 'utf8');
 const style = readFileSync(files.style, 'utf8');
 const makefile = readFileSync(files.makefile, 'utf8');
 
@@ -105,6 +107,10 @@ check(serviceJob.includes('state)'),
 	'Service job script must expose a state command.');
 check(makefile.includes('rootfs/opt/clash/bin/miclash-service'),
 	'Package install must include the service job script.');
+check(acl.includes('"/opt/clash/bin/miclash-service": [ "read", "stat", "exec" ]'),
+	'ACL read permissions must allow LuCI to inspect and execute miclash-service.');
+check(acl.includes('"/opt/clash/bin/miclash-service": [ "exec" ]'),
+	'ACL write permissions must allow LuCI to start miclash-service jobs.');
 
 check(rules.includes('health_service_process') &&
 	rules.includes('health_clash_api') &&

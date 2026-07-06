@@ -41,14 +41,14 @@ async function getNetworkInterfaces() {
 	};
 
 	try {
-		const r = await fs.exec('ls', ['/sys/class/net/']);
+		const r = await fs.exec('/bin/ls', ['/sys/class/net/']);
 		if (r.code === 0 && r.stdout) {
 			String(r.stdout).split('\n').forEach(pushIface);
 		}
 	} catch (e) {}
 
 	try {
-		const r = await fs.exec('ip', ['link', 'show']);
+		const r = await fs.exec('/sbin/ip', ['link', 'show']);
 		if (r.code === 0 && r.stdout) {
 			String(r.stdout).split('\n').forEach((line) => {
 				const m = line.match(/^\d+:\s+([^:@]+)/);
@@ -395,7 +395,7 @@ async function detectLanBridge() {
 			}
 		} catch (e) {}
 
-		const ipResult = await fs.exec('ip', ['addr', 'show']);
+		const ipResult = await fs.exec('/sbin/ip', ['addr', 'show']);
 		if (ipResult.code === 0 && ipResult.stdout) {
 			const lines = String(ipResult.stdout).split('\n');
 			let currentIface = '';
