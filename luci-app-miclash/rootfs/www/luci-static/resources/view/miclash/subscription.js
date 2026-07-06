@@ -204,6 +204,57 @@ async function downloadWithProfile(url, profile, deviceHeaders, mode) {
 	return String(catResult.stdout || '');
 }
 
+function parseKeyValueStatus(raw) {
+	const status = {};
+	String(raw || '').split(/\r?\n/).forEach((line) => {
+		const idx = line.indexOf('=');
+		if (idx <= 0) return;
+		status[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+	});
+	return status;
+}
+
+async function applySubscriptionOnRouter(options) {
+	const opts = options || {};
+	const url = String(opts.url || '').trim();
+	if (!url) throw new Error(_('Subscription URL is empty.'));
+
+	const settings = opts.settings || {};
+	const resolved = normalizeDownloadUrl(url);
+	const profile = buildClientProfile(settings, opts.appVersion);
+	const deviceHeaders = await buildDeviceHeaders(settings);
+	const targetName = view_miclash_store.normalizeConfigProfileName(opts.targetName);
+	const args = [
+		'apply',
+		'--url', resolved.url,
+		'--target', targetName,
+		'--mode', resolved.mode,
+		'--fallback-on-error', resolved.fallbackOnError ? '1' : '0',
+		'--proxy-mode', opts.proxyMode || 'tproxy',
+		'--tun-stack', opts.tunStack || 'system',
+		'--user-agent', profile.ua
+	];
+
+	if (resolved.remnawaveCandidateUrl) {
+		args.push('--fallback-url', resolved.remnawaveCandidateUrl);
+	}
+
+	Object.keys(deviceHeaders || {}).forEach((key) => {
+		const value = String(deviceHeaders[key] || '').trim();
+		if (!value) return;
+		args.push('--header');
+		args.push(key + ': ' + value);
+	});
+
+	await view_miclash_package.ensureCurlAvailable();
+	const result = await fs.exec('/opt/clash/bin/miclash-subscription', args);
+	if (result.code !== 0) {
+		throw new Error(String(result.stderr || result.stdout || 'Failed to apply subscription.').trim());
+	}
+
+	return parseKeyValueStatus(result.stdout || '');
+}
+
 async function cleanupTemp() {
 	try {
 		await fs.remove(TMP_SUBSCRIPTION_PATH);
@@ -273,6 +324,7 @@ return L.Class.extend({
 	normalizeDownloadUrl: normalizeDownloadUrl,
 	buildDeviceHeaders: buildDeviceHeaders,
 	downloadWithProfile: downloadWithProfile,
+	applySubscriptionOnRouter: applySubscriptionOnRouter,
 	cleanupTemp: cleanupTemp,
 	testConfigContent: testConfigContent
 });

@@ -1005,6 +1005,17 @@ async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode
 	return view_miclash_subscription.downloadWithProfile(url, profile, deviceHeaders, mode);
 }
 
+async function applySubscriptionOnRouter(url, targetName, settings, appVersion, proxyMode, tunStack) {
+	return view_miclash_subscription.applySubscriptionOnRouter({
+		url,
+		targetName,
+		settings,
+		appVersion,
+		proxyMode,
+		tunStack
+	});
+}
+
 async function testConfigContent(content, keepOnSuccess, targetPath) {
 	return view_miclash_subscription.testConfigContent(
 		content,
@@ -2468,7 +2479,6 @@ function bindConfigEvents() {
 				if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
 
 				const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
-				const selectedPath = getConfigPathByName(selectedConfig);
 				await saveSubscriptionUrl(url, selectedConfig);
 				appState.subscriptionUrl = url;
 				appState.serviceRunning = await getServiceStatus();
@@ -2478,22 +2488,16 @@ function bindConfigEvents() {
 				await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
 				setOperationStatus('running', _('Downloading subscription...'));
 
-				const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
 				const currentSettings = appState.settings || await loadOperationalSettings();
-				const downloaded = transformProxyMode(
-					String(downloadedInfo.content || '').trimEnd() + '\n',
+				const versions = await getVersions();
+				const appliedInfo = await applySubscriptionOnRouter(
+					url,
+					selectedConfig,
+					currentSettings,
+					versions.app,
 					normalizeProxyMode(appState.proxyMode || currentSettings.proxyMode || 'tproxy'),
 					currentSettings.tunStack || 'system'
 				);
-
-				const tested = await testConfigContent(downloaded, true, selectedPath);
-				if (!tested.ok) throw new Error(_('YAML validation failed: %s').format(tested.message));
-
-				appState.configContent = downloaded;
-				if (editor) {
-					editor.setValue(downloaded, -1);
-					editor.clearSelection();
-				}
 
 				let serviceReloaded = false;
 				if (selectedConfig === MAIN_CONFIG_NAME) {
@@ -2506,7 +2510,7 @@ function bindConfigEvents() {
 					updateHeaderAndControlDom();
 				}
 
-				if (downloadedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
+				if (appliedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
 					await logUiAction('info', 'Subscription downloaded and applied with Remnawave fallback');
 					notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
 				} else if (serviceReloaded) {
