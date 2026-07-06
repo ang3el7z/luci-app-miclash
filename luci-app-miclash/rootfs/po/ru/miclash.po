@@ -1238,3 +1238,33 @@ msgstr "Стек TUN"
 
 msgid "Unable to stop service: %s"
 msgstr "Не удалось остановить службу: %s"
+
+msgid "Checking Clash service readiness..."
+msgstr "Проверка готовности службы Clash..."
+
+msgid "Checking stopped state..."
+msgstr "Проверка состояния остановки..."
+
+msgid "Failed to read service status."
+msgstr "Не удалось прочитать статус службы."
+
+msgid "Failed to start service job."
+msgstr "Не удалось запустить задачу службы."
+
+msgid "Service is not ready."
+msgstr "Служба не готова."
+
+msgid "Service operation completed."
+msgstr "Операция службы завершена."
+
+msgid "Service operation exceeded timeout. Please retry the action."
+msgstr "Операция службы превысила таймаут. Повторите действие."
+
+msgid "Service operation failed."
+msgstr "Операция службы завершилась ошибкой."
+
+msgid "Starting service job..."
+msgstr "Запуск задачи службы..."
+
+msgid "Updating service status..."
+msgstr "Обновление статуса службы..."

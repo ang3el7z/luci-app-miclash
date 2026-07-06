@@ -1182,3 +1182,33 @@ msgstr "YAML 验证失败。"
 
 msgid "YAML validation passed."
 msgstr "YAML 验证通过。"
+
+msgid "Checking Clash service readiness..."
+msgstr "正在检查 Clash 服务就绪状态..."
+
+msgid "Checking stopped state..."
+msgstr "正在检查停止状态..."
+
+msgid "Failed to read service status."
+msgstr "读取服务状态失败。"
+
+msgid "Failed to start service job."
+msgstr "启动服务任务失败。"
+
+msgid "Service is not ready."
+msgstr "服务尚未就绪。"
+
+msgid "Service operation completed."
+msgstr "服务操作已完成。"
+
+msgid "Service operation exceeded timeout. Please retry the action."
+msgstr "服务操作超时。请重试该操作。"
+
+msgid "Service operation failed."
+msgstr "服务操作失败。"
+
+msgid "Starting service job..."
+msgstr "正在启动服务任务..."
+
+msgid "Updating service status..."
+msgstr "正在更新服务状态..."
