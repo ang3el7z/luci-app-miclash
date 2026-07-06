@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=0.6.7
+PKG_VERSION:=0.6.8
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
