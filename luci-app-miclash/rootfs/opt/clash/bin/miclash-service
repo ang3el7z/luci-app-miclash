@@ -1,0 +1,317 @@
+#!/bin/sh
+
+set -u
+
+LOCK_DIR="/tmp/miclash-service.lock"
+LOCK_ACQUIRED=0
+STATUS_DIR="/tmp/miclash-service"
+STATUS_FILE="/tmp/miclash-service/status"
+STATUS_OUT="/tmp/miclash-service/stdout"
+STATUS_ERR="/tmp/miclash-service/stderr"
+CLASH_INIT="/etc/init.d/clash"
+CLASH_RULES="/opt/clash/bin/clash-rules"
+READY_TIMEOUT_SEC=180
+STOP_TIMEOUT_SEC=60
+POLL_INTERVAL_SEC=1
+CURRENT_ACTION=""
+
+cleanup() {
+	if [ "$LOCK_ACQUIRED" = "1" ]; then
+		rm -rf "$LOCK_DIR" 2>/dev/null || true
+	fi
+}
+
+trap cleanup EXIT INT TERM
+
+status_text() {
+	printf '%s' "$*" | tr '\r\n' '  '
+}
+
+write_status() {
+	state="$1"
+	phase="$2"
+	shift 2 || true
+	message="$(status_text "$*")"
+
+	mkdir -p "$STATUS_DIR" 2>/dev/null || true
+	{
+		printf 'state=%s\n' "$state"
+		printf 'phase=%s\n' "$phase"
+		printf 'action=%s\n' "${CURRENT_ACTION:-}"
+		printf 'message=%s\n' "$message"
+		printf 'updated_at=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+	} > "$STATUS_FILE.tmp.$$" 2>/dev/null && mv "$STATUS_FILE.tmp.$$" "$STATUS_FILE" 2>/dev/null || true
+}
+
+print_status() {
+	if [ -f "$STATUS_FILE" ]; then
+		cat "$STATUS_FILE"
+	else
+		echo "state=idle"
+	fi
+}
+
+status_value() {
+	key="$1"
+	fallback="${2:-}"
+	value=""
+
+	if [ -f "$STATUS_FILE" ]; then
+		value="$(sed -n "s/^${key}=//p" "$STATUS_FILE" 2>/dev/null | tail -n 1)"
+	fi
+
+	if [ -n "$value" ]; then
+		printf '%s' "$value"
+	else
+		printf '%s' "$fallback"
+	fi
+}
+
+print_state() {
+	operation="$(status_value state idle)"
+	action="$(status_value action)"
+	phase="$(status_value phase)"
+	message="$(status_value message)"
+	updated_at="$(status_value updated_at 0)"
+
+	if is_service_running; then
+		service="running"
+		if [ "$operation" = "running" ]; then
+			health="checking"
+		else
+			health_output="$(CLASH_RULES_QUIET=1 "$CLASH_RULES" health 2>&1)"
+			if [ "$?" -eq 0 ]; then
+				health="ready"
+			else
+				health="not_ready"
+				[ -n "$message" ] || message="$(status_text "$health_output")"
+			fi
+		fi
+	else
+		service="stopped"
+		health="stopped"
+	fi
+
+	printf 'state=%s\n' "$operation"
+	printf 'operation=%s\n' "$operation"
+	printf 'phase=%s\n' "$phase"
+	printf 'action=%s\n' "$action"
+	printf 'service=%s\n' "$service"
+	printf 'health=%s\n' "$health"
+	printf 'message=%s\n' "$(status_text "$message")"
+	printf 'updated_at=%s\n' "$updated_at"
+}
+
+clear_status() {
+	rm -f "$STATUS_FILE" "$STATUS_OUT" "$STATUS_ERR" 2>/dev/null || true
+}
+
+last_status_line() {
+	file="$1"
+	[ -f "$file" ] || return 0
+	tail -n 1 "$file" 2>/dev/null || true
+}
+
+fail() {
+	write_status failed error "ERROR: $*"
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+acquire_lock() {
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		LOCK_ACQUIRED=1
+		printf '%s\n' "$$" > "$LOCK_DIR/pid"
+		return 0
+	fi
+
+	old_pid=""
+	[ -f "$LOCK_DIR/pid" ] && old_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+	if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+		fail "another MiClash service operation is already running (pid $old_pid)"
+	fi
+
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		LOCK_ACQUIRED=1
+		printf '%s\n' "$$" > "$LOCK_DIR/pid"
+		return 0
+	fi
+
+	fail "failed to acquire service operation lock"
+}
+
+run_job() {
+	[ $# -gt 0 ] || fail "missing service job command"
+
+	clear_status
+	CURRENT_ACTION="$1"
+	write_status running queued "Starting MiClash service job"
+
+	(
+		"$0" "$@" > "$STATUS_OUT" 2> "$STATUS_ERR"
+		code="$?"
+		if [ "$code" -eq 0 ]; then
+			msg="$(last_status_line "$STATUS_OUT")"
+			[ -n "$msg" ] || msg="Service operation completed"
+			CURRENT_ACTION="$1"
+			write_status success done "$msg"
+		else
+			msg="$(last_status_line "$STATUS_ERR")"
+			[ -n "$msg" ] || msg="$(last_status_line "$STATUS_OUT")"
+			[ -n "$msg" ] || msg="Service operation failed"
+			CURRENT_ACTION="$1"
+			write_status failed error "$msg"
+		fi
+	) >/dev/null 2>&1 &
+
+	echo "MiClash service job started"
+}
+
+now_sec() {
+	date +%s 2>/dev/null || echo 0
+}
+
+is_service_running() {
+	if command -v ubus >/dev/null 2>&1 && command -v jsonfilter >/dev/null 2>&1; then
+		if ubus call service list '{"name":"clash"}' 2>/dev/null |
+			jsonfilter -e '@.clash.instances.*.running' 2>/dev/null |
+			grep -q true; then
+			return 0
+		fi
+	fi
+
+	pidof clash >/dev/null 2>&1
+}
+
+stage_message() {
+	case "$1" in
+		process) echo "Checking Clash service process" ;;
+		api) echo "Checking Clash API" ;;
+		dns) echo "Checking DNS" ;;
+		tun) echo "Checking TUN interface" ;;
+		policy) echo "Checking routing policy" ;;
+		forward) echo "Checking forwarding rules" ;;
+		stopped) echo "Checking stopped state" ;;
+		*) echo "Checking service readiness" ;;
+	esac
+}
+
+run_health_stage() {
+	stage="$1"
+	[ -x "$CLASH_RULES" ] || {
+		echo "clash-rules script is missing or not executable"
+		return 1
+	}
+	CLASH_RULES_QUIET=1 "$CLASH_RULES" health "$stage" 2>&1
+}
+
+wait_health_stage() {
+	stage="$1"
+	deadline="$2"
+	message="$(stage_message "$stage")"
+	last_error=""
+
+	write_status running "$stage" "$message"
+	while [ "$(now_sec)" -lt "$deadline" ]; do
+		out="$(run_health_stage "$stage")"
+		code="$?"
+		if [ "$code" -eq 0 ]; then
+			return 0
+		fi
+		[ -n "$out" ] && last_error="$out"
+		sleep "$POLL_INTERVAL_SEC"
+	done
+
+	[ -n "$last_error" ] || last_error="timeout while waiting for $stage"
+	fail "$message failed: $last_error"
+}
+
+wait_ready() {
+	deadline="$(($(now_sec) + READY_TIMEOUT_SEC))"
+
+	wait_health_stage process "$deadline"
+	wait_health_stage api "$deadline"
+	wait_health_stage dns "$deadline"
+	wait_health_stage tun "$deadline"
+	wait_health_stage policy "$deadline"
+	wait_health_stage forward "$deadline"
+}
+
+wait_stopped() {
+	deadline="$(($(now_sec) + STOP_TIMEOUT_SEC))"
+	write_status running stopped "Checking stopped state"
+
+	while [ "$(now_sec)" -lt "$deadline" ]; do
+		if ! is_service_running; then
+			return 0
+		fi
+		sleep "$POLL_INTERVAL_SEC"
+	done
+
+	fail "Clash service did not stop within ${STOP_TIMEOUT_SEC}s"
+}
+
+run_service_action() {
+	CURRENT_ACTION="$1"
+	acquire_lock
+
+	case "$CURRENT_ACTION" in
+		start)
+			write_status running start "Starting Clash service"
+			"$CLASH_INIT" enable || fail "failed to enable Clash service"
+			"$CLASH_INIT" start || fail "failed to start Clash service"
+			wait_ready
+			echo "Clash service started"
+			;;
+		stop)
+			write_status running stop "Stopping Clash service"
+			"$CLASH_INIT" stop || fail "failed to stop Clash service"
+			"$CLASH_INIT" disable || fail "failed to disable Clash service"
+			wait_stopped
+			echo "Clash service stopped"
+			;;
+		restart)
+			write_status running restart "Restarting Clash service"
+			"$CLASH_INIT" restart || fail "failed to restart Clash service"
+			wait_ready
+			echo "Clash service restarted"
+			;;
+		reload)
+			write_status running reload "Reloading Clash service"
+			"$CLASH_INIT" reload || fail "failed to reload Clash service"
+			wait_ready
+			echo "Clash service reloaded"
+			;;
+		wait-ready|health)
+			CURRENT_ACTION="health"
+			wait_ready
+			echo "Clash service ready"
+			;;
+		*)
+			fail "usage: $0 start|stop|restart|reload|wait-ready|health | job start|stop|restart|reload | state | status | clear-status"
+			;;
+	esac
+}
+
+case "${1:-}" in
+	status)
+		print_status
+		;;
+	state)
+		print_state
+		;;
+	clear-status)
+		clear_status
+		;;
+	job)
+		shift
+		run_job "$@"
+		;;
+	start|stop|restart|reload|wait-ready|health)
+		run_service_action "$1"
+		;;
+	*)
+		fail "usage: $0 start|stop|restart|reload|wait-ready|health | job start|stop|restart|reload | state | status | clear-status"
+		;;
+esac
