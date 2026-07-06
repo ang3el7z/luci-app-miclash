@@ -11,8 +11,9 @@ Current client marking also excludes IP addresses from the generated `proxy_serv
 
 The same exclusion is unsafe for LAN client traffic while the guard is enabled. If a normal destination resolves to the same IP as one of the proxy servers, client traffic is excluded from MiClash, then the guard blocks the direct WAN path.
 
-Observed example:
+Observed anonymized example:
 
+- The original report used real infrastructure identifiers; they are intentionally replaced here with documentation placeholders.
 - `example.com` resolved to `203.0.113.10`.
 - `203.0.113.10` was present in `@proxy_servers`.
 - LAN client traffic to `example.com` was skipped by client marking.
