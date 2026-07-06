@@ -85,6 +85,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/opt/clash/bin
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/clash-rules $(1)/opt/clash/bin/
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-update $(1)/opt/clash/bin/
+	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-service $(1)/opt/clash/bin/
 
 	$(INSTALL_DIR) $(1)/opt/clash
 	$(INSTALL_DATA) ./rootfs/opt/clash/config.yaml $(1)/opt/clash/
