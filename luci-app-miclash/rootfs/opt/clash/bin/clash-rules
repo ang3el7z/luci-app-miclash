@@ -3018,6 +3018,153 @@ repair_policy_routing_state() {
     validate_policy_routing_state
 }
 
+config_value() {
+    local key="$1"
+    [ -f "$CONFIG_FILE" ] || return 1
+    sed -n "s/^[[:space:]]*$key[[:space:]]*:[[:space:]]*//p" "$CONFIG_FILE" |
+        sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//' |
+        head -n 1 |
+        tr -d "\"'"
+}
+
+config_port() {
+    local value="$1"
+    local fallback="$2"
+    local cleaned port
+
+    cleaned=$(printf '%s' "$value" | tr -d "\"'" | sed 's/^\[//; s/\]$//')
+    case "$cleaned" in
+        *:*) port="${cleaned##*:}" ;;
+        *) port="$fallback" ;;
+    esac
+    port=$(printf '%s' "$port" | sed 's/[^0-9]//g')
+    [ -n "$port" ] && echo "$port" || echo "$fallback"
+}
+
+health_service_process() {
+    if command -v ubus >/dev/null 2>&1 && command -v jsonfilter >/dev/null 2>&1; then
+        if ubus call service list '{"name":"clash"}' 2>/dev/null |
+            jsonfilter -e '@.clash.instances.*.running' 2>/dev/null |
+            grep -q true; then
+            return 0
+        fi
+    fi
+
+    if pidof clash >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "Clash service process is not running"
+    return 1
+}
+
+health_clash_api() {
+    local ec ec_tls secret scheme port url
+
+    command -v curl >/dev/null 2>&1 || {
+        echo "curl is not installed"
+        return 1
+    }
+
+    ec=$(config_value "external-controller")
+    ec_tls=$(config_value "external-controller-tls")
+    secret=$(config_value "secret")
+
+    scheme="http"
+    port=$(config_port "$ec" "9090")
+    if [ -n "$ec_tls" ]; then
+        scheme="https"
+        port=$(config_port "$ec_tls" "9090")
+    fi
+
+    url="$scheme://127.0.0.1:$port/version"
+    if [ "$scheme" = "https" ]; then
+        if [ -n "$secret" ]; then
+            curl -fsS -k --connect-timeout 2 --max-time 3 -H "Authorization: Bearer $secret" "$url" >/dev/null 2>&1
+        else
+            curl -fsS -k --connect-timeout 2 --max-time 3 "$url" >/dev/null 2>&1
+        fi
+    else
+        if [ -n "$secret" ]; then
+            curl -fsS --connect-timeout 2 --max-time 3 -H "Authorization: Bearer $secret" "$url" >/dev/null 2>&1
+        else
+            curl -fsS --connect-timeout 2 --max-time 3 "$url" >/dev/null 2>&1
+        fi
+    fi
+
+    [ "$?" -eq 0 ] && return 0
+    echo "Clash API is not responding on 127.0.0.1:$port"
+    return 1
+}
+
+health_dns_listener() {
+    local listen port
+
+    listen=$(config_value "listen")
+    port=$(config_port "$listen" "7874")
+    if command -v ss >/dev/null 2>&1; then
+        ss -ln 2>/dev/null
+    else
+        netstat -ln 2>/dev/null
+    fi | grep -Eq "[:.]${port}([[:space:]]|$)" && return 0
+
+    echo "DNS listener is not active on port $port"
+    return 1
+}
+
+health_tun_interface() {
+    load_all_settings_once
+    case "$PROXY_MODE" in
+        "tun"|"mixed") ;;
+        *) return 0 ;;
+    esac
+
+    [ -d /sys/class/net/clash-tun ] && return 0
+    echo "clash-tun interface is missing"
+    return 1
+}
+
+health_policy_routing() {
+    if validate_policy_routing_state; then
+        return 0
+    fi
+
+    echo "Policy routing state is invalid"
+    return 1
+}
+
+health_forward_rules() {
+    if validate_forward_state; then
+        return 0
+    fi
+
+    echo "Forward firewall rules are missing"
+    return 1
+}
+
+health_stage() {
+    case "$1" in
+        process) health_service_process ;;
+        api) health_clash_api ;;
+        dns) health_dns_listener ;;
+        tun) health_tun_interface ;;
+        policy) health_policy_routing ;;
+        forward) health_forward_rules ;;
+        *) echo "Unknown health stage: $1"; return 1 ;;
+    esac
+}
+
+health_check() {
+    health_stage process || return 1
+    health_stage api || return 1
+    health_stage dns || return 1
+    health_stage tun || return 1
+    health_stage policy || return 1
+    health_stage forward || return 1
+    msg "MiClash health check passed"
+    return 0
+}
+
 # =============================================================================
 # SECTION: bridge-nf-call — prevent double-processing on bridged interfaces
 # =============================================================================
@@ -3338,12 +3485,21 @@ case "$1" in
             exit 1
         fi
         ;;
+    health)
+        shift
+        if [ $# -gt 0 ]; then
+            health_stage "$1"
+        else
+            health_check
+        fi
+        exit $?
+        ;;
     repair_forward_rules)
         repair_forward_rules
         exit $?
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|repair_forward_rules}"
+        echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
         exit 1
         ;;
 esac

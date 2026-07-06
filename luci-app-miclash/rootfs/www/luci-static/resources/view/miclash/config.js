@@ -3,7 +3,6 @@
 'require fs';
 'require ui';
 'require view.miclash.utils';
-'require view.miclash.service';
 'require view.miclash.store';
 'require view.miclash.release';
 'require view.miclash.package';
@@ -24,12 +23,15 @@ const LOG_POLL_MS = 5000;
 const STATUS_POLL_MS = 5000;
 const UPDATE_JOB_POLL_MS = 1000;
 const UPDATE_JOB_TIMEOUT_MS = 7 * 60 * 1000;
+const SERVICE_JOB_POLL_MS = 1000;
+const SERVICE_JOB_TIMEOUT_MS = 3 * 60 * 1000;
 
 let editor = null;
 let pageRoot = null;
 let controlPollTimer = null;
 let logPollTimer = null;
 let updatePollTimer = null;
+let controlPollBusy = false;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
 
@@ -39,6 +41,8 @@ const appState = {
 	versions: { app: 'unknown', clash: 'unknown' },
 	kernelStatus: { installed: false, version: null },
 	serviceRunning: false,
+	serviceHealth: 'unknown',
+	serviceState: {},
 	proxyMode: 'tproxy',
 	configContent: '',
 	subscriptionUrl: '',
@@ -58,7 +62,9 @@ const appState = {
 		kernelVersion: '',
 		checkedAt: 0
 	},
-	serviceActionBusy: false
+	serviceActionBusy: false,
+	serviceJobBusy: false,
+	updateJobBusy: false
 };
 
 function notify(type, message) {
@@ -429,7 +435,7 @@ function isRpcReconnectLikeError(message) {
 	return false;
 }
 
-function parseMiClashUpdateStatus(raw) {
+function parseKeyValueStatus(raw) {
 	const status = {};
 	String(raw || '').split(/\r?\n/).forEach((line) => {
 		const idx = line.indexOf('=');
@@ -438,6 +444,14 @@ function parseMiClashUpdateStatus(raw) {
 	});
 	if (!status.state) status.state = 'idle';
 	return status;
+}
+
+function parseMiClashUpdateStatus(raw) {
+	return parseKeyValueStatus(raw);
+}
+
+function parseMiClashServiceStatus(raw) {
+	return parseKeyValueStatus(raw);
 }
 
 async function readMiClashUpdateStatus() {
@@ -469,11 +483,75 @@ async function clearMiClashUpdateStatus() {
 	await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-update', ['clear-status']), null);
 }
 
+async function readMiClashServiceState() {
+	const result = await fs.exec('/opt/clash/bin/miclash-service', ['state']);
+	if (result.code !== 0) {
+		throw new Error(String(result.stderr || result.stdout || _('Failed to read service status.')).trim());
+	}
+	return parseMiClashServiceStatus(result.stdout || '');
+}
+
+function getServiceOperationState(status) {
+	return String((status && (status.operation || status.state)) || 'idle').trim() || 'idle';
+}
+
+function applyServiceState(status) {
+	const state = status || {};
+	const service = String(state.service || '').trim();
+	const health = String(state.health || '').trim();
+	const operation = getServiceOperationState(state);
+
+	appState.serviceState = state;
+	appState.serviceRunning = service === 'running';
+	appState.serviceHealth = health || (appState.serviceRunning ? 'unknown' : 'stopped');
+	appState.serviceJobBusy = operation === 'running';
+
+	return state;
+}
+
+function formatMiClashServiceStatus(status, fallback) {
+	const phase = String(status && status.phase || '').trim();
+	const action = String(status && status.action || '').trim();
+	const labels = {
+		queued: _('Starting service job...'),
+		start: _('Starting Clash service...'),
+		stop: _('Stopping Clash service...'),
+		restart: _('Restarting Clash service...'),
+		reload: _('Reloading Clash service...'),
+		process: _('Checking Clash service process...'),
+		api: _('Checking Clash API...'),
+		dns: _('Checking DNS...'),
+		tun: _('Checking TUN interface...'),
+		policy: _('Checking routing policy...'),
+		forward: _('Checking forwarding rules...'),
+		stopped: _('Checking stopped state...'),
+		done: _('Service operation completed.')
+	};
+	const translated = labels[phase] || labels[action];
+	if (translated) return translated;
+
+	const message = String(status && status.message || '').trim();
+	return message || fallback || _('Updating service status...');
+}
+
+async function clearMiClashServiceStatus() {
+	await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-service', ['clear-status']), null);
+}
+
 async function startMiClashUpdateJob(kind, args) {
 	await clearMiClashUpdateStatus();
 	const result = await fs.exec('/opt/clash/bin/miclash-update', ['job', kind].concat(args || []));
 	if (result.code !== 0) {
 		throw new Error(String(result.stderr || result.stdout || _('Failed to start update job.')).trim());
+	}
+	return true;
+}
+
+async function startMiClashServiceJob(action) {
+	await clearMiClashServiceStatus();
+	const result = await fs.exec('/opt/clash/bin/miclash-service', ['job', action]);
+	if (result.code !== 0) {
+		throw new Error(String(result.stderr || result.stdout || _('Failed to start service job.')).trim());
 	}
 	return true;
 }
@@ -484,34 +562,89 @@ async function pollMiClashUpdateJob(initialMessage, options) {
 	const startedAt = Date.now();
 	const fallback = initialMessage || _('Updating MiClash...');
 
+	appState.updateJobBusy = true;
 	setOperationStatus('running', fallback);
 
-	while (Date.now() - startedAt < timeoutMs) {
-		await delay(UPDATE_JOB_POLL_MS);
+	try {
+		while (Date.now() - startedAt < timeoutMs) {
+			await delay(UPDATE_JOB_POLL_MS);
 
-		let status;
-		try {
-			status = await readMiClashUpdateStatus();
-		} catch (e) {
-			if (isRpcReconnectLikeError(e.message)) throw e;
-			setOperationStatus('running', fallback);
-			continue;
+			let status;
+			try {
+				status = await readMiClashUpdateStatus();
+			} catch (e) {
+				if (isRpcReconnectLikeError(e.message)) throw e;
+				setOperationStatus('running', fallback);
+				continue;
+			}
+
+			const state = String(status.state || 'idle');
+			if (state === 'success') {
+				clearOperationStatus();
+				return status;
+			}
+			if (state === 'failed') {
+				throw new Error(status.message || _('Update failed.'));
+			}
+			if (state === 'running') {
+				setOperationStatus('running', formatMiClashUpdateStatus(status, fallback));
+			}
 		}
 
-		const state = String(status.state || 'idle');
-		if (state === 'success') {
-			clearOperationStatus();
-			return status;
-		}
-		if (state === 'failed') {
-			throw new Error(status.message || _('Update failed.'));
-		}
-		if (state === 'running') {
-			setOperationStatus('running', formatMiClashUpdateStatus(status, fallback));
-		}
+		throw new Error(_('Update exceeded timeout. Please check MiClash logs and retry.'));
+	} finally {
+		appState.updateJobBusy = false;
+		updateHeaderAndControlDom();
 	}
+}
 
-	throw new Error(_('Update exceeded timeout. Please check MiClash logs and retry.'));
+async function pollMiClashServiceJob(initialMessage, options) {
+	const opts = options || {};
+	const timeoutMs = opts.timeoutMs || SERVICE_JOB_TIMEOUT_MS;
+	const startedAt = Date.now();
+	const fallback = initialMessage || _('Updating service status...');
+
+	appState.serviceJobBusy = true;
+	setOperationStatus('running', fallback);
+
+	try {
+		while (Date.now() - startedAt < timeoutMs) {
+			await delay(SERVICE_JOB_POLL_MS);
+
+			let status;
+			try {
+				status = await readMiClashServiceState();
+				applyServiceState(status);
+			} catch (e) {
+				if (isRpcReconnectLikeError(e.message)) throw e;
+				setOperationStatus('running', fallback);
+				continue;
+			}
+
+			const state = getServiceOperationState(status);
+			if (state === 'success') {
+				await refreshServiceState();
+				clearOperationStatus();
+				return status;
+			}
+			if (state === 'failed') {
+				throw new Error(status.message || _('Service operation failed.'));
+			}
+			if (state === 'running') {
+				setOperationStatus('running', formatMiClashServiceStatus(status, fallback));
+			}
+		}
+
+		throw new Error(_('Service operation exceeded timeout. Please retry the action.'));
+	} finally {
+		appState.serviceJobBusy = false;
+		updateHeaderAndControlDom();
+	}
+}
+
+async function runMiClashServiceJob(action, initialMessage) {
+	await startMiClashServiceJob(action);
+	return pollMiClashServiceJob(initialMessage);
 }
 
 async function resumeMiClashUpdateJobStatus() {
@@ -528,6 +661,25 @@ async function resumeMiClashUpdateJobStatus() {
 	}
 	if (state === 'success') {
 		clearOperationStatus();
+	}
+}
+
+async function resumeMiClashServiceJobStatus() {
+	const status = await readMiClashServiceState();
+	applyServiceState(status);
+	const state = getServiceOperationState(status);
+
+	if (state === 'running') {
+		await pollMiClashServiceJob(formatMiClashServiceStatus(status, _('Updating service status...')));
+		return;
+	}
+	if (state === 'failed') {
+		setOperationError(new Error(status.message || _('Service operation failed.')));
+		await refreshServiceState();
+	}
+	if (state === 'success') {
+		await refreshServiceState();
+		await clearMiClashServiceStatus();
 	}
 }
 
@@ -765,6 +917,20 @@ function resolveDashboardButtonState() {
 			title: _('Start the service to open dashboard.')
 		};
 	}
+	if (appState.serviceHealth === 'checking') {
+		return {
+			disabled: true,
+			className: 'cbi-button-neutral',
+			title: _('Updating service status...')
+		};
+	}
+	if (appState.serviceHealth === 'not_ready') {
+		return {
+			disabled: true,
+			className: 'cbi-button-negative',
+			title: _('Service is not ready.')
+		};
+	}
 
 	const issue = getDashboardConfigIssue(appState.configContent || '');
 	if (issue) {
@@ -783,15 +949,37 @@ function resolveDashboardButtonState() {
 }
 
 async function getServiceStatus() {
-	return view_miclash_service.getStatus();
+	try {
+		const status = await readMiClashServiceState();
+		applyServiceState(status);
+		return appState.serviceRunning;
+	} catch (e) {
+		const running = await view_miclash_utils.getClashRunning();
+		appState.serviceRunning = !!running;
+		appState.serviceHealth = running ? 'unknown' : 'stopped';
+		return appState.serviceRunning;
+	}
+}
+
+async function checkServiceHealthOrThrow() {
+	const status = await readMiClashServiceState();
+	applyServiceState(status);
+	if (!appState.serviceRunning) {
+		throw new Error(_('Service is not running.'));
+	}
+	if (appState.serviceHealth !== 'ready') {
+		throw new Error(String(status.message || _('Service is not ready.')).trim());
+	}
+	return true;
 }
 
 async function restartOrReloadServiceOrThrow(action, options) {
-	return view_miclash_service.dispatchActionsAndWaitReadyOrThrow([action], true, options || {});
-}
-
-async function dispatchServiceActionsAndWaitOrThrow(actions, targetStatus, options) {
-	return view_miclash_service.dispatchActionsAndWaitReadyOrThrow(actions, targetStatus, options || {});
+	const opts = options || {};
+	const message = action === 'reload'
+		? _('Reloading Clash service...')
+		: _('Restarting Clash service...');
+	if (opts.onStage) opts.onStage(message);
+	return runMiClashServiceJob(action, message);
 }
 
 function notifyDetailedError(title, detail) {
@@ -914,6 +1102,9 @@ async function openDashboard() {
 			return;
 		}
 
+		setOperationStatus('running', _('Checking Clash service readiness...'));
+		await checkServiceHealthOrThrow();
+
 		const ec = parseYamlValue(config, 'external-controller');
 		const ecTls = parseYamlValue(config, 'external-controller-tls');
 		const secret = parseYamlValue(config, 'secret');
@@ -939,7 +1130,9 @@ async function openDashboard() {
 		if (!popup) {
 			notify('warning', _('Popup was blocked. Please allow popups for this site.'));
 		}
+		clearOperationStatus();
 	} catch (e) {
+		setOperationError(e);
 		notify('error', _('Failed to open dashboard: %s').format(e.message));
 	}
 }
@@ -1698,7 +1891,7 @@ function updateHeaderAndControlDom() {
 	const kernelVersion = pageRoot.querySelector('#sbox-kernel-version');
 	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
 	const modeSelect = pageRoot.querySelector('#sbox-mode-select');
-	const serviceBusy = !!appState.serviceActionBusy;
+	const serviceBusy = !!appState.serviceActionBusy || !!appState.serviceJobBusy || !!appState.updateJobBusy;
 
 	if (status && statusLabel) {
 		status.classList.toggle('sbox-status-on', appState.serviceRunning);
@@ -1743,8 +1936,8 @@ function updateHeaderAndControlDom() {
 		dashboardBtn.className = 'cbi-button ' +
 			dashboardState.className +
 			' sbox-header-button sbox-btn-dashboard';
-		dashboardBtn.removeAttribute('title');
-		dashboardBtn.removeAttribute('aria-label');
+		dashboardBtn.title = dashboardState.title;
+		dashboardBtn.setAttribute('aria-label', dashboardState.title);
 	}
 
 	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
@@ -1788,19 +1981,26 @@ function isInternetOnlyEnabled() {
 }
 
 async function refreshHeaderAndControl() {
-	const [running, versions, kernelStatus, proxyMode] = await Promise.all([
-		getServiceStatus(),
+	const [serviceState, versions, kernelStatus, proxyMode] = await Promise.all([
+		readMiClashServiceState(),
 		getVersions(),
 		getMihomoStatus(),
 		detectCurrentProxyMode()
 	]);
 
-	appState.serviceRunning = !!running;
+	applyServiceState(serviceState);
 	appState.versions = versions;
 	appState.kernelStatus = kernelStatus;
 	appState.proxyMode = proxyMode || 'tproxy';
 
 	updateHeaderAndControlDom();
+}
+
+async function refreshServiceState() {
+	const serviceState = await readMiClashServiceState();
+	applyServiceState(serviceState);
+	updateHeaderAndControlDom();
+	return serviceState;
 }
 
 async function refreshHeaderAndControlSafe() {
@@ -1984,10 +2184,19 @@ function stopLogPolling() {
 
 function startControlPolling() {
 	controlPollTimer = view_miclash_ui_shell.startInterval(controlPollTimer, async () => {
+		if (controlPollBusy) return;
+		controlPollBusy = true;
 		try {
-			appState.serviceRunning = await getServiceStatus();
-			updateHeaderAndControlDom();
-		} catch (e) {}
+			await refreshServiceState();
+		} catch (e) {
+			try {
+				appState.serviceRunning = await view_miclash_utils.getClashRunning();
+				appState.serviceHealth = appState.serviceRunning ? 'unknown' : 'stopped';
+				updateHeaderAndControlDom();
+			} catch (statusError) {}
+		} finally {
+			controlPollBusy = false;
+		}
 	}, STATUS_POLL_MS, { replace: true });
 }
 
@@ -2091,13 +2300,8 @@ function bindControlAndHeaderEvents() {
 				await withServiceButtons(startBtn, stopBtn, async () => {
 					if (!(await validateMainConfigBeforeStart())) return;
 					setOperationStatus('running', _('Starting Clash service...'));
-					await dispatchServiceActionsAndWaitOrThrow(
-						['enable', 'start'],
-						true,
-						operationStageOptions(_('Starting Clash service...'))
-					);
+					await runMiClashServiceJob('start', _('Starting Clash service...'));
 					await logUiAction('info', 'Clash service started');
-					clearOperationStatus();
 				});
 				await refreshHeaderAndControlSafe();
 			} catch (e) {
@@ -2114,9 +2318,8 @@ function bindControlAndHeaderEvents() {
 			try {
 				await withServiceButtons(stopBtn, startBtn, async () => {
 					setOperationStatus('running', _('Stopping Clash service...'));
-					await dispatchServiceActionsAndWaitOrThrow(['stop', 'disable'], false);
+					await runMiClashServiceJob('stop', _('Stopping Clash service...'));
 					await logUiAction('info', 'Clash service stopped');
-					clearOperationStatus();
 				});
 				await refreshHeaderAndControlSafe();
 			} catch (e) {
@@ -2136,7 +2339,6 @@ function bindControlAndHeaderEvents() {
 			await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
 			await logUiAction('info', 'Clash service restarted');
 			notify('info', _('Clash service restarted successfully.'));
-			clearOperationStatus();
 			await refreshHeaderAndControl();
 		}).catch((e) => {
 			setOperationError(e);
@@ -2467,7 +2669,7 @@ return view.extend({
 			getNetworkInterfaces(),
 			getVersions(),
 			getMihomoStatus(),
-			getServiceStatus(),
+			L.resolveDefault(readMiClashServiceState(), null),
 			detectCurrentProxyMode()
 		]);
 	},
@@ -2482,7 +2684,11 @@ return view.extend({
 		appState.interfaces = data[3] || [];
 		appState.versions = data[4] || { app: 'unknown', clash: 'unknown' };
 		appState.kernelStatus = data[5] || { installed: false, version: null };
-		appState.serviceRunning = !!data[6];
+		if (data[6]) {
+			applyServiceState(data[6]);
+		} else {
+			appState.serviceRunning = await getServiceStatus();
+		}
 		appState.proxyMode = data[7] || 'tproxy';
 
 		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
@@ -2511,6 +2717,7 @@ return view.extend({
 
 		startControlPolling();
 		startUpdatePolling();
+		resumeMiClashServiceJobStatus().catch(() => {});
 		resumeMiClashUpdateJobStatus().catch(() => {});
 
 		document.addEventListener('visibilitychange', () => {
