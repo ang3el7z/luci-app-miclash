@@ -105,6 +105,23 @@ There should be no `Show Logs` action in this modal.
 
 After copying, the modal button text can briefly change to `Copied`.
 
+## Localization
+
+All new user-facing text must be localizable and translated everywhere MiClash currently ships translations.
+
+This includes:
+
+- Operation status phase labels.
+- Error details modal title, labels, button text, and "You can" list items.
+- Success and failure messages added for newly instrumented actions.
+- New tab labels or changed tab labels.
+- Clipboard feedback text such as `Copied`.
+- Any new notification text.
+
+Implementation should wrap new UI strings with the existing LuCI `_()` translation helper and update all existing locale files, including Russian and Simplified Chinese. If an existing status or notification string is reused, prefer reusing its existing msgid instead of creating a near-duplicate.
+
+Before completion, run the project translation check and review the changed UI code for raw user-facing English strings that should have been translated. Any untranslated text that is intentionally technical, such as `config.yaml`, may remain literal.
+
 ## Close Button
 
 The close button should not appear immediately on error. It should become visible after one second so accidental dismissals are less likely.
@@ -141,6 +158,8 @@ Add or update static check scripts to verify:
 - Error details UI exposes a copy action.
 - Close button behavior is represented in DOM/CSS.
 - Key user actions set operation status before long-running work.
+- New user-facing operation-status and error-detail strings are localized in all shipped locale files.
+- Translation checks cover the full project after the UI changes.
 
 Run the existing check scripts after implementation:
 
