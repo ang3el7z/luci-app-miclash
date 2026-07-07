@@ -34,6 +34,7 @@ const controlTabBindingBlock = blockBetween("tabAttr: 'ctrl-tab'", "tabAttr: 'cf
 const configTabBindingBlock = bindTabEventsBlock.slice(bindTabEventsBlock.indexOf("tabAttr: 'cfg-tab'"));
 const bindConfigEventsBlock = functionBlock('bindConfigEvents');
 const bindControlBlock = functionBlock('bindControlAndHeaderEvents');
+const operationStatusRenderBlock = blockBetween('operationStatus.innerHTML =', 'operationStatus.title = state.message;', config);
 const rulesetsSaveBlock = blockBetween("const saveBtn = body.querySelector('#sbox-ruleset-save');", 'if (data.whitelistMode', config);
 const rulesetsWhitelistBlock = blockBetween("const saveWhitelistBtn = body.querySelector('#sbox-ruleset-save-whitelist');", '\n}\n\nfunction buildSettingsPaneHtml', config);
 
@@ -63,6 +64,12 @@ check(config.includes('sbox-operation-status-detail') &&
 check(style.includes('.sbox-operation-status-detail') &&
 	style.includes('.sbox-operation-status-close'),
 	'Operation status detail and close controls must be styled.');
+check(operationStatusRenderBlock.indexOf('sbox-operation-status-spacer') >= 0 &&
+	operationStatusRenderBlock.indexOf('sbox-operation-status-spacer') < operationStatusRenderBlock.indexOf('sbox-operation-status-close'),
+	'Operation status close control must be pinned after a flex spacer.');
+check(style.includes('.sbox-operation-status-spacer') &&
+	style.includes('flex: 1 1 auto;'),
+	'Operation status spacer must stretch before the close control.');
 check(style.includes('.sbox-operation-error-detail'),
 	'Full error detail block must be styled.');
 

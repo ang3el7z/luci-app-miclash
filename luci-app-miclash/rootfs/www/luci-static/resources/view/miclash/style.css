@@ -180,8 +180,12 @@
 }
 .sbox-operation-status-message {
 	min-width: 0;
-	flex: 1 1 auto;
+	flex: 0 1 auto;
 	overflow-wrap: anywhere;
+}
+.sbox-operation-status-spacer {
+	flex: 1 1 auto;
+	min-width: 8px;
 }
 .sbox-operation-status-action {
 	display: inline-flex;
