@@ -392,17 +392,6 @@
 	justify-content: flex-end;
 	min-width: 0;
 }
-.sbox-subscription-action {
-	min-height: 32px;
-	font-weight: 700;
-}
-.sbox-url-clear-button {
-	width: 32px;
-	min-width: 32px;
-	min-height: 32px;
-	padding: 0;
-	font-weight: 700;
-}
 .sbox-select,
 .sbox-input {
 	width: 100%;

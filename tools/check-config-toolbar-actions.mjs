@@ -32,11 +32,21 @@ function handlerBlock(selectorNeedle) {
 	return start >= 0 && nextConst > start ? config.slice(start, nextConst) : '';
 }
 
+function cssBlock(selector) {
+	const start = style.indexOf(`${selector} {`);
+	const end = start >= 0 ? style.indexOf('\n}', start + selector.length) : -1;
+	return start >= 0 && end > start ? style.slice(start, end + 2) : '';
+}
+
 const toolbarBlock = blockBetween('<div class="sbox-config-toolbar">', '<div id="miclash-editor"', config);
 const actionBlock = blockBetween('<div class="sbox-actions">', '<div id="sbox-pane-settings"', config);
 const saveUrlHandler = handlerBlock("const saveUrlBtn = pageRoot.querySelector('#sbox-save-sub-url');");
 const updateUrlHandler = handlerBlock("const updateUrlBtn = pageRoot.querySelector('#sbox-update-sub');");
 const clearUrlHandler = handlerBlock("const clearUrlBtn = pageRoot.querySelector('#sbox-clear-sub-url');");
+const subscriptionButtonStyle = [
+	cssBlock('.sbox-subscription-action'),
+	cssBlock('.sbox-url-clear-button')
+].join('\n');
 
 check(!config.includes('sbox-save-update-sub'),
 	'Combined Save URL / Update Config button must be removed.');
@@ -57,6 +67,8 @@ check(toolbarBlock.includes('id="sbox-clear-sub-url" type="button" class="cbi-bu
 	'Subscription clear button must use the same negative style as the editor Clear button.');
 check(style.includes('.sbox-subscription-actions') && style.includes('gap: 8px;'),
 	'Subscription toolbar buttons must keep the same 8px gap as editor actions.');
+check(!/\b(?:width|min-width|height|min-height|padding|font-weight)\s*:/.test(subscriptionButtonStyle),
+	'Subscription toolbar buttons must not override native cbi-button sizing or weight.');
 
 check(saveUrlHandler.includes("setOperationStatus('running', _('Saving subscription URL...'))"),
 	'Save URL handler must show matching operation status.');
