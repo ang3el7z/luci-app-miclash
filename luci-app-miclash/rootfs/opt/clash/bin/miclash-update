@@ -12,6 +12,7 @@ STATUS_ERR="/tmp/miclash-update/stderr"
 CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
 CURL_RETRY=2
+CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 
 cleanup() {
 	for file in $TMP_FILES; do
@@ -38,6 +39,7 @@ write_status() {
 	{
 		printf 'state=%s\n' "$state"
 		printf 'phase=%s\n' "$phase"
+		printf 'token=%s\n' "${CURRENT_TOKEN:-}"
 		printf 'message=%s\n' "$message"
 		printf 'updated_at=%s\n' "$(date +%s 2>/dev/null || echo 0)"
 	} > "$STATUS_FILE.tmp.$$" 2>/dev/null && mv "$STATUS_FILE.tmp.$$" "$STATUS_FILE" 2>/dev/null || true
@@ -61,13 +63,28 @@ last_status_line() {
 	tail -n 1 "$file" 2>/dev/null || true
 }
 
+parse_job_token() {
+	CURRENT_TOKEN=""
+	if [ "${1:-}" = "--token" ]; then
+		[ $# -gt 1 ] || fail "missing value for --token"
+		CURRENT_TOKEN="$(status_text "$2")"
+		return 0
+	fi
+
+	return 1
+}
+
 run_job() {
+	if parse_job_token "$@"; then
+		shift 2
+	fi
 	[ $# -gt 0 ] || fail "missing update job command"
 
 	clear_status
 	write_status running queued "Starting MiClash update job"
 
 	(
+		export CURRENT_TOKEN
 		"$0" "$@" > "$STATUS_OUT" 2> "$STATUS_ERR"
 		code="$?"
 		if [ "$code" -eq 0 ]; then

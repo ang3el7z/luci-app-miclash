@@ -25,6 +25,7 @@ const UPDATE_JOB_POLL_MS = 1000;
 const UPDATE_JOB_TIMEOUT_MS = 7 * 60 * 1000;
 const SERVICE_JOB_POLL_MS = 1000;
 const SERVICE_JOB_TIMEOUT_MS = 3 * 60 * 1000;
+const OPERATION_TOKEN_STORAGE_PREFIX = 'miclash-operation-token-';
 
 let editor = null;
 let pageRoot = null;
@@ -577,10 +578,47 @@ async function clearMiClashServiceStatus() {
 	await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-service', ['clear-status']), null);
 }
 
+function getOperationTokenStorageKey(kind) {
+	return OPERATION_TOKEN_STORAGE_PREFIX + String(kind || '');
+}
+
+function getStoredOperationToken(kind) {
+	try {
+		return String(window.sessionStorage.getItem(getOperationTokenStorageKey(kind)) || '');
+	} catch (e) {
+		return '';
+	}
+}
+
+function clearStoredOperationToken(kind, token) {
+	try {
+		const key = getOperationTokenStorageKey(kind);
+		const expected = String(token || '');
+		if (!expected || String(window.sessionStorage.getItem(key) || '') === expected) {
+			window.sessionStorage.removeItem(key);
+		}
+	} catch (e) {}
+}
+
+function createOperationToken(kind) {
+	const token = String(kind || 'operation') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+	try {
+		window.sessionStorage.setItem(getOperationTokenStorageKey(kind), token);
+	} catch (e) {}
+	return token;
+}
+
+function isCurrentOperationToken(kind, status) {
+	const token = String(status && status.token || '').trim();
+	return !!token && getStoredOperationToken(kind) === token;
+}
+
 async function startMiClashUpdateJob(kind, args) {
 	await clearMiClashUpdateStatus();
-	const result = await fs.exec('/opt/clash/bin/miclash-update', ['job', kind].concat(args || []));
+	const token = createOperationToken('update');
+	const result = await fs.exec('/opt/clash/bin/miclash-update', ['job', '--token', token, kind].concat(args || []));
 	if (result.code !== 0) {
+		clearStoredOperationToken('update', token);
 		throw new Error(String(result.stderr || result.stdout || _('Failed to start update job.')).trim());
 	}
 	return true;
@@ -588,8 +626,10 @@ async function startMiClashUpdateJob(kind, args) {
 
 async function startMiClashServiceJob(action) {
 	await clearMiClashServiceStatus();
-	const result = await fs.exec('/opt/clash/bin/miclash-service', ['job', action]);
+	const token = createOperationToken('service');
+	const result = await fs.exec('/opt/clash/bin/miclash-service', ['job', '--token', token, action]);
 	if (result.code !== 0) {
+		clearStoredOperationToken('service', token);
 		throw new Error(String(result.stderr || result.stdout || _('Failed to start service job.')).trim());
 	}
 	return true;
@@ -619,10 +659,12 @@ async function pollMiClashUpdateJob(initialMessage, options) {
 
 			const state = String(status.state || 'idle');
 			if (state === 'success') {
+				clearStoredOperationToken('update', status.token);
 				clearOperationStatus();
 				return status;
 			}
 			if (state === 'failed') {
+				clearStoredOperationToken('update', status.token);
 				throw new Error(status.message || _('Update failed.'));
 			}
 			if (state === 'running') {
@@ -662,11 +704,13 @@ async function pollMiClashServiceJob(initialMessage, options) {
 
 			const state = getServiceOperationState(status);
 			if (state === 'success') {
+				clearStoredOperationToken('service', status.token);
 				await refreshServiceState();
 				clearOperationStatus();
 				return status;
 			}
 			if (state === 'failed') {
+				clearStoredOperationToken('service', status.token);
 				throw new Error(status.message || _('Service operation failed.'));
 			}
 			if (state === 'running') {
@@ -695,6 +739,12 @@ async function resumeMiClashUpdateJobStatus() {
 		return;
 	}
 	if (state === 'failed' || state === 'success') {
+		if (state === 'failed' && isCurrentOperationToken('update', status)) {
+			setOperationError(new Error(status.message || _('Update failed.')));
+			clearStoredOperationToken('update', status.token);
+			await clearMiClashUpdateStatus();
+			return;
+		}
 		await clearMiClashUpdateStatus();
 		clearOperationStatus();
 	}
@@ -710,6 +760,12 @@ async function resumeMiClashServiceJobStatus() {
 		return;
 	}
 	if (state === 'failed' || state === 'success') {
+		if (state === 'failed' && isCurrentOperationToken('service', status)) {
+			setOperationError(new Error(status.message || _('Service operation failed.')));
+			clearStoredOperationToken('service', status.token);
+			await clearMiClashServiceStatus();
+			return;
+		}
 		await refreshServiceState();
 		await clearMiClashServiceStatus();
 		clearOperationStatus();

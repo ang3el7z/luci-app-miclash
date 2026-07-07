@@ -64,6 +64,14 @@ check(!config.includes('view_miclash_service.dispatchActionsAndWaitReadyOrThrow'
 	'UI must not keep the old JS readiness dispatch path after service jobs own readiness.');
 check(config.includes('pollMiClashUpdateJob') && config.includes('startMiClashUpdateJob'),
 	'Package/kernel updates must use detached update jobs and polling.');
+check(config.includes('createOperationToken(') &&
+	config.includes('getStoredOperationToken(') &&
+	config.includes('clearStoredOperationToken(') &&
+	config.includes('isCurrentOperationToken('),
+	'UI must track operation tokens in sessionStorage.');
+check(config.includes("['job', '--token', token, kind]") &&
+	config.includes("['job', '--token', token, action]"),
+	'UI must pass operation tokens to update and service jobs.');
 check(config.includes('updateJobBusy: false') &&
 	config.includes('appState.updateJobBusy = true') &&
 	config.includes('appState.updateJobBusy = false'),
@@ -98,8 +106,11 @@ check(
 check(resumeUpdateBlock.includes("if (state === 'running')") &&
 	resumeUpdateBlock.includes('pollMiClashUpdateJob'),
 	'Update status resume must continue actively running update jobs.');
+check(resumeUpdateBlock.includes("if (state === 'failed' && isCurrentOperationToken('update', status))") &&
+	resumeUpdateBlock.includes("setOperationError(new Error(status.message || _('Update failed.')))"),
+	'Update status resume must show failed status only when its token matches the current tab operation.');
 check(!resumeUpdateBlock.includes("if (state === 'failed')") &&
-	!resumeUpdateBlock.includes("setOperationError(new Error(status.message || _('Update failed.')))"),
+	!resumeUpdateBlock.includes("if (state === 'failed') {\n\t\tsetOperationError(new Error(status.message || _('Update failed.')))"),
 	'Update status resume must not resurrect stale failed update errors from /tmp.');
 check(resumeUpdateBlock.includes("if (state === 'failed' || state === 'success')") &&
 	resumeUpdateBlock.includes('await clearMiClashUpdateStatus();'),
@@ -107,8 +118,11 @@ check(resumeUpdateBlock.includes("if (state === 'failed' || state === 'success')
 check(resumeServiceBlock.includes("if (state === 'running')") &&
 	resumeServiceBlock.includes('pollMiClashServiceJob'),
 	'Service status resume must continue actively running service jobs.');
+check(resumeServiceBlock.includes("if (state === 'failed' && isCurrentOperationToken('service', status))") &&
+	resumeServiceBlock.includes("setOperationError(new Error(status.message || _('Service operation failed.')))"),
+	'Service status resume must show failed status only when its token matches the current tab operation.');
 check(!resumeServiceBlock.includes("if (state === 'failed')") &&
-	!resumeServiceBlock.includes("setOperationError(new Error(status.message || _('Service operation failed.')))"),
+	!resumeServiceBlock.includes("if (state === 'failed') {\n\t\tsetOperationError(new Error(status.message || _('Service operation failed.')))"),
 	'Service status resume must not resurrect stale failed service errors from /tmp.');
 check(resumeServiceBlock.includes("if (state === 'failed' || state === 'success')") &&
 	resumeServiceBlock.includes('await clearMiClashServiceStatus();') &&
@@ -128,6 +142,11 @@ check(!existsSync(files.service),
 
 check(serviceJob.includes('STATUS_FILE="/tmp/miclash-service/status"'),
 	'Service job script must write a persistent status file.');
+check(serviceJob.includes('CURRENT_TOKEN=') &&
+	serviceJob.includes("printf 'token=%s\\n'") &&
+	serviceJob.includes('token="$(status_value token)"') &&
+	serviceJob.includes("printf 'token=%s\\n' \"$token\""),
+	'Service job script must persist operation tokens and expose them from state.');
 check(serviceJob.includes('run_job()') && serviceJob.includes('write_status()'),
 	'Service job script must support detached job status reporting.');
 check(serviceJob.includes('wait_ready()') && serviceJob.includes('wait_stopped()'),
@@ -159,6 +178,10 @@ check(rules.includes('health)'),
 
 check(update.includes('STATUS_FILE="/tmp/miclash-update/status"'),
 	'Update script must write a persistent status file.');
+check(update.includes('CURRENT_TOKEN=') &&
+	update.includes("printf 'token=%s\\n'") &&
+	update.includes('parse_job_token "$@"'),
+	'Update script must persist operation tokens in job status.');
 check(update.includes('write_status()') && update.includes('run_job()'),
 	'Update script must support detached job status reporting.');
 check(update.includes('case "${1:-}" in') && update.includes('status)') && update.includes('clear-status)'),
