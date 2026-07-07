@@ -24,13 +24,28 @@ const restartButtonEnd = source.indexOf('const dashboardBtn', restartButtonStart
 const restartButtonBlock = restartButtonStart >= 0 && restartButtonEnd > restartButtonStart
 	? source.slice(restartButtonStart, restartButtonEnd)
 	: '';
+const proxyModeStart = source.indexOf('async function switchProxyModeFromHeader(targetMode)');
+const proxyModeEnd = source.indexOf('async function loadClashLogs()', proxyModeStart);
+const proxyModeBlock = proxyModeStart >= 0 && proxyModeEnd > proxyModeStart
+	? source.slice(proxyModeStart, proxyModeEnd)
+	: '';
 
 check(/async function withRestartButtonFeedback\(fn\)/.test(source),
 	'Missing withRestartButtonFeedback(fn) helper.');
 check(settingsSaveBlock.includes('await withRestartButtonFeedback(async () => {'),
 	'Settings save restart must show the same service feedback as the Restart button.');
+check(settingsSaveBlock.includes('const wasRunning = await getServiceStatus();'),
+	'Settings save must check whether MiClash is running before restart.');
+check(settingsSaveBlock.includes('if (wasRunning)') &&
+	settingsSaveBlock.includes("await restartOrReloadServiceOrThrow('restart'"),
+	'Settings save must restart only when MiClash was already running.');
 check(/await restartOrReloadServiceOrThrow\('restart'(?:,|\))/.test(settingsSaveBlock),
 	'Settings save must still restart the Clash service.');
+check(proxyModeBlock.includes('const wasRunning = await getServiceStatus();'),
+	'Proxy mode switch must check whether MiClash is running before restart.');
+check(proxyModeBlock.includes('if (wasRunning)') &&
+	proxyModeBlock.includes("await restartOrReloadServiceOrThrow('restart'"),
+	'Proxy mode switch must restart only when MiClash was already running.');
 check(restartButtonBlock.includes('withRestartButtonFeedback(async () => {'),
 	'The Restart button must use the shared restart feedback helper.');
 check(!restartButtonBlock.includes('withButtons(restartBtn'),

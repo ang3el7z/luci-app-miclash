@@ -1275,6 +1275,7 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 async function switchProxyModeFromHeader(targetMode) {
 	const nextMode = normalizeProxyMode(targetMode);
 	if (nextMode === appState.proxyMode) return;
+	const wasRunning = await getServiceStatus();
 
 	const current = await loadOperationalSettings();
 	const interfaces = (current.mode === 'explicit'
@@ -1303,9 +1304,11 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	if (!ok) throw new Error(_('Cannot save proxy mode.'));
 
-	if (!(await validateMainConfigBeforeStart())) return;
-	setOperationStatus('running', _('Restarting Clash service...'));
-	await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
+	if (wasRunning) {
+		if (!(await validateMainConfigBeforeStart())) return;
+		setOperationStatus('running', _('Restarting Clash service...'));
+		await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
+	}
 
 	appState.settings = await loadOperationalSettings();
 	appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
@@ -1326,8 +1329,11 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	updateHeaderAndControlDom();
 	if (appState.activeCfgTab === 'settings') renderSettingsPane();
-	clearOperationStatus();
-	notify('info', _('Proxy mode switched to %s. Service restarted.').format(appState.proxyMode));
+	const message = wasRunning
+		? _('Proxy mode switched to %s. Service restarted.').format(appState.proxyMode)
+		: _('Settings saved.');
+	setOperationSuccess(message);
+	notify('info', message);
 }
 
 async function loadClashLogs() {
@@ -2219,6 +2225,7 @@ function bindSettingsPaneEvents() {
 			if (!formState) return;
 			const previousMiClashReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.miclashReleaseChannel);
 			const previousMihomoReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.mihomoReleaseChannel);
+			const wasRunning = await getServiceStatus();
 			setOperationStatus('running', _('Saving settings...'));
 
 			const ok = await saveOperationalSettings(
@@ -2241,19 +2248,24 @@ function bindSettingsPaneEvents() {
 			);
 
 			if (!ok) return;
-			if (!(await validateMainConfigBeforeStart())) return;
-			try {
-				await withRestartButtonFeedback(async () => {
-					setOperationStatus('running', _('Restarting Clash service...'));
-					await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
-				});
-				await logUiAction('info', 'Settings saved and Clash service restarted');
-				notify('info', _('Settings saved and Clash service restarted.'));
-				setOperationSuccess(_('Settings saved and Clash service restarted.'));
-			} catch (e) {
-				setOperationError(e);
-				await logUiAction('err', 'Settings saved, but Clash service restart failed: ' + e.message);
-				notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
+			if (wasRunning) {
+				if (!(await validateMainConfigBeforeStart())) return;
+				try {
+					await withRestartButtonFeedback(async () => {
+						setOperationStatus('running', _('Restarting Clash service...'));
+						await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
+					});
+					await logUiAction('info', 'Settings saved and Clash service restarted');
+					notify('info', _('Settings saved and Clash service restarted.'));
+					setOperationSuccess(_('Settings saved and Clash service restarted.'));
+				} catch (e) {
+					setOperationError(e);
+					await logUiAction('err', 'Settings saved, but Clash service restart failed: ' + e.message);
+					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
+				}
+			} else {
+				setOperationSuccess(_('Settings saved.'));
+				notify('info', _('Settings saved.'));
 			}
 
 			appState.settings = await loadOperationalSettings();
@@ -2282,10 +2294,10 @@ function bindSettingsPaneEvents() {
 			}
 			renderSettingsPane();
 			updateHeaderAndControlDom();
-			}).catch((e) => {
-				setOperationError(e);
-				notify('error', _('Failed to save settings: %s').format(e.message));
-			}));
+		}).catch((e) => {
+			setOperationError(e);
+			notify('error', _('Failed to save settings: %s').format(e.message));
+		}));
 	}
 }
 
