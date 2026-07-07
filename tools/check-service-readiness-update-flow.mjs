@@ -86,6 +86,10 @@ const resumeUpdateBlock = blockBetween(
 	'async function resumeMiClashUpdateJobStatus()',
 	'async function resumeMiClashServiceJobStatus()'
 );
+const resumeServiceBlock = blockBetween(
+	'async function resumeMiClashServiceJobStatus()',
+	'async function installMiClashFromSettings('
+);
 check(
 	updateStatusBlock.indexOf('if (translated) return translated;') >= 0 &&
 		updateStatusBlock.indexOf('const message =') > updateStatusBlock.indexOf('if (translated) return translated;'),
@@ -100,6 +104,16 @@ check(!resumeUpdateBlock.includes("if (state === 'failed')") &&
 check(resumeUpdateBlock.includes("if (state === 'failed' || state === 'success')") &&
 	resumeUpdateBlock.includes('await clearMiClashUpdateStatus();'),
 	'Update status resume must clear completed failed/success update status files.');
+check(resumeServiceBlock.includes("if (state === 'running')") &&
+	resumeServiceBlock.includes('pollMiClashServiceJob'),
+	'Service status resume must continue actively running service jobs.');
+check(!resumeServiceBlock.includes("if (state === 'failed')") &&
+	!resumeServiceBlock.includes("setOperationError(new Error(status.message || _('Service operation failed.')))"),
+	'Service status resume must not resurrect stale failed service errors from /tmp.');
+check(resumeServiceBlock.includes("if (state === 'failed' || state === 'success')") &&
+	resumeServiceBlock.includes('await clearMiClashServiceStatus();') &&
+	resumeServiceBlock.includes('clearOperationStatus();'),
+	'Service status resume must clear completed failed/success service status files.');
 
 check(style.includes('.sbox-operation-status') &&
 	style.includes('.sbox-operation-status-error') &&

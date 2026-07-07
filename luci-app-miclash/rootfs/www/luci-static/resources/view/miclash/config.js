@@ -709,13 +709,10 @@ async function resumeMiClashServiceJobStatus() {
 		await pollMiClashServiceJob(formatMiClashServiceStatus(status, _('Updating service status...')));
 		return;
 	}
-	if (state === 'failed') {
-		setOperationError(new Error(status.message || _('Service operation failed.')));
-		await refreshServiceState();
-	}
-	if (state === 'success') {
+	if (state === 'failed' || state === 'success') {
 		await refreshServiceState();
 		await clearMiClashServiceStatus();
+		clearOperationStatus();
 	}
 }
 
