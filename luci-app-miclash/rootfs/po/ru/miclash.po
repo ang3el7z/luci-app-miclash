@@ -1337,3 +1337,27 @@ msgstr "Проверка YAML..."
 
 msgid "You can"
 msgstr "Вы можете"
+
+msgid "Check"
+msgstr "Проверить"
+
+msgid "Clear subscription URL"
+msgstr "Очистить URL подписки"
+
+msgid "Clearing subscription URL..."
+msgstr "Очистка URL подписки..."
+
+msgid "Client devices only through MiClash (Protection)"
+msgstr "Устройства только через MiClash (Защита)"
+
+msgid "Failed to clear subscription URL: %s"
+msgstr "Не удалось очистить URL подписки: %s"
+
+msgid "Failed to save subscription URL: %s"
+msgstr "Не удалось сохранить URL подписки: %s"
+
+msgid "Subscription URL cleared."
+msgstr "URL подписки очищен."
+
+msgid "Update"
+msgstr "Обновить"

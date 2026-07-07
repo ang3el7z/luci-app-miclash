@@ -1836,7 +1836,7 @@ function buildSettingsPaneHtml() {
 					'</label>' +
 				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Client devices only through MiClash (beta)')) + '</span>' +
+					'<span>' + safeText(_('Client devices only through MiClash (Protection)')) + '</span>' +
 				'</label>' +
 				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' />' +
@@ -1931,7 +1931,7 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Client devices only through MiClash (beta)')) + '">' +
+			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Client devices only through MiClash (Protection)')) + '">' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
 			'</span>' +
@@ -1965,21 +1965,23 @@ function buildPageHtml() {
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
 			'</div>' +
 
-			'<div id="sbox-pane-config">' +
-				'<div class="sbox-config-toolbar">' +
-					'<select id="sbox-config-select" class="cbi-input-select sbox-select">' + buildConfigOptionsHtml() + '</select>' +
-					'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
-					'<button id="sbox-save-update-sub" type="button" class="cbi-button cbi-button-positive sbox-save-update-sub">' + safeText(_('Save URL / Update Config')) + '</button>' +
-				'</div>' +
-				'<div id="miclash-editor" class="sbox-editor"></div>' +
-				'<div class="sbox-actions">' +
-						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Validate YAML')) + '</button>' +
-						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
-						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear Editor')) + '</button>' +
-						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
+				'<div id="sbox-pane-config">' +
+					'<div class="sbox-config-toolbar">' +
+						'<select id="sbox-config-select" class="cbi-input-select sbox-select">' + buildConfigOptionsHtml() + '</select>' +
+						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
+						'<div class="sbox-subscription-actions">' +
+							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-neutral sbox-subscription-action">' + safeText(_('Save')) + '</button>' +
+							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-positive sbox-subscription-action">' + safeText(_('Update')) + '</button>' +
+							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-neutral sbox-url-clear-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '">x</button>' +
+						'</div>' +
 					'</div>' +
-					'<div class="sbox-config-footer">' +
-						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('Rulesets')) + '</button>' +
+					'<div id="miclash-editor" class="sbox-editor"></div>' +
+					'<div class="sbox-actions">' +
+						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Check')) + '</button>' +
+						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
+						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear')) + '</button>' +
+						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
+						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral sbox-rulesets-action">' + safeText(_('Rulesets')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
@@ -2101,7 +2103,7 @@ function updateHeaderAndControlDom() {
 		guardPill.classList.remove('cbi-button', 'cbi-button-apply', 'cbi-button-neutral', 'cbi-button-positive', 'cbi-button-negative');
 		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
 		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
-		guardPill.title = _('Client devices only through MiClash (beta)');
+		guardPill.title = _('Client devices only through MiClash (Protection)');
 	}
 	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
 }
@@ -2596,74 +2598,112 @@ function bindConfigEvents() {
 		}));
 	}
 
-	const saveUpdateBtn = pageRoot.querySelector('#sbox-save-update-sub');
-	if (saveUpdateBtn) {
-		saveUpdateBtn.addEventListener('click', () => withButtons(saveUpdateBtn, async () => {
-				const url = String(subInput?.value || '').trim();
-				if (!url) throw new Error(_('Subscription URL is empty.'));
-				if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
+	const saveUrlBtn = pageRoot.querySelector('#sbox-save-sub-url');
+	if (saveUrlBtn) {
+		saveUrlBtn.addEventListener('click', () => withButtons(saveUrlBtn, async () => {
+			const url = String(subInput?.value || '').trim();
+			if (!url) throw new Error(_('Subscription URL is empty.'));
+			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
 
-				const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
-				const selectedPath = getConfigPathByName(selectedConfig);
-				setOperationStatus('running', _('Saving subscription URL...'));
-				await saveSubscriptionUrl(url, selectedConfig);
-				appState.subscriptionUrl = url;
+			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
+			setOperationStatus('running', _('Saving subscription URL...'));
+			await saveSubscriptionUrl(url, selectedConfig);
+			appState.subscriptionUrl = url;
+			updateHeaderAndControlDom();
+			await logUiAction('info', 'Subscription URL saved for ' + getConfigLabel(selectedConfig));
+			setOperationSuccess(_('Subscription URL saved.'));
+			notify('info', _('Subscription URL saved.'));
+		}).catch((e) => {
+			setOperationError(e);
+			notify('error', _('Failed to save subscription URL: %s').format(e.message));
+		}));
+	}
+
+	const updateUrlBtn = pageRoot.querySelector('#sbox-update-sub');
+	if (updateUrlBtn) {
+		updateUrlBtn.addEventListener('click', () => withButtons(updateUrlBtn, async () => {
+			const url = String(subInput?.value || '').trim();
+			if (!url) throw new Error(_('Subscription URL is empty.'));
+			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
+
+			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
+			const selectedPath = getConfigPathByName(selectedConfig);
+			setOperationStatus('running', _('Saving subscription URL...'));
+			await saveSubscriptionUrl(url, selectedConfig);
+			appState.subscriptionUrl = url;
+			appState.serviceRunning = await getServiceStatus();
+			updateHeaderAndControlDom();
+
+			await ensureMihomoKernelInstalled();
+			await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
+			setOperationStatus('running', _('Downloading subscription...'));
+
+			const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
+			const currentSettings = appState.settings || await loadOperationalSettings();
+			const downloaded = transformProxyMode(
+				String(downloadedInfo.content || '').trimEnd() + '\n',
+				normalizeProxyMode(appState.proxyMode || currentSettings.proxyMode || 'tproxy'),
+				currentSettings.tunStack || 'system'
+			);
+
+			const tested = await testConfigContent(downloaded, true, selectedPath);
+			if (!tested.ok) throw new Error(_('YAML validation failed: %s').format(tested.message));
+
+			appState.configContent = downloaded;
+			if (editor) {
+				editor.setValue(downloaded, -1);
+				editor.clearSelection();
+			}
+
+			let serviceReloaded = false;
+			if (selectedConfig === MAIN_CONFIG_NAME) {
+				if (await getServiceStatus()) {
+					setOperationStatus('running', _('Reloading Clash service...'));
+					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Clash service...')));
+					serviceReloaded = true;
+				}
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();
+			}
 
-				await ensureMihomoKernelInstalled();
-				await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
-				setOperationStatus('running', _('Downloading subscription...'));
+			if (downloadedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
+				await logUiAction('info', 'Subscription downloaded and applied with Remnawave fallback');
+				setOperationSuccess(_('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
+				notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
+			} else if (serviceReloaded) {
+				await logUiAction('info', 'Subscription downloaded and applied');
+				setOperationSuccess(_('Subscription downloaded and applied.'));
+				notify('info', _('Subscription downloaded and applied.'));
+			} else {
+				await logUiAction('info', getConfigLabel(selectedConfig) + ' downloaded and saved');
+				setOperationSuccess(_('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
+				notify('info', _('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
+			}
+		}).catch((e) => {
+			setOperationError(e);
+			logUiAction('err', 'Failed to apply subscription: ' + e.message);
+			notify('error', _('Failed to apply subscription: %s').format(e.message));
+		}).finally(async () => {
+			await view_miclash_subscription.cleanupTemp();
+		}));
+	}
 
-				const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
-				const currentSettings = appState.settings || await loadOperationalSettings();
-				const downloaded = transformProxyMode(
-					String(downloadedInfo.content || '').trimEnd() + '\n',
-					normalizeProxyMode(appState.proxyMode || currentSettings.proxyMode || 'tproxy'),
-					currentSettings.tunStack || 'system'
-				);
-
-				const tested = await testConfigContent(downloaded, true, selectedPath);
-				if (!tested.ok) throw new Error(_('YAML validation failed: %s').format(tested.message));
-
-				appState.configContent = downloaded;
-				if (editor) {
-					editor.setValue(downloaded, -1);
-					editor.clearSelection();
-				}
-
-				let serviceReloaded = false;
-				if (selectedConfig === MAIN_CONFIG_NAME) {
-					if (await getServiceStatus()) {
-						setOperationStatus('running', _('Reloading Clash service...'));
-						await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Clash service...')));
-						serviceReloaded = true;
-					}
-					appState.serviceRunning = await getServiceStatus();
-					updateHeaderAndControlDom();
-				}
-
-				if (downloadedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
-					await logUiAction('info', 'Subscription downloaded and applied with Remnawave fallback');
-					setOperationSuccess(_('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
-					notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
-				} else if (serviceReloaded) {
-					await logUiAction('info', 'Subscription downloaded and applied');
-					setOperationSuccess(_('Subscription downloaded and applied.'));
-					notify('info', _('Subscription downloaded and applied.'));
-				} else {
-					await logUiAction('info', getConfigLabel(selectedConfig) + ' downloaded and saved');
-					setOperationSuccess(_('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
-					notify('info', _('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
-				}
-			}).catch((e) => {
-				setOperationError(e);
-				logUiAction('err', 'Failed to apply subscription: ' + e.message);
-				notify('error', _('Failed to apply subscription: %s').format(e.message));
-			}).finally(async () => {
-				await view_miclash_subscription.cleanupTemp();
-			})
-		);
+	const clearUrlBtn = pageRoot.querySelector('#sbox-clear-sub-url');
+	if (clearUrlBtn) {
+		clearUrlBtn.addEventListener('click', () => withButtons(clearUrlBtn, async () => {
+			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
+			setOperationStatus('running', _('Clearing subscription URL...'));
+			await saveSubscriptionUrl('', selectedConfig);
+			appState.subscriptionUrl = '';
+			if (subInput) subInput.value = '';
+			updateHeaderAndControlDom();
+			await logUiAction('info', 'Subscription URL cleared for ' + getConfigLabel(selectedConfig));
+			setOperationSuccess(_('Subscription URL cleared.'));
+			notify('info', _('Subscription URL cleared.'));
+		}).catch((e) => {
+			setOperationError(e);
+			notify('error', _('Failed to clear subscription URL: %s').format(e.message));
+		}));
 	}
 
 	const validateBtn = pageRoot.querySelector('#sbox-validate');

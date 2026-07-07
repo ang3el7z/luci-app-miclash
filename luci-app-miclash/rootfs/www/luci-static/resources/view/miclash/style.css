@@ -375,9 +375,22 @@
 	align-items: center;
 	margin-bottom: 12px;
 }
-.sbox-save-update-sub {
-	width: 100%;
+.sbox-subscription-actions {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	justify-content: flex-end;
+	min-width: 0;
+}
+.sbox-subscription-action {
 	min-height: 32px;
+	font-weight: 700;
+}
+.sbox-url-clear-button {
+	width: 32px;
+	min-width: 32px;
+	min-height: 32px;
+	padding: 0;
 	font-weight: 700;
 }
 .sbox-select,
@@ -419,15 +432,12 @@
 .sbox-actions {
 	display: flex;
 	flex-wrap: wrap;
+	align-items: center;
 	gap: 8px;
 	margin-top: 10px;
 }
-.sbox-config-footer {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-	flex-wrap: wrap;
-	margin-top: 8px;
+.sbox-rulesets-action {
+	margin-left: auto;
 }
 .sbox-muted {
 	color: var(--sbox-muted);
@@ -735,6 +745,12 @@
 	.sbox-form-grid,
 	.sbox-rulesets-layout {
 		grid-template-columns: 1fr;
+	}
+	.sbox-subscription-actions {
+		justify-content: flex-start;
+	}
+	.sbox-rulesets-action {
+		margin-left: 0;
 	}
 	.sbox-modal-wide {
 		width: min(98vw, 980px);

@@ -1281,3 +1281,30 @@ msgstr "正在验证 YAML..."
 
 msgid "You can"
 msgstr "你可以"
+
+msgid "Check"
+msgstr "检查"
+
+msgid "Clear subscription URL"
+msgstr "清除订阅 URL"
+
+msgid "Clearing subscription URL..."
+msgstr "正在清除订阅 URL..."
+
+msgid "Client devices only through MiClash (Protection)"
+msgstr "设备仅通过 MiClash（保护）"
+
+msgid "Failed to clear subscription URL: %s"
+msgstr "清除订阅 URL 失败：%s"
+
+msgid "Failed to save subscription URL: %s"
+msgstr "保存订阅 URL 失败：%s"
+
+msgid "Subscription URL cleared."
+msgstr "订阅 URL 已清除。"
+
+msgid "Subscription URL saved."
+msgstr "订阅 URL 已保存。"
+
+msgid "Update"
+msgstr "更新"
