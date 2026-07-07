@@ -55,6 +55,22 @@ clear_status() {
 	rm -f "$STATUS_FILE" "$STATUS_OUT" "$STATUS_ERR" 2>/dev/null || true
 }
 
+cleanup_legacy_output_guard_for_cmd() {
+	cmd="$1"
+	legacy_output_chain="MICLASH_GUARD_OUTPUT"
+
+	command -v "$cmd" >/dev/null 2>&1 || return 0
+
+	while "$cmd" -t filter -D OUTPUT -j "$legacy_output_chain" 2>/dev/null; do :; done
+	"$cmd" -t filter -F "$legacy_output_chain" 2>/dev/null || true
+	"$cmd" -t filter -X "$legacy_output_chain" 2>/dev/null || true
+}
+
+cleanup_legacy_output_guard() {
+	cleanup_legacy_output_guard_for_cmd iptables
+	cleanup_legacy_output_guard_for_cmd ip6tables
+}
+
 last_status_line() {
 	file="$1"
 	[ -f "$file" ] || return 0
@@ -194,6 +210,7 @@ install_app() {
 		*) fail "unsupported app mode: $mode" ;;
 	esac
 
+	cleanup_legacy_output_guard
 	manager="$(detect_pkg_manager)"
 	install_deps "$manager"
 	write_status running install "Preparing MiClash package install"
@@ -244,6 +261,7 @@ install_kernel() {
 
 	[ -n "$url" ] || fail "missing --url"
 
+	cleanup_legacy_output_guard
 	if ! command -v curl >/dev/null 2>&1; then
 		manager="$(detect_pkg_manager)"
 		install_deps "$manager"

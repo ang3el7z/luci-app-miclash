@@ -49,6 +49,14 @@ check(toolbarBlock.includes('id="sbox-save-sub-url"') &&
 check(toolbarBlock.indexOf('id="sbox-save-sub-url"') < toolbarBlock.indexOf('id="sbox-update-sub"') &&
 	toolbarBlock.indexOf('id="sbox-update-sub"') < toolbarBlock.indexOf('id="sbox-clear-sub-url"'),
 	'Subscription toolbar button order must be Save, Update, clear.');
+check(toolbarBlock.includes('id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-positive sbox-subscription-action"'),
+	'Subscription Save button must use the same positive style as the editor Save button.');
+check(toolbarBlock.includes('id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action"'),
+	'Subscription Update button must use the same apply style as the editor Check button.');
+check(toolbarBlock.includes('id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button"'),
+	'Subscription clear button must use the same negative style as the editor Clear button.');
+check(style.includes('.sbox-subscription-actions') && style.includes('gap: 8px;'),
+	'Subscription toolbar buttons must keep the same 8px gap as editor actions.');
 
 check(saveUrlHandler.includes("setOperationStatus('running', _('Saving subscription URL...'))"),
 	'Save URL handler must show matching operation status.');
@@ -79,8 +87,12 @@ check(actionBlock.includes('id="sbox-open-rulesets"'),
 	'Rulesets button must be in the editor action row.');
 check(!config.includes('sbox-config-footer'),
 	'Rulesets footer row must be removed.');
-check(config.includes('sbox-rulesets-action') && style.includes('.sbox-rulesets-action'),
-	'Rulesets action must have a right-pinning class and style.');
+check(actionBlock.indexOf('id="sbox-set-main-config"') < actionBlock.indexOf('sbox-actions-spacer') &&
+	actionBlock.indexOf('sbox-actions-spacer') < actionBlock.indexOf('id="sbox-open-rulesets"'),
+	'Rulesets button must be separated from editor actions by a flex spacer.');
+check(config.includes('sbox-rulesets-action') && style.includes('.sbox-rulesets-action') &&
+	style.includes('.sbox-actions-spacer') && style.includes('flex: 1 1 auto;'),
+	'Rulesets action must have an explicit right-pinning spacer and style.');
 
 [
 	'Save',

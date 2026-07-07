@@ -436,8 +436,12 @@
 	gap: 8px;
 	margin-top: 10px;
 }
+.sbox-actions-spacer {
+	flex: 1 1 auto;
+	min-width: 24px;
+}
 .sbox-rulesets-action {
-	margin-left: auto;
+	flex: 0 0 auto;
 }
 .sbox-muted {
 	color: var(--sbox-muted);
@@ -748,9 +752,6 @@
 	}
 	.sbox-subscription-actions {
 		justify-content: flex-start;
-	}
-	.sbox-rulesets-action {
-		margin-left: 0;
 	}
 	.sbox-modal-wide {
 		width: min(98vw, 980px);

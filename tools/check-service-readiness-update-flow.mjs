@@ -131,5 +131,25 @@ check(update.includes('write_status()') && update.includes('run_job()'),
 check(update.includes('case "${1:-}" in') && update.includes('status)') && update.includes('clear-status)'),
 	'Update script must expose status and clear-status commands.');
 
+const installAppStart = update.indexOf('\ninstall_app()');
+const installKernelStart = update.indexOf('\ninstall_kernel()');
+const dispatchStart = update.indexOf('\ncase "${1:-}" in');
+const installAppBlock = installAppStart >= 0 && installKernelStart > installAppStart
+	? update.slice(installAppStart, installKernelStart)
+	: '';
+const installKernelBlock = installKernelStart >= 0 && dispatchStart > installKernelStart
+	? update.slice(installKernelStart, dispatchStart)
+	: '';
+check(update.includes('cleanup_legacy_output_guard()') &&
+	update.includes('MICLASH_GUARD_OUTPUT') &&
+	update.includes('-D OUTPUT -j "$legacy_output_chain"'),
+	'Update script must remove stale legacy OUTPUT guard state before network downloads.');
+check(installAppBlock.indexOf('cleanup_legacy_output_guard') >= 0 &&
+	installAppBlock.indexOf('cleanup_legacy_output_guard') < installAppBlock.indexOf('download_file "$url" "$tmp" "MiClash package"'),
+	'App update must clean the legacy OUTPUT guard before downloading the MiClash package.');
+check(installKernelBlock.indexOf('cleanup_legacy_output_guard') >= 0 &&
+	installKernelBlock.indexOf('cleanup_legacy_output_guard') < installKernelBlock.indexOf('download_file "$url" "$download" "mihomo kernel"'),
+	'Kernel update must clean the legacy OUTPUT guard before downloading the mihomo kernel.');
+
 if (failed) process.exit(1);
 console.log('service readiness and update flow check passed');

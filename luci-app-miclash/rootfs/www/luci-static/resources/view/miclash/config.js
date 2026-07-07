@@ -1970,9 +1970,9 @@ function buildPageHtml() {
 						'<select id="sbox-config-select" class="cbi-input-select sbox-select">' + buildConfigOptionsHtml() + '</select>' +
 						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
 						'<div class="sbox-subscription-actions">' +
-							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-neutral sbox-subscription-action">' + safeText(_('Save')) + '</button>' +
-							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-positive sbox-subscription-action">' + safeText(_('Update')) + '</button>' +
-							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-neutral sbox-url-clear-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '">x</button>' +
+							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-positive sbox-subscription-action">' + safeText(_('Save')) + '</button>' +
+							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action">' + safeText(_('Update')) + '</button>' +
+							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '">x</button>' +
 						'</div>' +
 					'</div>' +
 					'<div id="miclash-editor" class="sbox-editor"></div>' +
@@ -1981,6 +1981,7 @@ function buildPageHtml() {
 						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
 						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear')) + '</button>' +
 						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
+						'<span class="sbox-actions-spacer" aria-hidden="true"></span>' +
 						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral sbox-rulesets-action">' + safeText(_('Rulesets')) + '</button>' +
 					'</div>' +
 				'</div>' +
