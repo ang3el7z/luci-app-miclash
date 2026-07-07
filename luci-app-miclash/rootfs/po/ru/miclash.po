@@ -1268,3 +1268,72 @@ msgstr "Запуск задачи службы..."
 
 msgid "Updating service status..."
 msgstr "Обновление статуса службы..."
+
+msgid "Check config.yaml if the operation was related to config."
+msgstr "Проверьте config.yaml, если операция была связана с конфигурацией."
+
+msgid "Check internet access on the router if the operation was related to download or update."
+msgstr "Проверьте доступ роутера к интернету, если операция была связана со скачиванием или обновлением."
+
+msgid "Clash service started successfully."
+msgstr "Служба Clash успешно запущена."
+
+msgid "Clash service stopped successfully."
+msgstr "Служба Clash успешно остановлена."
+
+msgid "Copied"
+msgstr "Скопировано"
+
+msgid "Copy error"
+msgstr "Скопировать ошибку"
+
+msgid "Dismiss"
+msgstr "Закрыть"
+
+msgid "Error details"
+msgstr "Подробности ошибки"
+
+msgid "Operation failed"
+msgstr "Операция завершилась ошибкой"
+
+msgid "Preparing MiClash package update..."
+msgstr "Подготовка обновления пакета MiClash..."
+
+msgid "Preparing Mihomo kernel update..."
+msgstr "Подготовка обновления ядра Mihomo..."
+
+msgid "Reinstall MiClash if nothing else helped."
+msgstr "Переустановите MiClash, если ничего не помогло."
+
+msgid "Saving configuration..."
+msgstr "Сохранение конфигурации..."
+
+msgid "Saving IP-CIDR list..."
+msgstr "Сохранение списка IP-CIDR..."
+
+msgid "Saving ruleset..."
+msgstr "Сохранение списка правил..."
+
+msgid "Saving settings..."
+msgstr "Сохранение настроек..."
+
+msgid "Saving subscription URL..."
+msgstr "Сохранение URL подписки..."
+
+msgid "Setting selected config as Main..."
+msgstr "Назначение выбранной конфигурации основной..."
+
+msgid "Show error details"
+msgstr "Показать подробности ошибки"
+
+msgid "Switching proxy mode..."
+msgstr "Переключение режима прокси..."
+
+msgid "Try again."
+msgstr "Попробуйте ещё раз."
+
+msgid "Validating YAML..."
+msgstr "Проверка YAML..."
+
+msgid "You can"
+msgstr "Вы можете"

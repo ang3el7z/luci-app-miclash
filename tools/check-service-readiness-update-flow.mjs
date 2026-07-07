@@ -39,8 +39,11 @@ check(config.includes('id="sbox-operation-status"'),
 	'Control row must render the operation status line next to service buttons.');
 check(config.includes('function setOperationStatus(') && config.includes('function clearOperationStatus('),
 	'UI must expose operation status set/clear helpers.');
-check(config.includes('function getOperationRecommendation('),
-	'UI must map failures to actionable recommendations.');
+check(config.includes('function showOperationErrorDetails(') &&
+	config.includes('async function copyOperationErrorDetail(') &&
+	config.includes('detail:') &&
+	config.includes('showCloseAt:'),
+	'UI must keep full operation error details with a copyable details modal.');
 check(config.includes('startMiClashServiceJob') && config.includes('pollMiClashServiceJob'),
 	'Start/stop/restart UI must use detached service jobs and polling.');
 check(config.includes('readMiClashServiceState') && config.includes("['state']"),

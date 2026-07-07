@@ -1212,3 +1212,72 @@ msgstr "正在启动服务任务..."
 
 msgid "Updating service status..."
 msgstr "正在更新服务状态..."
+
+msgid "Check config.yaml if the operation was related to config."
+msgstr "如果操作与配置有关，请检查 config.yaml。"
+
+msgid "Check internet access on the router if the operation was related to download or update."
+msgstr "如果操作与下载或更新有关，请检查路由器的互联网连接。"
+
+msgid "Clash service started successfully."
+msgstr "Clash 服务已成功启动。"
+
+msgid "Clash service stopped successfully."
+msgstr "Clash 服务已成功停止。"
+
+msgid "Copied"
+msgstr "已复制"
+
+msgid "Copy error"
+msgstr "复制错误"
+
+msgid "Dismiss"
+msgstr "关闭"
+
+msgid "Error details"
+msgstr "错误详情"
+
+msgid "Operation failed"
+msgstr "操作失败"
+
+msgid "Preparing MiClash package update..."
+msgstr "正在准备 MiClash 软件包更新..."
+
+msgid "Preparing Mihomo kernel update..."
+msgstr "正在准备 Mihomo 内核更新..."
+
+msgid "Reinstall MiClash if nothing else helped."
+msgstr "如果仍无法解决，请重新安装 MiClash。"
+
+msgid "Saving configuration..."
+msgstr "正在保存配置..."
+
+msgid "Saving IP-CIDR list..."
+msgstr "正在保存 IP-CIDR 列表..."
+
+msgid "Saving ruleset..."
+msgstr "正在保存规则集..."
+
+msgid "Saving settings..."
+msgstr "正在保存设置..."
+
+msgid "Saving subscription URL..."
+msgstr "正在保存订阅 URL..."
+
+msgid "Setting selected config as Main..."
+msgstr "正在将所选配置设为主配置..."
+
+msgid "Show error details"
+msgstr "显示错误详情"
+
+msgid "Switching proxy mode..."
+msgstr "正在切换代理模式..."
+
+msgid "Try again."
+msgstr "请重试。"
+
+msgid "Validating YAML..."
+msgstr "正在验证 YAML..."
+
+msgid "You can"
+msgstr "你可以"
