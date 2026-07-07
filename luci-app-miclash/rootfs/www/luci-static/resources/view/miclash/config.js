@@ -2046,13 +2046,14 @@ function updateHeaderAndControlDom() {
 			operationStatus.hidden = false;
 			operationStatus.className = 'sbox-operation-status sbox-operation-status-' + type;
 			operationStatus.innerHTML =
+				'<span class="sbox-operation-status-content">' +
 				'<span class="sbox-operation-status-message">' + safeText(state.message) + '</span>' +
 				(type === 'error' && detail
 					? '<button type="button" class="sbox-operation-status-action sbox-operation-status-detail" title="' + safeText(_('Show error details')) + '" aria-label="' + safeText(_('Show error details')) + '">i</button>'
 					: '') +
+				'</span>' +
 				(state.dismissible
-					? '<span class="sbox-operation-status-spacer" aria-hidden="true"></span>' +
-						'<button type="button" class="sbox-operation-status-action sbox-operation-status-close"' + (canShowClose ? '' : ' hidden') + ' title="' + safeText(_('Dismiss')) + '" aria-label="' + safeText(_('Dismiss')) + '">x</button>'
+					? '<button type="button" class="sbox-operation-status-action sbox-operation-status-close"' + (canShowClose ? '' : ' hidden') + ' title="' + safeText(_('Dismiss')) + '" aria-label="' + safeText(_('Dismiss')) + '">x</button>'
 					: '');
 			operationStatus.title = state.message;
 

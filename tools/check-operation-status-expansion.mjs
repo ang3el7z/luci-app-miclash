@@ -64,12 +64,19 @@ check(config.includes('sbox-operation-status-detail') &&
 check(style.includes('.sbox-operation-status-detail') &&
 	style.includes('.sbox-operation-status-close'),
 	'Operation status detail and close controls must be styled.');
-check(operationStatusRenderBlock.indexOf('sbox-operation-status-spacer') >= 0 &&
-	operationStatusRenderBlock.indexOf('sbox-operation-status-spacer') < operationStatusRenderBlock.indexOf('sbox-operation-status-close'),
-	'Operation status close control must be pinned after a flex spacer.');
-check(style.includes('.sbox-operation-status-spacer') &&
-	style.includes('flex: 1 1 auto;'),
-	'Operation status spacer must stretch before the close control.');
+check(operationStatusRenderBlock.indexOf('sbox-operation-status-content') >= 0 &&
+	operationStatusRenderBlock.indexOf('sbox-operation-status-message') < operationStatusRenderBlock.indexOf('sbox-operation-status-detail') &&
+	operationStatusRenderBlock.indexOf('sbox-operation-status-detail') < operationStatusRenderBlock.indexOf('sbox-operation-status-close'),
+	'Operation status detail control must stay inline after the message before the close control.');
+check(!operationStatusRenderBlock.includes('sbox-operation-status-spacer') &&
+	!style.includes('.sbox-operation-status-spacer'),
+	'Operation status must not use a spacer between details and close.');
+check(style.includes('.sbox-operation-status-content') &&
+	style.includes('position: relative;') &&
+	style.includes('position: absolute;') &&
+	style.includes('right: 10px;') &&
+	style.includes('top: 5px;'),
+	'Operation status close control must be pinned to the top-right corner.');
 check(style.includes('.sbox-operation-error-detail'),
 	'Full error detail block must be styled.');
 
