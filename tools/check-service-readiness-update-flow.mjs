@@ -33,6 +33,12 @@ function count(text, pattern) {
 	return matches ? matches.length : 0;
 }
 
+function blockBetween(startNeedle, endNeedle, source = config) {
+	const start = source.indexOf(startNeedle);
+	const end = source.indexOf(endNeedle, start + startNeedle.length);
+	return start >= 0 && end > start ? source.slice(start, end) : '';
+}
+
 check(config.includes('operationStatus: null'),
 	'UI state must keep a persistent operationStatus value.');
 check(config.includes('id="sbox-operation-status"'),
@@ -76,11 +82,24 @@ const updateStatusEnd = config.indexOf('async function clearMiClashUpdateStatus'
 const updateStatusBlock = updateStatusStart >= 0 && updateStatusEnd > updateStatusStart
 	? config.slice(updateStatusStart, updateStatusEnd)
 	: '';
+const resumeUpdateBlock = blockBetween(
+	'async function resumeMiClashUpdateJobStatus()',
+	'async function resumeMiClashServiceJobStatus()'
+);
 check(
 	updateStatusBlock.indexOf('if (translated) return translated;') >= 0 &&
 		updateStatusBlock.indexOf('const message =') > updateStatusBlock.indexOf('if (translated) return translated;'),
 	'Update status UI must prefer translated phase labels before raw job messages.'
 );
+check(resumeUpdateBlock.includes("if (state === 'running')") &&
+	resumeUpdateBlock.includes('pollMiClashUpdateJob'),
+	'Update status resume must continue actively running update jobs.');
+check(!resumeUpdateBlock.includes("if (state === 'failed')") &&
+	!resumeUpdateBlock.includes("setOperationError(new Error(status.message || _('Update failed.')))"),
+	'Update status resume must not resurrect stale failed update errors from /tmp.');
+check(resumeUpdateBlock.includes("if (state === 'failed' || state === 'success')") &&
+	resumeUpdateBlock.includes('await clearMiClashUpdateStatus();'),
+	'Update status resume must clear completed failed/success update status files.');
 
 check(style.includes('.sbox-operation-status') &&
 	style.includes('.sbox-operation-status-error') &&

@@ -694,11 +694,8 @@ async function resumeMiClashUpdateJobStatus() {
 		await pollMiClashUpdateJob(formatMiClashUpdateStatus(status, _('Updating MiClash...')));
 		return;
 	}
-	if (state === 'failed') {
-		setOperationError(new Error(status.message || _('Update failed.')));
-		return;
-	}
-	if (state === 'success') {
+	if (state === 'failed' || state === 'success') {
+		await clearMiClashUpdateStatus();
 		clearOperationStatus();
 	}
 }
