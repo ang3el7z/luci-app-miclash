@@ -4,7 +4,7 @@
         "read": {
             "file": {
                 "/etc/openwrt_release": [ "read" ],
-                "/opt/clash/config.yaml": [ "read" ],
+                "/opt/clash/config.yaml": [ "read", "stat" ],
                 "/opt/clash/settings": [ "read" ],
                 "/opt/clash/bin/clash": [ "read", "stat", "exec" ],
                 "/opt/clash/bin/clash-rules": [ "read", "stat", "exec" ],
@@ -32,8 +32,8 @@
                 "/usr/lib/opkg/status": [ "read" ],
                 "/usr/lib/apk/db/installed": [ "read" ],
                 "/lib/apk/db/installed": [ "read" ],
-                "/opt/clash/config2.yaml": [ "read" ],
-                "/opt/clash/config3.yaml": [ "read" ],
+                "/opt/clash/config2.yaml": [ "read", "stat" ],
+                "/opt/clash/config3.yaml": [ "read", "stat" ],
                 "/tmp/miclash-*": [ "read", "stat" ],
                 "/bin/opkg": [ "exec" ],
                 "/usr/bin/opkg": [ "exec" ],
@@ -47,7 +47,7 @@
         },
         "write": {
             "file": {
-                "/opt/clash/config.yaml": [ "write" ],
+                "/opt/clash/config.yaml": [ "write", "stat" ],
                 "/opt/clash/settings": [ "write" ],
                 "/opt/clash/bin/clash": [ "write" ],
                 "/opt/clash/lst/*.txt": [ "write", "remove" ],
@@ -65,8 +65,8 @@
                 "/bin/chmod": [ "exec" ],
                 "/bin/rm": [ "exec" ],
                 "/bin/mkdir": [ "exec" ],
-                "/opt/clash/config2.yaml": [ "write" ],
-                "/opt/clash/config3.yaml": [ "write" ],
+                "/opt/clash/config2.yaml": [ "write", "stat" ],
+                "/opt/clash/config3.yaml": [ "write", "stat" ],
                 "/tmp/miclash-*": [ "write", "remove" ],
                 "/usr/bin/chmod": [ "exec" ],
                 "/usr/bin/logger": [ "exec" ]

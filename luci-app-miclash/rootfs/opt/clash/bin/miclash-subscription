@@ -148,7 +148,7 @@ download_subscription() {
 	return 0
 }
 
-raw_github_cdn_fallback_url() {
+raw_github_cdn_path() {
 	raw_url="$1"
 	case "$raw_url" in
 		https://raw.githubusercontent.com/*|http://raw.githubusercontent.com/*) ;;
@@ -168,7 +168,30 @@ raw_github_cdn_fallback_url() {
 	[ "$raw_path" != "$raw_after_repo" ] || return 1
 	[ -n "$raw_owner" ] && [ -n "$raw_repo" ] && [ -n "$raw_branch" ] && [ -n "$raw_path" ] || return 1
 
-	printf 'https://cdn.jsdelivr.net/gh/%s/%s@%s/%s' "$raw_owner" "$raw_repo" "$raw_branch" "$raw_path"
+	printf '%s/%s@%s/%s' "$raw_owner" "$raw_repo" "$raw_branch" "$raw_path"
+}
+
+raw_github_cdn_fallback_url() {
+	raw_cdn_path="$(raw_github_cdn_path "$1" 2>/dev/null || true)"
+	[ -n "$raw_cdn_path" ] || return 1
+	printf 'https://cdn.jsdelivr.net/gh/%s' "$raw_cdn_path"
+}
+
+raw_github_cdn_purge_url() {
+	raw_cdn_path="$(raw_github_cdn_path "$1" 2>/dev/null || true)"
+	[ -n "$raw_cdn_path" ] || return 1
+	printf 'https://purge.jsdelivr.net/gh/%s' "$raw_cdn_path"
+}
+
+purge_raw_github_cdn_fallback() {
+	raw_purge_url="$(raw_github_cdn_purge_url "$1" 2>/dev/null || true)"
+	[ -n "$raw_purge_url" ] || return 0
+	"$CURL_BIN" -L -fsS \
+		--connect-timeout "$CURL_CONNECT_TIMEOUT" \
+		--max-time 20 \
+		-A "$USER_AGENT" \
+		"$raw_purge_url" \
+		-o /dev/null >/dev/null 2>/dev/null || true
 }
 
 looks_like_uri_subscription() {
@@ -235,6 +258,7 @@ download_primary_or_fallback() {
 
 	raw_github_fallback="$(raw_github_cdn_fallback_url "$URL" 2>/dev/null || true)"
 	if [ -n "$raw_github_fallback" ]; then
+		purge_raw_github_cdn_fallback "$URL"
 		if download_subscription "$raw_github_fallback" "$TMP_DOWNLOAD" "github-raw-cdn"; then
 			MODE="github-raw-cdn"
 			return 0

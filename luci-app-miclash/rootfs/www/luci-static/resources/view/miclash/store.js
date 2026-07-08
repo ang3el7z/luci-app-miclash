@@ -4,6 +4,7 @@
 
 const CONFIG_PATH = '/opt/clash/config.yaml';
 const CONFIG_DIR = '/opt/clash';
+const CONFIG_READ_CHUNK_LINES = 800;
 const MAIN_CONFIG_NAME = 'config.yaml';
 const CONFIG_PROFILES = [
 	{ name: 'config.yaml', label: 'Main Config #1' },
@@ -62,6 +63,49 @@ async function writeTextFile(path, content) {
 	await view_miclash_utils.writeFile(path, String(content || ''));
 }
 
+async function pathExists(path) {
+	return await L.resolveDefault(fs.stat(path), null) != null;
+}
+
+function countLines(text) {
+	if (!text) return 0;
+	const parts = String(text).split('\n');
+	return parts.length - (String(text).endsWith('\n') ? 1 : 0);
+}
+
+async function readLargeTextFile(path) {
+	if (!(await pathExists(path))) return null;
+
+	const chunks = [];
+	let startLine = 1;
+
+	while (true) {
+		const endLine = startLine + CONFIG_READ_CHUNK_LINES - 1;
+		const result = await fs.exec('/bin/sh', [
+			'-c',
+			'sed -n "${2},${3}p" "$1"',
+			'miclash-read-config',
+			path,
+			String(startLine),
+			String(endLine)
+		]);
+
+		if (result.code !== 0) {
+			throw new Error(String(result.stderr || result.stdout || 'Unable to read config file').trim());
+		}
+
+		const chunk = String(result.stdout || '');
+		const linesRead = countLines(chunk);
+		if (!chunk) break;
+
+		chunks.push(chunk);
+		if (linesRead < CONFIG_READ_CHUNK_LINES) break;
+		startLine += CONFIG_READ_CHUNK_LINES;
+	}
+
+	return chunks.join('');
+}
+
 async function readSettingsMap() {
 	try {
 		return parseSettingsToMap(await fs.read(SETTINGS_PATH));
@@ -77,7 +121,8 @@ async function writeSettingsMap(map) {
 async function readConfigFileByName(name) {
 	const path = getConfigPathByName(name);
 	await setFileMode(path);
-	return String(await L.resolveDefault(fs.read(path), ''));
+	const content = await readLargeTextFile(path);
+	return String(content || '');
 }
 
 async function writeConfigFileByName(name, content) {
@@ -89,7 +134,7 @@ async function writeConfigFileByName(name, content) {
 
 async function ensureConfigProfilesReady(seedMainContent) {
 	const mainPath = getConfigPathByName(MAIN_CONFIG_NAME);
-	let mainContent = await L.resolveDefault(fs.read(mainPath), null);
+	let mainContent = await readLargeTextFile(mainPath);
 	if (mainContent == null) {
 		mainContent = String(seedMainContent || '');
 		await writeTextFile(mainPath, String(mainContent).trimEnd() + '\n');
@@ -99,8 +144,7 @@ async function ensureConfigProfilesReady(seedMainContent) {
 	for (let i = 0; i < CONFIG_PROFILES.length; i++) {
 		const profile = CONFIG_PROFILES[i];
 		const path = getConfigPathByName(profile.name);
-		const existing = await L.resolveDefault(fs.read(path), null);
-		if (existing == null) {
+		if (!(await pathExists(path))) {
 			await writeTextFile(path, String(mainContent || '').trimEnd() + '\n');
 		}
 		await setFileMode(path);
@@ -141,6 +185,8 @@ return L.Class.extend({
 	getConfigLabel: getConfigLabel,
 	getConfigPathByName: getConfigPathByName,
 	setFileMode: setFileMode,
+	pathExists: pathExists,
+	readLargeTextFile: readLargeTextFile,
 	writeTextFile: writeTextFile,
 	readSettingsMap: readSettingsMap,
 	writeSettingsMap: writeSettingsMap,
