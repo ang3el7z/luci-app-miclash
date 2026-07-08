@@ -216,6 +216,79 @@ async function downloadWithProfile(url, profile, deviceHeaders, mode) {
 	return { content: String(catResult.stdout || ''), profileUpdateIntervalHours: readProfileUpdateIntervalHours(headers) };
 }
 
+function parseKeyValueStatus(raw) {
+	const status = {};
+	String(raw || '').split(/\r?\n/).forEach((line) => {
+		const idx = line.indexOf('=');
+		if (idx <= 0) return;
+		status[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+	});
+	return status;
+}
+
+async function buildSubscriptionHelperArgs(command, options) {
+	const opts = options || {};
+	const url = String(opts.url || '').trim();
+	if (!url) throw new Error(_('Subscription URL is empty.'));
+
+	const settings = opts.settings || {};
+	const resolved = normalizeDownloadUrl(url);
+	const profile = buildClientProfile(settings, opts.appVersion);
+	const deviceHeaders = await buildDeviceHeaders(settings);
+	const args = [
+		command,
+		'--url', resolved.url,
+		'--mode', resolved.mode,
+		'--fallback-on-error', resolved.fallbackOnError ? '1' : '0',
+		'--user-agent', profile.ua
+	];
+
+	if (command === 'apply') {
+		args.push('--target');
+		args.push(view_miclash_store.normalizeConfigProfileName(opts.targetName));
+		args.push('--proxy-mode');
+		args.push(opts.proxyMode || 'tproxy');
+		args.push('--tun-stack');
+		args.push(opts.tunStack || 'system');
+	}
+
+	if (resolved.remnawaveCandidateUrl) {
+		args.push('--fallback-url');
+		args.push(resolved.remnawaveCandidateUrl);
+	}
+
+	Object.keys(deviceHeaders || {}).forEach((key) => {
+		const value = String(deviceHeaders[key] || '').trim().replace(/[\r\n]+/g, ' ');
+		if (!value) return;
+		args.push('--header');
+		args.push(key + ': ' + value);
+	});
+
+	return args;
+}
+
+async function applySubscriptionOnRouter(options) {
+	const args = await buildSubscriptionHelperArgs('apply', options);
+	await view_miclash_package.ensureCurlAvailable();
+	const result = await fs.exec('/opt/clash/bin/miclash-subscription', args);
+	if (result.code !== 0) {
+		throw new Error(String(result.stderr || result.stdout || 'Failed to apply subscription.').trim());
+	}
+
+	return parseKeyValueStatus(result.stdout || '');
+}
+
+async function probeSubscriptionUpdateIntervalOnRouter(options) {
+	const args = await buildSubscriptionHelperArgs('probe-interval', options);
+	await view_miclash_package.ensureCurlAvailable();
+	const result = await fs.exec('/opt/clash/bin/miclash-subscription', args);
+	if (result.code !== 0) {
+		throw new Error(String(result.stderr || result.stdout || 'Failed to probe subscription update interval.').trim());
+	}
+
+	return parseKeyValueStatus(result.stdout || '');
+}
+
 async function cleanupTemp() {
 	try {
 		await fs.remove(TMP_SUBSCRIPTION_PATH);
@@ -288,6 +361,8 @@ return L.Class.extend({
 	normalizeDownloadUrl: normalizeDownloadUrl,
 	buildDeviceHeaders: buildDeviceHeaders,
 	downloadWithProfile: downloadWithProfile,
+	applySubscriptionOnRouter: applySubscriptionOnRouter,
+	probeSubscriptionUpdateIntervalOnRouter: probeSubscriptionUpdateIntervalOnRouter,
 	readProfileUpdateIntervalHours: readProfileUpdateIntervalHours,
 	cleanupTemp: cleanupTemp,
 	testConfigContent: testConfigContent

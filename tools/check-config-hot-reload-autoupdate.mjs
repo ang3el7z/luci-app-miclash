@@ -76,8 +76,9 @@ check(!subscription.includes('SUPPORTED_PROFILE_UPDATE_INTERVAL_HOURS') &&
 	subscription.includes('value > 0 ? String(value)'),
 	'Subscription Profile-Update-Interval must accept provider-supplied positive hour values such as 3.');
 check(config.includes('applySubscriptionProfileUpdateInterval') &&
-	config.includes('downloadedInfo.profileUpdateIntervalHours'),
-	'Config update flow must persist a supported Profile-Update-Interval value from subscription downloads.');
+	config.includes('appliedInfo.profileUpdateIntervalHours') &&
+	config.includes('intervalInfo.profileUpdateIntervalHours'),
+	'Config update/probe flows must persist a supported Profile-Update-Interval value from router-side subscription downloads.');
 check(config.includes('AUTO_UPDATE_PRESET_INTERVAL_HOURS') &&
 	config.includes("['2', '4', '12', '24']") &&
 	config.includes('buildAutoUpdateIntervalChoicesHtml') &&
@@ -107,10 +108,11 @@ check(config.includes('id="sbox-auto-update-config"') &&
 	'Settings pane must expose auto-update checkbox and interval choices.');
 check(config.includes('async function probeAutoUpdateIntervalFromSubscription()') &&
 	config.includes('readSubscriptionUrl(MAIN_CONFIG_NAME)') &&
-	config.includes('downloadSubscriptionWithProfile') &&
-	config.includes('applySubscriptionProfileUpdateInterval(downloadedInfo.profileUpdateIntervalHours)') &&
+	config.includes('probeSubscriptionUpdateIntervalOnRouter') &&
+	config.includes('applySubscriptionProfileUpdateInterval(intervalInfo.profileUpdateIntervalHours)') &&
+	!blockBetween('async function probeAutoUpdateIntervalFromSubscription()', 'async function testConfigContent', config).includes('downloadSubscriptionWithProfile') &&
 	config.includes("setOperationStatus('running', _('Checking subscription update interval...'))"),
-	'Settings pane must probe subscription Profile-Update-Interval when enabling auto-update without a stored interval.');
+	'Settings pane must probe subscription Profile-Update-Interval through the router-side helper when enabling auto-update without a stored interval.');
 check(config.includes('syncAutoUpdateInterval = async () =>') &&
 	config.includes('autoUpdateConfigEl.checked && !(appState.settings && appState.settings.autoUpdateIntervalStored)') &&
 	config.includes('await probeAutoUpdateIntervalFromSubscription();') &&
