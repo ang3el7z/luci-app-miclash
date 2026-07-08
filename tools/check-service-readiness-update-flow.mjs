@@ -164,9 +164,10 @@ check(serviceJob.includes('state)'),
 	'Service job script must expose a state command.');
 check(makefile.includes('rootfs/opt/clash/bin/miclash-service'),
 	'Package install must include the service job script.');
-check(makefile.includes('rm -rf /tmp/luci-indexcache /tmp/luci-modulecache') &&
+check(makefile.includes('rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*') &&
+	!makefile.includes('rm -rf /tmp/luci-indexcache /tmp/luci-modulecache') &&
 	!makefile.includes('rm -f /tmp/luci-*'),
-	'Package postinst must clear only LuCI index/module caches after install.');
+	'Package postinst must clear only LuCI index/module cache patterns after install.');
 check(acl.includes('"/opt/clash/bin/miclash-service": [ "read", "stat", "exec" ]'),
 	'ACL read permissions must allow LuCI to inspect and execute miclash-service.');
 check(acl.includes('"/opt/clash/bin/miclash-service": [ "exec" ]'),
