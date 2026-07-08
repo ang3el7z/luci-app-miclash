@@ -10,6 +10,7 @@ STATUS_OUT="/tmp/miclash-service/stdout"
 STATUS_ERR="/tmp/miclash-service/stderr"
 CLASH_INIT="/etc/init.d/clash"
 CLASH_RULES="/opt/clash/bin/clash-rules"
+CONFIG_FILE="/opt/clash/config.yaml"
 READY_TIMEOUT_SEC=180
 STOP_TIMEOUT_SEC=60
 POLL_INTERVAL_SEC=1
@@ -203,6 +204,63 @@ is_service_running() {
 	pidof clash >/dev/null 2>&1
 }
 
+config_value() {
+	key="$1"
+	[ -f "$CONFIG_FILE" ] || return 1
+	sed -n "s/^[[:space:]]*$key[[:space:]]*:[[:space:]]*//p" "$CONFIG_FILE" |
+		sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//' |
+		head -n 1 |
+		tr -d "\"'"
+}
+
+config_port() {
+	value="$1"
+	fallback="$2"
+	cleaned="$(printf '%s' "$value" | tr -d "\"'" | sed 's/^\[//; s/\]$//')"
+	case "$cleaned" in
+		*:*) port="${cleaned##*:}" ;;
+		*) port="$fallback" ;;
+	esac
+	port="$(printf '%s' "$port" | sed 's/[^0-9]//g')"
+	[ -n "$port" ] && echo "$port" || echo "$fallback"
+}
+
+hot_reload_config() {
+	command -v curl >/dev/null 2>&1 || fail "curl is not installed"
+	[ -f "$CONFIG_FILE" ] || fail "config file is missing: $CONFIG_FILE"
+
+	ec="$(config_value "external-controller")"
+	ec_tls="$(config_value "external-controller-tls")"
+	secret="$(config_value "secret")"
+
+	scheme="http"
+	port="$(config_port "$ec" "9090")"
+	if [ -n "$ec_tls" ]; then
+		scheme="https"
+		port="$(config_port "$ec_tls" "9090")"
+	fi
+
+	url="$scheme://127.0.0.1:$port/configs?force=true"
+	body='{"path":"'"$CONFIG_FILE"'"}'
+	write_status running api "Sending configuration reload to Mihomo API"
+
+	if [ "$scheme" = "https" ]; then
+		if [ -n "$secret" ]; then
+			output="$(curl -fsS -k --connect-timeout 2 --max-time 8 -X PUT -H "Content-Type: application/json" -H "Authorization: Bearer $secret" -d "$body" "$url" 2>&1)"
+		else
+			output="$(curl -fsS -k --connect-timeout 2 --max-time 8 -X PUT -H "Content-Type: application/json" -d "$body" "$url" 2>&1)"
+		fi
+	else
+		if [ -n "$secret" ]; then
+			output="$(curl -fsS --connect-timeout 2 --max-time 8 -X PUT -H "Content-Type: application/json" -H "Authorization: Bearer $secret" -d "$body" "$url" 2>&1)"
+		else
+			output="$(curl -fsS --connect-timeout 2 --max-time 8 -X PUT -H "Content-Type: application/json" -d "$body" "$url" 2>&1)"
+		fi
+	fi
+
+	[ "$?" -eq 0 ] || fail "failed to reload Mihomo configuration: $output"
+}
+
 stage_message() {
 	case "$1" in
 		process) echo "Checking Clash service process" ;;
@@ -297,10 +355,10 @@ run_service_action() {
 			echo "Clash service restarted"
 			;;
 		reload)
-			write_status running reload "Reloading Clash service"
-			"$CLASH_INIT" reload || fail "failed to reload Clash service"
+			write_status running reload "Reloading Mihomo configuration"
+			hot_reload_config
 			wait_ready
-			echo "Clash service reloaded"
+			echo "Mihomo configuration reloaded"
 			;;
 		wait-ready|health)
 			CURRENT_ACTION="health"

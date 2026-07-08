@@ -1308,3 +1308,24 @@ msgstr "订阅 URL 已保存。"
 
 msgid "Update"
 msgstr "更新"
+
+msgid "Auto-update config"
+msgstr "自动更新配置"
+
+msgid "Configuration applied and Mihomo reloaded."
+msgstr "配置已应用，Mihomo 已重新加载。"
+
+msgid "Every 2 hours"
+msgstr "每 2 小时"
+
+msgid "Every 4 hours"
+msgstr "每 4 小时"
+
+msgid "Every 12 hours"
+msgstr "每 12 小时"
+
+msgid "Every 24 hours"
+msgstr "每 24 小时"
+
+msgid "Reloading Mihomo configuration..."
+msgstr "正在重新加载 Mihomo 配置..."

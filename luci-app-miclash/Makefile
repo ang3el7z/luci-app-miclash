@@ -76,6 +76,7 @@ endef
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./rootfs/etc/init.d/clash $(1)/etc/init.d/
+	$(INSTALL_BIN) ./rootfs/etc/init.d/miclash-autoupdate $(1)/etc/init.d/
 
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
 	$(INSTALL_BIN) ./rootfs/etc/hotplug.d/iface/40-clash $(1)/etc/hotplug.d/iface/
@@ -86,6 +87,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/clash-rules $(1)/opt/clash/bin/
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-update $(1)/opt/clash/bin/
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-service $(1)/opt/clash/bin/
+	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-autoupdate $(1)/opt/clash/bin/
 
 	$(INSTALL_DIR) $(1)/opt/clash
 	$(INSTALL_DATA) ./rootfs/opt/clash/config.yaml $(1)/opt/clash/
@@ -148,6 +150,11 @@ fi
 		/etc/init.d/clash disable 2>/dev/null || true
 	fi
 
+	if [ -x /etc/init.d/miclash-autoupdate ]; then
+		/etc/init.d/miclash-autoupdate enable >/dev/null 2>&1 || true
+		/etc/init.d/miclash-autoupdate start >/dev/null 2>&1 || true
+	fi
+
 	# Ensure periodic clash-rules update cron job exists
 	CRON_FILE="/etc/crontabs/root"
 	CRON_LINE="*/30 * * * * /opt/clash/bin/clash-rules update >/dev/null 2>&1"
@@ -164,6 +171,7 @@ endef
 define Package/$(PKG_NAME)/prerm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
+	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate stop >/dev/null 2>&1 || true
 	[ -x /etc/init.d/clash ] && /etc/init.d/clash stop >/dev/null 2>&1 || true
 	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || true
 }
@@ -188,6 +196,8 @@ define Package/$(PKG_NAME)/postrm
 	}
 
 	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || true
+	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate stop >/dev/null 2>&1 || true
+	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate disable >/dev/null 2>&1 || true
 
 	# Clean up cron job for clash-rules update, if present
 	CRON_FILE="/etc/crontabs/root"
@@ -200,11 +210,13 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /opt/clash/ruleset
 	rm -f /opt/clash/.dns_backup
 	rm -rf /tmp/clash
+	rm -rf /tmp/miclash-autoupdate
 	rm -rf /www/luci-static/resources/view/miclash
 	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
 	rm -f /opt/clash/.config.yaml.upgrade.bak
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
+	rm -f /etc/init.d/miclash-autoupdate
 	rm -f /etc/apk/protected_paths.d/miclash.list
 
 	# Remove manually installed Mihomo core only on full package removal.

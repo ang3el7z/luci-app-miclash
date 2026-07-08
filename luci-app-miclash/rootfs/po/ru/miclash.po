@@ -1361,3 +1361,24 @@ msgstr "URL подписки очищен."
 
 msgid "Update"
 msgstr "Обновить"
+
+msgid "Auto-update config"
+msgstr "Автообновление конфига"
+
+msgid "Configuration applied and Mihomo reloaded."
+msgstr "Конфигурация применена, Mihomo перезагружен."
+
+msgid "Every 2 hours"
+msgstr "Каждые 2 часа"
+
+msgid "Every 4 hours"
+msgstr "Каждые 4 часа"
+
+msgid "Every 12 hours"
+msgstr "Каждые 12 часов"
+
+msgid "Every 24 hours"
+msgstr "Каждые 24 часа"
+
+msgid "Reloading Mihomo configuration..."
+msgstr "Перезагрузка конфигурации Mihomo..."

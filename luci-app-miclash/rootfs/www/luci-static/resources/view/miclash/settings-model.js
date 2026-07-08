@@ -318,6 +318,8 @@ function defaultOperationalSettings() {
 		internetOnlyMiclash: false,
 		useTmpfsRules: true,
 		autoHideNotifications: true,
+		autoUpdateConfig: true,
+		autoUpdateIntervalHours: '4',
 		miclashReleaseChannel: 'release',
 		mihomoReleaseChannel: 'release',
 		detectedLan: '',
@@ -328,6 +330,11 @@ function defaultOperationalSettings() {
 		hwidUserAgent: 'MiClash',
 		hwidDeviceOS: 'OpenWrt'
 	};
+}
+
+function normalizeAutoUpdateIntervalHours(value) {
+	const clean = String(value || '').trim();
+	return ['2', '4', '12', '24'].includes(clean) ? clean : '4';
 }
 
 async function loadOperationalSettings() {
@@ -351,6 +358,8 @@ async function loadOperationalSettings() {
 				case 'INTERNET_ONLY_MICLASH': settings.internetOnlyMiclash = value === 'true'; break;
 				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
 				case 'AUTO_HIDE_NOTIFICATIONS': settings.autoHideNotifications = value !== 'false'; break;
+				case 'AUTO_UPDATE_CONFIG': settings.autoUpdateConfig = value !== 'false'; break;
+				case 'AUTO_UPDATE_INTERVAL_HOURS': settings.autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(value); break;
 				case 'MICLASH_RELEASE_CHANNEL': settings.miclashReleaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
 				case 'MIHOMO_RELEASE_CHANNEL': settings.mihomoReleaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
 				case 'DETECTED_LAN': settings.detectedLan = value; break;
@@ -450,9 +459,10 @@ async function detectWanInterface() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
 	let detectedLan = '';
 	let detectedWan = '';
+	const cleanAutoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalHours);
 
 	if (autoDetectLan) detectedLan = await detectLanBridge() || '';
 	if (autoDetectWan) detectedWan = await detectWanInterface() || '';
@@ -477,6 +487,8 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 		'INTERNET_ONLY_MICLASH=' + internetOnlyMiclash,
 		'USE_TMPFS_RULES=' + useTmpfsRules,
 		'AUTO_HIDE_NOTIFICATIONS=' + (autoHideNotifications !== false),
+		'AUTO_UPDATE_CONFIG=' + (autoUpdateConfig !== false),
+		'AUTO_UPDATE_INTERVAL_HOURS=' + cleanAutoUpdateIntervalHours,
 		'MICLASH_RELEASE_CHANNEL=' + view_miclash_release.normalizeReleaseChannel(miclashReleaseChannel),
 		'MIHOMO_RELEASE_CHANNEL=' + view_miclash_release.normalizeReleaseChannel(mihomoReleaseChannel),
 		'DETECTED_LAN=' + detectedLan,

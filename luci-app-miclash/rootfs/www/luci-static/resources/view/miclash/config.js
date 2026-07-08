@@ -557,7 +557,7 @@ function formatMiClashServiceStatus(status, fallback) {
 		start: _('Starting Clash service...'),
 		stop: _('Stopping Clash service...'),
 		restart: _('Restarting Clash service...'),
-		reload: _('Reloading Clash service...'),
+		reload: _('Reloading Mihomo configuration...'),
 		process: _('Checking Clash service process...'),
 		api: _('Checking Clash API...'),
 		dns: _('Checking DNS...'),
@@ -1132,7 +1132,7 @@ async function checkServiceHealthOrThrow() {
 async function restartOrReloadServiceOrThrow(action, options) {
 	const opts = options || {};
 	const message = action === 'reload'
-		? _('Reloading Clash service...')
+		? _('Reloading Mihomo configuration...')
 		: _('Restarting Clash service...');
 	if (opts.onStage) opts.onStage(message);
 	return runMiClashServiceJob(action, message);
@@ -1159,6 +1159,23 @@ async function buildSubscriptionDeviceHeaders(settings) {
 
 async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode) {
 	return view_miclash_subscription.downloadWithProfile(url, profile, deviceHeaders, mode);
+}
+
+function normalizeAutoUpdateIntervalHours(value) {
+	const clean = String(value || '').trim();
+	return ['2', '4', '12', '24'].includes(clean) ? clean : '';
+}
+
+async function applySubscriptionProfileUpdateInterval(hours) {
+	const clean = normalizeAutoUpdateIntervalHours(hours);
+	if (!clean) return;
+
+	const settings = await readSettingsMap();
+	if (settings.AUTO_UPDATE_INTERVAL_HOURS === clean) return;
+
+	settings.AUTO_UPDATE_INTERVAL_HOURS = clean;
+	await writeSettingsMap(settings);
+	if (appState.settings) appState.settings.autoUpdateIntervalHours = clean;
 }
 
 async function testConfigContent(content, keepOnSuccess, targetPath) {
@@ -1192,10 +1209,13 @@ async function fetchSubscriptionAsYaml(url, targetPath) {
 	const resolved = normalizeSubscriptionDownloadUrl(url);
 	let mode = resolved.mode;
 	let payload = '';
+	let profileUpdateIntervalHours = '';
 	let primaryError = null;
 
 	try {
-		payload = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, mode);
+		const info = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, mode);
+		payload = String(info && info.content != null ? info.content : info || '');
+		profileUpdateIntervalHours = normalizeAutoUpdateIntervalHours(info && info.profileUpdateIntervalHours);
 	} catch (e) {
 		primaryError = e;
 	}
@@ -1207,12 +1227,14 @@ async function fetchSubscriptionAsYaml(url, targetPath) {
 
 	if (shouldTryFallback) {
 		try {
-			payload = await downloadSubscriptionWithProfile(
+			const info = await downloadSubscriptionWithProfile(
 				resolved.remnawaveCandidateUrl,
 				profile,
 				deviceHeaders,
 				'remnawave-client-path'
 			);
+			payload = String(info && info.content != null ? info.content : info || '');
+			profileUpdateIntervalHours = normalizeAutoUpdateIntervalHours(info && info.profileUpdateIntervalHours);
 			mode = 'remnawave-client-path';
 			primaryError = null;
 		} catch (fallbackError) {
@@ -1243,7 +1265,7 @@ async function fetchSubscriptionAsYaml(url, targetPath) {
 	const tested = await testConfigContent(payload, false, targetPath || CONFIG_PATH);
 	if (!tested.ok) throw new Error(tested.message || _('YAML validation failed.'));
 
-	return { content: payload, mode: mode };
+	return { content: payload, mode: mode, profileUpdateIntervalHours: profileUpdateIntervalHours };
 }
 
 async function openDashboard() {
@@ -1295,7 +1317,7 @@ async function openDashboard() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, options) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, options) {
 	const opts = options || {};
 	try {
 		await view_miclash_settings_model.saveOperationalSettings(
@@ -1313,7 +1335,9 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			hwidDeviceOS,
 			autoHideNotifications,
 			miclashReleaseChannel,
-			mihomoReleaseChannel
+			mihomoReleaseChannel,
+			autoUpdateConfig,
+			autoUpdateIntervalHours
 		);
 
 		if (!opts.silent) {
@@ -1355,6 +1379,8 @@ async function switchProxyModeFromHeader(targetMode) {
 		current.autoHideNotifications !== false,
 		current.miclashReleaseChannel || 'release',
 		current.mihomoReleaseChannel || 'release',
+		current.autoUpdateConfig !== false,
+		current.autoUpdateIntervalHours || '4',
 		{ silent: true }
 	);
 
@@ -1821,6 +1847,8 @@ function buildSettingsPaneHtml() {
 		internetOnlyMiclash: false,
 		useTmpfsRules: true,
 		autoHideNotifications: true,
+		autoUpdateConfig: true,
+		autoUpdateIntervalHours: '4',
 		miclashReleaseChannel: 'release',
 		mihomoReleaseChannel: 'release',
 		enableHwid: false,
@@ -1902,6 +1930,18 @@ function buildSettingsPaneHtml() {
 					'<input type="checkbox" id="sbox-auto-hide-notifications"' + (s.autoHideNotifications !== false ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Auto-hide notifications')) + '</span>' +
 				'</label>' +
+				'<div class="sbox-settings-field">' +
+					'<label class="sbox-checkbox-row">' +
+						'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
+						'<span>' + safeText(_('Auto-update config')) + '</span>' +
+					'</label>' +
+					'<select id="sbox-auto-update-interval" class="cbi-input-select sbox-select"' + (s.autoUpdateConfig !== false ? '' : ' disabled') + '>' +
+						'<option value="2"' + ((s.autoUpdateIntervalHours || '4') === '2' ? ' selected' : '') + '>' + safeText(_('Every 2 hours')) + '</option>' +
+						'<option value="4"' + ((s.autoUpdateIntervalHours || '4') === '4' ? ' selected' : '') + '>' + safeText(_('Every 4 hours')) + '</option>' +
+						'<option value="12"' + ((s.autoUpdateIntervalHours || '4') === '12' ? ' selected' : '') + '>' + safeText(_('Every 12 hours')) + '</option>' +
+						'<option value="24"' + ((s.autoUpdateIntervalHours || '4') === '24' ? ' selected' : '') + '>' + safeText(_('Every 24 hours')) + '</option>' +
+					'</select>' +
+				'</div>' +
 				'<div class="sbox-settings-field">' +
 					'<label>' + safeText(_('Release channels')) + '</label>' +
 					'<div class="sbox-release-channel-grid">' +
@@ -2228,6 +2268,10 @@ async function collectSettingsFormState() {
 	const useTmpfsRules = !!pane.querySelector('#sbox-tmpfs')?.checked;
 	const autoHideNotificationsEl = pane.querySelector('#sbox-auto-hide-notifications');
 	const autoHideNotifications = autoHideNotificationsEl ? !!autoHideNotificationsEl.checked : true;
+	const autoUpdateConfigEl = pane.querySelector('#sbox-auto-update-config');
+	const autoUpdateIntervalEl = pane.querySelector('#sbox-auto-update-interval');
+	const autoUpdateConfig = autoUpdateConfigEl ? !!autoUpdateConfigEl.checked : true;
+	const autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalEl?.value || '4') || '4';
 	const enableHwid = !!pane.querySelector('#sbox-enable-hwid')?.checked;
 	const hwidUserAgent = String(pane.querySelector('#sbox-hwid-user-agent')?.value || 'MiClash').trim() || 'MiClash';
 	const hwidDeviceOS = String(pane.querySelector('#sbox-hwid-device-os')?.value || 'OpenWrt').trim() || 'OpenWrt';
@@ -2253,6 +2297,8 @@ async function collectSettingsFormState() {
 		internetOnlyMiclash,
 		useTmpfsRules,
 		autoHideNotifications,
+		autoUpdateConfig,
+		autoUpdateIntervalHours,
 		selected,
 		enableHwid,
 		hwidUserAgent,
@@ -2273,6 +2319,16 @@ function bindSettingsPaneEvents() {
 			renderSettingsPane();
 		});
 	});
+
+	const autoUpdateConfigEl = pane.querySelector('#sbox-auto-update-config');
+	const autoUpdateIntervalEl = pane.querySelector('#sbox-auto-update-interval');
+	if (autoUpdateConfigEl && autoUpdateIntervalEl) {
+		const syncAutoUpdateInterval = () => {
+			autoUpdateIntervalEl.disabled = !autoUpdateConfigEl.checked;
+		};
+		autoUpdateConfigEl.addEventListener('change', syncAutoUpdateInterval);
+		syncAutoUpdateInterval();
+	}
 
 	const saveBtn = pane.querySelector('#sbox-settings-save');
 	if (saveBtn) {
@@ -2300,6 +2356,8 @@ function bindSettingsPaneEvents() {
 				formState.autoHideNotifications,
 				formState.miclashReleaseChannel,
 				formState.mihomoReleaseChannel,
+				formState.autoUpdateConfig,
+				formState.autoUpdateIntervalHours,
 				{ silent: true }
 			);
 
@@ -2722,9 +2780,10 @@ function bindConfigEvents() {
 
 			let serviceReloaded = false;
 			if (selectedConfig === MAIN_CONFIG_NAME) {
+				await applySubscriptionProfileUpdateInterval(downloadedInfo.profileUpdateIntervalHours);
 				if (await getServiceStatus()) {
-					setOperationStatus('running', _('Reloading Clash service...'));
-					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Clash service...')));
+					setOperationStatus('running', _('Reloading Mihomo configuration...'));
+					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
 					serviceReloaded = true;
 				}
 				appState.serviceRunning = await getServiceStatus();
@@ -2815,14 +2874,14 @@ function bindConfigEvents() {
 			if (selectedConfig === MAIN_CONFIG_NAME) {
 				const wasRunning = await getServiceStatus();
 				if (wasRunning) {
-					setOperationStatus('running', _('Reloading Clash service...'));
-					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Clash service...')));
+					setOperationStatus('running', _('Reloading Mihomo configuration...'));
+					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
 				}
 				appState.serviceRunning = await getServiceStatus();
 				updateHeaderAndControlDom();
-				await logUiAction('info', wasRunning ? 'Configuration applied and service reloaded' : getConfigLabel(selectedConfig) + ' saved');
-				setOperationSuccess(wasRunning ? _('Configuration applied and service reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
-				notify('info', wasRunning ? _('Configuration applied and service reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
+				await logUiAction('info', wasRunning ? 'Configuration applied and Mihomo reloaded' : getConfigLabel(selectedConfig) + ' saved');
+				setOperationSuccess(wasRunning ? _('Configuration applied and Mihomo reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
+				notify('info', wasRunning ? _('Configuration applied and Mihomo reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
 			} else {
 				await logUiAction('info', getConfigLabel(selectedConfig) + ' saved');
 				setOperationSuccess(_('%s saved.').format(_(getConfigLabel(selectedConfig))));
