@@ -102,10 +102,12 @@ check(settings.includes('autoUpdateConfig: true') &&
 check(config.includes('id="sbox-auto-update-config"') &&
 	config.includes('id="sbox-auto-update-interval"') &&
 	config.includes('Auto-update config') &&
-	config.includes("safeText(_('hours'))") &&
+	!config.includes("safeText(_('Every'))") &&
+	!config.includes('sbox-auto-update-interval-label') &&
+	config.includes("safeText(_('%s h').format(value))") &&
 	config.includes('autoUpdateConfig') &&
 	config.includes('autoUpdateIntervalHours'),
-	'Settings pane must expose auto-update checkbox and interval choices.');
+	'Settings pane must expose auto-update checkbox and interval choices without a redundant Every label.');
 check(config.includes('async function probeAutoUpdateIntervalFromSubscription()') &&
 	config.includes('readSubscriptionUrl(MAIN_CONFIG_NAME)') &&
 	config.includes('probeSubscriptionUpdateIntervalOnRouter') &&

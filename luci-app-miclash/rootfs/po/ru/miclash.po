@@ -631,7 +631,7 @@ msgid "Real-time Clash service logs."
 msgstr "Логи службы Clash в реальном времени."
 
 msgid "Restart"
-msgstr "Перезапуск"
+msgstr "Перезапустить"
 
 msgid "Save & Apply"
 msgstr "Сохранить и применить"
@@ -649,10 +649,13 @@ msgid "Service stopped"
 msgstr "Служба остановлена"
 
 msgid "Start"
-msgstr "Запуск"
+msgstr "Запустить"
 
 msgid "Stop"
-msgstr "Остановка"
+msgstr "Остановить"
+
+msgid "Stop core"
+msgstr "Остановить"
 
 msgid "Subscription downloaded, validated and applied."
 msgstr "Подписка загружена, проверена и применена."
@@ -879,6 +882,9 @@ msgstr "Не удалось сохранить режим прокси."
 msgid "Clear"
 msgstr "Очистить"
 
+msgid "Clear editor content"
+msgstr "Очистить"
+
 msgid "Clear Editor"
 msgstr "Очистить редактор"
 
@@ -1087,10 +1093,10 @@ msgid "Release channels"
 msgstr "Каналы релизов"
 
 msgid "Latest"
-msgstr "Latest"
+msgstr "Последний"
 
 msgid "Pre-release"
-msgstr "Pre-release"
+msgstr "Предрелиз"
 
 msgid "Release only"
 msgstr "Только релизы"
@@ -1305,6 +1311,30 @@ msgstr "Полный текст ошибки"
 msgid "Operation failed"
 msgstr "Операция завершилась ошибкой"
 
+msgid "Operation could not be completed"
+msgstr "Операцию не удалось завершить"
+
+msgid "What to try next"
+msgstr "Что попробовать дальше"
+
+msgid "Copy details"
+msgstr "Скопировать детали"
+
+msgid "Fix config.yaml, then run Check again."
+msgstr "Исправьте config.yaml, затем снова нажмите «Проверить»."
+
+msgid "Check router internet access and DNS, then retry."
+msgstr "Проверьте интернет и DNS на роутере, затем повторите попытку."
+
+msgid "Check that the Mihomo kernel is installed and available."
+msgstr "Проверьте, что ядро Mihomo установлено и доступно."
+
+msgid "Open Logs if the same error repeats."
+msgstr "Откройте «Логи», если ошибка повторяется."
+
+msgid "Try the action again."
+msgstr "Повторите действие."
+
 msgid "Preparing MiClash package update..."
 msgstr "Подготовка обновления пакета MiClash..."
 
@@ -1376,6 +1406,12 @@ msgstr "Автообновление конфига"
 
 msgid "hours"
 msgstr "часы"
+
+msgid "Every"
+msgstr "каждые"
+
+msgid "%s h"
+msgstr "%s ч"
 
 msgid "Configuration applied and Mihomo reloaded."
 msgstr "Конфигурация применена, Mihomo перезагружен."

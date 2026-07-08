@@ -50,53 +50,39 @@ check(configTabBindingBlock.includes("settings: '#sbox-pane-settings'"),
 check(!controlTabBindingBlock.includes("settings: '#sbox-pane-settings'"),
 	'Settings pane must not remain wired to the control tab group.');
 
-check(config.includes('detail:') && config.includes('showCloseAt:'),
-	'operationStatus must store full detail and delayed close metadata.');
+check(config.includes('detail:') && config.includes('autoClearMs == null ? 3000'),
+	'operationStatus errors must store detail but auto-clear after 3 seconds by default.');
 check(!setOperationErrorBlock.includes('getOperationRecommendation('),
 	'Visible operation errors must not append recommendation text.');
-check(config.includes('function showOperationErrorDetails('),
-	'Missing showOperationErrorDetails() helper.');
-check(config.includes('async function copyOperationErrorDetail('),
-	'Missing copyOperationErrorDetail() helper.');
-check(config.includes('sbox-operation-status-detail') &&
-	config.includes('sbox-operation-status-close'),
-	'Operation status DOM must render detail and close controls.');
-check(style.includes('.sbox-operation-status-detail') &&
-	style.includes('.sbox-operation-status-close'),
-	'Operation status detail and close controls must be styled.');
+check(setOperationErrorBlock.includes('dismissible: false') &&
+	setOperationErrorBlock.includes('autoClearMs == null ? 3000'),
+	'Operation errors must not be manually dismissible and must auto-clear after 3 seconds.');
+check(!config.includes('sbox-operation-status-detail') &&
+	!config.includes('sbox-operation-status-close'),
+	'Operation status DOM must not render inline details or close controls.');
+check(!style.includes('.sbox-operation-status-detail') &&
+	!style.includes('.sbox-operation-status-close') &&
+	!style.includes('.sbox-operation-status-action'),
+	'Operation status detail and close control styles must be removed.');
 check(operationStatusRenderBlock.indexOf('sbox-operation-status-content') >= 0 &&
-	operationStatusRenderBlock.indexOf('sbox-operation-status-message') < operationStatusRenderBlock.indexOf('sbox-operation-status-detail') &&
-	operationStatusRenderBlock.indexOf('sbox-operation-status-detail') < operationStatusRenderBlock.indexOf('sbox-operation-status-close'),
-	'Operation status detail control must stay inline after the message before the close control.');
+	operationStatusRenderBlock.includes('sbox-operation-status-message') &&
+	!operationStatusRenderBlock.includes('sbox-operation-status-detail') &&
+	!operationStatusRenderBlock.includes('sbox-operation-status-close'),
+	'Operation status must render only the message content.');
 check(!operationStatusRenderBlock.includes('sbox-operation-status-spacer') &&
 	!style.includes('.sbox-operation-status-spacer'),
 	'Operation status must not use a spacer between details and close.');
-check(style.includes('.sbox-operation-status-content') &&
-	style.includes('position: relative;') &&
-	style.includes('position: absolute;') &&
-	style.includes('right: 10px;') &&
-	style.includes('top: 6px;'),
-	'Operation status close control must be pinned to the top-right corner.');
 check(style.includes('.sbox-operation-status {\n\tdisplay: flex;') &&
 	style.includes('align-items: center;') &&
-	style.includes('padding: 6px 38px 6px 10px;'),
+	style.includes('padding: 6px 10px;'),
 	'Operation status content must be vertically centered with balanced padding.');
-check(style.includes('.sbox-operation-status-detail') &&
-	style.includes('width: 16px;') &&
-	style.includes('height: 16px;') &&
-	style.includes('font-size: 11px;') &&
-	style.includes('font-weight: 600;') &&
-	style.includes('vertical-align: -0.15em;'),
-	'Operation detail info button must be visually compact and aligned with text.');
-check(config.includes('sbox-operation-error-section') &&
-	config.includes('sbox-operation-error-label') &&
-	config.includes('sbox-operation-error-actions'),
-	'Operation error modal must use structured visual sections.');
-check(style.includes('.sbox-operation-error-section') &&
-	style.includes('.sbox-operation-error-label') &&
-	style.includes('.sbox-operation-error-actions') &&
-	style.includes('.sbox-operation-error-detail'),
-	'Full error detail modal sections must be styled.');
+check(!config.includes('showOperationErrorDetails') &&
+	!config.includes('copyOperationErrorDetail') &&
+	!config.includes('compactOperationErrorSummary') &&
+	!config.includes('buildOperationErrorGuidance') &&
+	!config.includes('sbox-operation-error-') &&
+	!style.includes('sbox-operation-error-'),
+	'Removed inline error details modal code and styles must not remain in the UI.');
 
 [
 	"Saving settings...",

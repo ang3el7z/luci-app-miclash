@@ -63,8 +63,8 @@ check(toolbarBlock.includes('id="sbox-save-sub-url" type="button" class="cbi-but
 	'Subscription Save button must use the same positive style as the editor Save button.');
 check(toolbarBlock.includes('id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action"'),
 	'Subscription Update button must use the same apply style as the editor Check button.');
-check(toolbarBlock.includes('id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button"'),
-	'Subscription clear button must use the same negative style as the editor Clear button.');
+check(/id="sbox-clear-sub-url" type="button" class="[^"]*\bcbi-button\b[^"]*\bcbi-button-negative\b[^"]*\bsbox-url-clear-button\b[^"]*\bsbox-icon-button\b[^"]*"/.test(toolbarBlock),
+	'Subscription clear button must keep the negative style and render as an icon button.');
 check(style.includes('.sbox-subscription-actions') && style.includes('gap: 8px;'),
 	'Subscription toolbar buttons must keep the same 8px gap as editor actions.');
 check(!/\b(?:width|min-width|height|min-height|padding|font-weight)\s*:/.test(subscriptionButtonStyle),
@@ -90,8 +90,8 @@ check(clearUrlHandler.includes("await saveSubscriptionUrl('', selectedConfig);")
 
 check(config.includes("_('Check')") && !config.includes("_('Validate YAML')"),
 	'Validate YAML button must be renamed to Check.');
-check(config.includes("_('Clear')") && !config.includes("_('Clear Editor')"),
-	'Clear Editor button must be renamed to Clear.');
+check(config.includes("_('Clear editor content')") && !config.includes("_('Clear Editor')"),
+	'Clear Editor button must use the MiClash-specific clear action label.');
 check(config.includes('Client devices only through MiClash (Protection)') &&
 	!config.includes('Client devices only through MiClash (beta)'),
 	'Guard text must use Protection instead of beta.');
@@ -111,7 +111,7 @@ check(config.includes('sbox-rulesets-action') && style.includes('.sbox-rulesets-
 	'Save',
 	'Update',
 	'Check',
-	'Clear',
+	'Clear editor content',
 	'Clearing subscription URL...',
 	'Subscription URL saved.',
 	'Subscription URL cleared.',

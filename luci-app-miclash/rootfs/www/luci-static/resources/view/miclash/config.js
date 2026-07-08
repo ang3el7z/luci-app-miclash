@@ -33,7 +33,7 @@ let pageRoot = null;
 let controlPollTimer = null;
 let logPollTimer = null;
 let updatePollTimer = null;
-let operationCloseTimer = null;
+let operationAutoClearTimer = null;
 let controlPollBusy = false;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
@@ -113,77 +113,69 @@ function getOperationDetail(error) {
 	return raw || _('unknown error');
 }
 
-function scheduleOperationCloseReveal(state) {
-	if (operationCloseTimer) {
-		clearTimeout(operationCloseTimer);
-		operationCloseTimer = null;
-	}
-
-	const showCloseAt = Number(state && state.showCloseAt || 0);
-	if (!showCloseAt || Date.now() >= showCloseAt) return;
-
-	operationCloseTimer = setTimeout(() => {
-		operationCloseTimer = null;
-		updateHeaderAndControlDom();
-	}, Math.max(0, showCloseAt - Date.now()) + 20);
-}
-
 function setOperationStatus(type, message, options) {
 	const opts = options || {};
 	const statusType = /^(running|error|success)$/.test(String(type || '')) ? type : 'running';
 	const detail = opts.detail == null ? '' : String(opts.detail || '');
 	const dismissible = opts.dismissible != null ? !!opts.dismissible : statusType === 'error';
-	const showCloseAt = dismissible
-		? Date.now() + Math.max(0, opts.dismissDelayMs == null ? 1000 : Number(opts.dismissDelayMs) || 0)
-		: 0;
+	const autoClearMs = Number(opts.autoClearMs || 0);
+
+	if (operationAutoClearTimer) {
+		clearTimeout(operationAutoClearTimer);
+		operationAutoClearTimer = null;
+	}
 
 	appState.operationStatus = {
 		type: statusType,
 		message: String(message || ''),
 		detail: detail,
 		context: String(opts.context || ''),
-		dismissible: dismissible,
-		showCloseAt: showCloseAt
+		dismissible: dismissible
 	};
-	scheduleOperationCloseReveal(appState.operationStatus);
 	updateHeaderAndControlDom();
-}
 
-function setOperationSuccess(message, options) {
-	const opts = options || {};
-	const statusMessage = String(message || '');
-	setOperationStatus('success', statusMessage, Object.assign({}, opts, {
-		dismissible: opts.dismissible === true
-	}));
-
-	const autoClearMs = opts.autoClearMs == null ? 1800 : Number(opts.autoClearMs);
 	if (autoClearMs > 0) {
-		setTimeout(() => {
+		const expected = appState.operationStatus;
+		operationAutoClearTimer = setTimeout(() => {
+			operationAutoClearTimer = null;
 			const current = appState.operationStatus;
-			if (current && current.type === 'success' && current.message === statusMessage) {
+			if (current &&
+				current.type === expected.type &&
+				current.message === expected.message &&
+				current.detail === expected.detail) {
 				clearOperationStatus();
 			}
 		}, autoClearMs);
 	}
 }
 
+function setOperationSuccess(message, options) {
+	const opts = options || {};
+	const statusMessage = String(message || '');
+	setOperationStatus('success', statusMessage, Object.assign({}, opts, {
+		dismissible: opts.dismissible === true,
+		autoClearMs: opts.autoClearMs == null ? 1800 : Number(opts.autoClearMs)
+	}));
+}
+
 function clearOperationStatus() {
-	if (operationCloseTimer) {
-		clearTimeout(operationCloseTimer);
-		operationCloseTimer = null;
+	if (operationAutoClearTimer) {
+		clearTimeout(operationAutoClearTimer);
+		operationAutoClearTimer = null;
 	}
 	appState.operationStatus = null;
 	updateHeaderAndControlDom();
 }
 
 function setOperationError(error, options) {
+	const opts = options || {};
 	const detail = getOperationDetail(error);
 	const message = getOperationMessage(error);
 	setOperationStatus('error', _('Error: %s').format(message), Object.assign({
 		detail: detail,
-		dismissible: true,
-		dismissDelayMs: 1000
-	}, options || {}));
+		dismissible: false,
+		autoClearMs: opts.autoClearMs == null ? 3000 : Number(opts.autoClearMs)
+	}, opts));
 }
 
 function operationStageOptions(initialMessage) {
@@ -198,6 +190,22 @@ function safeText(value) {
 		.replace(/</g, '&lt;')
 		.replace(/>/g, '&gt;')
 		.replace(/"/g, '&quot;');
+}
+
+function buildInlineIcon(name, className) {
+	const icons = {
+		download: '<path d="M12 3v11"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
+		refresh: '<path d="M20 11a8 8 0 0 0-14.8-4"></path><path d="M5 3v4h4"></path><path d="M4 13a8 8 0 0 0 14.8 4"></path><path d="M19 21v-4h-4"></path>',
+		x: '<path d="M18 6 6 18"></path><path d="M6 6l12 12"></path>',
+		info: '<path d="M12 11v6"></path><circle cx="12" cy="7" r="1.2"></circle>'
+	};
+	const body = icons[name];
+	if (!body) return '';
+	return '<svg class="' + safeText(className || 'sbox-button-icon') + '" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' + body + '</svg>';
+}
+
+function buildVersionActionIcon(state) {
+	return buildInlineIcon(state && state.iconName === 'refresh' ? 'refresh' : 'download', 'sbox-version-action-icon');
 }
 
 function isValidUrl(url) {
@@ -375,7 +383,7 @@ function resolveAppActionState() {
 	if (!hasLocal) {
 		return {
 			kind: 'install',
-			icon: '\u2b07',
+			iconName: 'download',
 			className: 'cbi-button-positive',
 			title: _('Install MiClash')
 		};
@@ -384,7 +392,7 @@ function resolveAppActionState() {
 	if (hasUpdate) {
 		return {
 			kind: 'update',
-			icon: '\u2b07',
+			iconName: 'download',
 			className: 'cbi-button-positive',
 			title: _('Update MiClash')
 		};
@@ -392,7 +400,7 @@ function resolveAppActionState() {
 
 	return {
 		kind: 'reinstall',
-		icon: '\u21bb',
+		iconName: 'refresh',
 		className: 'cbi-button-neutral',
 		title: _('Reinstall MiClash')
 	};
@@ -412,7 +420,7 @@ function resolveKernelActionState() {
 	if (!installed) {
 		return {
 			kind: 'install',
-			icon: '\u2b07',
+			iconName: 'download',
 			className: 'cbi-button-positive',
 			title: _('Install Kernel')
 		};
@@ -421,7 +429,7 @@ function resolveKernelActionState() {
 	if (hasUpdate) {
 		return {
 			kind: 'update',
-			icon: '\u2b07',
+			iconName: 'download',
 			className: 'cbi-button-positive',
 			title: _('Update Kernel')
 		};
@@ -429,7 +437,7 @@ function resolveKernelActionState() {
 
 	return {
 		kind: 'reinstall',
-		icon: '\u21bb',
+		iconName: 'refresh',
 		className: 'cbi-button-neutral',
 		title: _('Reinstall Kernel')
 	};
@@ -857,75 +865,6 @@ async function installKernelFromSettings() {
 function showModal(options) {
 	const opts = Object.assign({}, options || {}, { mountNode: pageRoot });
 	return view_miclash_ui_shell.showModal(opts);
-}
-
-async function copyOperationErrorDetail(text) {
-	const value = String(text || '');
-	if (!value) return false;
-
-	if (navigator.clipboard && navigator.clipboard.writeText) {
-		await navigator.clipboard.writeText(value);
-		return true;
-	}
-
-	const textarea = document.createElement('textarea');
-	textarea.value = value;
-	textarea.setAttribute('readonly', 'readonly');
-	textarea.style.position = 'fixed';
-	textarea.style.left = '-9999px';
-	document.body.appendChild(textarea);
-	textarea.select();
-
-	try {
-		return document.execCommand('copy');
-	} finally {
-		textarea.remove();
-	}
-}
-
-function showOperationErrorDetails() {
-	const state = appState.operationStatus || {};
-	const detail = String(state.detail || state.message || _('unknown error'));
-
-	const body = E('div', { 'class': 'sbox-operation-error-modal' }, [
-		E('div', { 'class': 'sbox-operation-error-title' }, _('Error details')),
-		E('section', { 'class': 'sbox-operation-error-section' }, [
-			E('div', { 'class': 'sbox-operation-error-label' }, _('Full error text')),
-			E('pre', { 'class': 'sbox-operation-error-detail' }, detail)
-		]),
-		E('section', { 'class': 'sbox-operation-error-section' }, [
-			E('div', { 'class': 'sbox-operation-error-label' }, _('You can')),
-			E('ul', { 'class': 'sbox-operation-error-actions' }, [
-				E('li', {}, _('Try again.')),
-				E('li', {}, _('Check config.yaml if the operation was related to config.')),
-				E('li', {}, _('Check internet access on the router if the operation was related to download or update.')),
-				E('li', {}, _('Reinstall MiClash if nothing else helped.'))
-			])
-		])
-	]);
-
-	showModal({
-		title: _('Operation failed'),
-		body: body,
-		buttons: [
-			{
-				label: _('Copy error'),
-				className: 'cbi-button cbi-button-apply',
-				onClick: async function(ctx) {
-					const original = ctx.button.textContent;
-					await copyOperationErrorDetail(detail);
-					ctx.button.textContent = _('Copied');
-					setTimeout(() => {
-						if (ctx.button && ctx.button.isConnected) ctx.button.textContent = original;
-					}, 1200);
-				}
-			},
-			{
-				label: _('Close'),
-				className: 'cbi-button cbi-button-neutral'
-			}
-		]
-	});
 }
 
 async function openKernelModal() {
@@ -1852,11 +1791,10 @@ function buildAutoUpdateIntervalChoicesHtml(settings) {
 
 	return '' +
 		'<span id="sbox-auto-update-interval" class="sbox-auto-update-interval"' + (settings && settings.autoUpdateConfig !== false ? '' : ' hidden') + '>' +
-			'<span class="sbox-auto-update-interval-label">(' + safeText(_('hours')) + ')</span>' +
 			values.map((value) =>
 				'<label class="sbox-auto-update-choice">' +
-					'<span>' + safeText(value) + '</span>' +
 					'<input type="radio" name="sbox-auto-update-interval" value="' + safeText(value) + '"' + (value === current ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('%s h').format(value)) + '</span>' +
 				'</label>'
 			).join('') +
 		'</span>';
@@ -2093,11 +2031,11 @@ function buildPageHtml() {
 		'<div class="sbox-header">' +
 			'MiClash <span class="sbox-version-inline">' +
 				'<strong id="sbox-app-version">' + versionApp + '</strong>' +
-				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '">' + safeText(appActionState.icon) + '</button>' +
+				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '">' + buildVersionActionIcon(appActionState) + '</button>' +
 			'</span>' +
 			'mihomo <span class="sbox-version-inline">' +
 				'<strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
-				'<button id="sbox-kernel-action" type="button" class="cbi-button ' + kernelActionState.className + ' sbox-version-action-button" title="' + safeText(kernelActionState.title) + '" aria-label="' + safeText(kernelActionState.title) + '">' + safeText(kernelActionState.icon) + '</button>' +
+				'<button id="sbox-kernel-action" type="button" class="cbi-button ' + kernelActionState.className + ' sbox-version-action-button" title="' + safeText(kernelActionState.title) + '" aria-label="' + safeText(kernelActionState.title) + '">' + buildVersionActionIcon(kernelActionState) + '</button>' +
 			'</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
 			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select">' +
@@ -2125,7 +2063,7 @@ function buildPageHtml() {
 							'<span id="sbox-status-label">' + safeText(appState.serviceRunning ? _('Service running') : _('Service stopped')) + '</span>' +
 						'</span>' +
 						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-service-button"' + (appState.serviceRunning ? ' hidden' : '') + '>' + safeText(_('Start')) + '</button>' +
-						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop')) + '</button>' +
+						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop core')) + '</button>' +
 						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
 					'<div id="sbox-operation-status" class="sbox-operation-status" hidden></div>' +
@@ -2146,14 +2084,14 @@ function buildPageHtml() {
 						'<div class="sbox-subscription-actions">' +
 							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-positive sbox-subscription-action">' + safeText(_('Save')) + '</button>' +
 							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action">' + safeText(_('Update')) + '</button>' +
-							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '">x</button>' +
+							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button sbox-icon-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '">' + buildInlineIcon('x', 'sbox-button-icon') + '</button>' +
 						'</div>' +
 					'</div>' +
 					'<div id="miclash-editor" class="sbox-editor"></div>' +
 					'<div class="sbox-actions">' +
 						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Check')) + '</button>' +
 						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
-						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear')) + '</button>' +
+						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear editor content')) + '</button>' +
 						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
 						'<span class="sbox-actions-spacer" aria-hidden="true"></span>' +
 						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral sbox-rulesets-action">' + safeText(_('Rulesets')) + '</button>' +
@@ -2215,27 +2153,14 @@ function updateHeaderAndControlDom() {
 			operationStatus.removeAttribute('title');
 		} else {
 			const type = /^(running|error|success)$/.test(String(state.type || '')) ? state.type : 'running';
-			const detail = String(state.detail || '');
-			const canShowClose = !!state.dismissible && (!state.showCloseAt || Date.now() >= Number(state.showCloseAt));
 			operationStatus.hidden = false;
 			operationStatus.className = 'sbox-operation-status sbox-operation-status-' + type;
 			operationStatus.innerHTML =
 				'<span class="sbox-operation-status-content">' +
 				'<span class="sbox-operation-status-message">' + safeText(state.message) + '</span>' +
-				(type === 'error' && detail
-					? '<button type="button" class="sbox-operation-status-action sbox-operation-status-detail" title="' + safeText(_('Show error details')) + '" aria-label="' + safeText(_('Show error details')) + '">i</button>'
-					: '') +
 				'</span>' +
-				(state.dismissible
-					? '<button type="button" class="sbox-operation-status-action sbox-operation-status-close"' + (canShowClose ? '' : ' hidden') + ' title="' + safeText(_('Dismiss')) + '" aria-label="' + safeText(_('Dismiss')) + '">x</button>'
-					: '');
+				'</span>';
 			operationStatus.title = state.message;
-
-			const detailBtn = operationStatus.querySelector('.sbox-operation-status-detail');
-			if (detailBtn) detailBtn.addEventListener('click', showOperationErrorDetails);
-
-			const closeBtn = operationStatus.querySelector('.sbox-operation-status-close');
-			if (closeBtn) closeBtn.addEventListener('click', clearOperationStatus);
 		}
 	}
 
@@ -2254,7 +2179,7 @@ function updateHeaderAndControlDom() {
 		const appActionState = resolveAppActionState();
 		appAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
 		appAction.classList.add(appActionState.className);
-		appAction.textContent = appActionState.icon;
+		appAction.innerHTML = buildVersionActionIcon(appActionState);
 		appAction.title = appActionState.title;
 		appAction.setAttribute('aria-label', appActionState.title);
 	}
@@ -2267,7 +2192,7 @@ function updateHeaderAndControlDom() {
 		const kernelActionState = resolveKernelActionState();
 		kernelAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
 		kernelAction.classList.add(kernelActionState.className);
-		kernelAction.textContent = kernelActionState.icon;
+		kernelAction.innerHTML = buildVersionActionIcon(kernelActionState);
 		kernelAction.title = kernelActionState.title;
 		kernelAction.setAttribute('aria-label', kernelActionState.title);
 	}
