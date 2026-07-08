@@ -2737,14 +2737,17 @@ async function setSelectedConfigAsMain() {
 	]);
 
 	if (!(await validateContentAsMainConfig(selectedContent))) return;
+	const wasRunning = await getServiceStatus();
 
 	await writeConfigFileByName(MAIN_CONFIG_NAME, selectedContent);
 	await writeConfigFileByName(selected, mainContent);
 	await saveSubscriptionUrl(selectedUrl, MAIN_CONFIG_NAME);
 	await saveSubscriptionUrl(mainUrl, selected);
 
-	setOperationStatus('running', _('Restarting Clash service...'));
-	await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
+	if (wasRunning) {
+		setOperationStatus('running', _('Reloading Mihomo configuration...'));
+		await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
+	}
 	appState.serviceRunning = await getServiceStatus();
 	await switchConfigProfile(MAIN_CONFIG_NAME);
 	await refreshHeaderAndControl();

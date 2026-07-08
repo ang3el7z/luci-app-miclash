@@ -36,6 +36,7 @@ function blockBetween(startNeedle, endNeedle, source) {
 }
 
 const reloadCase = blockBetween('\n\t\treload)', '\n\t\twait-ready|health)', serviceJob);
+const setMainBlock = blockBetween('async function setSelectedConfigAsMain()', '\nfunction bindConfigEvents()', config);
 
 check(serviceJob.includes('hot_reload_config()'),
 	'miclash-service must implement a Mihomo hot reload helper.');
@@ -57,6 +58,11 @@ check(config.includes('Configuration applied and Mihomo reloaded.') &&
 	config.includes('Subscription downloaded and applied.') &&
 	config.includes("restartOrReloadServiceOrThrow('reload'"),
 	'Config save/update flows must keep using reload but report Mihomo hot reload to the user.');
+check(setMainBlock.includes('const wasRunning = await getServiceStatus();') &&
+	setMainBlock.includes('if (wasRunning)') &&
+	setMainBlock.includes("await restartOrReloadServiceOrThrow('reload'") &&
+	!setMainBlock.includes("restartOrReloadServiceOrThrow('restart'"),
+	'Set as Main must hot reload only when MiClash was running and must not start/restart a stopped service.');
 
 check(subscription.includes('TMP_SUBSCRIPTION_HEADERS_PATH') &&
 	subscription.includes("'-D'") &&
