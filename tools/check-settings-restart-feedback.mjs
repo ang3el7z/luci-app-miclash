@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 
 const configPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js';
+const settingsModelPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/settings-model.js';
+const makefilePath = 'luci-app-miclash/Makefile';
 const source = readFileSync(configPath, 'utf8');
+const settingsModel = readFileSync(settingsModelPath, 'utf8');
+const makefile = readFileSync(makefilePath, 'utf8');
 
 let failed = false;
 
@@ -24,17 +28,45 @@ const restartButtonEnd = source.indexOf('const dashboardBtn', restartButtonStart
 const restartButtonBlock = restartButtonStart >= 0 && restartButtonEnd > restartButtonStart
 	? source.slice(restartButtonStart, restartButtonEnd)
 	: '';
+const proxyModeStart = source.indexOf('async function switchProxyModeFromHeader(targetMode)');
+const proxyModeEnd = source.indexOf('async function loadClashLogs()', proxyModeStart);
+const proxyModeBlock = proxyModeStart >= 0 && proxyModeEnd > proxyModeStart
+	? source.slice(proxyModeStart, proxyModeEnd)
+	: '';
 
 check(/async function withRestartButtonFeedback\(fn\)/.test(source),
 	'Missing withRestartButtonFeedback(fn) helper.');
 check(settingsSaveBlock.includes('await withRestartButtonFeedback(async () => {'),
 	'Settings save restart must show the same service feedback as the Restart button.');
+check(settingsSaveBlock.includes('const wasRunning = await getServiceStatus();'),
+	'Settings save must check whether MiClash is running before restart.');
+check(settingsSaveBlock.includes('if (wasRunning)') &&
+	settingsSaveBlock.includes("await restartOrReloadServiceOrThrow('restart'"),
+	'Settings save must restart only when MiClash was already running.');
 check(/await restartOrReloadServiceOrThrow\('restart'(?:,|\))/.test(settingsSaveBlock),
 	'Settings save must still restart the Clash service.');
+check(source.includes('async function refreshGuardRulesOrThrow()') &&
+	source.includes("fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh'])"),
+	'Settings save must expose a guard_refresh helper for live protection rules.');
+check(settingsSaveBlock.includes('await refreshGuardRulesOrThrow();'),
+	'Settings save must refresh guard rules without starting a stopped service.');
+check(proxyModeBlock.includes('const wasRunning = await getServiceStatus();'),
+	'Proxy mode switch must check whether MiClash is running before restart.');
+check(proxyModeBlock.includes('if (wasRunning)') &&
+	proxyModeBlock.includes("await restartOrReloadServiceOrThrow('restart'"),
+	'Proxy mode switch must restart only when MiClash was already running.');
 check(restartButtonBlock.includes('withRestartButtonFeedback(async () => {'),
 	'The Restart button must use the shared restart feedback helper.');
 check(!restartButtonBlock.includes('withButtons(restartBtn'),
 	'The Restart button should not bypass service restart feedback.');
+check(settingsModel.includes('const settings = await view_miclash_store.readSettingsMap();') &&
+	settingsModel.includes('await view_miclash_store.writeSettingsMap(settings);') &&
+	!settingsModel.includes('await view_miclash_store.writeTextFile(SETTINGS_PATH, settingsContent);'),
+	'Operational settings save must preserve existing settings keys such as subscription URLs.');
+check(makefile.includes('/opt/clash/settings') &&
+	makefile.includes('.settings.upgrade.bak') &&
+	makefile.includes('/opt/clash/bin/clash-rules guard_refresh'),
+	'Package upgrade scripts must preserve /opt/clash/settings and apply restored guard state.');
 
 if (failed) process.exit(1);
 console.log('settings restart feedback check passed');

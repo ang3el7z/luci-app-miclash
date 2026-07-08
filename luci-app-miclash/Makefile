@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=0.6.8
+PKG_VERSION:=0.7.7
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
@@ -71,11 +71,13 @@ endef
 
 define Package/$(PKG_NAME)/conffiles
 /opt/clash/config.yaml
+/opt/clash/settings
 endef
 
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./rootfs/etc/init.d/clash $(1)/etc/init.d/
+	$(INSTALL_BIN) ./rootfs/etc/init.d/miclash-autoupdate $(1)/etc/init.d/
 
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
 	$(INSTALL_BIN) ./rootfs/etc/hotplug.d/iface/40-clash $(1)/etc/hotplug.d/iface/
@@ -86,6 +88,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/clash-rules $(1)/opt/clash/bin/
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-update $(1)/opt/clash/bin/
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-service $(1)/opt/clash/bin/
+	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-autoupdate $(1)/opt/clash/bin/
 
 	$(INSTALL_DIR) $(1)/opt/clash
 	$(INSTALL_DATA) ./rootfs/opt/clash/config.yaml $(1)/opt/clash/
@@ -125,20 +128,28 @@ define Package/$(PKG_NAME)/preinst
 #!/bin/sh
 mkdir -p /opt/clash 2>/dev/null || true
 [ -f /opt/clash/config.yaml ] && cp -p /opt/clash/config.yaml /opt/clash/.config.yaml.upgrade.bak
+[ -f /opt/clash/settings ] && cp -p /opt/clash/settings /opt/clash/.settings.upgrade.bak
 exit 0
 endef
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
+SETTINGS_RESTORED=0
 if [ -f /opt/clash/.config.yaml.upgrade.bak ]; then
 	mv /opt/clash/.config.yaml.upgrade.bak /opt/clash/config.yaml
 	FIRST_INSTALL=0
 else
 	FIRST_INSTALL=1
 fi
+if [ -f /opt/clash/.settings.upgrade.bak ]; then
+	mv /opt/clash/.settings.upgrade.bak /opt/clash/settings
+	chmod 0644 /opt/clash/settings 2>/dev/null || true
+	SETTINGS_RESTORED=1
+fi
 [ -n "$$IPKG_INSTROOT" ] || {
 	/etc/init.d/rpcd reload
-	rm -f /tmp/luci-*
+	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
+	rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*
 
 	# On first install the default config.yaml is just a usable example
 	# (no real proxies configured). Prevent auto-start on next boot so the
@@ -146,6 +157,15 @@ fi
 	# re-enables it via `/etc/init.d/clash enable`.
 	if [ "$$FIRST_INSTALL" = "1" ]; then
 		/etc/init.d/clash disable 2>/dev/null || true
+	fi
+
+	if [ -x /etc/init.d/miclash-autoupdate ]; then
+		/etc/init.d/miclash-autoupdate enable >/dev/null 2>&1 || true
+		/etc/init.d/miclash-autoupdate start >/dev/null 2>&1 || true
+	fi
+
+	if [ "$$SETTINGS_RESTORED" = "1" ] && [ -x /opt/clash/bin/clash-rules ]; then
+		CLASH_RULES_QUIET=1 /opt/clash/bin/clash-rules guard_refresh >/dev/null 2>&1 || true
 	fi
 
 	# Ensure periodic clash-rules update cron job exists
@@ -164,6 +184,7 @@ endef
 define Package/$(PKG_NAME)/prerm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
+	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate stop >/dev/null 2>&1 || true
 	[ -x /etc/init.d/clash ] && /etc/init.d/clash stop >/dev/null 2>&1 || true
 	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || true
 }
@@ -188,6 +209,8 @@ define Package/$(PKG_NAME)/postrm
 	}
 
 	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || true
+	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate stop >/dev/null 2>&1 || true
+	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate disable >/dev/null 2>&1 || true
 
 	# Clean up cron job for clash-rules update, if present
 	CRON_FILE="/etc/crontabs/root"
@@ -200,11 +223,14 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /opt/clash/ruleset
 	rm -f /opt/clash/.dns_backup
 	rm -rf /tmp/clash
+	rm -rf /tmp/miclash-autoupdate
 	rm -rf /www/luci-static/resources/view/miclash
 	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
 	rm -f /opt/clash/.config.yaml.upgrade.bak
+	rm -f /opt/clash/.settings.upgrade.bak
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
+	rm -f /etc/init.d/miclash-autoupdate
 	rm -f /etc/apk/protected_paths.d/miclash.list
 
 	# Remove manually installed Mihomo core only on full package removal.

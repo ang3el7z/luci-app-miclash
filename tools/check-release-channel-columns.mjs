@@ -23,7 +23,7 @@ check(settings.includes('miclashReleaseChannel') && settings.includes('mihomoRel
 	'Settings model must expose separate MiClash and Mihomo release channels.');
 check(settings.includes("case 'MICLASH_RELEASE_CHANNEL'") && settings.includes("case 'MIHOMO_RELEASE_CHANNEL'"),
 	'Settings model must read MICLASH_RELEASE_CHANNEL and MIHOMO_RELEASE_CHANNEL.');
-check(settings.includes("'MICLASH_RELEASE_CHANNEL='") && settings.includes("'MIHOMO_RELEASE_CHANNEL='"),
+check(settings.includes('settings.MICLASH_RELEASE_CHANNEL =') && settings.includes('settings.MIHOMO_RELEASE_CHANNEL ='),
 	'Settings model must write MICLASH_RELEASE_CHANNEL and MIHOMO_RELEASE_CHANNEL.');
 check(!settings.includes("case 'RELEASE_CHANNEL'") && !settings.includes("'RELEASE_CHANNEL='"),
 	'Settings model must not keep the old shared RELEASE_CHANNEL fallback/write path.');

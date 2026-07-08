@@ -778,6 +778,9 @@ msgstr "正在下载软件包..."
 msgid "Downloading subscription..."
 msgstr "正在下载订阅..."
 
+msgid "Checking subscription update interval..."
+msgstr "正在检查订阅更新间隔..."
+
 msgid "Error: %s"
 msgstr "错误：%s"
 
@@ -1063,6 +1066,9 @@ msgstr "设置已保存，Clash 服务已重启。"
 msgid "Settings saved, but failed to restart Clash service: %s"
 msgstr "设置已保存，但重启 Clash 服务失败：%s"
 
+msgid "Failed to refresh protection rules."
+msgstr "刷新保护规则失败。"
+
 msgid "Settings saved."
 msgstr "设置已保存。"
 
@@ -1212,3 +1218,126 @@ msgstr "正在启动服务任务..."
 
 msgid "Updating service status..."
 msgstr "正在更新服务状态..."
+
+msgid "Check config.yaml if the operation was related to config."
+msgstr "如果操作与配置有关，请检查 config.yaml。"
+
+msgid "Check internet access on the router if the operation was related to download or update."
+msgstr "如果操作与下载或更新有关，请检查路由器的互联网连接。"
+
+msgid "Clash service started successfully."
+msgstr "Clash 服务已成功启动。"
+
+msgid "Clash service stopped successfully."
+msgstr "Clash 服务已成功停止。"
+
+msgid "Copied"
+msgstr "已复制"
+
+msgid "Copy error"
+msgstr "复制错误"
+
+msgid "Dismiss"
+msgstr "关闭"
+
+msgid "Error details"
+msgstr "错误详情"
+
+msgid "Full error text"
+msgstr "完整错误文本"
+
+msgid "Operation failed"
+msgstr "操作失败"
+
+msgid "Preparing MiClash package update..."
+msgstr "正在准备 MiClash 软件包更新..."
+
+msgid "Preparing Mihomo kernel update..."
+msgstr "正在准备 Mihomo 内核更新..."
+
+msgid "Reinstall MiClash if nothing else helped."
+msgstr "如果仍无法解决，请重新安装 MiClash。"
+
+msgid "Saving configuration..."
+msgstr "正在保存配置..."
+
+msgid "Saving IP-CIDR list..."
+msgstr "正在保存 IP-CIDR 列表..."
+
+msgid "Saving ruleset..."
+msgstr "正在保存规则集..."
+
+msgid "Saving settings..."
+msgstr "正在保存设置..."
+
+msgid "Saving subscription URL..."
+msgstr "正在保存订阅 URL..."
+
+msgid "Setting selected config as Main..."
+msgstr "正在将所选配置设为主配置..."
+
+msgid "Show error details"
+msgstr "显示错误详情"
+
+msgid "Switching proxy mode..."
+msgstr "正在切换代理模式..."
+
+msgid "Try again."
+msgstr "请重试。"
+
+msgid "Validating YAML..."
+msgstr "正在验证 YAML..."
+
+msgid "You can"
+msgstr "你可以"
+
+msgid "Check"
+msgstr "检查"
+
+msgid "Clear subscription URL"
+msgstr "清除订阅 URL"
+
+msgid "Clearing subscription URL..."
+msgstr "正在清除订阅 URL..."
+
+msgid "Client devices only through MiClash (Protection)"
+msgstr "设备仅通过 MiClash（保护）"
+
+msgid "Failed to clear subscription URL: %s"
+msgstr "清除订阅 URL 失败：%s"
+
+msgid "Failed to save subscription URL: %s"
+msgstr "保存订阅 URL 失败：%s"
+
+msgid "Subscription URL cleared."
+msgstr "订阅 URL 已清除。"
+
+msgid "Subscription URL saved."
+msgstr "订阅 URL 已保存。"
+
+msgid "Update"
+msgstr "更新"
+
+msgid "Auto-update config"
+msgstr "自动更新配置"
+
+msgid "hours"
+msgstr "小时"
+
+msgid "Configuration applied and Mihomo reloaded."
+msgstr "配置已应用，Mihomo 已重新加载。"
+
+msgid "Every 2 hours"
+msgstr "每 2 小时"
+
+msgid "Every 4 hours"
+msgstr "每 4 小时"
+
+msgid "Every 12 hours"
+msgstr "每 12 小时"
+
+msgid "Every 24 hours"
+msgstr "每 24 小时"
+
+msgid "Reloading Mihomo configuration..."
+msgstr "正在重新加载 Mihomo 配置..."

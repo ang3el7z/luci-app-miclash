@@ -1,9 +1,5 @@
 'use strict';
-
-const MIHOMO_RELEASE_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest';
-const MIHOMO_RELEASES_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases';
-const MICLASH_RELEASE_API = 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest';
-const MICLASH_RELEASES_API = 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases';
+'require fs';
 
 function parseVersion(raw, fallback) {
 	const str = String(raw || '').trim();
@@ -73,37 +69,31 @@ function normalizeGithubRelease(data) {
 	return { version: data.tag_name, assets: data.assets, prerelease: !!data.prerelease };
 }
 
-async function fetchGithubRelease(latestUrl, releasesUrl, includePrereleases) {
-	if (includePrereleases) {
-		try {
-			const response = await fetch(releasesUrl);
-			if (response.ok) {
-				const releases = await response.json();
-				if (Array.isArray(releases)) {
-					for (let i = 0; i < releases.length; i++) {
-						const release = normalizeGithubRelease(releases[i]);
-						if (release) return release;
-					}
-				}
-			}
-		} catch (e) {}
-	}
-
+async function fetchGithubRelease(kind, includePrereleases) {
 	try {
-		const response = await fetch(latestUrl);
-		if (!response.ok) return null;
-		return normalizeGithubRelease(await response.json());
+		const channel = includePrereleases ? 'prerelease' : 'release';
+		const result = await fs.exec('/opt/clash/bin/miclash-update', ['release', kind, channel]);
+		if (result.code !== 0 || !result.stdout) return null;
+		const data = JSON.parse(result.stdout);
+		if (Array.isArray(data)) {
+			for (let i = 0; i < data.length; i++) {
+				const release = normalizeGithubRelease(data[i]);
+				if (release) return release;
+			}
+			return null;
+		}
+		return normalizeGithubRelease(data);
 	} catch (e) {
 		return null;
 	}
 }
 
 function getLatestMihomoRelease(includePrereleases) {
-	return fetchGithubRelease(MIHOMO_RELEASE_API, MIHOMO_RELEASES_API, includePrereleases);
+	return fetchGithubRelease('mihomo', includePrereleases);
 }
 
 function getLatestMiClashRelease(includePrereleases) {
-	return fetchGithubRelease(MICLASH_RELEASE_API, MICLASH_RELEASES_API, includePrereleases);
+	return fetchGithubRelease('miclash', includePrereleases);
 }
 
 function compareNumericVersions(left, right) {

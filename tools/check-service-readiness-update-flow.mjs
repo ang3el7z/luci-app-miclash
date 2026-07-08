@@ -6,6 +6,7 @@ const files = {
 	serviceJob: 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service',
 	rules: 'luci-app-miclash/rootfs/opt/clash/bin/clash-rules',
 	update: 'luci-app-miclash/rootfs/opt/clash/bin/miclash-update',
+	release: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/release.js',
 	acl: 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json',
 	style: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css',
 	makefile: 'luci-app-miclash/Makefile'
@@ -15,6 +16,7 @@ const config = readFileSync(files.config, 'utf8');
 const serviceJob = existsSync(files.serviceJob) ? readFileSync(files.serviceJob, 'utf8') : '';
 const rules = readFileSync(files.rules, 'utf8');
 const update = readFileSync(files.update, 'utf8');
+const release = readFileSync(files.release, 'utf8');
 const acl = readFileSync(files.acl, 'utf8');
 const style = readFileSync(files.style, 'utf8');
 const makefile = readFileSync(files.makefile, 'utf8');
@@ -33,14 +35,23 @@ function count(text, pattern) {
 	return matches ? matches.length : 0;
 }
 
+function blockBetween(startNeedle, endNeedle, source = config) {
+	const start = source.indexOf(startNeedle);
+	const end = source.indexOf(endNeedle, start + startNeedle.length);
+	return start >= 0 && end > start ? source.slice(start, end) : '';
+}
+
 check(config.includes('operationStatus: null'),
 	'UI state must keep a persistent operationStatus value.');
 check(config.includes('id="sbox-operation-status"'),
 	'Control row must render the operation status line next to service buttons.');
 check(config.includes('function setOperationStatus(') && config.includes('function clearOperationStatus('),
 	'UI must expose operation status set/clear helpers.');
-check(config.includes('function getOperationRecommendation('),
-	'UI must map failures to actionable recommendations.');
+check(config.includes('function showOperationErrorDetails(') &&
+	config.includes('async function copyOperationErrorDetail(') &&
+	config.includes('detail:') &&
+	config.includes('showCloseAt:'),
+	'UI must keep full operation error details with a copyable details modal.');
 check(config.includes('startMiClashServiceJob') && config.includes('pollMiClashServiceJob'),
 	'Start/stop/restart UI must use detached service jobs and polling.');
 check(config.includes('readMiClashServiceState') && config.includes("['state']"),
@@ -55,6 +66,14 @@ check(!config.includes('view_miclash_service.dispatchActionsAndWaitReadyOrThrow'
 	'UI must not keep the old JS readiness dispatch path after service jobs own readiness.');
 check(config.includes('pollMiClashUpdateJob') && config.includes('startMiClashUpdateJob'),
 	'Package/kernel updates must use detached update jobs and polling.');
+check(config.includes('createOperationToken(') &&
+	config.includes('getStoredOperationToken(') &&
+	config.includes('clearStoredOperationToken(') &&
+	config.includes('isCurrentOperationToken('),
+	'UI must track operation tokens in sessionStorage.');
+check(config.includes("['job', '--token', token, kind]") &&
+	config.includes("['job', '--token', token, action]"),
+	'UI must pass operation tokens to update and service jobs.');
 check(config.includes('updateJobBusy: false') &&
 	config.includes('appState.updateJobBusy = true') &&
 	config.includes('appState.updateJobBusy = false'),
@@ -73,11 +92,44 @@ const updateStatusEnd = config.indexOf('async function clearMiClashUpdateStatus'
 const updateStatusBlock = updateStatusStart >= 0 && updateStatusEnd > updateStatusStart
 	? config.slice(updateStatusStart, updateStatusEnd)
 	: '';
+const resumeUpdateBlock = blockBetween(
+	'async function resumeMiClashUpdateJobStatus()',
+	'async function resumeMiClashServiceJobStatus()'
+);
+const resumeServiceBlock = blockBetween(
+	'async function resumeMiClashServiceJobStatus()',
+	'async function installMiClashFromSettings('
+);
 check(
 	updateStatusBlock.indexOf('if (translated) return translated;') >= 0 &&
 		updateStatusBlock.indexOf('const message =') > updateStatusBlock.indexOf('if (translated) return translated;'),
 	'Update status UI must prefer translated phase labels before raw job messages.'
 );
+check(resumeUpdateBlock.includes("if (state === 'running')") &&
+	resumeUpdateBlock.includes('pollMiClashUpdateJob'),
+	'Update status resume must continue actively running update jobs.');
+check(resumeUpdateBlock.includes("if (state === 'failed' && isCurrentOperationToken('update', status))") &&
+	resumeUpdateBlock.includes("setOperationError(new Error(status.message || _('Update failed.')))"),
+	'Update status resume must show failed status only when its token matches the current tab operation.');
+check(!resumeUpdateBlock.includes("if (state === 'failed')") &&
+	!resumeUpdateBlock.includes("if (state === 'failed') {\n\t\tsetOperationError(new Error(status.message || _('Update failed.')))"),
+	'Update status resume must not resurrect stale failed update errors from /tmp.');
+check(resumeUpdateBlock.includes("if (state === 'failed' || state === 'success')") &&
+	resumeUpdateBlock.includes('await clearMiClashUpdateStatus();'),
+	'Update status resume must clear completed failed/success update status files.');
+check(resumeServiceBlock.includes("if (state === 'running')") &&
+	resumeServiceBlock.includes('pollMiClashServiceJob'),
+	'Service status resume must continue actively running service jobs.');
+check(resumeServiceBlock.includes("if (state === 'failed' && isCurrentOperationToken('service', status))") &&
+	resumeServiceBlock.includes("setOperationError(new Error(status.message || _('Service operation failed.')))"),
+	'Service status resume must show failed status only when its token matches the current tab operation.');
+check(!resumeServiceBlock.includes("if (state === 'failed')") &&
+	!resumeServiceBlock.includes("if (state === 'failed') {\n\t\tsetOperationError(new Error(status.message || _('Service operation failed.')))"),
+	'Service status resume must not resurrect stale failed service errors from /tmp.');
+check(resumeServiceBlock.includes("if (state === 'failed' || state === 'success')") &&
+	resumeServiceBlock.includes('await clearMiClashServiceStatus();') &&
+	resumeServiceBlock.includes('clearOperationStatus();'),
+	'Service status resume must clear completed failed/success service status files.');
 
 check(style.includes('.sbox-operation-status') &&
 	style.includes('.sbox-operation-status-error') &&
@@ -92,6 +144,11 @@ check(!existsSync(files.service),
 
 check(serviceJob.includes('STATUS_FILE="/tmp/miclash-service/status"'),
 	'Service job script must write a persistent status file.');
+check(serviceJob.includes('CURRENT_TOKEN=') &&
+	serviceJob.includes("printf 'token=%s\\n'") &&
+	serviceJob.includes('token="$(status_value token)"') &&
+	serviceJob.includes("printf 'token=%s\\n' \"$token\""),
+	'Service job script must persist operation tokens and expose them from state.');
 check(serviceJob.includes('run_job()') && serviceJob.includes('write_status()'),
 	'Service job script must support detached job status reporting.');
 check(serviceJob.includes('wait_ready()') && serviceJob.includes('wait_stopped()'),
@@ -107,6 +164,10 @@ check(serviceJob.includes('state)'),
 	'Service job script must expose a state command.');
 check(makefile.includes('rootfs/opt/clash/bin/miclash-service'),
 	'Package install must include the service job script.');
+check(makefile.includes('rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*') &&
+	!makefile.includes('rm -rf /tmp/luci-indexcache /tmp/luci-modulecache') &&
+	!makefile.includes('rm -f /tmp/luci-*'),
+	'Package postinst must clear only LuCI index/module cache patterns after install.');
 check(acl.includes('"/opt/clash/bin/miclash-service": [ "read", "stat", "exec" ]'),
 	'ACL read permissions must allow LuCI to inspect and execute miclash-service.');
 check(acl.includes('"/opt/clash/bin/miclash-service": [ "exec" ]'),
@@ -123,10 +184,41 @@ check(rules.includes('health)'),
 
 check(update.includes('STATUS_FILE="/tmp/miclash-update/status"'),
 	'Update script must write a persistent status file.');
+check(update.includes('CURRENT_TOKEN=') &&
+	update.includes("printf 'token=%s\\n'") &&
+	update.includes('parse_job_token "$@"'),
+	'Update script must persist operation tokens in job status.');
 check(update.includes('write_status()') && update.includes('run_job()'),
 	'Update script must support detached job status reporting.');
 check(update.includes('case "${1:-}" in') && update.includes('status)') && update.includes('clear-status)'),
 	'Update script must expose status and clear-status commands.');
+check(release.includes("'require fs';") &&
+	release.includes("fs.exec('/opt/clash/bin/miclash-update'") &&
+	release.includes("['release', kind, channel]") &&
+	!release.includes('await fetch('),
+	'Release metadata must be fetched by the router through miclash-update, not by the browser.');
+check(update.includes('print_release_info()') &&
+	update.includes('MICLASH_RELEASE_API=') &&
+	update.includes('MIHOMO_RELEASE_API=') &&
+	update.includes('uclient-fetch') &&
+	update.includes('release)'),
+	'miclash-update must expose router-side release metadata fetching with a uclient-fetch fallback.');
+
+const installAppStart = update.indexOf('\ninstall_app()');
+const installKernelStart = update.indexOf('\ninstall_kernel()');
+const dispatchStart = update.indexOf('\ncase "${1:-}" in');
+const installAppBlock = installAppStart >= 0 && installKernelStart > installAppStart
+	? update.slice(installAppStart, installKernelStart)
+	: '';
+const installKernelBlock = installKernelStart >= 0 && dispatchStart > installKernelStart
+	? update.slice(installKernelStart, dispatchStart)
+	: '';
+check(!update.includes('cleanup_legacy_output_guard') &&
+	!update.includes('MICLASH_GUARD_OUTPUT'),
+	'Update script must not own legacy guard cleanup; clash-rules owns firewall cleanup.');
+check(rules.includes('MICLASH_GUARD_OUTPUT') &&
+	rules.includes('remove_iptables_legacy_output_guard_rules'),
+	'clash-rules must keep the legacy OUTPUT guard migration cleanup.');
 
 if (failed) process.exit(1);
 console.log('service readiness and update flow check passed');

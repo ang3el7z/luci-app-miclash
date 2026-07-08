@@ -5,6 +5,7 @@
 'require view.miclash.utils';
 
 const TMP_SUBSCRIPTION_PATH = '/tmp/miclash-subscription.yaml';
+const TMP_SUBSCRIPTION_HEADERS_PATH = '/tmp/miclash-subscription.headers';
 const SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC = 8;
 const SUBSCRIPTION_CURL_MAX_TIME_SEC = 18;
 
@@ -39,6 +40,13 @@ function looksLikeBase64Blob(text) {
 function looksLikeYamlConfig(content) {
 	const text = String(content || '');
 	return /(^|\n)\s*(proxies|proxy-providers|mixed-port|port|mode|rules):\s*/m.test(text);
+}
+
+function readProfileUpdateIntervalHours(headers) {
+	const match = String(headers || '').match(/^Profile-Update-Interval:\s*([0-9]+)/im);
+	if (!match) return '';
+	const value = parseInt(match[1], 10);
+	return value > 0 ? String(value) : '';
 }
 
 function buildClientProfile(settings, appVersion) {
@@ -183,6 +191,8 @@ async function downloadWithProfile(url, profile, deviceHeaders, mode) {
 	});
 
 	args.push(url);
+	args.push('-D');
+	args.push(TMP_SUBSCRIPTION_HEADERS_PATH);
 	args.push('-o');
 	args.push(TMP_SUBSCRIPTION_PATH);
 
@@ -201,12 +211,17 @@ async function downloadWithProfile(url, profile, deviceHeaders, mode) {
 		throw new Error(String(catResult.stderr || catResult.stdout || _('Unable to read downloaded file')).trim());
 	}
 
-	return String(catResult.stdout || '');
+	const headers = await L.resolveDefault(fs.read(TMP_SUBSCRIPTION_HEADERS_PATH), '');
+
+	return { content: String(catResult.stdout || ''), profileUpdateIntervalHours: readProfileUpdateIntervalHours(headers) };
 }
 
 async function cleanupTemp() {
 	try {
 		await fs.remove(TMP_SUBSCRIPTION_PATH);
+	} catch (e) {}
+	try {
+		await fs.remove(TMP_SUBSCRIPTION_HEADERS_PATH);
 	} catch (e) {}
 }
 
@@ -273,6 +288,7 @@ return L.Class.extend({
 	normalizeDownloadUrl: normalizeDownloadUrl,
 	buildDeviceHeaders: buildDeviceHeaders,
 	downloadWithProfile: downloadWithProfile,
+	readProfileUpdateIntervalHours: readProfileUpdateIntervalHours,
 	cleanupTemp: cleanupTemp,
 	testConfigContent: testConfigContent
 });

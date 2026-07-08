@@ -2696,12 +2696,16 @@ refresh_fakeip_whitelist_file() {
     mkdir -p /opt/clash/lst/mrs_cache 2>/dev/null
     _fp_current_digest=$(
         extract_rule_providers | while IFS='|' read -r _n beh _t rpath; do
-            case "$beh" in classical|ipcidr) ;; *) continue ;; esac
-            case "$rpath" in
-                ./*) _f="$_fp_base_dir/${rpath#./}" ;;
-                /*)  _f="$rpath" ;;
-                *)   _f="$_fp_base_dir/$rpath" ;;
-            esac
+            if [ "$beh" != "classical" ] && [ "$beh" != "ipcidr" ]; then
+                continue
+            fi
+            if [ "${rpath#./}" != "$rpath" ]; then
+                _f="$_fp_base_dir/${rpath#./}"
+            elif [ "${rpath#/}" != "$rpath" ]; then
+                _f="$rpath"
+            else
+                _f="$_fp_base_dir/$rpath"
+            fi
             [ -f "$_f" ] && md5sum "$_f" 2>/dev/null | awk '{print $1}'
         done | md5sum | awk '{print $1}'
     )
