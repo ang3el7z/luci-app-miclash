@@ -1293,6 +1293,9 @@ msgstr "Закрыть"
 msgid "Error details"
 msgstr "Подробности ошибки"
 
+msgid "Full error text"
+msgstr "Полный текст ошибки"
+
 msgid "Operation failed"
 msgstr "Операция завершилась ошибкой"
 

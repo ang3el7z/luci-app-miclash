@@ -75,10 +75,28 @@ check(style.includes('.sbox-operation-status-content') &&
 	style.includes('position: relative;') &&
 	style.includes('position: absolute;') &&
 	style.includes('right: 10px;') &&
-	style.includes('top: 5px;'),
+	style.includes('top: 6px;'),
 	'Operation status close control must be pinned to the top-right corner.');
-check(style.includes('.sbox-operation-error-detail'),
-	'Full error detail block must be styled.');
+check(style.includes('.sbox-operation-status {\n\tdisplay: flex;') &&
+	style.includes('align-items: center;') &&
+	style.includes('padding: 6px 38px 6px 10px;'),
+	'Operation status content must be vertically centered with balanced padding.');
+check(style.includes('.sbox-operation-status-detail') &&
+	style.includes('width: 16px;') &&
+	style.includes('height: 16px;') &&
+	style.includes('font-size: 11px;') &&
+	style.includes('font-weight: 600;') &&
+	style.includes('vertical-align: -0.15em;'),
+	'Operation detail info button must be visually compact and aligned with text.');
+check(config.includes('sbox-operation-error-section') &&
+	config.includes('sbox-operation-error-label') &&
+	config.includes('sbox-operation-error-actions'),
+	'Operation error modal must use structured visual sections.');
+check(style.includes('.sbox-operation-error-section') &&
+	style.includes('.sbox-operation-error-label') &&
+	style.includes('.sbox-operation-error-actions') &&
+	style.includes('.sbox-operation-error-detail'),
+	'Full error detail modal sections must be styled.');
 
 [
 	"Saving settings...",

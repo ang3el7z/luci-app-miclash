@@ -886,13 +886,18 @@ function showOperationErrorDetails() {
 
 	const body = E('div', { 'class': 'sbox-operation-error-modal' }, [
 		E('div', { 'class': 'sbox-operation-error-title' }, _('Error details')),
-		E('pre', { 'class': 'sbox-operation-error-detail' }, detail),
-		E('div', { 'class': 'sbox-operation-error-title' }, _('You can')),
-		E('ul', { 'class': 'sbox-operation-error-list' }, [
-			E('li', {}, _('Try again.')),
-			E('li', {}, _('Check config.yaml if the operation was related to config.')),
-			E('li', {}, _('Check internet access on the router if the operation was related to download or update.')),
-			E('li', {}, _('Reinstall MiClash if nothing else helped.'))
+		E('section', { 'class': 'sbox-operation-error-section' }, [
+			E('div', { 'class': 'sbox-operation-error-label' }, _('Full error text')),
+			E('pre', { 'class': 'sbox-operation-error-detail' }, detail)
+		]),
+		E('section', { 'class': 'sbox-operation-error-section' }, [
+			E('div', { 'class': 'sbox-operation-error-label' }, _('You can')),
+			E('ul', { 'class': 'sbox-operation-error-actions' }, [
+				E('li', {}, _('Try again.')),
+				E('li', {}, _('Check config.yaml if the operation was related to config.')),
+				E('li', {}, _('Check internet access on the router if the operation was related to download or update.')),
+				E('li', {}, _('Reinstall MiClash if nothing else helped.'))
+			])
 		])
 	]);
 
