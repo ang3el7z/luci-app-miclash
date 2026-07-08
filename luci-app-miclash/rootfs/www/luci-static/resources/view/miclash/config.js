@@ -2870,6 +2870,13 @@ function bindConfigEvents() {
 				currentSettings.tunStack || 'system'
 			);
 
+			const freshConfig = await readConfigFileByName(selectedConfig);
+			appState.configContent = String(freshConfig || '');
+			if (editor) {
+				editor.setValue(appState.configContent, -1);
+				editor.clearSelection();
+			}
+
 			let serviceReloaded = false;
 			if (selectedConfig === MAIN_CONFIG_NAME) {
 				await applySubscriptionProfileUpdateInterval(appliedInfo.profileUpdateIntervalHours);

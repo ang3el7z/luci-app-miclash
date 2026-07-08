@@ -43,6 +43,10 @@ check(!updateHandler.includes('testConfigContent(downloaded, true'),
 	'Subscription update handler must not write large subscription content through LuCI/RPC.');
 check(!updateHandler.includes('editor.setValue(downloaded'),
 	'Subscription update handler must not push large downloaded YAML into the browser editor.');
+check(updateHandler.includes('const freshConfig = await readConfigFileByName(selectedConfig)') &&
+	updateHandler.includes("appState.configContent = String(freshConfig || '')") &&
+	updateHandler.includes('editor.setValue(appState.configContent, -1)'),
+	'Subscription update handler must refresh Ace from the selected config after the router-side apply.');
 check(updateHandler.includes('applySubscriptionProfileUpdateInterval(appliedInfo.profileUpdateIntervalHours)'),
 	'Subscription update handler must preserve Profile-Update-Interval from the router-side helper.');
 check(intervalProbe.includes('probeSubscriptionUpdateIntervalOnRouter('),
