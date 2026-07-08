@@ -62,6 +62,13 @@ check(subscription.includes('parseKeyValueStatus('),
 check(existsSync(files.helper), 'Router-side subscription helper must be installed in rootfs.');
 check(helper.includes('download_subscription()'),
 	'Router-side helper must own the subscription download step.');
+check(helper.includes('raw_github_cdn_fallback_url()') &&
+	helper.includes('raw.githubusercontent.com') &&
+	helper.includes('cdn.jsdelivr.net/gh/'),
+	'Router-side helper must derive a jsDelivr fallback for raw.githubusercontent.com subscriptions.');
+check(helper.includes('raw_github_fallback="$(raw_github_cdn_fallback_url "$URL"') &&
+	helper.includes('download_subscription "$raw_github_fallback" "$TMP_DOWNLOAD" "github-raw-cdn"'),
+	'Router-side helper must try the raw GitHub CDN fallback when the primary raw.githubusercontent.com download fails.');
 check(helper.includes('transform_proxy_mode()'),
 	'Router-side helper must transform MiClash proxy-mode fields without LuCI content writes.');
 check(helper.includes('validate_config()'),

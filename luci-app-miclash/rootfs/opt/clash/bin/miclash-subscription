@@ -148,6 +148,29 @@ download_subscription() {
 	return 0
 }
 
+raw_github_cdn_fallback_url() {
+	raw_url="$1"
+	case "$raw_url" in
+		https://raw.githubusercontent.com/*|http://raw.githubusercontent.com/*) ;;
+		*) return 1 ;;
+	esac
+
+	raw_rest="${raw_url#https://raw.githubusercontent.com/}"
+	raw_rest="${raw_rest#http://raw.githubusercontent.com/}"
+	raw_owner="${raw_rest%%/*}"
+	raw_after_owner="${raw_rest#*/}"
+	[ "$raw_after_owner" != "$raw_rest" ] || return 1
+	raw_repo="${raw_after_owner%%/*}"
+	raw_after_repo="${raw_after_owner#*/}"
+	[ "$raw_after_repo" != "$raw_after_owner" ] || return 1
+	raw_branch="${raw_after_repo%%/*}"
+	raw_path="${raw_after_repo#*/}"
+	[ "$raw_path" != "$raw_after_repo" ] || return 1
+	[ -n "$raw_owner" ] && [ -n "$raw_repo" ] && [ -n "$raw_branch" ] && [ -n "$raw_path" ] || return 1
+
+	printf 'https://cdn.jsdelivr.net/gh/%s/%s@%s/%s' "$raw_owner" "$raw_repo" "$raw_branch" "$raw_path"
+}
+
 looks_like_uri_subscription() {
 	grep -Eiq '(^|[[:space:]])(vmess|vless|trojan|ss|ssr|hysteria|hysteria2|tuic)://[^[:space:]]+' "$1" 2>/dev/null
 }
@@ -201,12 +224,29 @@ download_primary_or_fallback() {
 	fi
 
 	primary_error="$(cat "$DOWNLOAD_ERROR" 2>/dev/null || true)"
+	fallback_error=""
 	if [ -n "$FALLBACK_URL" ] && [ "$FALLBACK_ON_ERROR" = "1" ]; then
 		if download_subscription "$FALLBACK_URL" "$TMP_DOWNLOAD" "remnawave-client-path"; then
 			MODE="remnawave-client-path"
 			return 0
 		fi
 		fallback_error="$(cat "$DOWNLOAD_ERROR" 2>/dev/null || true)"
+	fi
+
+	raw_github_fallback="$(raw_github_cdn_fallback_url "$URL" 2>/dev/null || true)"
+	if [ -n "$raw_github_fallback" ]; then
+		if download_subscription "$raw_github_fallback" "$TMP_DOWNLOAD" "github-raw-cdn"; then
+			MODE="github-raw-cdn"
+			return 0
+		fi
+		raw_github_error="$(cat "$DOWNLOAD_ERROR" 2>/dev/null || true)"
+		if [ -n "$fallback_error" ]; then
+			fail "Subscription download failed for original URL, /mihomo fallback, and raw GitHub CDN fallback: ${raw_github_error:-$fallback_error}"
+		fi
+		fail "Subscription download failed for raw.githubusercontent.com and jsDelivr fallback: ${raw_github_error:-$primary_error}"
+	fi
+
+	if [ -n "$fallback_error" ]; then
 		fail "Subscription download failed for both original URL and /mihomo fallback: ${fallback_error:-$primary_error}"
 	fi
 
@@ -362,7 +402,7 @@ RESPONSE_HEADERS_FILE="/tmp/miclash-subscription-response-headers.$$"
 TMP_DOWNLOAD="/tmp/miclash-subscription-download.$$"
 TMP_DECODED="/tmp/miclash-subscription-decoded.$$"
 DOWNLOAD_ERROR="/tmp/miclash-subscription-error.$$"
-: > "$REQUEST_HEADERS_FILE" || fail "failed to create temporary header file"
+: > "$REQUEST_HEADERS_FILE" || fail "failed to create temporary heder file"
 set_target_name "$TARGET_NAME"
 
 case "${1:-}" in
