@@ -148,7 +148,8 @@ if [ -f /opt/clash/.settings.upgrade.bak ]; then
 fi
 [ -n "$$IPKG_INSTROOT" ] || {
 	/etc/init.d/rpcd reload
-	rm -f /tmp/luci-*
+	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
+	rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
 
 	# On first install the default config.yaml is just a usable example
 	# (no real proxies configured). Prevent auto-start on next boot so the
