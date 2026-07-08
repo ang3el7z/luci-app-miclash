@@ -778,6 +778,9 @@ msgstr "正在下载软件包..."
 msgid "Downloading subscription..."
 msgstr "正在下载订阅..."
 
+msgid "Checking subscription update interval..."
+msgstr "正在检查订阅更新间隔..."
+
 msgid "Error: %s"
 msgstr "错误：%s"
 

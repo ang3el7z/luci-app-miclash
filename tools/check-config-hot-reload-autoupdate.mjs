@@ -85,11 +85,13 @@ check(config.includes('AUTO_UPDATE_PRESET_INTERVAL_HOURS.includes(current)') &&
 
 check(settings.includes('autoUpdateConfig: true') &&
 	settings.includes("autoUpdateIntervalHours: '4'") &&
+	settings.includes('autoUpdateIntervalStored: false') &&
 	settings.includes("case 'AUTO_UPDATE_CONFIG'") &&
 	settings.includes("case 'AUTO_UPDATE_INTERVAL_HOURS'") &&
+	settings.includes('settings.autoUpdateIntervalStored = true') &&
 	settings.includes('settings.AUTO_UPDATE_CONFIG =') &&
 	settings.includes('settings.AUTO_UPDATE_INTERVAL_HOURS ='),
-	'Settings model must load, default, and save auto-update settings.');
+	'Settings model must load, default, save, and expose whether auto-update interval was explicitly stored.');
 check(config.includes('id="sbox-auto-update-config"') &&
 	config.includes('id="sbox-auto-update-interval"') &&
 	config.includes('Auto-update config') &&
@@ -97,6 +99,17 @@ check(config.includes('id="sbox-auto-update-config"') &&
 	config.includes('autoUpdateConfig') &&
 	config.includes('autoUpdateIntervalHours'),
 	'Settings pane must expose auto-update checkbox and interval choices.');
+check(config.includes('async function probeAutoUpdateIntervalFromSubscription()') &&
+	config.includes('readSubscriptionUrl(MAIN_CONFIG_NAME)') &&
+	config.includes('downloadSubscriptionWithProfile') &&
+	config.includes('applySubscriptionProfileUpdateInterval(downloadedInfo.profileUpdateIntervalHours)') &&
+	config.includes("setOperationStatus('running', _('Checking subscription update interval...'))"),
+	'Settings pane must probe subscription Profile-Update-Interval when enabling auto-update without a stored interval.');
+check(config.includes('syncAutoUpdateInterval = async () =>') &&
+	config.includes('autoUpdateConfigEl.checked && !(appState.settings && appState.settings.autoUpdateIntervalStored)') &&
+	config.includes('await probeAutoUpdateIntervalFromSubscription();') &&
+	config.includes('renderSettingsPane();'),
+	'Auto-update checkbox must trigger interval probing only when enabling and no interval was stored yet.');
 
 check(existsSync(files.autoUpdateJob),
 	'Package must include /opt/clash/bin/miclash-autoupdate worker.');

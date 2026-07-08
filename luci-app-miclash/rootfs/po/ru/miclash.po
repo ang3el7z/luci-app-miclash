@@ -1116,6 +1116,9 @@ msgstr "Перезагрузка службы Clash..."
 msgid "Downloading subscription..."
 msgstr "Загрузка подписки..."
 
+msgid "Checking subscription update interval..."
+msgstr "Проверка интервала обновления подписки..."
+
 msgid "Error: %s"
 msgstr "Ошибка: %s"
 

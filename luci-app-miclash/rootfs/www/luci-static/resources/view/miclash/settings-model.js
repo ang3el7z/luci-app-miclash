@@ -320,6 +320,7 @@ function defaultOperationalSettings() {
 		autoHideNotifications: true,
 		autoUpdateConfig: true,
 		autoUpdateIntervalHours: '4',
+		autoUpdateIntervalStored: false,
 		miclashReleaseChannel: 'release',
 		mihomoReleaseChannel: 'release',
 		detectedLan: '',
@@ -360,7 +361,10 @@ async function loadOperationalSettings() {
 				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
 				case 'AUTO_HIDE_NOTIFICATIONS': settings.autoHideNotifications = value !== 'false'; break;
 				case 'AUTO_UPDATE_CONFIG': settings.autoUpdateConfig = value !== 'false'; break;
-				case 'AUTO_UPDATE_INTERVAL_HOURS': settings.autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(value); break;
+				case 'AUTO_UPDATE_INTERVAL_HOURS':
+					settings.autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(value);
+					settings.autoUpdateIntervalStored = true;
+					break;
 				case 'MICLASH_RELEASE_CHANNEL': settings.miclashReleaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
 				case 'MIHOMO_RELEASE_CHANNEL': settings.mihomoReleaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
 				case 'DETECTED_LAN': settings.detectedLan = value; break;

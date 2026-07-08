@@ -67,7 +67,9 @@ const appState = {
 	},
 	serviceActionBusy: false,
 	serviceJobBusy: false,
-	updateJobBusy: false
+	updateJobBusy: false,
+	autoUpdateIntervalProbeBusy: false,
+	autoUpdateIntervalProbeAttempted: false
 };
 
 function notify(type, message) {
@@ -1185,11 +1187,43 @@ async function applySubscriptionProfileUpdateInterval(hours) {
 	if (!clean) return;
 
 	const settings = await readSettingsMap();
-	if (settings.AUTO_UPDATE_INTERVAL_HOURS === clean) return;
+	if (settings.AUTO_UPDATE_INTERVAL_HOURS === clean) {
+		if (appState.settings) appState.settings.autoUpdateIntervalStored = true;
+		return;
+	}
 
 	settings.AUTO_UPDATE_INTERVAL_HOURS = clean;
 	await writeSettingsMap(settings);
-	if (appState.settings) appState.settings.autoUpdateIntervalHours = clean;
+	if (appState.settings) {
+		appState.settings.autoUpdateIntervalHours = clean;
+		appState.settings.autoUpdateIntervalStored = true;
+	}
+}
+
+async function probeAutoUpdateIntervalFromSubscription() {
+	const url = String(await readSubscriptionUrl(MAIN_CONFIG_NAME) || '').trim();
+	if (!url || !isValidUrl(url)) return false;
+
+	setOperationStatus('running', _('Checking subscription update interval...'));
+	try {
+		const settingsMap = await readSettingsMap();
+		const versions = await getVersions();
+		const profile = buildSubscriptionClientProfile(settingsMap, versions.app);
+		const deviceHeaders = await buildSubscriptionDeviceHeaders(settingsMap);
+		const resolved = normalizeSubscriptionDownloadUrl(url);
+		const downloadedInfo = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, resolved.mode);
+		const interval = normalizeAutoUpdateIntervalHours(downloadedInfo && downloadedInfo.profileUpdateIntervalHours);
+		if (!interval) return false;
+
+		await applySubscriptionProfileUpdateInterval(downloadedInfo.profileUpdateIntervalHours);
+		return true;
+	} catch (e) {
+		await logUiAction('warn', 'Failed to probe subscription update interval: ' + e.message);
+		return false;
+	} finally {
+		await view_miclash_subscription.cleanupTemp();
+		clearOperationStatus();
+	}
 }
 
 async function testConfigContent(content, keepOnSuccess, targetPath) {
@@ -2351,13 +2385,27 @@ function bindSettingsPaneEvents() {
 	const autoUpdateConfigEl = pane.querySelector('#sbox-auto-update-config');
 	const autoUpdateIntervalEl = pane.querySelector('#sbox-auto-update-interval');
 	if (autoUpdateConfigEl && autoUpdateIntervalEl) {
-		const syncAutoUpdateInterval = () => {
+		const syncAutoUpdateInterval = async () => {
 			autoUpdateIntervalEl.hidden = !autoUpdateConfigEl.checked;
 			autoUpdateIntervalEl.querySelectorAll('input').forEach((input) => {
 				input.disabled = !autoUpdateConfigEl.checked;
 			});
+			if (autoUpdateConfigEl.checked && !(appState.settings && appState.settings.autoUpdateIntervalStored) && !appState.autoUpdateIntervalProbeBusy && !appState.autoUpdateIntervalProbeAttempted) {
+				appState.autoUpdateIntervalProbeBusy = true;
+				appState.autoUpdateIntervalProbeAttempted = true;
+				try {
+					await probeAutoUpdateIntervalFromSubscription();
+					appState.settings = await loadOperationalSettings();
+					if (appState.settings.autoUpdateIntervalStored) renderSettingsPane();
+				} finally {
+					appState.autoUpdateIntervalProbeBusy = false;
+				}
+			}
 		};
-		autoUpdateConfigEl.addEventListener('change', syncAutoUpdateInterval);
+		autoUpdateConfigEl.addEventListener('change', () => {
+			if (autoUpdateConfigEl.checked) appState.autoUpdateIntervalProbeAttempted = false;
+			syncAutoUpdateInterval();
+		});
 		syncAutoUpdateInterval();
 	}
 
