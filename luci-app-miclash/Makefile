@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=0.7.8
+PKG_VERSION:=0.7.9
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
@@ -86,6 +86,7 @@ define Package/$(PKG_NAME)/install
 
 	$(INSTALL_DIR) $(1)/opt/clash/bin
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/clash-rules $(1)/opt/clash/bin/
+	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-subscription $(1)/opt/clash/bin/
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-update $(1)/opt/clash/bin/
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-service $(1)/opt/clash/bin/
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-autoupdate $(1)/opt/clash/bin/

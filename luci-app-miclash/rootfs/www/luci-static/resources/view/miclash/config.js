@@ -1176,6 +1176,25 @@ async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode
 	return view_miclash_subscription.downloadWithProfile(url, profile, deviceHeaders, mode);
 }
 
+async function applySubscriptionOnRouter(url, targetName, settings, appVersion, proxyMode, tunStack) {
+	return view_miclash_subscription.applySubscriptionOnRouter({
+		url: url,
+		targetName: targetName,
+		settings: settings,
+		appVersion: appVersion,
+		proxyMode: proxyMode,
+		tunStack: tunStack
+	});
+}
+
+async function probeSubscriptionUpdateIntervalOnRouter(url, settings, appVersion) {
+	return view_miclash_subscription.probeSubscriptionUpdateIntervalOnRouter({
+		url: url,
+		settings: settings,
+		appVersion: appVersion
+	});
+}
+
 function normalizeAutoUpdateIntervalHours(value) {
 	const clean = String(value || '').trim();
 	const parsed = parseInt(clean, 10);
@@ -1208,14 +1227,11 @@ async function probeAutoUpdateIntervalFromSubscription() {
 	try {
 		const settingsMap = await readSettingsMap();
 		const versions = await getVersions();
-		const profile = buildSubscriptionClientProfile(settingsMap, versions.app);
-		const deviceHeaders = await buildSubscriptionDeviceHeaders(settingsMap);
-		const resolved = normalizeSubscriptionDownloadUrl(url);
-		const downloadedInfo = await downloadSubscriptionWithProfile(resolved.url, profile, deviceHeaders, resolved.mode);
-		const interval = normalizeAutoUpdateIntervalHours(downloadedInfo && downloadedInfo.profileUpdateIntervalHours);
+		const intervalInfo = await probeSubscriptionUpdateIntervalOnRouter(url, settingsMap, versions.app);
+		const interval = normalizeAutoUpdateIntervalHours(intervalInfo && intervalInfo.profileUpdateIntervalHours);
 		if (!interval) return false;
 
-		await applySubscriptionProfileUpdateInterval(downloadedInfo.profileUpdateIntervalHours);
+		await applySubscriptionProfileUpdateInterval(intervalInfo.profileUpdateIntervalHours);
 		return true;
 	} catch (e) {
 		await logUiAction('warn', 'Failed to probe subscription update interval: ' + e.message);
@@ -2833,7 +2849,6 @@ function bindConfigEvents() {
 			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
 
 			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
-			const selectedPath = getConfigPathByName(selectedConfig);
 			setOperationStatus('running', _('Saving subscription URL...'));
 			await saveSubscriptionUrl(url, selectedConfig);
 			appState.subscriptionUrl = url;
@@ -2844,26 +2859,20 @@ function bindConfigEvents() {
 			await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
 			setOperationStatus('running', _('Downloading subscription...'));
 
-			const downloadedInfo = await fetchSubscriptionAsYaml(url, selectedPath);
 			const currentSettings = appState.settings || await loadOperationalSettings();
-			const downloaded = transformProxyMode(
-				String(downloadedInfo.content || '').trimEnd() + '\n',
+			const versions = await getVersions();
+			const appliedInfo = await applySubscriptionOnRouter(
+				url,
+				selectedConfig,
+				currentSettings,
+				versions.app,
 				normalizeProxyMode(appState.proxyMode || currentSettings.proxyMode || 'tproxy'),
 				currentSettings.tunStack || 'system'
 			);
 
-			const tested = await testConfigContent(downloaded, true, selectedPath);
-			if (!tested.ok) throw new Error(_('YAML validation failed: %s').format(tested.message));
-
-			appState.configContent = downloaded;
-			if (editor) {
-				editor.setValue(downloaded, -1);
-				editor.clearSelection();
-			}
-
 			let serviceReloaded = false;
 			if (selectedConfig === MAIN_CONFIG_NAME) {
-				await applySubscriptionProfileUpdateInterval(downloadedInfo.profileUpdateIntervalHours);
+				await applySubscriptionProfileUpdateInterval(appliedInfo.profileUpdateIntervalHours);
 				if (await getServiceStatus()) {
 					setOperationStatus('running', _('Reloading Mihomo configuration...'));
 					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
@@ -2873,7 +2882,7 @@ function bindConfigEvents() {
 				updateHeaderAndControlDom();
 			}
 
-			if (downloadedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
+			if (appliedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
 				await logUiAction('info', 'Subscription downloaded and applied with Remnawave fallback');
 				setOperationSuccess(_('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
 				notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));

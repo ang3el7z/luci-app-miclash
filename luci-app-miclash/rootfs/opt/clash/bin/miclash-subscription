@@ -1,0 +1,430 @@
+#!/bin/sh
+
+set -u
+
+BASE_DIR="/opt/clash"
+CLASH_BIN="/opt/clash/bin/clash"
+CURL_BIN="/usr/bin/curl"
+CURL_CONNECT_TIMEOUT=8
+CURL_MAX_TIME=120
+
+URL=""
+FALLBACK_URL=""
+FALLBACK_ON_ERROR=0
+MODE="direct"
+TARGET_NAME="config.yaml"
+TARGET_PATH="/opt/clash/config.yaml"
+PROXY_MODE="tproxy"
+TUN_STACK="system"
+USER_AGENT="MiClash/1.0.0"
+
+REQUEST_HEADERS_FILE=""
+RESPONSE_HEADERS_FILE=""
+TMP_DOWNLOAD=""
+TMP_DECODED=""
+APPLY_PATH=""
+DOWNLOAD_ERROR=""
+PROFILE_UPDATE_INTERVAL_HOURS=""
+
+cleanup() {
+	[ -n "$REQUEST_HEADERS_FILE" ] && rm -f "$REQUEST_HEADERS_FILE" 2>/dev/null || true
+	[ -n "$RESPONSE_HEADERS_FILE" ] && rm -f "$RESPONSE_HEADERS_FILE" 2>/dev/null || true
+	[ -n "$TMP_DOWNLOAD" ] && rm -f "$TMP_DOWNLOAD" 2>/dev/null || true
+	[ -n "$TMP_DECODED" ] && rm -f "$TMP_DECODED" 2>/dev/null || true
+	[ -n "$APPLY_PATH" ] && rm -f "$APPLY_PATH" "$APPLY_PATH.tmp" 2>/dev/null || true
+	[ -n "$DOWNLOAD_ERROR" ] && rm -f "$DOWNLOAD_ERROR" 2>/dev/null || true
+}
+
+trap cleanup EXIT INT TERM
+
+status_text() {
+	printf '%s' "$*" | tr '\r\n' '  '
+}
+
+fail() {
+	echo "ERROR: $(status_text "$*")" >&2
+	exit 1
+}
+
+usage() {
+	fail "usage: $0 apply|probe-interval --url URL [--target config.yaml|config2.yaml|config3.yaml] [--fallback-url URL] [--fallback-on-error 0|1] [--mode direct|remnawave-client-path] [--proxy-mode tproxy|tun|mixed] [--tun-stack system|gvisor|mixed] [--user-agent UA] [--header 'Name: value']"
+}
+
+need_arg() {
+	[ $# -gt 1 ] || fail "missing value for $1"
+	printf '%s' "$2"
+}
+
+normalize_proxy_mode() {
+	clean="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+	case "$clean" in
+		tun|mixed|tproxy) printf '%s' "$clean" ;;
+		*) printf '%s' "tproxy" ;;
+	esac
+}
+
+normalize_tun_stack() {
+	clean="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+	case "$clean" in
+		system|gvisor|mixed) printf '%s' "$clean" ;;
+		*) printf '%s' "system" ;;
+	esac
+}
+
+set_target_name() {
+	case "$1" in
+		config.yaml|config2.yaml|config3.yaml)
+			TARGET_NAME="$1"
+			TARGET_PATH="$BASE_DIR/$TARGET_NAME"
+			APPLY_PATH="$BASE_DIR/.miclash-subscription.$TARGET_NAME.$$"
+			;;
+		*)
+			fail "unsupported config target: $1"
+			;;
+	esac
+}
+
+read_profile_update_interval_hours() {
+	[ -s "$RESPONSE_HEADERS_FILE" ] || return 0
+	value="$(
+		awk '{
+			lower = tolower($0);
+			if (lower !~ /^profile-update-interval:[[:space:]]*[0-9]+/) next;
+				sub(/^[^:]*:[[:space:]]*/, "", $0);
+				gsub(/[^0-9].*$/, "", $0);
+				print $0;
+				exit;
+			}' "$RESPONSE_HEADERS_FILE" 2>/dev/null
+	)"
+	case "$value" in
+		''|*[!0-9]*) return 0 ;;
+		*) PROFILE_UPDATE_INTERVAL_HOURS="$value" ;;
+	esac
+}
+
+download_subscription() {
+	download_url="$1"
+	output_path="$2"
+	download_mode="$3"
+
+	rm -f "$output_path" "$DOWNLOAD_ERROR" "$RESPONSE_HEADERS_FILE" 2>/dev/null || true
+	PROFILE_UPDATE_INTERVAL_HOURS=""
+
+	set -- \
+		-L -fsS \
+		--connect-timeout "$CURL_CONNECT_TIMEOUT" \
+		--max-time "$CURL_MAX_TIME" \
+		-A "$USER_AGENT" \
+		-H "Accept: application/yaml, text/yaml, text/plain, */*" \
+		-H "Cache-Control: no-cache" \
+		-H "Pragma: no-cache"
+
+	if [ -f "$REQUEST_HEADERS_FILE" ]; then
+		while IFS= read -r header; do
+			[ -n "$header" ] || continue
+			set -- "$@" -H "$header"
+		done < "$REQUEST_HEADERS_FILE"
+	fi
+
+	set -- "$@" "$download_url" -D "$RESPONSE_HEADERS_FILE" -o "$output_path"
+
+	if ! "$CURL_BIN" "$@" > /dev/null 2> "$DOWNLOAD_ERROR"; then
+		message="$(cat "$DOWNLOAD_ERROR" 2>/dev/null || true)"
+		if [ "$download_mode" = "remnawave-client-path" ] && printf '%s' "$message" | grep -q "403"; then
+			echo "Remnawave blocked /mihomo path (HTTP 403). Disable \"Disable Subscription Access by Path\" in Remnawave response-rules settings." > "$DOWNLOAD_ERROR"
+		elif [ -z "$message" ]; then
+			echo "Download failed." > "$DOWNLOAD_ERROR"
+		fi
+		return 1
+	fi
+
+	read_profile_update_interval_hours
+
+	if [ ! -s "$output_path" ]; then
+		echo "Downloaded file is empty." > "$DOWNLOAD_ERROR"
+		return 1
+	fi
+
+	return 0
+}
+
+looks_like_uri_subscription() {
+	grep -Eiq '(^|[[:space:]])(vmess|vless|trojan|ss|ssr|hysteria|hysteria2|tuic)://[^[:space:]]+' "$1" 2>/dev/null
+}
+
+looks_like_yaml_config() {
+	grep -Eq '^[[:space:]]*(proxies|proxy-providers|mixed-port|port|mode|rules):[[:space:]]*' "$1" 2>/dev/null
+}
+
+looks_like_base64_blob() {
+	file="$1"
+	[ -s "$file" ] || return 1
+	if grep -q ':' "$file" 2>/dev/null; then
+		return 1
+	fi
+	compact_len="$(tr -d ' \t\r\n' < "$file" 2>/dev/null | wc -c | tr -d ' ')"
+	[ "${compact_len:-0}" -ge 48 ] || return 1
+	tr -d ' \t\r\n' < "$file" 2>/dev/null | grep -Eq '^[A-Za-z0-9+/=]+$'
+}
+
+decode_base64_blob_if_yaml() {
+	input_path="$1"
+	output_path="$2"
+
+	if ! looks_like_base64_blob "$input_path"; then
+		return 1
+	fi
+
+	if tr -d ' \t\r\n' < "$input_path" | base64 -d > "$output_path" 2>/dev/null &&
+		looks_like_yaml_config "$output_path"; then
+		return 0
+	fi
+
+	return 1
+}
+
+prepare_downloaded_payload() {
+	source_path="$1"
+
+	if decode_base64_blob_if_yaml "$source_path" "$TMP_DECODED"; then
+		cat "$TMP_DECODED" > "$source_path" || fail "failed to prepare decoded subscription"
+	fi
+}
+
+payload_needs_fallback() {
+	looks_like_base64_blob "$1" || looks_like_uri_subscription "$1"
+}
+
+download_primary_or_fallback() {
+	if download_subscription "$URL" "$TMP_DOWNLOAD" "$MODE"; then
+		return 0
+	fi
+
+	primary_error="$(cat "$DOWNLOAD_ERROR" 2>/dev/null || true)"
+	if [ -n "$FALLBACK_URL" ] && [ "$FALLBACK_ON_ERROR" = "1" ]; then
+		if download_subscription "$FALLBACK_URL" "$TMP_DOWNLOAD" "remnawave-client-path"; then
+			MODE="remnawave-client-path"
+			return 0
+		fi
+		fallback_error="$(cat "$DOWNLOAD_ERROR" 2>/dev/null || true)"
+		fail "Subscription download failed for both original URL and /mihomo fallback: ${fallback_error:-$primary_error}"
+	fi
+
+	fail "${primary_error:-Download failed.}"
+}
+
+ensure_yaml_payload_or_fallback() {
+	prepare_downloaded_payload "$TMP_DOWNLOAD"
+
+	if ! payload_needs_fallback "$TMP_DOWNLOAD"; then
+		return 0
+	fi
+
+	if [ -n "$FALLBACK_URL" ]; then
+		if ! download_subscription "$FALLBACK_URL" "$TMP_DOWNLOAD" "remnawave-client-path"; then
+			fallback_error="$(cat "$DOWNLOAD_ERROR" 2>/dev/null || true)"
+			fail "Original URL returned links/base64 and /mihomo fallback failed: ${fallback_error:-Download failed.}"
+		fi
+		MODE="remnawave-client-path"
+		prepare_downloaded_payload "$TMP_DOWNLOAD"
+		if payload_needs_fallback "$TMP_DOWNLOAD"; then
+			fail "Both original URL and /mihomo returned links/base64 instead of Clash YAML. Check provider export type."
+		fi
+		return 0
+	fi
+
+	fail "The subscription server returned links/base64 instead of Clash YAML. For Remnawave use the /mihomo subscription path."
+}
+
+transform_proxy_mode() {
+	input_path="$1"
+	output_path="$2"
+
+	awk -v proxy_mode="$PROXY_MODE" -v tun_stack="$TUN_STACK" '
+	function ltrim(s) { sub(/^[ \t\r]+/, "", s); return s }
+	function rtrim(s) { sub(/[ \t\r]+$/, "", s); return s }
+	function trim(s) { return rtrim(ltrim(s)) }
+	function indent_of(s) { match(s, /[^ \t]/); return RSTART ? RSTART - 1 : 9999 }
+	function print_proxy_config() {
+		if (proxy_mode == "tun") {
+			print "# Proxy Mode: TUN"
+			print "tun:"
+			print "  enable: true"
+			print "  device: clash-tun"
+			print "  stack: " tun_stack
+			print "  auto-route: false"
+			print "  auto-redirect: false"
+			print "  auto-detect-interface: false"
+		} else if (proxy_mode == "mixed") {
+			print "# Proxy Mode: MIXED (TCP via TPROXY, UDP via TUN)"
+			print "redir-port: 7892"
+			print "tproxy-port: 7894"
+			print "tun:"
+			print "  enable: true"
+			print "  device: clash-tun"
+			print "  stack: " tun_stack
+			print "  auto-route: false"
+			print "  auto-redirect: false"
+			print "  auto-detect-interface: false"
+		} else {
+			print "# Proxy Mode: TPROXY"
+			print "redir-port: 7892"
+			print "tproxy-port: 7894"
+		}
+	}
+	{
+		line = $0
+		sub(/\r$/, "", line)
+		trimmed = trim(line)
+
+		if (trimmed ~ /^#[ \t]*Proxy[ \t]+Mode:/) next
+		if (trimmed == "" && previous_blank) next
+		if (trimmed ~ /^redir-port:/) next
+		if (trimmed ~ /^tproxy-port:/) next
+		if (trimmed ~ /^tun:/) {
+			in_tun = 1
+			tun_indent = indent_of(line)
+			next
+		}
+
+		if (in_tun) {
+			current_indent = indent_of(line)
+			if (trimmed == "" || trimmed ~ /^#/ || current_indent > tun_indent) next
+			in_tun = 0
+		}
+
+		out[++n] = line
+		previous_blank = (trimmed == "")
+	}
+	END {
+		insert_at = 0
+		for (i = 1; i <= n; i++) {
+			if (trim(out[i]) ~ /^mode:/) {
+				insert_at = i
+				break
+			}
+		}
+
+		if (insert_at == 0) print_proxy_config()
+		for (i = 1; i <= n; i++) {
+			print out[i]
+			if (i == insert_at) print_proxy_config()
+		}
+	}
+	' "$input_path" > "$output_path.tmp" || fail "failed to transform proxy mode"
+
+	mv "$output_path.tmp" "$output_path" || fail "failed to stage transformed subscription"
+	chmod 0644 "$output_path" 2>/dev/null || true
+}
+
+validate_config() {
+	candidate="$1"
+	[ -x "$CLASH_BIN" ] || fail "Mihomo kernel is not installed."
+
+	output="$("$CLASH_BIN" -d "$BASE_DIR" -f "$candidate" -t 2>&1)" && return 0
+	message="$(printf '%s\n' "$output" | sed -n '1,20p')"
+	fail "YAML validation failed: ${message:-unknown error}"
+}
+
+apply_subscription() {
+	[ -n "$URL" ] || fail "missing --url"
+	[ -x "$CURL_BIN" ] || fail "curl is not installed."
+	mkdir -p "$BASE_DIR" || fail "failed to create $BASE_DIR"
+
+	download_primary_or_fallback
+	ensure_yaml_payload_or_fallback
+	transform_proxy_mode "$TMP_DOWNLOAD" "$APPLY_PATH"
+	validate_config "$APPLY_PATH"
+	mv "$APPLY_PATH" "$TARGET_PATH" || fail "failed to replace $TARGET_PATH"
+	chmod 0644 "$TARGET_PATH" 2>/dev/null || true
+
+	printf 'ok=1\n'
+	printf 'mode=%s\n' "$MODE"
+	printf 'target=%s\n' "$TARGET_NAME"
+	printf 'profileUpdateIntervalHours=%s\n' "$PROFILE_UPDATE_INTERVAL_HOURS"
+	printf 'message=%s\n' "Subscription downloaded and applied."
+}
+
+probe_interval() {
+	[ -n "$URL" ] || fail "missing --url"
+	[ -x "$CURL_BIN" ] || fail "curl is not installed."
+
+	download_primary_or_fallback
+
+	printf 'ok=1\n'
+	printf 'mode=%s\n' "$MODE"
+	printf 'profileUpdateIntervalHours=%s\n' "$PROFILE_UPDATE_INTERVAL_HOURS"
+}
+
+ACTION=""
+REQUEST_HEADERS_FILE="/tmp/miclash-subscription-request-headers.$$"
+RESPONSE_HEADERS_FILE="/tmp/miclash-subscription-response-headers.$$"
+TMP_DOWNLOAD="/tmp/miclash-subscription-download.$$"
+TMP_DECODED="/tmp/miclash-subscription-decoded.$$"
+DOWNLOAD_ERROR="/tmp/miclash-subscription-error.$$"
+: > "$REQUEST_HEADERS_FILE" || fail "failed to create temporary header file"
+set_target_name "$TARGET_NAME"
+
+case "${1:-}" in
+	apply)
+		ACTION="apply"
+		shift
+		;;
+	probe-interval)
+		ACTION="probe-interval"
+		shift
+		;;
+	*)
+		usage
+		;;
+esac
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--url)
+			URL="$(need_arg "$@")"
+			shift 2
+			;;
+		--fallback-url)
+			FALLBACK_URL="$(need_arg "$@")"
+			shift 2
+			;;
+		--fallback-on-error)
+			FALLBACK_ON_ERROR="$(need_arg "$@")"
+			shift 2
+			;;
+		--mode)
+			MODE="$(need_arg "$@")"
+			shift 2
+			;;
+		--target)
+			set_target_name "$(need_arg "$@")"
+			shift 2
+			;;
+		--proxy-mode)
+			PROXY_MODE="$(normalize_proxy_mode "$(need_arg "$@")")"
+			shift 2
+			;;
+		--tun-stack)
+			TUN_STACK="$(normalize_tun_stack "$(need_arg "$@")")"
+			shift 2
+			;;
+		--user-agent)
+			USER_AGENT="$(need_arg "$@")"
+			shift 2
+			;;
+		--header)
+			printf '%s\n' "$(need_arg "$@")" >> "$REQUEST_HEADERS_FILE" || fail "failed to record request header"
+			shift 2
+			;;
+		*)
+			fail "unknown argument: $1"
+			;;
+	esac
+done
+
+case "$ACTION" in
+	apply) apply_subscription ;;
+	probe-interval) probe_interval ;;
+	*) usage ;;
+esac

@@ -79,8 +79,9 @@ check(!saveUrlHandler.includes('fetchSubscriptionAsYaml('),
 
 check(updateUrlHandler.includes("setOperationStatus('running', _('Saving subscription URL...'))"),
 	'Update URL handler must save URL before downloading.');
-check(updateUrlHandler.includes('fetchSubscriptionAsYaml('),
-	'Update URL handler must keep the subscription download/update flow.');
+check(updateUrlHandler.includes('applySubscriptionOnRouter(') &&
+	!updateUrlHandler.includes('fetchSubscriptionAsYaml('),
+	'Update URL handler must apply the subscription through the router-side helper.');
 
 check(clearUrlHandler.includes("setOperationStatus('running', _('Clearing subscription URL...'))"),
 	'Clear URL handler must show matching operation status.');
