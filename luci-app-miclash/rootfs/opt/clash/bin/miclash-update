@@ -13,6 +13,10 @@ CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
 CURL_RETRY=2
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
+MICLASH_RELEASE_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest"
+MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases"
+MIHOMO_RELEASE_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
+MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases"
 
 cleanup() {
 	for file in $TMP_FILES; do
@@ -146,6 +150,54 @@ detect_pkg_manager() {
 		return 0
 	fi
 	fail "no supported package manager found (apk/opkg)"
+}
+
+release_error() {
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+fetch_release_url() {
+	url="$1"
+
+	if command -v curl >/dev/null 2>&1; then
+		curl -L -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time 60 "$url"
+		return "$?"
+	fi
+
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -q -O- --timeout=30 "$url"
+		return "$?"
+	fi
+
+	return 127
+}
+
+print_release_info() {
+	kind="${1:-}"
+	channel="${2:-release}"
+
+	case "$kind" in
+		miclash)
+			latest_url="$MICLASH_RELEASE_API"
+			releases_url="$MICLASH_RELEASES_API"
+			;;
+		mihomo)
+			latest_url="$MIHOMO_RELEASE_API"
+			releases_url="$MIHOMO_RELEASES_API"
+			;;
+		*)
+			release_error "usage: $0 release miclash|mihomo [release|prerelease]"
+			;;
+	esac
+
+	case "$channel" in
+		prerelease) url="$releases_url" ;;
+		release|"") url="$latest_url" ;;
+		*) release_error "unsupported release channel: $channel" ;;
+	esac
+
+	fetch_release_url "$url" || release_error "failed to fetch release information"
 }
 
 openwrt_major() {
@@ -305,6 +357,10 @@ case "${1:-}" in
 	clear-status)
 		clear_status
 		;;
+	release)
+		shift
+		print_release_info "$@"
+		;;
 	job)
 		shift
 		run_job "$@"
@@ -320,6 +376,6 @@ case "${1:-}" in
 		install_kernel "$@"
 		;;
 	*)
-		fail "usage: $0 app --url URL [--mode update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
+		fail "usage: $0 release miclash|mihomo [release|prerelease] | app --url URL [--mode update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
 		;;
 esac

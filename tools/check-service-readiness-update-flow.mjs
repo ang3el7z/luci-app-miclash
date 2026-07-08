@@ -6,6 +6,7 @@ const files = {
 	serviceJob: 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service',
 	rules: 'luci-app-miclash/rootfs/opt/clash/bin/clash-rules',
 	update: 'luci-app-miclash/rootfs/opt/clash/bin/miclash-update',
+	release: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/release.js',
 	acl: 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json',
 	style: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css',
 	makefile: 'luci-app-miclash/Makefile'
@@ -15,6 +16,7 @@ const config = readFileSync(files.config, 'utf8');
 const serviceJob = existsSync(files.serviceJob) ? readFileSync(files.serviceJob, 'utf8') : '';
 const rules = readFileSync(files.rules, 'utf8');
 const update = readFileSync(files.update, 'utf8');
+const release = readFileSync(files.release, 'utf8');
 const acl = readFileSync(files.acl, 'utf8');
 const style = readFileSync(files.style, 'utf8');
 const makefile = readFileSync(files.makefile, 'utf8');
@@ -186,6 +188,17 @@ check(update.includes('write_status()') && update.includes('run_job()'),
 	'Update script must support detached job status reporting.');
 check(update.includes('case "${1:-}" in') && update.includes('status)') && update.includes('clear-status)'),
 	'Update script must expose status and clear-status commands.');
+check(release.includes("'require fs';") &&
+	release.includes("fs.exec('/opt/clash/bin/miclash-update'") &&
+	release.includes("['release', kind, channel]") &&
+	!release.includes('await fetch('),
+	'Release metadata must be fetched by the router through miclash-update, not by the browser.');
+check(update.includes('print_release_info()') &&
+	update.includes('MICLASH_RELEASE_API=') &&
+	update.includes('MIHOMO_RELEASE_API=') &&
+	update.includes('uclient-fetch') &&
+	update.includes('release)'),
+	'miclash-update must expose router-side release metadata fetching with a uclient-fetch fallback.');
 
 const installAppStart = update.indexOf('\ninstall_app()');
 const installKernelStart = update.indexOf('\ninstall_kernel()');
