@@ -8,7 +8,6 @@ const TMP_SUBSCRIPTION_PATH = '/tmp/miclash-subscription.yaml';
 const TMP_SUBSCRIPTION_HEADERS_PATH = '/tmp/miclash-subscription.headers';
 const SUBSCRIPTION_CURL_CONNECT_TIMEOUT_SEC = 8;
 const SUBSCRIPTION_CURL_MAX_TIME_SEC = 18;
-const SUPPORTED_PROFILE_UPDATE_INTERVAL_HOURS = ['2', '4', '12', '24'];
 
 function looksLikeBase64Text(value) {
 	const cleaned = String(value || '').replace(/\s+/g, '');
@@ -46,8 +45,8 @@ function looksLikeYamlConfig(content) {
 function readProfileUpdateIntervalHours(headers) {
 	const match = String(headers || '').match(/^Profile-Update-Interval:\s*([0-9]+)/im);
 	if (!match) return '';
-	const hours = String(parseInt(match[1], 10) || '');
-	return SUPPORTED_PROFILE_UPDATE_INTERVAL_HOURS.includes(hours) ? hours : '';
+	const value = parseInt(match[1], 10);
+	return value > 0 ? String(value) : '';
 }
 
 function buildClientProfile(settings, appVersion) {

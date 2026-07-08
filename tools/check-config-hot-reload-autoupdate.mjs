@@ -65,9 +65,23 @@ check(subscription.includes('TMP_SUBSCRIPTION_HEADERS_PATH') &&
 	subscription.includes('return { content:') &&
 	subscription.includes('profileUpdateIntervalHours:'),
 	'Subscription downloads must capture response headers and expose Profile-Update-Interval hours with the content.');
+check(!subscription.includes('SUPPORTED_PROFILE_UPDATE_INTERVAL_HOURS') &&
+	subscription.includes('parseInt(match[1], 10)') &&
+	subscription.includes('value > 0 ? String(value)'),
+	'Subscription Profile-Update-Interval must accept provider-supplied positive hour values such as 3.');
 check(config.includes('applySubscriptionProfileUpdateInterval') &&
 	config.includes('downloadedInfo.profileUpdateIntervalHours'),
 	'Config update flow must persist a supported Profile-Update-Interval value from subscription downloads.');
+check(config.includes('AUTO_UPDATE_PRESET_INTERVAL_HOURS') &&
+	config.includes("['2', '4', '12', '24']") &&
+	config.includes('buildAutoUpdateIntervalChoicesHtml') &&
+	config.includes('sbox-auto-update-choice') &&
+	config.includes('name="sbox-auto-update-interval"') &&
+	!config.includes('id="sbox-auto-update-interval" class="cbi-input-select'),
+	'Settings pane must render auto-update hours as radio choices, not as a select.');
+check(config.includes('AUTO_UPDATE_PRESET_INTERVAL_HOURS.includes(current)') &&
+	config.includes('const values = preset ? AUTO_UPDATE_PRESET_INTERVAL_HOURS : [current];'),
+	'Settings pane must show only the provider interval when it is not one of the default choices.');
 
 check(settings.includes('autoUpdateConfig: true') &&
 	settings.includes("autoUpdateIntervalHours: '4'") &&
@@ -79,7 +93,7 @@ check(settings.includes('autoUpdateConfig: true') &&
 check(config.includes('id="sbox-auto-update-config"') &&
 	config.includes('id="sbox-auto-update-interval"') &&
 	config.includes('Auto-update config') &&
-	config.includes('Every 4 hours') &&
+	config.includes("safeText(_('hours'))") &&
 	config.includes('autoUpdateConfig') &&
 	config.includes('autoUpdateIntervalHours'),
 	'Settings pane must expose auto-update checkbox and interval choices.');
@@ -102,6 +116,10 @@ check(autoUpdateJob.includes('AUTO_UPDATE_CONFIG') &&
 	autoUpdateJob.includes('is_service_running') &&
 	autoUpdateJob.includes('sleep "$POLL_INTERVAL_SEC"'),
 	'Auto-update worker must poll settings, download/validate Main config, and hot reload only when service is running.');
+check(autoUpdateJob.includes('case "$hours" in') &&
+	autoUpdateJob.includes('*[!0-9]*|0|"")') &&
+	!autoUpdateJob.includes('2|4|12|24'),
+	'Auto-update worker must accept provider-supplied positive hour values such as 3.');
 check(existsSync(files.autoUpdateInit),
 	'Package must include /etc/init.d/miclash-autoupdate procd service.');
 check(autoUpdateInit.includes('USE_PROCD=1') &&

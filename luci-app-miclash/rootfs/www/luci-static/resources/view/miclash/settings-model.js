@@ -334,7 +334,8 @@ function defaultOperationalSettings() {
 
 function normalizeAutoUpdateIntervalHours(value) {
 	const clean = String(value || '').trim();
-	return ['2', '4', '12', '24'].includes(clean) ? clean : '4';
+	const parsed = parseInt(clean, 10);
+	return parsed > 0 ? String(parsed) : '4';
 }
 
 async function loadOperationalSettings() {

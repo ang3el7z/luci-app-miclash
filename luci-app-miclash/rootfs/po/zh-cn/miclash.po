@@ -1315,6 +1315,9 @@ msgstr "更新"
 msgid "Auto-update config"
 msgstr "自动更新配置"
 
+msgid "hours"
+msgstr "小时"
+
 msgid "Configuration applied and Mihomo reloaded."
 msgstr "配置已应用，Mihomo 已重新加载。"
 

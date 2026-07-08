@@ -26,6 +26,7 @@ const UPDATE_JOB_TIMEOUT_MS = 7 * 60 * 1000;
 const SERVICE_JOB_POLL_MS = 1000;
 const SERVICE_JOB_TIMEOUT_MS = 3 * 60 * 1000;
 const OPERATION_TOKEN_STORAGE_PREFIX = 'miclash-operation-token-';
+const AUTO_UPDATE_PRESET_INTERVAL_HOURS = ['2', '4', '12', '24'];
 
 let editor = null;
 let pageRoot = null;
@@ -1168,7 +1169,8 @@ async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode
 
 function normalizeAutoUpdateIntervalHours(value) {
 	const clean = String(value || '').trim();
-	return ['2', '4', '12', '24'].includes(clean) ? clean : '';
+	const parsed = parseInt(clean, 10);
+	return parsed > 0 ? String(parsed) : '';
 }
 
 async function applySubscriptionProfileUpdateInterval(hours) {
@@ -1784,6 +1786,23 @@ function buildSettingsSummary() {
 	return lines.map((line) => '<div>' + safeText(line) + '</div>').join('');
 }
 
+function buildAutoUpdateIntervalChoicesHtml(settings) {
+	const current = normalizeAutoUpdateIntervalHours(settings && settings.autoUpdateIntervalHours || '4') || '4';
+	const preset = AUTO_UPDATE_PRESET_INTERVAL_HOURS.includes(current);
+	const values = preset ? AUTO_UPDATE_PRESET_INTERVAL_HOURS : [current];
+
+	return '' +
+		'<span id="sbox-auto-update-interval" class="sbox-auto-update-interval"' + (settings && settings.autoUpdateConfig !== false ? '' : ' hidden') + '>' +
+			'<span class="sbox-auto-update-interval-label">(' + safeText(_('hours')) + ')</span>' +
+			values.map((value) =>
+				'<label class="sbox-auto-update-choice">' +
+					'<span>' + safeText(value) + '</span>' +
+					'<input type="radio" name="sbox-auto-update-interval" value="' + safeText(value) + '"' + (value === current ? ' checked' : '') + ' />' +
+				'</label>'
+			).join('') +
+		'</span>';
+}
+
 function buildInterfaceListHtml() {
 	const s = appState.settings || {};
 	const selectedSet = new Set((appState.selectedInterfaces || []).concat(
@@ -1935,17 +1954,12 @@ function buildSettingsPaneHtml() {
 					'<input type="checkbox" id="sbox-auto-hide-notifications"' + (s.autoHideNotifications !== false ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Auto-hide notifications')) + '</span>' +
 				'</label>' +
-				'<div class="sbox-settings-field">' +
-					'<label class="sbox-checkbox-row">' +
+				'<div class="sbox-settings-field sbox-auto-update-field">' +
+					'<label class="sbox-checkbox-row sbox-auto-update-row">' +
 						'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
 						'<span>' + safeText(_('Auto-update config')) + '</span>' +
+						buildAutoUpdateIntervalChoicesHtml(s) +
 					'</label>' +
-					'<select id="sbox-auto-update-interval" class="cbi-input-select sbox-select"' + (s.autoUpdateConfig !== false ? '' : ' disabled') + '>' +
-						'<option value="2"' + ((s.autoUpdateIntervalHours || '4') === '2' ? ' selected' : '') + '>' + safeText(_('Every 2 hours')) + '</option>' +
-						'<option value="4"' + ((s.autoUpdateIntervalHours || '4') === '4' ? ' selected' : '') + '>' + safeText(_('Every 4 hours')) + '</option>' +
-						'<option value="12"' + ((s.autoUpdateIntervalHours || '4') === '12' ? ' selected' : '') + '>' + safeText(_('Every 12 hours')) + '</option>' +
-						'<option value="24"' + ((s.autoUpdateIntervalHours || '4') === '24' ? ' selected' : '') + '>' + safeText(_('Every 24 hours')) + '</option>' +
-					'</select>' +
 				'</div>' +
 				'<div class="sbox-settings-field">' +
 					'<label>' + safeText(_('Release channels')) + '</label>' +
@@ -2274,7 +2288,7 @@ async function collectSettingsFormState() {
 	const autoHideNotificationsEl = pane.querySelector('#sbox-auto-hide-notifications');
 	const autoHideNotifications = autoHideNotificationsEl ? !!autoHideNotificationsEl.checked : true;
 	const autoUpdateConfigEl = pane.querySelector('#sbox-auto-update-config');
-	const autoUpdateIntervalEl = pane.querySelector('#sbox-auto-update-interval');
+	const autoUpdateIntervalEl = pane.querySelector('input[name="sbox-auto-update-interval"]:checked');
 	const autoUpdateConfig = autoUpdateConfigEl ? !!autoUpdateConfigEl.checked : true;
 	const autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalEl?.value || '4') || '4';
 	const enableHwid = !!pane.querySelector('#sbox-enable-hwid')?.checked;
@@ -2329,7 +2343,10 @@ function bindSettingsPaneEvents() {
 	const autoUpdateIntervalEl = pane.querySelector('#sbox-auto-update-interval');
 	if (autoUpdateConfigEl && autoUpdateIntervalEl) {
 		const syncAutoUpdateInterval = () => {
-			autoUpdateIntervalEl.disabled = !autoUpdateConfigEl.checked;
+			autoUpdateIntervalEl.hidden = !autoUpdateConfigEl.checked;
+			autoUpdateIntervalEl.querySelectorAll('input').forEach((input) => {
+				input.disabled = !autoUpdateConfigEl.checked;
+			});
 		};
 		autoUpdateConfigEl.addEventListener('change', syncAutoUpdateInterval);
 		syncAutoUpdateInterval();

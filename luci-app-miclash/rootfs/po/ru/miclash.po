@@ -1368,6 +1368,9 @@ msgstr "Обновить"
 msgid "Auto-update config"
 msgstr "Автообновление конфига"
 
+msgid "hours"
+msgstr "часы"
+
 msgid "Configuration applied and Mihomo reloaded."
 msgstr "Конфигурация применена, Mihomo перезагружен."
 

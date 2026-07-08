@@ -580,6 +580,33 @@
 	margin: 6px 0;
 	font-size: 12px;
 }
+.sbox-auto-update-row {
+	align-items: center;
+	flex-wrap: wrap;
+}
+.sbox-auto-update-interval {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	color: var(--sbox-text);
+}
+.sbox-auto-update-interval[hidden] {
+	display: none !important;
+}
+.sbox-auto-update-interval-label {
+	color: var(--sbox-muted);
+}
+.sbox-auto-update-choice {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.2;
+}
+.sbox-auto-update-choice input {
+	margin: 0;
+}
 .sbox-form-grid {
 	margin-top: 8px;
 	display: grid;
