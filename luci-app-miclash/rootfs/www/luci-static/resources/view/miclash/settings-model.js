@@ -478,31 +478,29 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 	const includedInterfaces = mode === 'explicit' ? cleanInterfaces : [];
 	const excludedInterfaces = mode === 'exclude' ? cleanInterfaces : [];
 
-	const settingsContent = [
-		'INTERFACE_MODE=' + mode,
-		'PROXY_MODE=' + proxyMode,
-		'TUN_STACK=' + tunStack,
-		'AUTO_DETECT_LAN=' + autoDetectLan,
-		'AUTO_DETECT_WAN=' + autoDetectWan,
-		'BLOCK_QUIC=' + blockQuic,
-		'INTERNET_ONLY_MICLASH=' + internetOnlyMiclash,
-		'USE_TMPFS_RULES=' + useTmpfsRules,
-		'AUTO_HIDE_NOTIFICATIONS=' + (autoHideNotifications !== false),
-		'AUTO_UPDATE_CONFIG=' + (autoUpdateConfig !== false),
-		'AUTO_UPDATE_INTERVAL_HOURS=' + cleanAutoUpdateIntervalHours,
-		'MICLASH_RELEASE_CHANNEL=' + view_miclash_release.normalizeReleaseChannel(miclashReleaseChannel),
-		'MIHOMO_RELEASE_CHANNEL=' + view_miclash_release.normalizeReleaseChannel(mihomoReleaseChannel),
-		'DETECTED_LAN=' + detectedLan,
-		'DETECTED_WAN=' + detectedWan,
-		'INCLUDED_INTERFACES=' + includedInterfaces.join(','),
-		'EXCLUDED_INTERFACES=' + excludedInterfaces.join(','),
-		'ENABLE_HWID=' + enableHwid,
-		'HWID_USER_AGENT=' + hwidUserAgent,
-		'HWID_DEVICE_OS=' + hwidDeviceOS,
-		''
-	].join('\n');
+	const settings = await view_miclash_store.readSettingsMap();
+	settings.INTERFACE_MODE = mode;
+	settings.PROXY_MODE = proxyMode;
+	settings.TUN_STACK = tunStack;
+	settings.AUTO_DETECT_LAN = autoDetectLan;
+	settings.AUTO_DETECT_WAN = autoDetectWan;
+	settings.BLOCK_QUIC = blockQuic;
+	settings.INTERNET_ONLY_MICLASH = internetOnlyMiclash;
+	settings.USE_TMPFS_RULES = useTmpfsRules;
+	settings.AUTO_HIDE_NOTIFICATIONS = autoHideNotifications !== false;
+	settings.AUTO_UPDATE_CONFIG = autoUpdateConfig !== false;
+	settings.AUTO_UPDATE_INTERVAL_HOURS = cleanAutoUpdateIntervalHours;
+	settings.MICLASH_RELEASE_CHANNEL = view_miclash_release.normalizeReleaseChannel(miclashReleaseChannel);
+	settings.MIHOMO_RELEASE_CHANNEL = view_miclash_release.normalizeReleaseChannel(mihomoReleaseChannel);
+	settings.DETECTED_LAN = detectedLan;
+	settings.DETECTED_WAN = detectedWan;
+	settings.INCLUDED_INTERFACES = includedInterfaces.join(',');
+	settings.EXCLUDED_INTERFACES = excludedInterfaces.join(',');
+	settings.ENABLE_HWID = enableHwid;
+	settings.HWID_USER_AGENT = hwidUserAgent;
+	settings.HWID_DEVICE_OS = hwidDeviceOS;
 
-	await view_miclash_store.writeTextFile(SETTINGS_PATH, settingsContent);
+	await view_miclash_store.writeSettingsMap(settings);
 
 	const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
 	if (configContent) {

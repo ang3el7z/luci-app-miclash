@@ -71,6 +71,7 @@ endef
 
 define Package/$(PKG_NAME)/conffiles
 /opt/clash/config.yaml
+/opt/clash/settings
 endef
 
 define Package/$(PKG_NAME)/install
@@ -127,16 +128,23 @@ define Package/$(PKG_NAME)/preinst
 #!/bin/sh
 mkdir -p /opt/clash 2>/dev/null || true
 [ -f /opt/clash/config.yaml ] && cp -p /opt/clash/config.yaml /opt/clash/.config.yaml.upgrade.bak
+[ -f /opt/clash/settings ] && cp -p /opt/clash/settings /opt/clash/.settings.upgrade.bak
 exit 0
 endef
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
+SETTINGS_RESTORED=0
 if [ -f /opt/clash/.config.yaml.upgrade.bak ]; then
 	mv /opt/clash/.config.yaml.upgrade.bak /opt/clash/config.yaml
 	FIRST_INSTALL=0
 else
 	FIRST_INSTALL=1
+fi
+if [ -f /opt/clash/.settings.upgrade.bak ]; then
+	mv /opt/clash/.settings.upgrade.bak /opt/clash/settings
+	chmod 0644 /opt/clash/settings 2>/dev/null || true
+	SETTINGS_RESTORED=1
 fi
 [ -n "$$IPKG_INSTROOT" ] || {
 	/etc/init.d/rpcd reload
@@ -153,6 +161,10 @@ fi
 	if [ -x /etc/init.d/miclash-autoupdate ]; then
 		/etc/init.d/miclash-autoupdate enable >/dev/null 2>&1 || true
 		/etc/init.d/miclash-autoupdate start >/dev/null 2>&1 || true
+	fi
+
+	if [ "$$SETTINGS_RESTORED" = "1" ] && [ -x /opt/clash/bin/clash-rules ]; then
+		CLASH_RULES_QUIET=1 /opt/clash/bin/clash-rules guard_refresh >/dev/null 2>&1 || true
 	fi
 
 	# Ensure periodic clash-rules update cron job exists
@@ -214,6 +226,7 @@ define Package/$(PKG_NAME)/postrm
 	rm -rf /www/luci-static/resources/view/miclash
 	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
 	rm -f /opt/clash/.config.yaml.upgrade.bak
+	rm -f /opt/clash/.settings.upgrade.bak
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
 	rm -f /etc/init.d/miclash-autoupdate

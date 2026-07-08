@@ -87,8 +87,8 @@ check(settings.includes('autoUpdateConfig: true') &&
 	settings.includes("autoUpdateIntervalHours: '4'") &&
 	settings.includes("case 'AUTO_UPDATE_CONFIG'") &&
 	settings.includes("case 'AUTO_UPDATE_INTERVAL_HOURS'") &&
-	settings.includes("'AUTO_UPDATE_CONFIG=' +") &&
-	settings.includes("'AUTO_UPDATE_INTERVAL_HOURS=' +"),
+	settings.includes('settings.AUTO_UPDATE_CONFIG =') &&
+	settings.includes('settings.AUTO_UPDATE_INTERVAL_HOURS ='),
 	'Settings model must load, default, and save auto-update settings.');
 check(config.includes('id="sbox-auto-update-config"') &&
 	config.includes('id="sbox-auto-update-interval"') &&

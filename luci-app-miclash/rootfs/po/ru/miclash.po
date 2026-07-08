@@ -818,6 +818,9 @@ msgstr "Настройки сохранены, служба Clash перезап
 msgid "Settings saved, but failed to restart Clash service: %s"
 msgstr "Настройки сохранены, но перезапустить службу Clash не удалось: %s"
 
+msgid "Failed to refresh protection rules."
+msgstr "Не удалось обновить правила защиты."
+
 msgid "Kernel installed and service restarted."
 msgstr "Ядро установлено, служба перезапущена."
 

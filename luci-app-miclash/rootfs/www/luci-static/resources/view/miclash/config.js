@@ -1144,6 +1144,13 @@ async function restartOrReloadServiceOrThrow(action, options) {
 	return runMiClashServiceJob(action, message);
 }
 
+async function refreshGuardRulesOrThrow() {
+	const result = await fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh']);
+	if (result.code !== 0) {
+		throw new Error(String(result.stderr || result.stdout || _('Failed to refresh protection rules.')).trim());
+	}
+}
+
 function notifyDetailedError(title, detail) {
 	ui.addNotification(null, E('div', {}, [
 		E('p', String(title || '')),
@@ -1397,6 +1404,8 @@ async function switchProxyModeFromHeader(targetMode) {
 		if (!(await validateMainConfigBeforeStart())) return;
 		setOperationStatus('running', _('Restarting Clash service...'));
 		await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
+	} else {
+		await refreshGuardRulesOrThrow();
 	}
 
 	appState.settings = await loadOperationalSettings();
@@ -2400,6 +2409,7 @@ function bindSettingsPaneEvents() {
 					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
 				}
 			} else {
+				await refreshGuardRulesOrThrow();
 				setOperationSuccess(_('Settings saved.'));
 				notify('info', _('Settings saved.'));
 			}
