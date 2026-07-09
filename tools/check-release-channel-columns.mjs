@@ -32,6 +32,20 @@ check(config.includes('includeMiClashPrereleases') && config.includes('includeMi
 	'Config UI must use separate prerelease checks for MiClash and Mihomo.');
 check(config.includes('sbox-miclash-release-channel') && config.includes('sbox-mihomo-release-channel'),
 	'Settings UI must render separate radio groups for MiClash and Mihomo.');
+check(config.includes('function buildReleaseChannelSectionHtml(') &&
+	config.includes('sbox-settings-overview') &&
+	config.includes('sbox-release-channel-section cbi-section sbox-settings-block') &&
+	config.indexOf('buildReleaseChannelSectionHtml(s)') < config.indexOf("'<div class=\"sbox-settings-grid\">'") &&
+	!config.includes('sbox-settings-subtitle') &&
+	!config.includes("'<label>' + safeText(_('Release channels')) + '</label>'"),
+	'Release channel settings must render as a top overview section, not inside Additional.');
+const releaseOverviewStart = config.indexOf('buildReleaseChannelSectionHtml(s)');
+const settingsGridStart = config.indexOf("'<div class=\"sbox-settings-grid\">'");
+check(releaseOverviewStart !== -1 && settingsGridStart !== -1 &&
+	!config.slice(releaseOverviewStart, settingsGridStart).includes('sbox-settings-gap'),
+	'Release channel overview must flow directly into the settings grid without an extra spacer.');
+check(!config.includes('sbox-settings-gap') && !style.includes('.sbox-settings-gap'),
+	'Settings pane must not keep the removed vertical spacer markup or CSS.');
 check(!config.includes('id="sbox-release-channel"'),
 	'Settings UI must not render the old shared release channel select.');
 check(config.includes('miclashReleaseChannel') && config.includes('mihomoReleaseChannel'),
@@ -39,6 +53,11 @@ check(config.includes('miclashReleaseChannel') && config.includes('mihomoRelease
 
 check(style.includes('.sbox-release-channel-grid') && style.includes('.sbox-release-channel-column'),
 	'CSS must style the two-column release channel picker.');
+check(style.includes('.sbox-settings-overview') &&
+	style.includes('grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);') &&
+	style.includes('.sbox-release-channel-section') &&
+	style.includes('.sbox-release-channel-section .sbox-release-channel-grid'),
+	'Release channel section must occupy the top-right overview area with compact columns.');
 
 if (failed) process.exit(1);
 console.log('release channel columns check passed');

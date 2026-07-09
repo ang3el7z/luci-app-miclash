@@ -80,6 +80,11 @@ const checks = [
 			!config.includes('sbox-auto-update-interval-label')
 	},
 	{
+		name: 'auto-update row uses checkbox spacing before HWID row',
+		pass: config.includes('sbox-checkbox-row sbox-auto-update-row') &&
+			!config.includes('sbox-settings-field sbox-auto-update-field')
+	},
+	{
 		name: 'Russian release channel labels are localized',
 		pass: msgstr(ru, 'Latest') !== 'Latest' && msgstr(ru, 'Pre-release') !== 'Pre-release'
 	},

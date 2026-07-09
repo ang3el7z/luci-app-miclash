@@ -512,10 +512,23 @@
 .sbox-settings-field {
 	margin-bottom: 10px;
 }
+.sbox-settings-overview {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
+	gap: 10px;
+	align-items: stretch;
+	margin: 0 0 10px;
+}
 .sbox-release-channel-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 10px;
+}
+.sbox-release-channel-section {
+	margin: 0;
+}
+.sbox-release-channel-section .sbox-release-channel-grid {
+	gap: 12px;
 }
 .sbox-release-channel-column {
 	min-width: 0;
@@ -600,9 +613,6 @@
 	padding: 0;
 	font-size: 12px;
 	line-height: 1.5;
-}
-.sbox-settings-gap {
-	height: 12px;
 }
 .sbox-settings-save-wrap {
 	margin-top: 12px;
@@ -758,6 +768,7 @@
 }
 @media (max-width: 980px) {
 	.sbox-config-toolbar,
+	.sbox-settings-overview,
 	.sbox-settings-grid,
 	.sbox-form-grid,
 	.sbox-rulesets-layout {

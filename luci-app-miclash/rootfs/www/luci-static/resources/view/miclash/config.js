@@ -1800,6 +1800,39 @@ function buildAutoUpdateIntervalChoicesHtml(settings) {
 		'</span>';
 }
 
+function buildReleaseChannelSectionHtml(settings) {
+	const s = settings || {};
+
+	return '' +
+		'<section class="sbox-release-channel-section cbi-section sbox-settings-block">' +
+			'<h4>' + safeText(_('Release channels')) + '</h4>' +
+			'<div class="sbox-release-channel-grid">' +
+				'<div class="sbox-release-channel-column">' +
+					'<div class="sbox-release-channel-title">MiClash</div>' +
+					'<label class="sbox-radio-row">' +
+						'<input type="radio" name="sbox-miclash-release-channel" value="release"' + (normalizeReleaseChannel(s.miclashReleaseChannel) === 'release' ? ' checked' : '') + ' />' +
+						'<span>' + safeText(_('Latest')) + '</span>' +
+					'</label>' +
+					'<label class="sbox-radio-row">' +
+						'<input type="radio" name="sbox-miclash-release-channel" value="prerelease"' + (normalizeReleaseChannel(s.miclashReleaseChannel) === 'prerelease' ? ' checked' : '') + ' />' +
+						'<span>' + safeText(_('Pre-release')) + '</span>' +
+					'</label>' +
+				'</div>' +
+				'<div class="sbox-release-channel-column">' +
+					'<div class="sbox-release-channel-title">Mihomo</div>' +
+					'<label class="sbox-radio-row">' +
+						'<input type="radio" name="sbox-mihomo-release-channel" value="release"' + (normalizeReleaseChannel(s.mihomoReleaseChannel) === 'release' ? ' checked' : '') + ' />' +
+						'<span>' + safeText(_('Latest')) + '</span>' +
+					'</label>' +
+					'<label class="sbox-radio-row">' +
+						'<input type="radio" name="sbox-mihomo-release-channel" value="prerelease"' + (normalizeReleaseChannel(s.mihomoReleaseChannel) === 'prerelease' ? ' checked' : '') + ' />' +
+						'<span>' + safeText(_('Pre-release')) + '</span>' +
+					'</label>' +
+				'</div>' +
+			'</div>' +
+		'</section>';
+}
+
 function buildInterfaceListHtml() {
 	const s = appState.settings || {};
 	const selectedSet = new Set((appState.selectedInterfaces || []).concat(
@@ -1881,10 +1914,12 @@ function buildSettingsPaneHtml() {
 	const showTunStack = currentProxyMode === 'tun' || currentProxyMode === 'mixed';
 
 	return '' +
-		'<div id="sbox-settings-status" class="cbi-section-descr sbox-settings-status">' +
-			buildSettingsSummary() +
+		'<div class="sbox-settings-overview">' +
+			'<div id="sbox-settings-status" class="cbi-section-descr sbox-settings-status">' +
+				buildSettingsSummary() +
+			'</div>' +
+			buildReleaseChannelSectionHtml(s) +
 		'</div>' +
-		'<div class="sbox-settings-gap" aria-hidden="true"></div>' +
 		'<div class="sbox-settings-grid">' +
 			'<section class="cbi-section sbox-settings-block">' +
 				'<h4>' + safeText(_('Traffic Scope')) + '</h4>' +
@@ -1951,40 +1986,11 @@ function buildSettingsPaneHtml() {
 					'<input type="checkbox" id="sbox-auto-hide-notifications"' + (s.autoHideNotifications !== false ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Auto-hide notifications')) + '</span>' +
 				'</label>' +
-				'<div class="sbox-settings-field sbox-auto-update-field">' +
-					'<label class="sbox-checkbox-row sbox-auto-update-row">' +
-						'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
-						'<span>' + safeText(_('Auto-update config')) + '</span>' +
-						buildAutoUpdateIntervalChoicesHtml(s) +
-					'</label>' +
-				'</div>' +
-				'<div class="sbox-settings-field">' +
-					'<label>' + safeText(_('Release channels')) + '</label>' +
-					'<div class="sbox-release-channel-grid">' +
-						'<div class="sbox-release-channel-column">' +
-							'<div class="sbox-release-channel-title">MiClash</div>' +
-							'<label class="sbox-radio-row">' +
-								'<input type="radio" name="sbox-miclash-release-channel" value="release"' + (normalizeReleaseChannel(s.miclashReleaseChannel) === 'release' ? ' checked' : '') + ' />' +
-								'<span>' + safeText(_('Latest')) + '</span>' +
-							'</label>' +
-							'<label class="sbox-radio-row">' +
-								'<input type="radio" name="sbox-miclash-release-channel" value="prerelease"' + (normalizeReleaseChannel(s.miclashReleaseChannel) === 'prerelease' ? ' checked' : '') + ' />' +
-								'<span>' + safeText(_('Pre-release')) + '</span>' +
-							'</label>' +
-						'</div>' +
-						'<div class="sbox-release-channel-column">' +
-							'<div class="sbox-release-channel-title">Mihomo</div>' +
-							'<label class="sbox-radio-row">' +
-								'<input type="radio" name="sbox-mihomo-release-channel" value="release"' + (normalizeReleaseChannel(s.mihomoReleaseChannel) === 'release' ? ' checked' : '') + ' />' +
-								'<span>' + safeText(_('Latest')) + '</span>' +
-							'</label>' +
-							'<label class="sbox-radio-row">' +
-								'<input type="radio" name="sbox-mihomo-release-channel" value="prerelease"' + (normalizeReleaseChannel(s.mihomoReleaseChannel) === 'prerelease' ? ' checked' : '') + ' />' +
-								'<span>' + safeText(_('Pre-release')) + '</span>' +
-							'</label>' +
-						'</div>' +
-					'</div>' +
-				'</div>' +
+				'<label class="sbox-checkbox-row sbox-auto-update-row">' +
+					'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Auto-update config')) + '</span>' +
+					buildAutoUpdateIntervalChoicesHtml(s) +
+				'</label>' +
 				'<label class="sbox-checkbox-row">' +
 					'<input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Inject HWID headers into proxy-providers')) + '</span>' +
