@@ -235,7 +235,6 @@ const normalizeVersion = view_miclash_release.normalizeVersion;
 const normalizeReleaseChannel = view_miclash_release.normalizeReleaseChannel;
 const compareNumericVersions = view_miclash_release.compareNumericVersions;
 const findKernelAsset = view_miclash_release.findKernelAsset;
-const findMiClashAsset = view_miclash_release.findMiClashAsset;
 const detectPackageManager = view_miclash_package.detectPackageManager;
 const getNetworkInterfaces = view_miclash_settings_model.getNetworkInterfaces;
 const transformProxyMode = view_miclash_settings_model.transformProxyMode;
@@ -790,18 +789,14 @@ async function installMiClashFromSettings(actionKind) {
 
 	const release = await getLatestMiClashRelease();
 	if (!release) throw new Error(_('Failed to load MiClash release information: %s').format(_('Unavailable')));
-
-	const asset = findMiClashAsset(release, manager.type);
-	if (!asset || !asset.browser_download_url) {
-		throw new Error(_('Failed to load MiClash release information: %s').format(_('Download failed')));
-	}
+	if (!release.version) throw new Error(_('Failed to load MiClash release information: %s').format(_('Download failed')));
 
 	const mode = String(actionKind || 'update');
 
 	try {
 		await logUiAction('info', 'MiClash package update started');
 		notify('info', _('Updating MiClash package on router...'));
-		await startMiClashUpdateJob('app', ['--url', asset.browser_download_url, '--mode', mode]);
+		await startMiClashUpdateJob('app', ['--target-tag', release.version, '--mode', mode]);
 		await pollMiClashUpdateJob(_('Updating MiClash package on router...'));
 	} catch (e) {
 		if (isRpcReconnectLikeError(e.message)) {

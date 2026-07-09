@@ -9,17 +9,22 @@
 # ================================================================
 
 MICLASH_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest"
+MICLASH_TAG_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/tags"
 MIHOMO_BASE="https://github.com/MetaCubeX/mihomo/releases"
 MIHOMO_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 CLASH_BIN="/opt/clash/bin/clash"
 MICLASH_APK_URL=""
 MICLASH_IPK_URL=""
 MICLASH_VER=""
+MICLASH_TAG_NAME=""
+MICLASH_TARGET_TAG=""
 MICLASH_INSTALLED_VER=""
 MICLASH_RELEASE_NORM=""
 MICLASH_INSTALLED_NORM=""
 INSTALL_ACTION=""
 PKG_UPDATED=0
+STATUS_FILE=""
+CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
     R=$(printf '\033[0;31m') G=$(printf '\033[0;32m') Y=$(printf '\033[1;33m')
@@ -31,8 +36,29 @@ fi
 log()  { printf "%s[+]%s %s\n" "$G" "$N" "$*"; }
 info() { printf "%s[i]%s %s\n" "$C" "$N" "$*"; }
 warn() { printf "%s[!]%s %s\n" "$Y" "$N" "$*"; }
-die()  { printf "%s[✗] %s%s\n" "$R" "$*" "$N" >&2; exit 1; }
+die()  { write_status failed error "ERROR: $*" 2>/dev/null || true; printf "%s[✗] %s%s\n" "$R" "$*" "$N" >&2; exit 1; }
 sep()  { printf "%s%s%s\n" "$C" "────────────────────────────────────────" "$N"; }
+
+status_text() {
+    printf '%s' "$*" | tr '\r\n' '  '
+}
+
+write_status() {
+    [ -n "$STATUS_FILE" ] || return 0
+    state="$1"
+    phase="$2"
+    shift 2 || true
+    message="$(status_text "$*")"
+    status_dir="${STATUS_FILE%/*}"
+    [ "$status_dir" = "$STATUS_FILE" ] || mkdir -p "$status_dir" 2>/dev/null || true
+    {
+        printf 'state=%s\n' "$state"
+        printf 'phase=%s\n' "$phase"
+        printf 'token=%s\n' "${CURRENT_TOKEN:-}"
+        printf 'message=%s\n' "$message"
+        printf 'updated_at=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+    } > "$STATUS_FILE.tmp.$$" 2>/dev/null && mv "$STATUS_FILE.tmp.$$" "$STATUS_FILE" 2>/dev/null || true
+}
 
 normalize_version() {
     printf '%s' "$1" | sed 's/^v//; s/-r[0-9][0-9]*$//'
@@ -84,6 +110,7 @@ ensure_curl() {
         warn "curl not found, installing..."
     fi
 
+    write_status running dependencies "Repairing curl dependencies"
     if [ "$PKG_MGR" = "apk" ]; then
         apk update || die "apk update failed"
         apk add zlib libcurl4 curl || die "curl install failed"
@@ -110,6 +137,7 @@ pkg_update() {
     fi
 
     log "Updating package index..."
+    write_status running dependencies "Updating package index"
     if [ "$PKG_MGR" = "apk" ]; then
         apk update || die "apk update failed"
     else
@@ -120,6 +148,7 @@ pkg_update() {
 
 install_deps() {
     log "Installing dependencies..."
+    write_status running dependencies "Installing dependencies"
     if [ "$PKG_MGR" = "apk" ]; then
         apk add zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
             || die "Dependency installation failed"
@@ -187,13 +216,22 @@ detect_arch() {
 fetch_miclash_release() {
     log "Fetching latest MiClash release..."
 
-    RELEASE_JSON=$(curl -fsSL "$MICLASH_API") || die "Failed to fetch MiClash release data"
+    if [ -n "$MICLASH_TARGET_TAG" ]; then
+        MICLASH_RELEASE_API="${MICLASH_TAG_API}/${MICLASH_TARGET_TAG}"
+    else
+        MICLASH_RELEASE_API="$MICLASH_API"
+    fi
+
+    write_status running download "Fetching MiClash release metadata"
+    RELEASE_JSON=$(curl -fsSL "$MICLASH_RELEASE_API") || die "Failed to fetch MiClash release data"
     [ -n "$RELEASE_JSON" ] || die "MiClash release API returned empty response"
 
-    MICLASH_VER=$(printf '%s' "$RELEASE_JSON" \
+    MICLASH_TAG_NAME=$(printf '%s' "$RELEASE_JSON" \
         | grep '"tag_name"' | head -1 \
-        | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/')
-    [ -n "$MICLASH_VER" ] || die "Failed to parse MiClash version"
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    [ -n "$MICLASH_TAG_NAME" ] || die "Failed to parse MiClash version"
+    MICLASH_VER=$(normalize_version "$MICLASH_TAG_NAME")
+    [ -n "$MICLASH_VER" ] || die "Failed to normalize MiClash version"
 
     MICLASH_APK_URL=$(printf '%s' "$RELEASE_JSON" \
         | grep '"browser_download_url"' \
@@ -205,7 +243,7 @@ fetch_miclash_release() {
         | grep 'luci-app-miclash_.*\.ipk"' | head -1 \
         | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
-    info "Latest MiClash: ${B}v${MICLASH_VER}${N}"
+    info "Latest MiClash: ${B}${MICLASH_TAG_NAME}${N}"
     MICLASH_RELEASE_NORM=$(normalize_version "$MICLASH_VER")
 
     if [ "$PKG_MGR" = "apk" ]; then
@@ -321,8 +359,10 @@ install_miclash() {
 
     if [ "$PKG_MGR" = "apk" ]; then
         PKG_FILE="/tmp/luci-app-miclash.apk"
+        write_status running download "Downloading MiClash package"
         curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
             "$MICLASH_APK_URL" -o "$PKG_FILE" || die "Failed to download MiClash .apk"
+        write_status running install "Installing MiClash package"
         if [ "$INSTALL_ACTION" = "reinstall" ]; then
             apk add "$PKG_FILE" --allow-untrusted --force-overwrite \
                 || die "Failed to reinstall MiClash .apk"
@@ -332,8 +372,10 @@ install_miclash() {
         rm -f "$PKG_FILE"
     else
         PKG_FILE="/tmp/luci-app-miclash.ipk"
+        write_status running download "Downloading MiClash package"
         curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
             "$MICLASH_IPK_URL" -o "$PKG_FILE" || die "Failed to download MiClash .ipk"
+        write_status running install "Installing MiClash package"
         if [ "$INSTALL_ACTION" = "reinstall" ]; then
             opkg install --force-reinstall "$PKG_FILE" || die "Failed to reinstall MiClash .ipk"
         else
@@ -341,6 +383,55 @@ install_miclash() {
         fi
         rm -f "$PKG_FILE"
     fi
+}
+
+run_app_mode() {
+    INSTALL_ACTION="update"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --target-tag)
+                [ $# -gt 1 ] || die "missing value for --target-tag"
+                MICLASH_TARGET_TAG="$2"
+                shift 2
+                ;;
+            --mode)
+                [ $# -gt 1 ] || die "missing value for --mode"
+                INSTALL_ACTION="$2"
+                shift 2
+                ;;
+            --status-file)
+                [ $# -gt 1 ] || die "missing value for --status-file"
+                STATUS_FILE="$2"
+                shift 2
+                ;;
+            --token)
+                [ $# -gt 1 ] || die "missing value for --token"
+                CURRENT_TOKEN="$(status_text "$2")"
+                shift 2
+                ;;
+            *)
+                die "unknown app argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "$MICLASH_TARGET_TAG" ] || die "missing --target-tag"
+    case "$INSTALL_ACTION" in
+        update|reinstall) ;;
+        *) die "unsupported app mode: $INSTALL_ACTION" ;;
+    esac
+
+    write_status running queued "Starting MiClash package update"
+    detect_openwrt
+    ensure_curl
+    fetch_miclash_release
+    detect_installed_miclash
+    pkg_update
+    install_deps
+    install_miclash
+    write_status success done "MiClash package installed"
+    echo "MiClash package installed"
 }
 
 install_mihomo() {
@@ -438,4 +529,9 @@ main() {
     sep
 }
 
-main "$@"
+if [ "${1:-}" = "app" ]; then
+    shift
+    run_app_mode "$@"
+else
+    main "$@"
+fi
