@@ -140,7 +140,7 @@ acquire_lock() {
 	fail "failed to acquire update lock"
 }
 
-detect_pkg_manager() {
+find_pkg_manager() {
 	if command -v apk >/dev/null 2>&1; then
 		echo apk
 		return 0
@@ -149,7 +149,69 @@ detect_pkg_manager() {
 		echo opkg
 		return 0
 	fi
+	return 1
+}
+
+detect_pkg_manager() {
+	find_pkg_manager && return 0
 	fail "no supported package manager found (apk/opkg)"
+}
+
+curl_is_usable() {
+	command -v curl >/dev/null 2>&1 && curl --version >/dev/null 2>&1
+}
+
+install_curl_stack() {
+	manager="$1"
+	force="${2:-0}"
+
+	write_status running dependencies "Repairing curl dependencies"
+	if [ "$manager" = "apk" ]; then
+		apk update || fail "failed to update apk index"
+		apk add zlib libcurl4 curl || fail "failed to install curl dependencies"
+		if [ "$force" = "1" ]; then
+			apk fix zlib libcurl4 curl || fail "failed to repair curl dependencies"
+		fi
+		return 0
+	fi
+
+	opkg update || fail "failed to update opkg index"
+	if [ "$force" = "1" ]; then
+		opkg install --force-reinstall zlib libcurl4 curl || fail "failed to repair curl dependencies"
+	else
+		opkg install zlib libcurl4 curl || fail "failed to install curl dependencies"
+	fi
+}
+
+ensure_curl_available() {
+	manager="$1"
+	force=0
+
+	curl_is_usable && return 0
+	if command -v curl >/dev/null 2>&1; then
+		force=1
+	fi
+
+	install_curl_stack "$manager" "$force"
+	curl_is_usable && return 0
+
+	if [ "$force" != "1" ]; then
+		install_curl_stack "$manager" 1
+		curl_is_usable && return 0
+	fi
+
+	fail "curl is installed but cannot run"
+}
+
+prepare_curl_download() {
+	curl_is_usable && return 0
+
+	manager="$(find_pkg_manager || true)"
+	if [ -n "$manager" ]; then
+		ensure_curl_available "$manager"
+	fi
+
+	curl_is_usable || return 1
 }
 
 release_error() {
@@ -160,7 +222,7 @@ release_error() {
 fetch_release_url() {
 	url="$1"
 
-	if command -v curl >/dev/null 2>&1; then
+	if prepare_curl_download; then
 		curl -L -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time 60 "$url"
 		return "$?"
 	fi
@@ -230,6 +292,7 @@ download_file() {
 	label="$3"
 
 	write_status running download "Downloading $label"
+	prepare_curl_download || fail "curl is not available"
 	curl -L -fsS \
 		--retry "$CURL_RETRY" \
 		--connect-timeout "$CURL_CONNECT_TIMEOUT" \
@@ -313,10 +376,8 @@ install_kernel() {
 
 	[ -n "$url" ] || fail "missing --url"
 
-	if ! command -v curl >/dev/null 2>&1; then
-		manager="$(detect_pkg_manager)"
-		install_deps "$manager"
-	fi
+	manager="$(detect_pkg_manager)"
+	ensure_curl_available "$manager"
 
 	mkdir -p /opt/clash/bin || fail "failed to create /opt/clash/bin"
 

@@ -73,20 +73,33 @@ detect_openwrt() {
 }
 
 ensure_curl() {
-    if command -v curl >/dev/null 2>&1; then
-        info "curl: already installed"
+    if command -v curl >/dev/null 2>&1 && curl --version >/dev/null 2>&1; then
+        info "curl: available"
         return 0
     fi
 
-    warn "curl not found, installing..."
+    if command -v curl >/dev/null 2>&1; then
+        warn "curl is installed but cannot run, reinstalling curl libraries..."
+    else
+        warn "curl not found, installing..."
+    fi
+
     if [ "$PKG_MGR" = "apk" ]; then
         apk update || die "apk update failed"
-        apk add curl || die "curl install failed"
+        apk add zlib libcurl4 curl || die "curl install failed"
+        if ! curl --version >/dev/null 2>&1; then
+            apk fix zlib libcurl4 curl || die "curl repair failed"
+        fi
     else
         opkg update || die "opkg update failed"
-        opkg install curl || die "curl install failed"
+        if command -v curl >/dev/null 2>&1; then
+            opkg install --force-reinstall zlib libcurl4 curl || die "curl repair failed"
+        else
+            opkg install zlib libcurl4 curl || die "curl install failed"
+        fi
     fi
-    command -v curl >/dev/null 2>&1 || die "curl still unavailable after install"
+    command -v curl >/dev/null 2>&1 && curl --version >/dev/null 2>&1 \
+        || die "curl still unavailable after install"
     PKG_UPDATED=1
 }
 
