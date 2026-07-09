@@ -15,6 +15,7 @@ CURL_RETRY=2
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 MICLASH_RELEASE_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest"
 MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases"
+MICLASH_INSTALLER_RAW_BASE="https://raw.githubusercontent.com/ang3el7z/luci-app-miclash"
 MIHOMO_RELEASE_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases"
 
@@ -140,7 +141,7 @@ acquire_lock() {
 	fail "failed to acquire update lock"
 }
 
-detect_pkg_manager() {
+find_pkg_manager() {
 	if command -v apk >/dev/null 2>&1; then
 		echo apk
 		return 0
@@ -149,7 +150,69 @@ detect_pkg_manager() {
 		echo opkg
 		return 0
 	fi
+	return 1
+}
+
+detect_pkg_manager() {
+	find_pkg_manager && return 0
 	fail "no supported package manager found (apk/opkg)"
+}
+
+curl_is_usable() {
+	command -v curl >/dev/null 2>&1 && curl --version >/dev/null 2>&1
+}
+
+install_curl_stack() {
+	manager="$1"
+	force="${2:-0}"
+
+	write_status running dependencies "Repairing curl dependencies"
+	if [ "$manager" = "apk" ]; then
+		apk update || fail "failed to update apk index"
+		apk add zlib libcurl4 curl || fail "failed to install curl dependencies"
+		if [ "$force" = "1" ]; then
+			apk fix zlib libcurl4 curl || fail "failed to repair curl dependencies"
+		fi
+		return 0
+	fi
+
+	opkg update || fail "failed to update opkg index"
+	if [ "$force" = "1" ]; then
+		opkg install --force-reinstall zlib libcurl4 curl || fail "failed to repair curl dependencies"
+	else
+		opkg install zlib libcurl4 curl || fail "failed to install curl dependencies"
+	fi
+}
+
+ensure_curl_available() {
+	manager="$1"
+	force=0
+
+	curl_is_usable && return 0
+	if command -v curl >/dev/null 2>&1; then
+		force=1
+	fi
+
+	install_curl_stack "$manager" "$force"
+	curl_is_usable && return 0
+
+	if [ "$force" != "1" ]; then
+		install_curl_stack "$manager" 1
+		curl_is_usable && return 0
+	fi
+
+	fail "curl is installed but cannot run"
+}
+
+prepare_curl_download() {
+	curl_is_usable && return 0
+
+	manager="$(find_pkg_manager || true)"
+	if [ -n "$manager" ]; then
+		ensure_curl_available "$manager"
+	fi
+
+	curl_is_usable || return 1
 }
 
 release_error() {
@@ -160,7 +223,7 @@ release_error() {
 fetch_release_url() {
 	url="$1"
 
-	if command -v curl >/dev/null 2>&1; then
+	if prepare_curl_download; then
 		curl -L -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time 60 "$url"
 		return "$?"
 	fi
@@ -230,6 +293,7 @@ download_file() {
 	label="$3"
 
 	write_status running download "Downloading $label"
+	prepare_curl_download || fail "curl is not available"
 	curl -L -fsS \
 		--retry "$CURL_RETRY" \
 		--connect-timeout "$CURL_CONNECT_TIMEOUT" \
@@ -238,13 +302,13 @@ download_file() {
 }
 
 install_app() {
-	url=""
+	target_tag=""
 	mode="update"
 
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--url)
-				url="$(need_arg "$@")"
+			--target-tag)
+				target_tag="$(need_arg "$@")"
 				shift 2
 				;;
 			--mode)
@@ -257,43 +321,33 @@ install_app() {
 		esac
 	done
 
-	[ -n "$url" ] || fail "missing --url"
+	[ -n "$target_tag" ] || fail "missing --target-tag"
 	case "$mode" in
 		update|reinstall) ;;
 		*) fail "unsupported app mode: $mode" ;;
 	esac
 
-	manager="$(detect_pkg_manager)"
-	install_deps "$manager"
-	write_status running install "Preparing MiClash package install"
-
-	case "$manager" in
-		apk) tmp="/tmp/miclash-update-$$.apk" ;;
-		opkg) tmp="/tmp/miclash-update-$$.ipk" ;;
-		*) fail "unsupported package manager: $manager" ;;
-	esac
+	tmp="/tmp/miclash-install-$$.sh"
 	TMP_FILES="$TMP_FILES $tmp"
 
-	download_file "$url" "$tmp" "MiClash package"
+	installer_url="${MICLASH_INSTALLER_RAW_BASE}/${target_tag}/install-miclash.sh"
+	download_file "$installer_url" "$tmp" "MiClash installer"
 
-	if [ "$manager" = "apk" ]; then
-		write_status running install "Installing MiClash package"
-		if [ "$mode" = "reinstall" ]; then
-			apk add --force-reinstall --allow-untrusted "$tmp" || fail "failed to install MiClash package"
-		else
-			apk add "$tmp" --allow-untrusted || fail "failed to install MiClash package"
-		fi
-	else
-		write_status running install "Installing MiClash package"
-		if [ "$mode" = "reinstall" ]; then
-			opkg --force-reinstall install "$tmp" || fail "failed to install MiClash package"
-		else
-			opkg install "$tmp" || fail "failed to install MiClash package"
-		fi
+	validator="sh"
+	if command -v ash >/dev/null 2>&1; then
+		validator="$(command -v ash)"
 	fi
 
-	write_status success done "MiClash package installed"
-	echo "MiClash package installed"
+	"$validator" -n "$tmp" || fail "downloaded MiClash installer has invalid syntax"
+	chmod +x "$tmp" || fail "failed to mark MiClash installer executable"
+
+	write_status running install "Running MiClash installer"
+	"$validator" "$tmp" app \
+		--target-tag "$target_tag" \
+		--mode "$mode" \
+		--status-file "$STATUS_FILE" \
+		--token "${CURRENT_TOKEN:-}" \
+		|| fail "failed to run MiClash installer"
 }
 
 install_kernel() {
@@ -313,10 +367,8 @@ install_kernel() {
 
 	[ -n "$url" ] || fail "missing --url"
 
-	if ! command -v curl >/dev/null 2>&1; then
-		manager="$(detect_pkg_manager)"
-		install_deps "$manager"
-	fi
+	manager="$(detect_pkg_manager)"
+	ensure_curl_available "$manager"
 
 	mkdir -p /opt/clash/bin || fail "failed to create /opt/clash/bin"
 
@@ -376,6 +428,6 @@ case "${1:-}" in
 		install_kernel "$@"
 		;;
 	*)
-		fail "usage: $0 release miclash|mihomo [release|prerelease] | app --url URL [--mode update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
+		fail "usage: $0 release miclash|mihomo [release|prerelease] | app --target-tag TAG [--mode update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
 		;;
 esac

@@ -67,6 +67,15 @@ check(!config.includes('view_miclash_service.dispatchActionsAndWaitReadyOrThrow'
 	'UI must not keep the old JS readiness dispatch path after service jobs own readiness.');
 check(config.includes('pollMiClashUpdateJob') && config.includes('startMiClashUpdateJob'),
 	'Package/kernel updates must use detached update jobs and polling.');
+const installMiClashUiBlock = blockBetween(
+	'async function installMiClashFromSettings(',
+	'async function downloadMihomoKernel('
+);
+check(installMiClashUiBlock.includes("['--target-tag', release.version, '--mode', mode]"),
+	'MiClash app updates must pass the target release tag to miclash-update.');
+check(!installMiClashUiBlock.includes('asset.browser_download_url') &&
+	!installMiClashUiBlock.includes('findMiClashAsset('),
+	'MiClash app updates must not pass a package asset URL from LuCI.');
 check(config.includes('createOperationToken(') &&
 	config.includes('getStoredOperationToken(') &&
 	config.includes('clearStoredOperationToken(') &&
@@ -214,6 +223,12 @@ const installAppBlock = installAppStart >= 0 && installKernelStart > installAppS
 const installKernelBlock = installKernelStart >= 0 && dispatchStart > installKernelStart
 	? update.slice(installKernelStart, dispatchStart)
 	: '';
+check(installAppBlock.includes('--target-tag') &&
+	installAppBlock.includes('install-miclash.sh') &&
+	installAppBlock.includes('--status-file "$STATUS_FILE"') &&
+	installAppBlock.includes('--token "${CURRENT_TOKEN:-}"') &&
+	!installAppBlock.includes('missing --url'),
+	'miclash-update app mode must download and run the target tag installer with status/token propagation.');
 check(!update.includes('cleanup_legacy_output_guard') &&
 	!update.includes('MICLASH_GUARD_OUTPUT'),
 	'Update script must not own legacy guard cleanup; clash-rules owns firewall cleanup.');

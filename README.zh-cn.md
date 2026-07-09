@@ -10,19 +10,31 @@
 
 ## 自动安装
 
+推荐方式（`wget`，即使已安装的 `curl` 损坏也可以使用）：
+
 ```sh
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
+备用方式（`curl`）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+自动安装脚本会检查 `curl` 是否真的可以启动。如果系统中已有的 `curl` 因为缺少或不匹配的 `zlib`/`libcurl4` 而无法运行，脚本会在获取 MiClash release 前自动修复这些软件包。
+
 如果已经安装了 `luci-app-miclash`，交互式安装脚本会提供 `update / reinstall / delete / skip` 选项。
-通过 `wget ... | ash` 且没有 TTY 运行时，脚本不会自动删除软件包；它会选择更安全的 `update` 或 `skip`。
+通过 `wget ... | ash` 或 `curl ... | ash` 且没有 TTY 运行时，脚本不会自动删除软件包；它会选择更安全的 `update` 或 `skip`。
 
 ## OpenWrt 25.x
 
 ```sh
 apk update
 apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64
-release=$(curl -s https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
+curl --version >/dev/null 2>&1 || apk fix zlib libcurl4 curl
+curl --version >/dev/null 2>&1 || exit 1
+release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
 curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash-${release#v}.apk" -o /tmp/luci-app-miclash.apk
 apk add /tmp/luci-app-miclash.apk --allow-untrusted
 rm -f /tmp/luci-app-miclash.apk
@@ -32,8 +44,10 @@ rm -f /tmp/luci-app-miclash.apk
 
 ```sh
 opkg update
-opkg install zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64
-release=$(curl -s https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
+opkg install --force-reinstall zlib libcurl4 curl
+opkg install kmod-nft-tproxy kmod-tun coreutils-base64
+curl --version >/dev/null 2>&1 || exit 1
+release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
 curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash_${release#v}_all.ipk" -o /tmp/luci-app-miclash.ipk
 opkg install /tmp/luci-app-miclash.ipk
 rm -f /tmp/luci-app-miclash.ipk
