@@ -3,14 +3,11 @@
 set -u
 
 SETTINGS_FILE="/opt/clash/settings"
-CONFIG_FILE="/opt/clash/config.yaml"
-CLASH_DIR="/opt/clash"
-CLASH_BIN="/opt/clash/bin/clash"
 SERVICE_BIN="/opt/clash/bin/miclash-service"
+SUBSCRIPTION_BIN="/opt/clash/bin/miclash-subscription"
 STATE_DIR="/tmp/miclash-autoupdate"
-TMP_CONFIG="$STATE_DIR/config.yaml"
-TMP_HEADERS="$STATE_DIR/headers"
 LAST_SUCCESS_FILE="$STATE_DIR/last_success"
+LAST_ATTEMPT_FILE="$STATE_DIR/last_attempt"
 LOCK_DIR="/tmp/miclash-autoupdate.lock"
 POLL_INTERVAL_SEC=60
 DEFAULT_INTERVAL_HOURS="4"
@@ -93,121 +90,9 @@ auto_update_enabled() {
 	[ "$(setting_value AUTO_UPDATE_CONFIG true)" != "false" ]
 }
 
-main_subscription_url() {
-	url="$(setting_value SUBSCRIPTION_URL_CONFIG_YAML)"
-	[ -n "$url" ] || url="$(setting_value SUBSCRIPTION_URL)"
-	printf '%s' "$url"
-}
-
-profile_update_interval_from_headers() {
-	[ -f "$TMP_HEADERS" ] || return 0
-	# Subscription metadata header: Profile-Update-Interval
-	sed -n 's/^[Pp][Rr][Oo][Ff][Ii][Ll][Ee]-[Uu][Pp][Dd][Aa][Tt][Ee]-[Ii][Nn][Tt][Ee][Rr][Vv][Aa][Ll]:[[:space:]]*\([0-9][0-9]*\).*$/\1/p' "$TMP_HEADERS" |
-		tail -n 1
-}
-
-apply_profile_update_interval() {
-	hours="$(profile_update_interval_from_headers)"
-	case "$hours" in
-		*[!0-9]*|0|"") ;;
-		*) set_setting_value AUTO_UPDATE_INTERVAL_HOURS "$hours" ;;
-	esac
-}
-
-normalize_proxy_mode() {
-	case "$(setting_value PROXY_MODE tproxy)" in
-		tun) echo "tun" ;;
-		mixed) echo "mixed" ;;
-		*) echo "tproxy" ;;
-	esac
-}
-
-normalize_tun_stack() {
-	case "$(setting_value TUN_STACK system)" in
-		gvisor) echo "gvisor" ;;
-		mixed) echo "mixed" ;;
-		*) echo "system" ;;
-	esac
-}
-
-apply_proxy_mode() {
-	mode="$(normalize_proxy_mode)"
-	tun_stack="$(normalize_tun_stack)"
-	tmp="$STATE_DIR/config.transformed.$$"
-
-	awk -v mode="$mode" -v tun_stack="$tun_stack" '
-	function trim(value) {
-		sub(/^[ \t]+/, "", value)
-		sub(/[ \t]+$/, "", value)
-		return value
-	}
-	function indent_of(value) {
-		return match(value, /[^ \t]/) ? RSTART - 1 : 0
-	}
-	function emit_proxy_mode() {
-		if (mode == "tun") {
-			print "# Proxy Mode: TUN"
-			print "tun:"
-			print "  enable: true"
-			print "  device: clash-tun"
-			print "  stack: " tun_stack
-			print "  auto-route: false"
-			print "  auto-redirect: false"
-			print "  auto-detect-interface: false"
-			return
-		}
-		if (mode == "mixed") {
-			print "# Proxy Mode: MIXED (TCP via TPROXY, UDP via TUN)"
-			print "redir-port: 7892"
-			print "tproxy-port: 7894"
-			print "tun:"
-			print "  enable: true"
-			print "  device: clash-tun"
-			print "  stack: " tun_stack
-			print "  auto-route: false"
-			print "  auto-redirect: false"
-			print "  auto-detect-interface: false"
-			return
-		}
-		print "# Proxy Mode: TPROXY"
-		print "redir-port: 7892"
-		print "tproxy-port: 7894"
-	}
-	{
-		line = $0
-		trimmed = trim(line)
-
-		if (trimmed ~ /^#[ \t]*Proxy[ \t]+Mode:/) next
-		if (trimmed ~ /^redir-port:/) next
-		if (trimmed ~ /^tproxy-port:/) next
-
-		if (trimmed ~ /^tun:/) {
-			in_tun = 1
-			tun_indent = indent_of(line)
-			next
-		}
-
-		if (in_tun) {
-			current_indent = indent_of(line)
-			if (trimmed == "" || trimmed ~ /^#/ || current_indent > tun_indent) next
-			in_tun = 0
-		}
-
-		print line
-		if (!inserted && trimmed ~ /^mode:/) {
-			emit_proxy_mode()
-			inserted = 1
-		}
-	}
-	END {
-		if (!inserted) emit_proxy_mode()
-	}
-	' "$TMP_CONFIG" > "$tmp" && mv "$tmp" "$TMP_CONFIG"
-}
-
 is_due() {
-	[ -f "$LAST_SUCCESS_FILE" ] || return 0
-	last="$(cat "$LAST_SUCCESS_FILE" 2>/dev/null || echo 0)"
+	[ -f "$LAST_ATTEMPT_FILE" ] || return 0
+	last="$(cat "$LAST_ATTEMPT_FILE" 2>/dev/null || echo 0)"
 	case "$last" in
 		''|*[!0-9]*) return 0 ;;
 	esac
@@ -247,75 +132,26 @@ acquire_lock() {
 	printf '%s\n' "$$" > "$LOCK_DIR/pid"
 }
 
-download_subscription() {
-	url="$(main_subscription_url)"
-	[ -n "$url" ] || {
-		log_info "Main subscription URL is empty; skipping"
-		return 1
-	}
-
-	command -v curl >/dev/null 2>&1 || {
-		log_warn "curl is not installed"
-		return 1
-	}
-
-	mkdir -p "$STATE_DIR" 2>/dev/null || return 1
-	rm -f "$TMP_CONFIG" "$TMP_HEADERS" 2>/dev/null || true
-
-	ua="$(setting_value HWID_USER_AGENT MiClash)"
-	device_os="$(setting_value HWID_DEVICE_OS OpenWrt)"
-
-	curl -L -fsS \
-		--connect-timeout 8 \
-		--max-time 18 \
-		-A "$ua" \
-		-H "Accept: application/yaml, text/yaml, text/plain, */*" \
-		-H "Cache-Control: no-cache" \
-		-H "Pragma: no-cache" \
-		-H "x-device-os: $device_os" \
-		-D "$TMP_HEADERS" \
-		-o "$TMP_CONFIG" \
-		"$url"
-}
-
-validate_downloaded_config() {
-	[ -x "$CLASH_BIN" ] || {
-		log_warn "Mihomo kernel is not installed"
-		return 1
-	}
-	"$CLASH_BIN" -d "$CLASH_DIR" -f "$TMP_CONFIG" -t >/dev/null 2>&1
-}
-
-install_downloaded_config() {
-	mv "$TMP_CONFIG" "$CONFIG_FILE" || return 1
-	chmod 0644 "$CONFIG_FILE" 2>/dev/null || true
-}
-
 run_once() {
 	auto_update_enabled || return 0
 	acquire_lock || return 0
+	mkdir -p "$STATE_DIR" 2>/dev/null || {
+		release_lock
+		return 1
+	}
+	printf '%s\n' "$(now_sec)" > "$LAST_ATTEMPT_FILE"
 
-	if ! download_subscription; then
+	result="$("$SUBSCRIPTION_BIN" apply-saved-main 2>&1)" || {
+		log_warn "Main subscription update failed: $(printf '%s' "$result" | tr '\r\n' '  ')"
 		release_lock
 		return 1
-	fi
-	if ! apply_proxy_mode; then
-		log_warn "failed to apply proxy mode to downloaded Main config"
-		release_lock
-		return 1
-	fi
-	if ! validate_downloaded_config; then
-		log_warn "downloaded Main config did not pass Mihomo validation"
-		release_lock
-		return 1
-	fi
-	if ! install_downloaded_config; then
-		log_warn "failed to replace Main config"
-		release_lock
-		return 1
-	fi
+	}
 
-	apply_profile_update_interval
+	hours="$(printf '%s\n' "$result" | sed -n 's/^profileUpdateIntervalHours=//p' | tail -n 1)"
+	case "$hours" in
+		''|*[!0-9]*|0) ;;
+		*) set_setting_value AUTO_UPDATE_INTERVAL_HOURS "$hours" ;;
+	esac
 
 	if is_service_running; then
 		if "$SERVICE_BIN" reload >/dev/null 2>&1; then
