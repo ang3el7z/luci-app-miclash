@@ -289,23 +289,19 @@ check(update.includes('--target-tag'),
 	'miclash-update app mode must accept --target-tag.');
 check(!/missing --url/.test(updateInstallAppBlock),
 	'miclash-update app mode must not require a package URL from LuCI.');
-check(update.includes('MICLASH_ASSET_URL=') &&
-	!updateInstallAppBlock.includes('asset_url="$(resolve_miclash_asset'),
-	'miclash-update must resolve release assets in the current shell so failures cannot be lost in a subshell.');
 check(updateAppResult.code === 0,
-	`miclash-update app mode must install the release asset directly: ${updateAppResult.stderr || updateAppResult.stdout}`);
-check(/releases\/tags\/v1\.2\.3/.test(updateAppResult.curlLog),
-	'miclash-update app mode must resolve the requested release tag.');
-check(/luci-app-miclash_1\.2\.3_all\.ipk/.test(updateAppResult.curlLog),
-	'miclash-update app mode must download the selected package asset.');
-check(!/raw\.githubusercontent\.com.*install-miclash\.sh/.test(updateAppResult.curlLog),
-	'miclash-update app mode must not download the standalone installer.');
-check(/install .*luci-app-miclash.*\.ipk/.test(updateAppResult.opkgLog),
-	'miclash-update app mode must invoke opkg for the downloaded package.');
+	`miclash-update app mode must run the tagged installer: ${updateAppResult.stderr || updateAppResult.stdout}`);
+check(/raw\.githubusercontent\.com\/ang3el7z\/luci-app-miclash\/v1\.2\.3\/install-miclash\.sh/.test(updateAppResult.curlLog),
+	'miclash-update app mode must download install-miclash.sh from the requested release tag.');
+check(!/releases\/tags\/v1\.2\.3/.test(updateAppResult.curlLog) &&
+	!/luci-app-miclash_1\.2\.3_all\.ipk/.test(updateAppResult.curlLog),
+	'miclash-update app mode must leave release and package resolution to install-miclash.sh.');
+check(/^app --target-tag v1\.2\.3 --mode update --status-file .* --token test-token$/.test(updateAppResult.installerLog.trim()),
+	'miclash-update app mode must pass target tag, mode, status file, and token to the tagged installer.');
 check(/state=success/.test(updateAppResult.status) &&
 	/phase=done/.test(updateAppResult.status) &&
 	/token=test-token/.test(updateAppResult.status),
-	'miclash-update app mode must write successful operation status.');
+	'miclash-update app mode must preserve successful operation status from the tagged installer.');
 
 const retryResult = runShell(scriptWithoutDispatch(update), `
 STATUS_FILE="$TEST_STATUS_FILE"
@@ -329,6 +325,37 @@ check(exhaustedResult.code !== 0,
 	'miclash-update downloads must fail after the bounded attempts are exhausted.');
 check(/curl: \(28\) Connection timed out/.test(exhaustedResult.status),
 	'miclash-update must preserve the final curl error in operation status.');
+
+const installerFailureResult = runShell(scriptWithoutDispatch(update), `
+STATUS_FILE="$TEST_STATUS_FILE"
+CURRENT_TOKEN="installer-failed-token"
+install_app --target-tag v1.2.3 --mode reinstall
+`, {
+	tagInstaller: `#!/bin/sh
+status_file=""
+token=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--status-file) status_file="$2"; shift 2 ;;
+		--token) token="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+{
+	printf 'state=failed\\n'
+	printf 'phase=error\\n'
+	printf 'token=%s\\n' "$token"
+	printf 'message=ERROR: package install exploded\\n'
+} > "$status_file"
+echo 'ERROR: package install exploded' >&2
+exit 7
+`
+});
+check(installerFailureResult.code !== 0,
+	'miclash-update must return the tagged installer failure code.');
+check(/package install exploded/.test(installerFailureResult.status) &&
+	!/failed to run MiClash installer/.test(installerFailureResult.status),
+	'miclash-update must preserve the tagged installer error instead of replacing it with a generic wrapper error.');
 
 if (failed) process.exit(1);
 console.log('curl repair flow check passed');

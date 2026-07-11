@@ -10,6 +10,7 @@ const files = {
 	acl: 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json',
 	style: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css',
 	makefile: 'luci-app-miclash/Makefile',
+	installer: 'install-miclash.sh',
 	clashInit: 'luci-app-miclash/rootfs/etc/init.d/clash',
 	autoUpdateInit: 'luci-app-miclash/rootfs/etc/init.d/miclash-autoupdate'
 };
@@ -22,6 +23,7 @@ const release = readFileSync(files.release, 'utf8');
 const acl = readFileSync(files.acl, 'utf8');
 const style = readFileSync(files.style, 'utf8');
 const makefile = readFileSync(files.makefile, 'utf8');
+const installer = readFileSync(files.installer, 'utf8');
 const clashInit = readFileSync(files.clashInit, 'utf8');
 const autoUpdateInit = readFileSync(files.autoUpdateInit, 'utf8');
 
@@ -241,11 +243,13 @@ const installKernelBlock = installKernelStart >= 0 && dispatchStart > installKer
 	? update.slice(installKernelStart, dispatchStart)
 	: '';
 check(installAppBlock.includes('--target-tag') &&
-	installAppBlock.includes('resolve_miclash_asset') &&
-	installAppBlock.includes('Installing MiClash package') &&
-	!installAppBlock.includes('install-miclash.sh') &&
+	installAppBlock.includes('install-miclash.sh') &&
+	installAppBlock.includes('"$validator" -n "$tmp"') &&
+	!installAppBlock.includes('resolve_miclash_asset') &&
+	!installAppBlock.includes('opkg install') &&
+	!installAppBlock.includes('apk add') &&
 	!installAppBlock.includes('missing --url'),
-	'miclash-update app mode must resolve and install the release package directly.');
+	'miclash-update app mode must validate and run the canonical tagged installer without installing packages itself.');
 
 const postinstBlock = blockBetween(
 	'define Package/$(PKG_NAME)/postinst',
@@ -272,8 +276,11 @@ check(autoUpdateInit.includes('/tmp/miclash-package-no-autostart-autoupdate'),
 	'Auto-update init must consume its package no-autostart marker.');
 check(postrmBlock.includes('/tmp/miclash-hard-reinstall'),
 	'Package postrm must remove the kernel only for explicit hard reinstall or full removal.');
-check(installAppBlock.includes('[ "$mode" = "reinstall" ]') &&
-	installAppBlock.includes('rm -f /opt/clash/bin/clash'),
+check(installer.includes('/tmp/miclash-package-no-autostart-clash') &&
+	installer.includes('/tmp/miclash-package-no-autostart-autoupdate'),
+	'Canonical installer must create package no-autostart lifecycle markers.');
+check(installer.includes('[ "$INSTALL_ACTION" = "reinstall" ]') &&
+	installer.includes('rm -f /opt/clash/bin/clash'),
 	'Hard reinstall must remove the kernel even when upgrading from an older postrm that does not understand the marker.');
 check(!update.includes('cleanup_legacy_output_guard') &&
 	!update.includes('MICLASH_GUARD_OUTPUT'),

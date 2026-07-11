@@ -14,9 +14,9 @@ CURL_MAX_TIME=300
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 MICLASH_RELEASE_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest"
 MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases"
+MICLASH_INSTALLER_RAW_BASE="https://raw.githubusercontent.com/ang3el7z/luci-app-miclash"
 MIHOMO_RELEASE_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases"
-MICLASH_ASSET_URL=""
 
 cleanup() {
 	for file in $TMP_FILES; do
@@ -262,30 +262,6 @@ print_release_info() {
 	fetch_release_url "$url" || release_error "failed to fetch release information"
 }
 
-openwrt_major() {
-	. /etc/openwrt_release 2>/dev/null || true
-	printf '%s\n' "${DISTRIB_RELEASE:-}" | sed -n 's/^\([0-9][0-9]*\).*/\1/p'
-}
-
-install_deps() {
-	manager="$1"
-	write_status running dependencies "Installing dependencies"
-	if [ "$manager" = "apk" ]; then
-		apk update || fail "failed to update apk index"
-		apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64 || fail "failed to install dependencies"
-		return 0
-	fi
-
-	major="$(openwrt_major)"
-	tproxy_pkg="kmod-nft-tproxy"
-	if [ -n "$major" ] && [ "$major" -lt 23 ]; then
-		tproxy_pkg="iptables-mod-tproxy"
-	fi
-
-	opkg update || fail "failed to update opkg index"
-	opkg install zlib libcurl4 curl "$tproxy_pkg" kmod-tun coreutils-base64 || fail "failed to install dependencies"
-}
-
 download_file() {
 	url="$1"
 	target="$2"
@@ -322,27 +298,6 @@ download_file() {
 	fail "failed to download $label: ${detail:-download returned an empty file}"
 }
 
-resolve_miclash_asset() {
-	target_tag="$1"
-	manager="$2"
-	metadata="/tmp/miclash-release-$$.json"
-	MICLASH_ASSET_URL=""
-
-	download_file "${MICLASH_RELEASES_API}/tags/${target_tag}" "$metadata" \
-		"MiClash release metadata for ${target_tag}"
-
-	case "$manager" in
-		apk) extension="apk"; pattern='luci-app-miclash-.*\.apk"' ;;
-		opkg) extension="ipk"; pattern='luci-app-miclash_.*\.ipk"' ;;
-		*) fail "unsupported package manager: $manager" ;;
-	esac
-
-	MICLASH_ASSET_URL="$(grep '"browser_download_url"' "$metadata" \
-		| grep "$pattern" | head -n 1 \
-		| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
-	[ -n "$MICLASH_ASSET_URL" ] || fail "no MiClash .$extension asset found for release $target_tag"
-}
-
 install_app() {
 	target_tag=""
 	mode="update"
@@ -369,39 +324,27 @@ install_app() {
 		*) fail "unsupported app mode: $mode" ;;
 	esac
 
-	manager="$(find_pkg_manager || true)"
-	[ -n "$manager" ] || fail "no supported package manager found (apk/opkg)"
-	install_deps "$manager"
-	TMP_FILES="$TMP_FILES /tmp/miclash-release-$$.json"
-	resolve_miclash_asset "$target_tag" "$manager"
-	asset_url="$MICLASH_ASSET_URL"
-	case "$manager" in
-		apk) package_file="/tmp/luci-app-miclash-$$.apk" ;;
-		opkg) package_file="/tmp/luci-app-miclash-$$.ipk" ;;
-	esac
-	TMP_FILES="$TMP_FILES $package_file /tmp/miclash-package-no-autostart-clash /tmp/miclash-package-no-autostart-autoupdate /tmp/miclash-hard-reinstall"
-	download_file "$asset_url" "$package_file" "MiClash package"
+	tmp="/tmp/miclash-install-$$.sh"
+	TMP_FILES="$TMP_FILES $tmp"
+	installer_url="${MICLASH_INSTALLER_RAW_BASE}/${target_tag}/install-miclash.sh"
+	download_file "$installer_url" "$tmp" "MiClash installer for ${target_tag}"
 
-	touch /tmp/miclash-package-no-autostart-clash \
-		/tmp/miclash-package-no-autostart-autoupdate \
-		|| fail "failed to prepare package service state"
-	if [ "$mode" = "reinstall" ]; then
-		touch /tmp/miclash-hard-reinstall || fail "failed to prepare hard reinstall"
+	validator="sh"
+	if command -v ash >/dev/null 2>&1; then
+		validator="$(command -v ash)"
 	fi
+	"$validator" -n "$tmp" || fail "downloaded MiClash installer for $target_tag has invalid syntax"
+	chmod +x "$tmp" || fail "failed to mark MiClash installer executable"
 
-	write_status running install "Installing MiClash package"
-	case "$manager:$mode" in
-		apk:reinstall) apk add --force-reinstall --allow-untrusted "$package_file" ;;
-		apk:*) apk add --allow-untrusted "$package_file" ;;
-		opkg:reinstall) opkg install --force-reinstall "$package_file" ;;
-		opkg:*) opkg install "$package_file" ;;
-	esac || fail "failed to install MiClash package"
-	if [ "$mode" = "reinstall" ]; then
-		rm -f /opt/clash/bin/clash || fail "failed to remove Mihomo kernel after hard reinstall"
-	fi
-
-	write_status success done "MiClash package installed; services remain stopped"
-	echo "MiClash package installed; services remain stopped"
+	write_status running install "Running MiClash installer for $target_tag"
+	"$validator" "$tmp" app \
+		--target-tag "$target_tag" \
+		--mode "$mode" \
+		--status-file "$STATUS_FILE" \
+		--token "${CURRENT_TOKEN:-}"
+	installer_code="$?"
+	[ "$installer_code" -eq 0 ] && return 0
+	return "$installer_code"
 }
 
 install_kernel() {
