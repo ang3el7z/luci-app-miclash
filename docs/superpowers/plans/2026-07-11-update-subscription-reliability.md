@@ -4,7 +4,7 @@
 
 **Goal:** Make MiClash package, Mihomo kernel, and subscription operations reliable and independent from the client forwarding guard and Clash service state, while leaving a hard reinstall stopped and without a kernel.
 
-**Architecture:** Keep LuCI as a thin job launcher. `miclash-update` directly resolves and installs release assets through one bounded downloader, while `miclash-subscription` becomes the only manual and scheduled subscription engine. OpenWrt lifecycle markers suppress package-manager autostart, and `miclash-autoupdate` owns only interval scheduling and optional hot reload.
+**Architecture:** Keep LuCI as a thin job launcher and `install-miclash.sh` as the single application installer for both first installation and tagged LuCI updates. `miclash-update` reliably downloads, validates, and launches that installer while preserving its detailed status. `miclash-subscription` is the only manual and scheduled subscription engine. OpenWrt lifecycle markers suppress package-manager autostart, and `miclash-autoupdate` owns only interval scheduling and optional hot reload.
 
 **Tech Stack:** POSIX/BusyBox `sh`, OpenWrt `opkg` and `apk`, procd init scripts, LuCI JavaScript, gettext `.po`, Node.js repository checks.
 
@@ -24,8 +24,8 @@
 
 ## File Map
 
-- `luci-app-miclash/rootfs/opt/clash/bin/miclash-update`: release lookup, resilient artifact download, app/kernel install jobs, lifecycle marker creation, specific error propagation.
-- `install-miclash.sh`: standalone first-install downloader; reuse the same retry semantics without being called by LuCI.
+- `luci-app-miclash/rootfs/opt/clash/bin/miclash-update`: release lookup, resilient tagged-installer/kernel download, installer validation and launch, specific error propagation.
+- `install-miclash.sh`: canonical first-install and LuCI application installer; release/package resolution, lifecycle marker creation, and resilient package/kernel downloads.
 - `luci-app-miclash/rootfs/opt/clash/bin/miclash-subscription`: canonical subscription normalization, fallback, transform, validation, and atomic replacement.
 - `luci-app-miclash/rootfs/opt/clash/bin/miclash-autoupdate`: interval state and delegation to `miclash-subscription`.
 - `luci-app-miclash/rootfs/opt/clash/bin/miclash-service`: kernel preflight before service enable/start.
@@ -35,7 +35,7 @@
 - `luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js`: actionable kernel text and fallback-neutral success text.
 - `luci-app-miclash/rootfs/po/ru/miclash.po`: Russian copy.
 - `luci-app-miclash/rootfs/po/zh-cn/miclash.po`: Chinese copy.
-- `tools/check-curl-repair-flow.mjs`: direct app install and resilient downloader regression coverage.
+- `tools/check-curl-repair-flow.mjs`: canonical tagged-installer invocation and resilient downloader regression coverage.
 - `tools/check-config-hot-reload-autoupdate.mjs`: failed-attempt interval and shared subscription-engine coverage.
 - `tools/check-subscription-helper-flow.mjs`: saved-settings/Base64/Remnawave behavior coverage.
 - `tools/check-service-readiness-update-flow.mjs`: missing-kernel and lifecycle marker coverage.
@@ -119,143 +119,50 @@ git commit -m "test: make shell checks portable"
 
 ---
 
-### Task 2: Replace the nested installer with direct resilient artifact downloads
+### Task 2: Keep one tagged installer and make its invocation resilient
 
 **Files:**
-- Modify: `tools/check-curl-repair-flow.mjs:170-270`
-- Modify: `luci-app-miclash/rootfs/opt/clash/bin/miclash-update:13-22,207-350`
-- Modify: `install-miclash.sh:1-20,220-255,353-385`
+- Modify: `tools/check-curl-repair-flow.mjs`
+- Modify: `luci-app-miclash/rootfs/opt/clash/bin/miclash-update`
+- Modify: `install-miclash.sh`
 
 **Interfaces:**
-- Consumes: `miclash-update app --target-tag TAG --mode install|update|reinstall`, GitHub release JSON, `curl`, `opkg` or `apk`.
-- Produces: `download_file URL TARGET LABEL [FALLBACK_URL]`, `resolve_miclash_asset TAG MANAGER`, and precise failed job status.
+- Consumes: `miclash-update app --target-tag TAG --mode install|update|reinstall` and the tagged GitHub `install-miclash.sh`.
+- Produces: a bounded installer download, syntax validation, exact argument/status propagation, and resilient package downloads inside the canonical installer.
 
-- [ ] **Step 1: Rewrite the app-flow assertions to describe direct installation**
+- [ ] **Step 1: Restore failing assertions for the canonical tagged installer**
 
-Replace the nested-installer expectations in `check-curl-repair-flow.mjs` with these assertions:
+Update `check-curl-repair-flow.mjs` to require that `miclash-update app`:
 
-```js
-check(updateAppResult.code === 0,
-	`miclash-update app mode must install the release asset directly: ${updateAppResult.stderr || updateAppResult.stdout}`);
-check(/releases\/tags\/v1\.2\.3/.test(updateAppResult.curlLog),
-	'miclash-update app mode must resolve the requested release tag.');
-check(/luci-app-miclash_1\.2\.3_all\.ipk/.test(updateAppResult.curlLog),
-	'miclash-update app mode must download the selected package asset.');
-check(!/raw\.githubusercontent\.com.*install-miclash\.sh/.test(updateAppResult.curlLog),
-	'miclash-update app mode must not download the standalone installer.');
-check(/install .*luci-app-miclash.*\.ipk/.test(updateAppResult.opkgLog),
-	'miclash-update app mode must invoke opkg for the downloaded package.');
-```
+- downloads `https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/$TAG/install-miclash.sh`;
+- does not resolve or install `.ipk`/`.apk` itself;
+- passes `app --target-tag TAG --mode MODE --status-file FILE --token TOKEN`;
+- preserves the status written by the installer;
+- succeeds after two simulated installer-download timeouts;
+- reports the final `curl: (28) Connection timed out` when all installer-download attempts fail.
 
-Extend the fake curl with `CURL_FAIL_COUNT` and `CURL_FINAL_ERROR` environment-controlled state. Add assertions that two timeouts followed by success return zero, while exhausted attempts preserve `curl: (28) Connection timed out` in the job status.
+- [ ] **Step 2: Run the focused check and observe RED**
 
-- [ ] **Step 2: Run the focused test and observe RED**
+Run `node tools/check-curl-repair-flow.mjs`. Expected: the direct-package implementation fails the tagged-installer assertions.
 
-```powershell
-& 'C:\Users\Ang3el\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' tools/check-curl-repair-flow.mjs
-```
+- [ ] **Step 3: Restore tagged-installer orchestration in `miclash-update`**
 
-Expected: FAIL because `miclash-update` still downloads and runs `install-miclash.sh` and replaces its error with `failed to run MiClash installer`.
+Keep the bounded `download_file()` implementation. Restore `MICLASH_INSTALLER_RAW_BASE` and make `install_app()`:
 
-- [ ] **Step 3: Implement one bounded downloader in `miclash-update`**
+1. validate `target_tag` and `mode`;
+2. download the tagged installer through `download_file()`;
+3. select `ash` when available, otherwise `sh`;
+4. run syntax validation before execution;
+5. invoke the installer with tag, mode, status file, and operation token;
+6. on failure, preserve the installer's existing status or propagate its captured stderr instead of writing `failed to run MiClash installer`.
 
-Replace the single curl call in `download_file()` with the following interface and control flow:
+- [ ] **Step 4: Keep package/lifecycle ownership in `install-miclash.sh`**
 
-```sh
-download_file() {
-	url="$1"
-	target="$2"
-	label="$3"
-	fallback_url="${4:-}"
-	error_file="/tmp/miclash-download-error-$$"
-	TMP_FILES="$TMP_FILES $error_file"
+The installer remains independent for first installation and owns release metadata lookup, dependency installation, package selection, lifecycle marker creation, package installation, hard-reinstall kernel removal, and the final success status. Use `download_artifact()` for release metadata, `.ipk`, `.apk`, and Mihomo downloads with three attempts (`default`, `default`, `-4`) and final curl diagnostics.
 
-	prepare_curl_download || fail "curl is not available"
-	write_status running download "Downloading $label"
-	rm -f "$target" "$error_file"
+- [ ] **Step 5: Verify GREEN and commit**
 
-	for family in "" "" "-4"; do
-		if curl $family -L -fsS \
-			--connect-timeout "$CURL_CONNECT_TIMEOUT" \
-			--max-time "$CURL_MAX_TIME" \
-			"$url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
-			return 0
-		fi
-		rm -f "$target"
-		sleep 1
-	done
-
-	if [ -n "$fallback_url" ]; then
-		if curl -4 -L -fsS \
-			--connect-timeout "$CURL_CONNECT_TIMEOUT" \
-			--max-time "$CURL_MAX_TIME" \
-			"$fallback_url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
-			return 0
-		fi
-	fi
-
-	detail="$(tail -n 3 "$error_file" 2>/dev/null | tr '\r\n' '  ')"
-	fail "failed to download $label: ${detail:-download returned an empty file}"
-}
-```
-
-Do not use `curl --retry-all-errors`, because older supported OpenWrt curl builds may not implement it.
-
-- [ ] **Step 4: Implement direct release resolution and package installation**
-
-Add `resolve_miclash_asset()` that fetches `https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/tags/$target_tag`, extracts the `.ipk` or `.apk` `browser_download_url`, and fails with the exact tag/package type when no asset exists.
-
-Replace the body of `install_app()` after argument parsing with this state machine:
-
-```sh
-case "$mode" in
-	install|update|reinstall) ;;
-	*) fail "unsupported app mode: $mode" ;;
-esac
-
-manager="$(detect_pkg_manager)"
-install_deps "$manager"
-asset_url="$(resolve_miclash_asset "$target_tag" "$manager")"
-case "$manager" in
-	apk) package_file="/tmp/miclash-update-$$.apk" ;;
-	opkg) package_file="/tmp/miclash-update-$$.ipk" ;;
-esac
-TMP_FILES="$TMP_FILES $package_file /tmp/miclash-package-no-autostart-clash /tmp/miclash-package-no-autostart-autoupdate /tmp/miclash-hard-reinstall"
-download_file "$asset_url" "$package_file" "MiClash package"
-
-touch /tmp/miclash-package-no-autostart-clash
-touch /tmp/miclash-package-no-autostart-autoupdate
-[ "$mode" = "reinstall" ] && touch /tmp/miclash-hard-reinstall
-
-write_status running install "Installing MiClash package"
-case "$manager:$mode" in
-	apk:reinstall) apk add --force-reinstall --allow-untrusted "$package_file" ;;
-	apk:*) apk add --allow-untrusted "$package_file" ;;
-	opkg:reinstall) opkg install --force-reinstall "$package_file" ;;
-	opkg:*) opkg install "$package_file" ;;
-esac || fail "failed to install MiClash package"
-
-write_status success done "MiClash package installed; services remain stopped"
-```
-
-Remove `MICLASH_INSTALLER_RAW_BASE` and every tagged-installer download/launch branch from `miclash-update`.
-
-- [ ] **Step 5: Apply the same retry semantics to the standalone installer**
-
-Add a standalone `download_artifact URL TARGET LABEL` function to `install-miclash.sh` with the same three attempts (`default`, `default`, `-4`), non-empty target check, and final curl detail. Use it for `.ipk`, `.apk`, and Mihomo downloads. Keep `install-miclash.sh` independent from `/opt/clash/bin/miclash-update` so first installation still works.
-
-- [ ] **Step 6: Verify GREEN and commit**
-
-```powershell
-& 'C:\Users\Ang3el\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' tools/check-curl-repair-flow.mjs
-```
-
-Expected: `curl repair flow check passed`.
-
-```bash
-git add tools/check-curl-repair-flow.mjs install-miclash.sh luci-app-miclash/rootfs/opt/clash/bin/miclash-update
-git commit -m "fix: make release downloads resilient"
-```
+Run the focused check plus `sh -n` for both scripts, then commit the restored single-installer architecture.
 
 ---
 

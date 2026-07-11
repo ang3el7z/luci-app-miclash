@@ -30,9 +30,9 @@ The configured provider returns `Profile-Update-Interval: 3`, a Base64 primary r
 
 `miclash-autoupdate` polls every 60 seconds and treats a missing `last_success` file as immediately due. A validation failure never creates `last_success`, so the daemon retries every minute despite `AUTO_UPDATE_INTERVAL_HOURS=3`.
 
-### Nested application installer
+### Tagged installer download hides its failure
 
-The LuCI update path downloads a tagged `install-miclash.sh`, launches it, fetches release metadata again, and then downloads the package. This adds a fragile `raw.githubusercontent.com` dependency and overwrites the installer's specific error with `failed to run MiClash installer`.
+The LuCI update path intentionally downloads the tagged `install-miclash.sh` so first installation and LuCI updates use one canonical installer implementation. The defect is not that this installer is shared: its download is a single fragile request, and `miclash-update` replaces the installer's specific error with `failed to run MiClash installer`.
 
 ### Package lifecycle conflicts
 
@@ -44,24 +44,21 @@ The router has produced repeated 15-second connection timeouts against both raw 
 
 ## Architecture
 
-### 1. Direct package update path
+### 1. One tagged installer for every application install
 
-`miclash-update app` will own the complete LuCI package update flow:
+`install-miclash.sh` remains the canonical implementation for both first-time shell installation and LuCI package updates. `miclash-update app` will:
 
 1. Ensure the curl stack is usable.
-2. Resolve the requested MiClash tag through the GitHub Releases API.
-3. Select the correct `.ipk` or `.apk` asset.
-4. Download the asset through the shared bounded downloader.
-5. Mark the package operation so lifecycle scripts know whether it is a hard reinstall.
-6. Install the package.
-7. Leave Clash and `miclash-autoupdate` stopped.
-8. Preserve the most specific failure in the operation status.
+2. Download `install-miclash.sh` from the requested GitHub tag through the bounded downloader.
+3. Validate that the downloaded installer is non-empty and passes `sh -n` (or `ash -n` when available).
+4. Launch it in non-interactive `app` mode with the requested tag, mode, operation token, and status path.
+5. Preserve the installer's specific status and stderr instead of replacing them with a generic wrapper error.
 
-The standalone `install-miclash.sh` remains the entry point for first-time shell installation, but LuCI no longer downloads or launches it.
+The tagged installer resolves the correct `.ipk` or `.apk`, downloads it with the same bounded retry policy, creates lifecycle intent markers, installs it, and leaves Clash and `miclash-autoupdate` stopped. A hard reinstall removes the Mihomo kernel; an ordinary update preserves it.
 
-### 2. Shared download policy
+### 2. Consistent download policy
 
-The router-side update script will expose one download function for MiClash packages and Mihomo archives. It will:
+`miclash-update` uses the policy for the tagged installer and Mihomo archives; `install-miclash.sh` independently implements the same policy for release metadata, MiClash packages, and first-install Mihomo downloads. The downloaders will:
 
 - use curl in direct router context without changing guard rules;
 - use explicit connect and total time limits;
@@ -154,7 +151,8 @@ Successful subscription copy becomes `Subscription downloaded and applied.` rega
 
 ### Automated shell and Node checks
 
-- A failing test will first prove that `miclash-update app` still depends on the tagged installer; the implementation removes that dependency and downloads the release asset directly.
+- App-flow tests will assert that `miclash-update` downloads the installer from the requested tag, validates it, and passes tag, mode, token, and status path to that same installer.
+- Tests will assert that `miclash-update` does not resolve or install `.ipk`/`.apk` itself, keeping `install-miclash.sh` as the canonical application installer.
 - Downloader tests will simulate a primary timeout followed by a successful bounded retry or alternate endpoint, plus a fully failed case that preserves the final curl message.
 - Subscription tests will use Base64 primary content and valid `/mihomo` YAML, asserting identical manual and scheduled behavior.
 - Scheduler tests will assert that a failed attempt writes `last_attempt` and is not due again until the configured interval.
