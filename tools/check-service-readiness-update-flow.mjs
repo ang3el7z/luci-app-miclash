@@ -272,6 +272,9 @@ check(autoUpdateInit.includes('/tmp/miclash-package-no-autostart-autoupdate'),
 	'Auto-update init must consume its package no-autostart marker.');
 check(postrmBlock.includes('/tmp/miclash-hard-reinstall'),
 	'Package postrm must remove the kernel only for explicit hard reinstall or full removal.');
+check(installAppBlock.includes('[ "$mode" = "reinstall" ]') &&
+	installAppBlock.includes('rm -f /opt/clash/bin/clash'),
+	'Hard reinstall must remove the kernel even when upgrading from an older postrm that does not understand the marker.');
 check(!update.includes('cleanup_legacy_output_guard') &&
 	!update.includes('MICLASH_GUARD_OUTPUT'),
 	'Update script must not own legacy guard cleanup; clash-rules owns firewall cleanup.');

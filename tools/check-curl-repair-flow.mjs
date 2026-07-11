@@ -289,6 +289,9 @@ check(update.includes('--target-tag'),
 	'miclash-update app mode must accept --target-tag.');
 check(!/missing --url/.test(updateInstallAppBlock),
 	'miclash-update app mode must not require a package URL from LuCI.');
+check(update.includes('MICLASH_ASSET_URL=') &&
+	!updateInstallAppBlock.includes('asset_url="$(resolve_miclash_asset'),
+	'miclash-update must resolve release assets in the current shell so failures cannot be lost in a subshell.');
 check(updateAppResult.code === 0,
 	`miclash-update app mode must install the release asset directly: ${updateAppResult.stderr || updateAppResult.stdout}`);
 check(/releases\/tags\/v1\.2\.3/.test(updateAppResult.curlLog),

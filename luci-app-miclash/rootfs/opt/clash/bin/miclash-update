@@ -16,6 +16,7 @@ MICLASH_RELEASE_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/rele
 MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases"
 MIHOMO_RELEASE_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases"
+MICLASH_ASSET_URL=""
 
 cleanup() {
 	for file in $TMP_FILES; do
@@ -325,6 +326,7 @@ resolve_miclash_asset() {
 	target_tag="$1"
 	manager="$2"
 	metadata="/tmp/miclash-release-$$.json"
+	MICLASH_ASSET_URL=""
 
 	download_file "${MICLASH_RELEASES_API}/tags/${target_tag}" "$metadata" \
 		"MiClash release metadata for ${target_tag}"
@@ -335,11 +337,10 @@ resolve_miclash_asset() {
 		*) fail "unsupported package manager: $manager" ;;
 	esac
 
-	asset_url="$(grep '"browser_download_url"' "$metadata" \
+	MICLASH_ASSET_URL="$(grep '"browser_download_url"' "$metadata" \
 		| grep "$pattern" | head -n 1 \
 		| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
-	[ -n "$asset_url" ] || fail "no MiClash .$extension asset found for release $target_tag"
-	printf '%s\n' "$asset_url"
+	[ -n "$MICLASH_ASSET_URL" ] || fail "no MiClash .$extension asset found for release $target_tag"
 }
 
 install_app() {
@@ -368,10 +369,12 @@ install_app() {
 		*) fail "unsupported app mode: $mode" ;;
 	esac
 
-	manager="$(detect_pkg_manager)"
+	manager="$(find_pkg_manager || true)"
+	[ -n "$manager" ] || fail "no supported package manager found (apk/opkg)"
 	install_deps "$manager"
 	TMP_FILES="$TMP_FILES /tmp/miclash-release-$$.json"
-	asset_url="$(resolve_miclash_asset "$target_tag" "$manager")" || exit "$?"
+	resolve_miclash_asset "$target_tag" "$manager"
+	asset_url="$MICLASH_ASSET_URL"
 	case "$manager" in
 		apk) package_file="/tmp/luci-app-miclash-$$.apk" ;;
 		opkg) package_file="/tmp/luci-app-miclash-$$.ipk" ;;
@@ -393,6 +396,9 @@ install_app() {
 		opkg:reinstall) opkg install --force-reinstall "$package_file" ;;
 		opkg:*) opkg install "$package_file" ;;
 	esac || fail "failed to install MiClash package"
+	if [ "$mode" = "reinstall" ]; then
+		rm -f /opt/clash/bin/clash || fail "failed to remove Mihomo kernel after hard reinstall"
+	fi
 
 	write_status success done "MiClash package installed; services remain stopped"
 	echo "MiClash package installed; services remain stopped"
@@ -415,7 +421,8 @@ install_kernel() {
 
 	[ -n "$url" ] || fail "missing --url"
 
-	manager="$(detect_pkg_manager)"
+	manager="$(find_pkg_manager || true)"
+	[ -n "$manager" ] || fail "no supported package manager found (apk/opkg)"
 	ensure_curl_available "$manager"
 
 	mkdir -p /opt/clash/bin || fail "failed to create /opt/clash/bin"
