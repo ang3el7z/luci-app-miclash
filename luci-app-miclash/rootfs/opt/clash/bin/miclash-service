@@ -10,6 +10,7 @@ STATUS_OUT="/tmp/miclash-service/stdout"
 STATUS_ERR="/tmp/miclash-service/stderr"
 CLASH_INIT="/etc/init.d/clash"
 CLASH_RULES="/opt/clash/bin/clash-rules"
+CLASH_BIN="/opt/clash/bin/clash"
 CONFIG_FILE="/opt/clash/config.yaml"
 READY_TIMEOUT_SEC=180
 STOP_TIMEOUT_SEC=60
@@ -121,6 +122,10 @@ fail() {
 	write_status failed error "ERROR: $*"
 	echo "ERROR: $*" >&2
 	exit 1
+}
+
+require_kernel() {
+	[ -x "$CLASH_BIN" ] || fail "Install the Mihomo kernel first."
 }
 
 parse_job_token() {
@@ -335,6 +340,7 @@ run_service_action() {
 
 	case "$CURRENT_ACTION" in
 		start)
+			require_kernel
 			write_status running start "Starting Clash service"
 			"$CLASH_INIT" enable || fail "failed to enable Clash service"
 			"$CLASH_INIT" start || fail "failed to start Clash service"
@@ -349,6 +355,7 @@ run_service_action() {
 			echo "Clash service stopped"
 			;;
 		restart)
+			require_kernel
 			write_status running restart "Restarting Clash service"
 			"$CLASH_INIT" restart || fail "failed to restart Clash service"
 			wait_ready

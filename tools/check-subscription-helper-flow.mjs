@@ -198,6 +198,12 @@ check(helper.includes('derive_remnawave_fallback()') &&
 	'Saved Main updates must derive and try the Remnawave /mihomo path.');
 check(helper.includes('[ -x "$CLASH_BIN" ] || fail "Install the Mihomo kernel first."'),
 	'Subscription apply must fail with an actionable kernel preflight before downloading.');
+const applyStart = helper.indexOf('\napply_subscription()');
+const applyEnd = helper.indexOf('\nprobe_interval()', applyStart);
+const applyBlock = applyStart >= 0 && applyEnd > applyStart ? helper.slice(applyStart, applyEnd) : '';
+check(applyBlock.indexOf('[ -x "$CLASH_BIN" ]') >= 0 &&
+	applyBlock.indexOf('[ -x "$CLASH_BIN" ]') < applyBlock.indexOf('download_primary_or_fallback'),
+	'Subscription apply must reject a missing kernel before making any subscription request.');
 
 check(makefile.includes('rootfs/opt/clash/bin/miclash-subscription'),
 	'Package install must include the router-side subscription helper.');

@@ -925,6 +925,9 @@ msgstr "Mihomo 内核已下载并安装。"
 msgid "Mihomo kernel is not installed."
 msgstr "Mihomo 内核未安装。"
 
+msgid "Install the Mihomo kernel first."
+msgstr "请先安装 Mihomo 内核。"
+
 msgid "Mode"
 msgstr "模式"
 
@@ -1104,9 +1107,6 @@ msgstr "将 rules/providers 存储在 tmpfs"
 
 msgid "Subscription download failed for both original URL and /mihomo fallback: %s"
 msgstr "原始 URL 和 /mihomo 备用路径均下载订阅失败：%s"
-
-msgid "Subscription downloaded and applied (Remnawave /mihomo fallback)."
-msgstr "订阅已下载并应用（Remnawave /mihomo 备用路径）。"
 
 msgid "Subscription downloaded and applied."
 msgstr "订阅已下载并应用。"

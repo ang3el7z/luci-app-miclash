@@ -114,6 +114,8 @@ const resumeServiceBlock = blockBetween(
 	'async function resumeMiClashServiceJobStatus()',
 	'async function installMiClashFromSettings('
 );
+const startAction = blockBetween('\n\t\tstart)', '\n\t\tstop)', serviceJob);
+const kernelCheck = startAction.indexOf('require_kernel');
 check(
 	updateStatusBlock.indexOf('if (translated) return translated;') >= 0 &&
 		updateStatusBlock.indexOf('const message =') > updateStatusBlock.indexOf('if (translated) return translated;'),
@@ -144,6 +146,17 @@ check(resumeServiceBlock.includes("if (state === 'failed' || state === 'success'
 	resumeServiceBlock.includes('await clearMiClashServiceStatus();') &&
 	resumeServiceBlock.includes('clearOperationStatus();'),
 	'Service status resume must clear completed failed/success service status files.');
+check(kernelCheck >= 0 &&
+	kernelCheck < startAction.indexOf('"$CLASH_INIT" enable') &&
+	kernelCheck < startAction.indexOf('"$CLASH_INIT" start'),
+	'Service start must reject a missing kernel before changing enable or process state.');
+check(serviceJob.includes('require_kernel()') &&
+	serviceJob.includes('[ -x "$CLASH_BIN" ] || fail "Install the Mihomo kernel first."'),
+	'Service kernel preflight must return the actionable missing-kernel error.');
+check(config.includes('Install the Mihomo kernel first.'),
+	'UI must show the actionable missing-kernel instruction.');
+check(!config.includes('Subscription downloaded and applied (Remnawave /mihomo fallback).'),
+	'UI must not expose the internal Remnawave fallback in successful subscription copy.');
 
 check(style.includes('.sbox-operation-status') &&
 	style.includes('.sbox-operation-status-error') &&

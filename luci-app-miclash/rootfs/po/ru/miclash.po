@@ -797,6 +797,9 @@ msgstr "Не установлено"
 msgid "Mihomo kernel is not installed."
 msgstr "Ядро Mihomo не установлено."
 
+msgid "Install the Mihomo kernel first."
+msgstr "Сначала установите ядро Mihomo."
+
 msgid "Install Kernel"
 msgstr "Установить ядро"
 
@@ -1025,9 +1028,6 @@ msgstr "Сохранить список IP-CIDR"
 
 msgid "Save URL / Update Config"
 msgstr "Сохранить URL / Обновить конфиг"
-
-msgid "Subscription downloaded and applied (Remnawave /mihomo fallback)."
-msgstr "Подписка загружена и применена (fallback Remnawave /mihomo)."
 
 msgid "Subscription downloaded and applied."
 msgstr "Подписка загружена и применена."
