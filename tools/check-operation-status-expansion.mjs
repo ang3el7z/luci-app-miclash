@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 
 const configPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js';
 const stylePath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css';
-const config = readFileSync(configPath, 'utf8');
-const style = readFileSync(stylePath, 'utf8');
+const config = readFileSync(configPath, 'utf8').replace(/\r\n/g, '\n');
+const style = readFileSync(stylePath, 'utf8').replace(/\r\n/g, '\n');
 
 let failed = false;
 

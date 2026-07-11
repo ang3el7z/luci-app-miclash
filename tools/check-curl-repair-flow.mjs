@@ -11,6 +11,25 @@ const update = readFileSync(updatePath, 'utf8');
 
 let failed = false;
 
+const shellCandidates = process.platform === 'win32'
+	? [
+		process.env.MICLASH_TEST_SHELL,
+		'C:/Program Files/Git/bin/sh.exe',
+		'C:/Program Files/Git/usr/bin/sh.exe'
+	].filter(Boolean)
+	: [process.env.MICLASH_TEST_SHELL, '/bin/sh'].filter(Boolean);
+const shellExecutable = shellCandidates.find((candidate) => existsSync(candidate));
+
+function shellPath(path) {
+	const normalized = String(path).replace(/\\/g, '/');
+	if (process.platform !== 'win32') return normalized;
+	return normalized.replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase());
+}
+
+if (!shellExecutable) {
+	throw new Error('No POSIX shell found. Set MICLASH_TEST_SHELL to a BusyBox-compatible sh.');
+}
+
 function check(condition, message) {
 	if (!condition) {
 		console.error(message);
@@ -47,6 +66,12 @@ function runShell(source, body, options = {}) {
 		const curlLog = join(dir, 'curl.log');
 		const installerLog = join(dir, 'installer.log');
 		const statusFile = join(dir, 'status');
+		const shellBin = shellPath(bin);
+		const shellState = shellPath(state);
+		const shellLog = shellPath(log);
+		const shellCurlLog = shellPath(curlLog);
+		const shellInstallerLog = shellPath(installerLog);
+		const shellStatusFile = shellPath(statusFile);
 		mkdirSync(bin, { recursive: true });
 		writeFileSync(state, 'broken');
 		writeFileSync(log, '');
@@ -61,7 +86,7 @@ function runShell(source, body, options = {}) {
 	]
 }`;
 		const tagInstaller = options.tagInstaller || `#!/bin/sh
-printf '%s\\n' "$*" > "${installerLog}"
+printf '%s\\n' "$*" > "${shellInstallerLog}"
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--status-file)
@@ -88,12 +113,14 @@ echo "tag installer ran"
 `;
 		const releasePath = join(dir, 'release.json');
 		const tagInstallerPath = join(dir, 'tag-installer.sh');
+		const shellReleasePath = shellPath(releasePath);
+		const shellTagInstallerPath = shellPath(tagInstallerPath);
 		writeFileSync(releasePath, releaseJson);
 		writeFileSync(tagInstallerPath, tagInstaller);
 
 		writeExecutable(join(bin, 'curl'), `#!/bin/sh
-if [ "$(cat "${state}")" = "fixed" ]; then
-	printf '%s\\n' "$*" >> "${curlLog}"
+if [ "$(cat "${shellState}")" = "fixed" ]; then
+	printf '%s\\n' "$*" >> "${shellCurlLog}"
 	case " $* " in
 		*" --version "*) echo "curl 8.0.0"; exit 0 ;;
 	esac
@@ -109,13 +136,13 @@ for arg in "$@"; do
 done
 if [ -n "$out" ]; then
 	case "$url" in
-		*install-miclash.sh) cp "${tagInstallerPath}" "$out" ;;
+		*install-miclash.sh) cp "${shellTagInstallerPath}" "$out" ;;
 		*) printf 'package-data\\n' > "$out" ;;
 	esac
 	exit 0
 fi
 case "$url" in
-	*api.github.com*) cat "${releasePath}"; exit 0 ;;
+	*api.github.com*) cat "${shellReleasePath}"; exit 0 ;;
 esac
 	exit 0
 fi
@@ -125,7 +152,7 @@ exit 127
 `);
 
 		writeExecutable(join(bin, 'opkg'), `#!/bin/sh
-printf '%s\\n' "$*" >> "${log}"
+printf '%s\\n' "$*" >> "${shellLog}"
 args=" $* "
 case "$args" in *" update "*) exit 0 ;; esac
 case "$args" in *" --force-reinstall "*) force=1 ;; *) force=0 ;; esac
@@ -134,24 +161,31 @@ case "$args" in *" zlib "*) has_zlib=1 ;; *) has_zlib=0 ;; esac
 case "$args" in *" libcurl4 "*) has_libcurl=1 ;; *) has_libcurl=0 ;; esac
 case "$args" in *" curl "*) has_curl=1 ;; *) has_curl=0 ;; esac
 if [ "$force" = "1" ] && [ "$install" = "1" ] && [ "$has_zlib" = "1" ] && [ "$has_libcurl" = "1" ] && [ "$has_curl" = "1" ]; then
-	echo fixed > "${state}"
+	echo fixed > "${shellState}"
 fi
 exit 0
 `);
 
-		const script = `${source}
-TEST_STATUS_FILE="${statusFile}"
+		const script = `PATH="${shellBin}:/usr/bin:/bin"
+export PATH
+${source}
+TEST_STATUS_FILE="${shellStatusFile}"
 ${body}
 `;
-		const result = spawnSync('/bin/sh', ['-s'], {
+		const result = spawnSync(shellExecutable, ['-s'], {
 			input: script,
 			encoding: 'utf8',
-			env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }
+			env: {
+				...process.env,
+				PATH: process.platform === 'win32'
+					? `${bin};${process.env.PATH || ''}`
+					: `${shellBin}:${process.env.PATH || ''}`
+			}
 		});
 		return {
 			code: result.status,
 			stdout: result.stdout,
-			stderr: result.stderr,
+			stderr: result.stderr || result.error?.message || '',
 			opkgLog: readFileSync(log, 'utf8'),
 			curlLog: readFileSync(curlLog, 'utf8'),
 			installerLog: readFileSync(installerLog, 'utf8'),
