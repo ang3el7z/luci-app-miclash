@@ -66,17 +66,20 @@ function runShell(source, body, options = {}) {
 		const curlLog = join(dir, 'curl.log');
 		const installerLog = join(dir, 'installer.log');
 		const statusFile = join(dir, 'status');
+		const curlAttempts = join(dir, 'curl-attempts');
 		const shellBin = shellPath(bin);
 		const shellState = shellPath(state);
 		const shellLog = shellPath(log);
 		const shellCurlLog = shellPath(curlLog);
 		const shellInstallerLog = shellPath(installerLog);
 		const shellStatusFile = shellPath(statusFile);
+		const shellCurlAttempts = shellPath(curlAttempts);
 		mkdirSync(bin, { recursive: true });
 		writeFileSync(state, 'broken');
 		writeFileSync(log, '');
 		writeFileSync(curlLog, '');
 		writeFileSync(installerLog, '');
+		writeFileSync(curlAttempts, '0');
 
 		const releaseJson = options.releaseJson || `{
 	"tag_name": "v1.2.3",
@@ -135,7 +138,15 @@ for arg in "$@"; do
 	prev="$arg"
 done
 if [ -n "$out" ]; then
+	attempt="$(cat "${shellCurlAttempts}")"
+	if [ "$attempt" -lt "\${CURL_FAIL_COUNT:-0}" ]; then
+		attempt=$((attempt + 1))
+		echo "$attempt" > "${shellCurlAttempts}"
+		echo "\${CURL_FINAL_ERROR:-curl: (28) Connection timed out}" >&2
+		exit 28
+	fi
 	case "$url" in
+		*api.github.com*) cp "${shellReleasePath}" "$out" ;;
 		*install-miclash.sh) cp "${shellTagInstallerPath}" "$out" ;;
 		*) printf 'package-data\\n' > "$out" ;;
 	esac
@@ -177,6 +188,7 @@ ${body}
 			encoding: 'utf8',
 			env: {
 				...process.env,
+				...options.env,
 				PATH: process.platform === 'win32'
 					? `${bin};${process.env.PATH || ''}`
 					: `${shellBin}:${process.env.PATH || ''}`
@@ -278,15 +290,42 @@ check(update.includes('--target-tag'),
 check(!/missing --url/.test(updateInstallAppBlock),
 	'miclash-update app mode must not require a package URL from LuCI.');
 check(updateAppResult.code === 0,
-	`miclash-update app mode must run the target tag installer: ${updateAppResult.stderr || updateAppResult.stdout}`);
-check(/raw\.githubusercontent\.com\/ang3el7z\/luci-app-miclash\/v1\.2\.3\/install-miclash\.sh/.test(updateAppResult.curlLog),
-	'miclash-update app mode must download install-miclash.sh from the target release tag.');
-check(/^app --target-tag v1\.2\.3 --mode update --status-file .* --token test-token$/.test(updateAppResult.installerLog.trim()),
-	'miclash-update app mode must pass target tag, mode, status file, and token to the tag installer.');
+	`miclash-update app mode must install the release asset directly: ${updateAppResult.stderr || updateAppResult.stdout}`);
+check(/releases\/tags\/v1\.2\.3/.test(updateAppResult.curlLog),
+	'miclash-update app mode must resolve the requested release tag.');
+check(/luci-app-miclash_1\.2\.3_all\.ipk/.test(updateAppResult.curlLog),
+	'miclash-update app mode must download the selected package asset.');
+check(!/raw\.githubusercontent\.com.*install-miclash\.sh/.test(updateAppResult.curlLog),
+	'miclash-update app mode must not download the standalone installer.');
+check(/install .*luci-app-miclash.*\.ipk/.test(updateAppResult.opkgLog),
+	'miclash-update app mode must invoke opkg for the downloaded package.');
 check(/state=success/.test(updateAppResult.status) &&
 	/phase=done/.test(updateAppResult.status) &&
 	/token=test-token/.test(updateAppResult.status),
-	'miclash-update app mode must preserve operation status from the tag installer.');
+	'miclash-update app mode must write successful operation status.');
+
+const retryResult = runShell(scriptWithoutDispatch(update), `
+STATUS_FILE="$TEST_STATUS_FILE"
+CURRENT_TOKEN="retry-token"
+install_app --target-tag v1.2.3 --mode update
+`, { env: { CURL_FAIL_COUNT: '2' } });
+check(retryResult.code === 0,
+	`miclash-update downloads must recover after two timeouts: ${retryResult.stderr || retryResult.stdout}`);
+
+const exhaustedResult = runShell(scriptWithoutDispatch(update), `
+STATUS_FILE="$TEST_STATUS_FILE"
+CURRENT_TOKEN="failed-token"
+install_app --target-tag v1.2.3 --mode update
+`, {
+	env: {
+		CURL_FAIL_COUNT: '5',
+		CURL_FINAL_ERROR: 'curl: (28) Connection timed out'
+	}
+});
+check(exhaustedResult.code !== 0,
+	'miclash-update downloads must fail after the bounded attempts are exhausted.');
+check(/curl: \(28\) Connection timed out/.test(exhaustedResult.status),
+	'miclash-update must preserve the final curl error in operation status.');
 
 if (failed) process.exit(1);
 console.log('curl repair flow check passed');

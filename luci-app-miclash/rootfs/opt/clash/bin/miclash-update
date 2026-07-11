@@ -11,11 +11,9 @@ STATUS_OUT="/tmp/miclash-update/stdout"
 STATUS_ERR="/tmp/miclash-update/stderr"
 CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
-CURL_RETRY=2
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 MICLASH_RELEASE_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest"
 MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases"
-MICLASH_INSTALLER_RAW_BASE="https://raw.githubusercontent.com/ang3el7z/luci-app-miclash"
 MIHOMO_RELEASE_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases"
 
@@ -291,14 +289,57 @@ download_file() {
 	url="$1"
 	target="$2"
 	label="$3"
+	fallback_url="${4:-}"
+	error_file="/tmp/miclash-download-error-$$"
+	TMP_FILES="$TMP_FILES $error_file"
 
-	write_status running download "Downloading $label"
 	prepare_curl_download || fail "curl is not available"
-	curl -L -fsS \
-		--retry "$CURL_RETRY" \
-		--connect-timeout "$CURL_CONNECT_TIMEOUT" \
-		--max-time "$CURL_MAX_TIME" \
-		"$url" -o "$target" || fail "failed to download $label"
+	write_status running download "Downloading $label"
+	rm -f "$target" "$error_file"
+
+	for family in "" "" "-4"; do
+		if curl $family -L -fsS \
+			--connect-timeout "$CURL_CONNECT_TIMEOUT" \
+			--max-time "$CURL_MAX_TIME" \
+			"$url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
+			return 0
+		fi
+		rm -f "$target"
+		sleep 1
+	done
+
+	if [ -n "$fallback_url" ]; then
+		if curl -4 -L -fsS \
+			--connect-timeout "$CURL_CONNECT_TIMEOUT" \
+			--max-time "$CURL_MAX_TIME" \
+			"$fallback_url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
+			return 0
+		fi
+	fi
+
+	detail="$(tail -n 3 "$error_file" 2>/dev/null | tr '\r\n' '  ')"
+	fail "failed to download $label: ${detail:-download returned an empty file}"
+}
+
+resolve_miclash_asset() {
+	target_tag="$1"
+	manager="$2"
+	metadata="/tmp/miclash-release-$$.json"
+
+	download_file "${MICLASH_RELEASES_API}/tags/${target_tag}" "$metadata" \
+		"MiClash release metadata for ${target_tag}"
+
+	case "$manager" in
+		apk) extension="apk"; pattern='luci-app-miclash-.*\.apk"' ;;
+		opkg) extension="ipk"; pattern='luci-app-miclash_.*\.ipk"' ;;
+		*) fail "unsupported package manager: $manager" ;;
+	esac
+
+	asset_url="$(grep '"browser_download_url"' "$metadata" \
+		| grep "$pattern" | head -n 1 \
+		| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+	[ -n "$asset_url" ] || fail "no MiClash .$extension asset found for release $target_tag"
+	printf '%s\n' "$asset_url"
 }
 
 install_app() {
@@ -323,31 +364,38 @@ install_app() {
 
 	[ -n "$target_tag" ] || fail "missing --target-tag"
 	case "$mode" in
-		update|reinstall) ;;
+		install|update|reinstall) ;;
 		*) fail "unsupported app mode: $mode" ;;
 	esac
 
-	tmp="/tmp/miclash-install-$$.sh"
-	TMP_FILES="$TMP_FILES $tmp"
+	manager="$(detect_pkg_manager)"
+	install_deps "$manager"
+	TMP_FILES="$TMP_FILES /tmp/miclash-release-$$.json"
+	asset_url="$(resolve_miclash_asset "$target_tag" "$manager")" || exit "$?"
+	case "$manager" in
+		apk) package_file="/tmp/luci-app-miclash-$$.apk" ;;
+		opkg) package_file="/tmp/luci-app-miclash-$$.ipk" ;;
+	esac
+	TMP_FILES="$TMP_FILES $package_file /tmp/miclash-package-no-autostart-clash /tmp/miclash-package-no-autostart-autoupdate /tmp/miclash-hard-reinstall"
+	download_file "$asset_url" "$package_file" "MiClash package"
 
-	installer_url="${MICLASH_INSTALLER_RAW_BASE}/${target_tag}/install-miclash.sh"
-	download_file "$installer_url" "$tmp" "MiClash installer"
-
-	validator="sh"
-	if command -v ash >/dev/null 2>&1; then
-		validator="$(command -v ash)"
+	touch /tmp/miclash-package-no-autostart-clash \
+		/tmp/miclash-package-no-autostart-autoupdate \
+		|| fail "failed to prepare package service state"
+	if [ "$mode" = "reinstall" ]; then
+		touch /tmp/miclash-hard-reinstall || fail "failed to prepare hard reinstall"
 	fi
 
-	"$validator" -n "$tmp" || fail "downloaded MiClash installer has invalid syntax"
-	chmod +x "$tmp" || fail "failed to mark MiClash installer executable"
+	write_status running install "Installing MiClash package"
+	case "$manager:$mode" in
+		apk:reinstall) apk add --force-reinstall --allow-untrusted "$package_file" ;;
+		apk:*) apk add --allow-untrusted "$package_file" ;;
+		opkg:reinstall) opkg install --force-reinstall "$package_file" ;;
+		opkg:*) opkg install "$package_file" ;;
+	esac || fail "failed to install MiClash package"
 
-	write_status running install "Running MiClash installer"
-	"$validator" "$tmp" app \
-		--target-tag "$target_tag" \
-		--mode "$mode" \
-		--status-file "$STATUS_FILE" \
-		--token "${CURRENT_TOKEN:-}" \
-		|| fail "failed to run MiClash installer"
+	write_status success done "MiClash package installed; services remain stopped"
+	echo "MiClash package installed; services remain stopped"
 }
 
 install_kernel() {
@@ -428,6 +476,6 @@ case "${1:-}" in
 		install_kernel "$@"
 		;;
 	*)
-		fail "usage: $0 release miclash|mihomo [release|prerelease] | app --target-tag TAG [--mode update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
+		fail "usage: $0 release miclash|mihomo [release|prerelease] | app --target-tag TAG [--mode install|update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
 		;;
 esac

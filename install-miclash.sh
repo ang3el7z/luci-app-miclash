@@ -25,6 +25,8 @@ INSTALL_ACTION=""
 PKG_UPDATED=0
 STATUS_FILE=""
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
+CURL_CONNECT_TIMEOUT=15
+CURL_MAX_TIME=300
 
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
     R=$(printf '\033[0;31m') G=$(printf '\033[0;32m') Y=$(printf '\033[1;33m')
@@ -128,6 +130,31 @@ ensure_curl() {
     command -v curl >/dev/null 2>&1 && curl --version >/dev/null 2>&1 \
         || die "curl still unavailable after install"
     PKG_UPDATED=1
+}
+
+download_artifact() {
+    url="$1"
+    target="$2"
+    label="$3"
+    error_file="/tmp/miclash-download-error-$$"
+
+    write_status running download "Downloading $label"
+    rm -f "$target" "$error_file"
+    for family in "" "" "-4"; do
+        if curl $family -L -fsS \
+            --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+            --max-time "$CURL_MAX_TIME" \
+            "$url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
+            rm -f "$error_file"
+            return 0
+        fi
+        rm -f "$target"
+        sleep 1
+    done
+
+    detail=$(tail -n 3 "$error_file" 2>/dev/null | tr '\r\n' '  ')
+    rm -f "$error_file"
+    die "Failed to download $label: ${detail:-download returned an empty file}"
 }
 
 pkg_update() {
@@ -360,8 +387,7 @@ install_miclash() {
     if [ "$PKG_MGR" = "apk" ]; then
         PKG_FILE="/tmp/luci-app-miclash.apk"
         write_status running download "Downloading MiClash package"
-        curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
-            "$MICLASH_APK_URL" -o "$PKG_FILE" || die "Failed to download MiClash .apk"
+        download_artifact "$MICLASH_APK_URL" "$PKG_FILE" "MiClash .apk"
         write_status running install "Installing MiClash package"
         if [ "$INSTALL_ACTION" = "reinstall" ]; then
             apk add "$PKG_FILE" --allow-untrusted --force-overwrite \
@@ -373,8 +399,7 @@ install_miclash() {
     else
         PKG_FILE="/tmp/luci-app-miclash.ipk"
         write_status running download "Downloading MiClash package"
-        curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
-            "$MICLASH_IPK_URL" -o "$PKG_FILE" || die "Failed to download MiClash .ipk"
+        download_artifact "$MICLASH_IPK_URL" "$PKG_FILE" "MiClash .ipk"
         write_status running install "Installing MiClash package"
         if [ "$INSTALL_ACTION" = "reinstall" ]; then
             opkg install --force-reinstall "$PKG_FILE" || die "Failed to reinstall MiClash .ipk"
@@ -418,7 +443,7 @@ run_app_mode() {
 
     [ -n "$MICLASH_TARGET_TAG" ] || die "missing --target-tag"
     case "$INSTALL_ACTION" in
-        update|reinstall) ;;
+        install|update|reinstall) ;;
         *) die "unsupported app mode: $INSTALL_ACTION" ;;
     esac
 
@@ -448,8 +473,7 @@ install_mihomo() {
     info "Latest Mihomo: ${B}${MIHOMO_VER}${N}"
     info "Kernel URL: ${MIHOMO_URL}"
 
-    curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
-        "$MIHOMO_URL" -o /tmp/clash.gz || die "Failed to download Mihomo kernel"
+    download_artifact "$MIHOMO_URL" /tmp/clash.gz "Mihomo kernel"
 
     mkdir -p "$(dirname "$CLASH_BIN")"
     gunzip -c /tmp/clash.gz > "$CLASH_BIN" || die "Failed to unpack Mihomo kernel"
