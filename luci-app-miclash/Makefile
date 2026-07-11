@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=0.9.0
+PKG_VERSION:=0.9.1
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
@@ -160,11 +160,6 @@ fi
 		/etc/init.d/clash disable 2>/dev/null || true
 	fi
 
-	if [ -x /etc/init.d/miclash-autoupdate ]; then
-		/etc/init.d/miclash-autoupdate enable >/dev/null 2>&1 || true
-		/etc/init.d/miclash-autoupdate start >/dev/null 2>&1 || true
-	fi
-
 	if [ "$$SETTINGS_RESTORED" = "1" ] && [ -x /opt/clash/bin/clash-rules ]; then
 		CLASH_RULES_QUIET=1 /opt/clash/bin/clash-rules guard_refresh >/dev/null 2>&1 || true
 	fi
@@ -184,17 +179,18 @@ endef
 
 define Package/$(PKG_NAME)/prerm
 #!/bin/sh
-[ -n "$$IPKG_INSTROOT" ] || {
-	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate stop >/dev/null 2>&1 || true
-	[ -x /etc/init.d/clash ] && /etc/init.d/clash stop >/dev/null 2>&1 || true
-	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || true
-}
 exit 0
 endef
 
 define Package/$(PKG_NAME)/postrm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
+	HARD_REINSTALL=0
+	if [ -f /tmp/miclash-hard-reinstall ]; then
+		rm -f /tmp/miclash-hard-reinstall
+		HARD_REINSTALL=1
+	fi
+
 	is_pkg_installed() {
 		if [ -x /usr/bin/apk ] || [ -x /bin/apk ]; then
 			APK_BIN="/usr/bin/apk"
@@ -234,12 +230,14 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /etc/init.d/miclash-autoupdate
 	rm -f /etc/apk/protected_paths.d/miclash.list
 
-	# Remove manually installed Mihomo core only on full package removal.
+	# Preserve the manually installed core on ordinary upgrades. An explicit
+	# hard reinstall intentionally starts over without it.
 	case "$$1" in
 		upgrade|update)
+			[ "$$HARD_REINSTALL" = "1" ] && rm -f /opt/clash/bin/clash
 			;;
 		*)
-			if ! is_pkg_installed; then
+			if [ "$$HARD_REINSTALL" = "1" ] || ! is_pkg_installed; then
 				rm -f /opt/clash/bin/clash
 			fi
 			;;

@@ -11,6 +11,25 @@ const update = readFileSync(updatePath, 'utf8');
 
 let failed = false;
 
+const shellCandidates = process.platform === 'win32'
+	? [
+		process.env.MICLASH_TEST_SHELL,
+		'C:/Program Files/Git/bin/sh.exe',
+		'C:/Program Files/Git/usr/bin/sh.exe'
+	].filter(Boolean)
+	: [process.env.MICLASH_TEST_SHELL, '/bin/sh'].filter(Boolean);
+const shellExecutable = shellCandidates.find((candidate) => existsSync(candidate));
+
+function shellPath(path) {
+	const normalized = String(path).replace(/\\/g, '/');
+	if (process.platform !== 'win32') return normalized;
+	return normalized.replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase());
+}
+
+if (!shellExecutable) {
+	throw new Error('No POSIX shell found. Set MICLASH_TEST_SHELL to a BusyBox-compatible sh.');
+}
+
 function check(condition, message) {
 	if (!condition) {
 		console.error(message);
@@ -47,11 +66,20 @@ function runShell(source, body, options = {}) {
 		const curlLog = join(dir, 'curl.log');
 		const installerLog = join(dir, 'installer.log');
 		const statusFile = join(dir, 'status');
+		const curlAttempts = join(dir, 'curl-attempts');
+		const shellBin = shellPath(bin);
+		const shellState = shellPath(state);
+		const shellLog = shellPath(log);
+		const shellCurlLog = shellPath(curlLog);
+		const shellInstallerLog = shellPath(installerLog);
+		const shellStatusFile = shellPath(statusFile);
+		const shellCurlAttempts = shellPath(curlAttempts);
 		mkdirSync(bin, { recursive: true });
 		writeFileSync(state, 'broken');
 		writeFileSync(log, '');
 		writeFileSync(curlLog, '');
 		writeFileSync(installerLog, '');
+		writeFileSync(curlAttempts, '0');
 
 		const releaseJson = options.releaseJson || `{
 	"tag_name": "v1.2.3",
@@ -61,7 +89,7 @@ function runShell(source, body, options = {}) {
 	]
 }`;
 		const tagInstaller = options.tagInstaller || `#!/bin/sh
-printf '%s\\n' "$*" > "${installerLog}"
+printf '%s\\n' "$*" > "${shellInstallerLog}"
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--status-file)
@@ -88,12 +116,14 @@ echo "tag installer ran"
 `;
 		const releasePath = join(dir, 'release.json');
 		const tagInstallerPath = join(dir, 'tag-installer.sh');
+		const shellReleasePath = shellPath(releasePath);
+		const shellTagInstallerPath = shellPath(tagInstallerPath);
 		writeFileSync(releasePath, releaseJson);
 		writeFileSync(tagInstallerPath, tagInstaller);
 
 		writeExecutable(join(bin, 'curl'), `#!/bin/sh
-if [ "$(cat "${state}")" = "fixed" ]; then
-	printf '%s\\n' "$*" >> "${curlLog}"
+if [ "$(cat "${shellState}")" = "fixed" ]; then
+	printf '%s\\n' "$*" >> "${shellCurlLog}"
 	case " $* " in
 		*" --version "*) echo "curl 8.0.0"; exit 0 ;;
 	esac
@@ -108,14 +138,22 @@ for arg in "$@"; do
 	prev="$arg"
 done
 if [ -n "$out" ]; then
+	attempt="$(cat "${shellCurlAttempts}")"
+	if [ "$attempt" -lt "\${CURL_FAIL_COUNT:-0}" ]; then
+		attempt=$((attempt + 1))
+		echo "$attempt" > "${shellCurlAttempts}"
+		echo "\${CURL_FINAL_ERROR:-curl: (28) Connection timed out}" >&2
+		exit 28
+	fi
 	case "$url" in
-		*install-miclash.sh) cp "${tagInstallerPath}" "$out" ;;
+		*api.github.com*) cp "${shellReleasePath}" "$out" ;;
+		*install-miclash.sh) cp "${shellTagInstallerPath}" "$out" ;;
 		*) printf 'package-data\\n' > "$out" ;;
 	esac
 	exit 0
 fi
 case "$url" in
-	*api.github.com*) cat "${releasePath}"; exit 0 ;;
+	*api.github.com*) cat "${shellReleasePath}"; exit 0 ;;
 esac
 	exit 0
 fi
@@ -125,7 +163,7 @@ exit 127
 `);
 
 		writeExecutable(join(bin, 'opkg'), `#!/bin/sh
-printf '%s\\n' "$*" >> "${log}"
+printf '%s\\n' "$*" >> "${shellLog}"
 args=" $* "
 case "$args" in *" update "*) exit 0 ;; esac
 case "$args" in *" --force-reinstall "*) force=1 ;; *) force=0 ;; esac
@@ -134,24 +172,32 @@ case "$args" in *" zlib "*) has_zlib=1 ;; *) has_zlib=0 ;; esac
 case "$args" in *" libcurl4 "*) has_libcurl=1 ;; *) has_libcurl=0 ;; esac
 case "$args" in *" curl "*) has_curl=1 ;; *) has_curl=0 ;; esac
 if [ "$force" = "1" ] && [ "$install" = "1" ] && [ "$has_zlib" = "1" ] && [ "$has_libcurl" = "1" ] && [ "$has_curl" = "1" ]; then
-	echo fixed > "${state}"
+	echo fixed > "${shellState}"
 fi
 exit 0
 `);
 
-		const script = `${source}
-TEST_STATUS_FILE="${statusFile}"
+		const script = `PATH="${shellBin}:/usr/bin:/bin"
+export PATH
+${source}
+TEST_STATUS_FILE="${shellStatusFile}"
 ${body}
 `;
-		const result = spawnSync('/bin/sh', ['-s'], {
+		const result = spawnSync(shellExecutable, ['-s'], {
 			input: script,
 			encoding: 'utf8',
-			env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }
+			env: {
+				...process.env,
+				...options.env,
+				PATH: process.platform === 'win32'
+					? `${bin};${process.env.PATH || ''}`
+					: `${shellBin}:${process.env.PATH || ''}`
+			}
 		});
 		return {
 			code: result.status,
 			stdout: result.stdout,
-			stderr: result.stderr,
+			stderr: result.stderr || result.error?.message || '',
 			opkgLog: readFileSync(log, 'utf8'),
 			curlLog: readFileSync(curlLog, 'utf8'),
 			installerLog: readFileSync(installerLog, 'utf8'),
@@ -244,15 +290,72 @@ check(update.includes('--target-tag'),
 check(!/missing --url/.test(updateInstallAppBlock),
 	'miclash-update app mode must not require a package URL from LuCI.');
 check(updateAppResult.code === 0,
-	`miclash-update app mode must run the target tag installer: ${updateAppResult.stderr || updateAppResult.stdout}`);
+	`miclash-update app mode must run the tagged installer: ${updateAppResult.stderr || updateAppResult.stdout}`);
 check(/raw\.githubusercontent\.com\/ang3el7z\/luci-app-miclash\/v1\.2\.3\/install-miclash\.sh/.test(updateAppResult.curlLog),
-	'miclash-update app mode must download install-miclash.sh from the target release tag.');
+	'miclash-update app mode must download install-miclash.sh from the requested release tag.');
+check(!/releases\/tags\/v1\.2\.3/.test(updateAppResult.curlLog) &&
+	!/luci-app-miclash_1\.2\.3_all\.ipk/.test(updateAppResult.curlLog),
+	'miclash-update app mode must leave release and package resolution to install-miclash.sh.');
 check(/^app --target-tag v1\.2\.3 --mode update --status-file .* --token test-token$/.test(updateAppResult.installerLog.trim()),
-	'miclash-update app mode must pass target tag, mode, status file, and token to the tag installer.');
+	'miclash-update app mode must pass target tag, mode, status file, and token to the tagged installer.');
 check(/state=success/.test(updateAppResult.status) &&
 	/phase=done/.test(updateAppResult.status) &&
 	/token=test-token/.test(updateAppResult.status),
-	'miclash-update app mode must preserve operation status from the tag installer.');
+	'miclash-update app mode must preserve successful operation status from the tagged installer.');
+
+const retryResult = runShell(scriptWithoutDispatch(update), `
+STATUS_FILE="$TEST_STATUS_FILE"
+CURRENT_TOKEN="retry-token"
+install_app --target-tag v1.2.3 --mode update
+`, { env: { CURL_FAIL_COUNT: '2' } });
+check(retryResult.code === 0,
+	`miclash-update downloads must recover after two timeouts: ${retryResult.stderr || retryResult.stdout}`);
+
+const exhaustedResult = runShell(scriptWithoutDispatch(update), `
+STATUS_FILE="$TEST_STATUS_FILE"
+CURRENT_TOKEN="failed-token"
+install_app --target-tag v1.2.3 --mode update
+`, {
+	env: {
+		CURL_FAIL_COUNT: '5',
+		CURL_FINAL_ERROR: 'curl: (28) Connection timed out'
+	}
+});
+check(exhaustedResult.code !== 0,
+	'miclash-update downloads must fail after the bounded attempts are exhausted.');
+check(/curl: \(28\) Connection timed out/.test(exhaustedResult.status),
+	'miclash-update must preserve the final curl error in operation status.');
+
+const installerFailureResult = runShell(scriptWithoutDispatch(update), `
+STATUS_FILE="$TEST_STATUS_FILE"
+CURRENT_TOKEN="installer-failed-token"
+install_app --target-tag v1.2.3 --mode reinstall
+`, {
+	tagInstaller: `#!/bin/sh
+status_file=""
+token=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--status-file) status_file="$2"; shift 2 ;;
+		--token) token="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+{
+	printf 'state=failed\\n'
+	printf 'phase=error\\n'
+	printf 'token=%s\\n' "$token"
+	printf 'message=ERROR: package install exploded\\n'
+} > "$status_file"
+echo 'ERROR: package install exploded' >&2
+exit 7
+`
+});
+check(installerFailureResult.code !== 0,
+	'miclash-update must return the tagged installer failure code.');
+check(/package install exploded/.test(installerFailureResult.status) &&
+	!/failed to run MiClash installer/.test(installerFailureResult.status),
+	'miclash-update must preserve the tagged installer error instead of replacing it with a generic wrapper error.');
 
 if (failed) process.exit(1);
 console.log('curl repair flow check passed');

@@ -9,7 +9,10 @@ const files = {
 	release: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/release.js',
 	acl: 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json',
 	style: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css',
-	makefile: 'luci-app-miclash/Makefile'
+	makefile: 'luci-app-miclash/Makefile',
+	installer: 'install-miclash.sh',
+	clashInit: 'luci-app-miclash/rootfs/etc/init.d/clash',
+	autoUpdateInit: 'luci-app-miclash/rootfs/etc/init.d/miclash-autoupdate'
 };
 
 const config = readFileSync(files.config, 'utf8');
@@ -20,6 +23,9 @@ const release = readFileSync(files.release, 'utf8');
 const acl = readFileSync(files.acl, 'utf8');
 const style = readFileSync(files.style, 'utf8');
 const makefile = readFileSync(files.makefile, 'utf8');
+const installer = readFileSync(files.installer, 'utf8');
+const clashInit = readFileSync(files.clashInit, 'utf8');
+const autoUpdateInit = readFileSync(files.autoUpdateInit, 'utf8');
 
 let failed = false;
 
@@ -110,6 +116,8 @@ const resumeServiceBlock = blockBetween(
 	'async function resumeMiClashServiceJobStatus()',
 	'async function installMiClashFromSettings('
 );
+const startAction = blockBetween('\n\t\tstart)', '\n\t\tstop)', serviceJob);
+const kernelCheck = startAction.indexOf('require_kernel');
 check(
 	updateStatusBlock.indexOf('if (translated) return translated;') >= 0 &&
 		updateStatusBlock.indexOf('const message =') > updateStatusBlock.indexOf('if (translated) return translated;'),
@@ -140,6 +148,17 @@ check(resumeServiceBlock.includes("if (state === 'failed' || state === 'success'
 	resumeServiceBlock.includes('await clearMiClashServiceStatus();') &&
 	resumeServiceBlock.includes('clearOperationStatus();'),
 	'Service status resume must clear completed failed/success service status files.');
+check(kernelCheck >= 0 &&
+	kernelCheck < startAction.indexOf('"$CLASH_INIT" enable') &&
+	kernelCheck < startAction.indexOf('"$CLASH_INIT" start'),
+	'Service start must reject a missing kernel before changing enable or process state.');
+check(serviceJob.includes('require_kernel()') &&
+	serviceJob.includes('[ -x "$CLASH_BIN" ] || fail "Install the Mihomo kernel first."'),
+	'Service kernel preflight must return the actionable missing-kernel error.');
+check(config.includes('Install the Mihomo kernel first.'),
+	'UI must show the actionable missing-kernel instruction.');
+check(!config.includes('Subscription downloaded and applied (Remnawave /mihomo fallback).'),
+	'UI must not expose the internal Remnawave fallback in successful subscription copy.');
 
 check(style.includes('.sbox-operation-status') &&
 	style.includes('.sbox-operation-status-error') &&
@@ -225,10 +244,44 @@ const installKernelBlock = installKernelStart >= 0 && dispatchStart > installKer
 	: '';
 check(installAppBlock.includes('--target-tag') &&
 	installAppBlock.includes('install-miclash.sh') &&
-	installAppBlock.includes('--status-file "$STATUS_FILE"') &&
-	installAppBlock.includes('--token "${CURRENT_TOKEN:-}"') &&
+	installAppBlock.includes('"$validator" -n "$tmp"') &&
+	!installAppBlock.includes('resolve_miclash_asset') &&
+	!installAppBlock.includes('opkg install') &&
+	!installAppBlock.includes('apk add') &&
 	!installAppBlock.includes('missing --url'),
-	'miclash-update app mode must download and run the target tag installer with status/token propagation.');
+	'miclash-update app mode must validate and run the canonical tagged installer without installing packages itself.');
+
+const postinstBlock = blockBetween(
+	'define Package/$(PKG_NAME)/postinst',
+	'endef',
+	makefile
+);
+const prermBlock = blockBetween(
+	'define Package/$(PKG_NAME)/prerm',
+	'endef',
+	makefile
+);
+const postrmBlock = blockBetween(
+	'define Package/$(PKG_NAME)/postrm',
+	'endef',
+	makefile
+);
+check(!prermBlock.includes('/etc/init.d/clash stop'),
+	'Package prerm must let default_prerm stop Clash exactly once.');
+check(!postinstBlock.includes('/etc/init.d/miclash-autoupdate start'),
+	'Package postinst must not start auto-update before default_postinst.');
+check(clashInit.includes('/tmp/miclash-package-no-autostart-clash'),
+	'Clash init must consume its package no-autostart marker.');
+check(autoUpdateInit.includes('/tmp/miclash-package-no-autostart-autoupdate'),
+	'Auto-update init must consume its package no-autostart marker.');
+check(postrmBlock.includes('/tmp/miclash-hard-reinstall'),
+	'Package postrm must remove the kernel only for explicit hard reinstall or full removal.');
+check(installer.includes('/tmp/miclash-package-no-autostart-clash') &&
+	installer.includes('/tmp/miclash-package-no-autostart-autoupdate'),
+	'Canonical installer must create package no-autostart lifecycle markers.');
+check(installer.includes('[ "$INSTALL_ACTION" = "reinstall" ]') &&
+	installer.includes('rm -f /opt/clash/bin/clash'),
+	'Hard reinstall must remove the kernel even when upgrading from an older postrm that does not understand the marker.');
 check(!update.includes('cleanup_legacy_output_guard') &&
 	!update.includes('MICLASH_GUARD_OUTPUT'),
 	'Update script must not own legacy guard cleanup; clash-rules owns firewall cleanup.');

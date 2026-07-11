@@ -125,22 +125,24 @@ check(existsSync(files.autoUpdateJob),
 	'Package must include /opt/clash/bin/miclash-autoupdate worker.');
 check(autoUpdateJob.includes('AUTO_UPDATE_CONFIG') &&
 	autoUpdateJob.includes('AUTO_UPDATE_INTERVAL_HOURS') &&
-	autoUpdateJob.includes('PROXY_MODE') &&
-	autoUpdateJob.includes('TUN_STACK') &&
-	autoUpdateJob.includes('SUBSCRIPTION_URL') &&
-	autoUpdateJob.includes('Profile-Update-Interval') &&
-	autoUpdateJob.includes('apply_proxy_mode') &&
-	autoUpdateJob.includes('tproxy-port: 7894') &&
-	autoUpdateJob.includes('device: clash-tun') &&
-	autoUpdateJob.includes('/opt/clash/bin/clash') &&
-	autoUpdateJob.includes('-t') &&
+	autoUpdateJob.includes('SUBSCRIPTION_BIN="/opt/clash/bin/miclash-subscription"') &&
+	autoUpdateJob.includes('apply-saved-main') &&
 	autoUpdateJob.includes('/opt/clash/bin/miclash-service') &&
 	autoUpdateJob.includes('reload') &&
 	autoUpdateJob.includes('is_service_running') &&
 	autoUpdateJob.includes('sleep "$POLL_INTERVAL_SEC"'),
-	'Auto-update worker must poll settings, download/validate Main config, and hot reload only when service is running.');
+	'Auto-update worker must schedule the shared subscription helper and hot reload only when service is running.');
+check(autoUpdateJob.includes('LAST_ATTEMPT_FILE="$STATE_DIR/last_attempt"') &&
+	autoUpdateJob.includes('[ -f "$LAST_ATTEMPT_FILE" ]') &&
+	autoUpdateJob.includes('> "$LAST_ATTEMPT_FILE"') &&
+	autoUpdateJob.indexOf('> "$LAST_ATTEMPT_FILE"') < autoUpdateJob.indexOf('apply-saved-main'),
+	'Auto-update must record each attempt before invoking the helper so failures wait for the configured interval.');
+check(!autoUpdateJob.includes('download_subscription()') &&
+	!autoUpdateJob.includes('apply_proxy_mode()') &&
+	!autoUpdateJob.includes('validate_downloaded_config()'),
+	'Auto-update must not keep a second subscription download and validation implementation.');
 check(autoUpdateJob.includes('case "$hours" in') &&
-	autoUpdateJob.includes('*[!0-9]*|0|"")') &&
+	autoUpdateJob.includes("''|*[!0-9]*|0)") &&
 	!autoUpdateJob.includes('2|4|12|24'),
 	'Auto-update worker must accept provider-supplied positive hour values such as 3.');
 check(existsSync(files.autoUpdateInit),
@@ -151,10 +153,8 @@ check(autoUpdateInit.includes('USE_PROCD=1') &&
 	'Auto-update init script must run the worker under procd with respawn.');
 check(makefile.includes('rootfs/opt/clash/bin/miclash-autoupdate') &&
 	makefile.includes('rootfs/etc/init.d/miclash-autoupdate') &&
-	makefile.includes('/etc/init.d/miclash-autoupdate enable') &&
-	makefile.includes('/etc/init.d/miclash-autoupdate start') &&
-	makefile.includes('/etc/init.d/miclash-autoupdate stop'),
-	'Makefile must install, enable/start, and remove the auto-update service.');
+	!makefile.includes('/etc/init.d/miclash-autoupdate start'),
+	'Makefile must install auto-update without starting it from package hooks.');
 check(!/CRON_LINE=.*miclash-autoupdate/.test(makefile),
 	'Auto-update config must not be scheduled through cron.');
 check(acl.includes('"/opt/clash/bin/miclash-autoupdate": [ "read", "stat", "exec" ]') &&

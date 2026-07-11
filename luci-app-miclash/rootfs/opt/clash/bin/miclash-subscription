@@ -2,9 +2,11 @@
 
 set -u
 
-BASE_DIR="/opt/clash"
-CLASH_BIN="/opt/clash/bin/clash"
-CURL_BIN="/usr/bin/curl"
+BASE_DIR="${MICLASH_BASE_DIR:-/opt/clash}"
+CLASH_DATA_DIR="${MICLASH_CLASH_DATA_DIR:-$BASE_DIR}"
+CLASH_BIN="${MICLASH_CLASH_BIN:-$BASE_DIR/bin/clash}"
+SETTINGS_FILE="${MICLASH_SETTINGS_FILE:-$BASE_DIR/settings}"
+CURL_BIN="${MICLASH_CURL_BIN:-/usr/bin/curl}"
 CURL_CONNECT_TIMEOUT=8
 CURL_MAX_TIME=120
 
@@ -47,7 +49,7 @@ fail() {
 }
 
 usage() {
-	fail "usage: $0 apply|probe-interval --url URL [--target config.yaml|config2.yaml|config3.yaml] [--fallback-url URL] [--fallback-on-error 0|1] [--mode direct|remnawave-client-path] [--proxy-mode tproxy|tun|mixed] [--tun-stack system|gvisor|mixed] [--user-agent UA] [--header 'Name: value']"
+	fail "usage: $0 apply|apply-saved-main|probe-interval --url URL [--target config.yaml|config2.yaml|config3.yaml] [--fallback-url URL] [--fallback-on-error 0|1] [--mode direct|remnawave-client-path] [--proxy-mode tproxy|tun|mixed] [--tun-stack system|gvisor|mixed] [--user-agent UA] [--header 'Name: value']"
 }
 
 need_arg() {
@@ -69,6 +71,71 @@ normalize_tun_stack() {
 		system|gvisor|mixed) printf '%s' "$clean" ;;
 		*) printf '%s' "system" ;;
 	esac
+}
+
+setting_value() {
+	key="$1"
+	fallback="${2:-}"
+	value="$(sed -n "s/^${key}=//p" "$SETTINGS_FILE" 2>/dev/null | tail -n 1)"
+	[ -n "$value" ] && printf '%s' "$value" || printf '%s' "$fallback"
+}
+
+derive_remnawave_fallback() {
+	input="$1"
+	case "$input" in
+		*\?*) query="?${input#*\?}"; base="${input%%\?*}" ;;
+		*) query=""; base="$input" ;;
+	esac
+	case "$base" in
+		*/mihomo) printf '%s%s' "$base" "$query"; return 0 ;;
+	esac
+	scheme="${base%%://*}"
+	rest="${base#*://}"
+	host="${rest%%/*}"
+	[ "$host" != "$rest" ] && path="${rest#*/}" || path=""
+	new_path="$(printf '%s\n' "$path" | awk -F/ '
+		BEGIN { OFS="/" }
+		{
+			for (i = 1; i <= NF; i++) {
+				if ($i == "sub" && i + 1 <= NF) {
+					if (i + 2 <= NF && $(i + 2) != "") $(i + 2) = "mihomo"
+					else $(++NF) = "mihomo"
+					found = 1
+					break
+				}
+			}
+			if (!found) $(++NF) = "mihomo"
+			print
+		}')"
+	printf '%s://%s/%s%s' "$scheme" "$host" "$new_path" "$query"
+}
+
+append_saved_device_headers() {
+	device_os="$(setting_value HWID_DEVICE_OS OpenWrt)"
+	printf 'x-device-os: %s\n' "$device_os" >> "$REQUEST_HEADERS_FILE"
+	if [ -f /etc/openwrt_release ]; then
+		. /etc/openwrt_release
+		[ -n "${DISTRIB_RELEASE:-}" ] && printf 'x-ver-os: %s\n' "$DISTRIB_RELEASE" >> "$REQUEST_HEADERS_FILE"
+	fi
+	model="$(cat /tmp/sysinfo/model 2>/dev/null || true)"
+	[ -n "$model" ] && printf 'x-device-model: %s\n' "$model" >> "$REQUEST_HEADERS_FILE"
+	if [ "$(setting_value ENABLE_HWID false)" = "true" ]; then
+		hwid="$(cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | md5sum | cut -c1-14)"
+		[ -n "$hwid" ] && printf 'x-hwid: %s\n' "$hwid" >> "$REQUEST_HEADERS_FILE"
+	fi
+}
+
+load_saved_main_options() {
+	URL="$(setting_value SUBSCRIPTION_URL_CONFIG_YAML)"
+	[ -n "$URL" ] || URL="$(setting_value SUBSCRIPTION_URL)"
+	[ -n "$URL" ] || fail "Subscription URL is empty."
+	set_target_name config.yaml
+	PROXY_MODE="$(normalize_proxy_mode "$(setting_value PROXY_MODE tproxy)")"
+	TUN_STACK="$(normalize_tun_stack "$(setting_value TUN_STACK system)")"
+	USER_AGENT="$(setting_value HWID_USER_AGENT MiClash)"
+	append_saved_device_headers
+	FALLBACK_URL="$(derive_remnawave_fallback "$URL")"
+	FALLBACK_ON_ERROR=1
 }
 
 set_target_name() {
@@ -285,11 +352,13 @@ ensure_yaml_payload_or_fallback() {
 	fi
 
 	if [ -n "$FALLBACK_URL" ]; then
+		primary_interval="$PROFILE_UPDATE_INTERVAL_HOURS"
 		if ! download_subscription "$FALLBACK_URL" "$TMP_DOWNLOAD" "remnawave-client-path"; then
 			fallback_error="$(cat "$DOWNLOAD_ERROR" 2>/dev/null || true)"
 			fail "Original URL returned links/base64 and /mihomo fallback failed: ${fallback_error:-Download failed.}"
 		fi
 		MODE="remnawave-client-path"
+		[ -n "$PROFILE_UPDATE_INTERVAL_HOURS" ] || PROFILE_UPDATE_INTERVAL_HOURS="$primary_interval"
 		prepare_downloaded_payload "$TMP_DOWNLOAD"
 		if payload_needs_fallback "$TMP_DOWNLOAD"; then
 			fail "Both original URL and /mihomo returned links/base64 instead of Clash YAML. Check provider export type."
@@ -385,13 +454,14 @@ validate_config() {
 	candidate="$1"
 	[ -x "$CLASH_BIN" ] || fail "Mihomo kernel is not installed."
 
-	output="$("$CLASH_BIN" -d "$BASE_DIR" -f "$candidate" -t 2>&1)" && return 0
+	output="$("$CLASH_BIN" -d "$CLASH_DATA_DIR" -f "$candidate" -t 2>&1)" && return 0
 	message="$(printf '%s\n' "$output" | sed -n '1,20p')"
 	fail "YAML validation failed: ${message:-unknown error}"
 }
 
 apply_subscription() {
 	[ -n "$URL" ] || fail "missing --url"
+	[ -x "$CLASH_BIN" ] || fail "Install the Mihomo kernel first."
 	[ -x "$CURL_BIN" ] || fail "curl is not installed."
 	mkdir -p "$BASE_DIR" || fail "failed to create $BASE_DIR"
 
@@ -433,6 +503,11 @@ case "${1:-}" in
 	apply)
 		ACTION="apply"
 		shift
+		;;
+	apply-saved-main)
+		ACTION="apply-saved-main"
+		shift
+		load_saved_main_options
 		;;
 	probe-interval)
 		ACTION="probe-interval"
@@ -488,7 +563,7 @@ while [ $# -gt 0 ]; do
 done
 
 case "$ACTION" in
-	apply) apply_subscription ;;
+	apply|apply-saved-main) apply_subscription ;;
 	probe-interval) probe_interval ;;
 	*) usage ;;
 esac

@@ -350,7 +350,7 @@ async function ensureMihomoKernelInstalled() {
 
 	if (!status || !status.installed) {
 		updateHeaderAndControlDom();
-		throw new Error(_('Mihomo kernel is not installed.'));
+		throw new Error(_('Install the Mihomo kernel first.'));
 	}
 
 	return status;
@@ -2815,11 +2815,7 @@ function bindConfigEvents() {
 				updateHeaderAndControlDom();
 			}
 
-			if (appliedInfo.mode === 'remnawave-client-path' && serviceReloaded) {
-				await logUiAction('info', 'Subscription downloaded and applied with Remnawave fallback');
-				setOperationSuccess(_('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
-				notify('info', _('Subscription downloaded and applied (Remnawave /mihomo fallback).'));
-			} else if (serviceReloaded) {
+			if (serviceReloaded) {
 				await logUiAction('info', 'Subscription downloaded and applied');
 				setOperationSuccess(_('Subscription downloaded and applied.'));
 				notify('info', _('Subscription downloaded and applied.'));

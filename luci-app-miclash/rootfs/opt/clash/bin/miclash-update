@@ -11,7 +11,6 @@ STATUS_OUT="/tmp/miclash-update/stdout"
 STATUS_ERR="/tmp/miclash-update/stderr"
 CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
-CURL_RETRY=2
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 MICLASH_RELEASE_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest"
 MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases"
@@ -263,42 +262,40 @@ print_release_info() {
 	fetch_release_url "$url" || release_error "failed to fetch release information"
 }
 
-openwrt_major() {
-	. /etc/openwrt_release 2>/dev/null || true
-	printf '%s\n' "${DISTRIB_RELEASE:-}" | sed -n 's/^\([0-9][0-9]*\).*/\1/p'
-}
-
-install_deps() {
-	manager="$1"
-	write_status running dependencies "Installing dependencies"
-	if [ "$manager" = "apk" ]; then
-		apk update || fail "failed to update apk index"
-		apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64 || fail "failed to install dependencies"
-		return 0
-	fi
-
-	major="$(openwrt_major)"
-	tproxy_pkg="kmod-nft-tproxy"
-	if [ -n "$major" ] && [ "$major" -lt 23 ]; then
-		tproxy_pkg="iptables-mod-tproxy"
-	fi
-
-	opkg update || fail "failed to update opkg index"
-	opkg install zlib libcurl4 curl "$tproxy_pkg" kmod-tun coreutils-base64 || fail "failed to install dependencies"
-}
-
 download_file() {
 	url="$1"
 	target="$2"
 	label="$3"
+	fallback_url="${4:-}"
+	error_file="/tmp/miclash-download-error-$$"
+	TMP_FILES="$TMP_FILES $error_file"
 
-	write_status running download "Downloading $label"
 	prepare_curl_download || fail "curl is not available"
-	curl -L -fsS \
-		--retry "$CURL_RETRY" \
-		--connect-timeout "$CURL_CONNECT_TIMEOUT" \
-		--max-time "$CURL_MAX_TIME" \
-		"$url" -o "$target" || fail "failed to download $label"
+	write_status running download "Downloading $label"
+	rm -f "$target" "$error_file"
+
+	for family in "" "" "-4"; do
+		if curl $family -L -fsS \
+			--connect-timeout "$CURL_CONNECT_TIMEOUT" \
+			--max-time "$CURL_MAX_TIME" \
+			"$url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
+			return 0
+		fi
+		rm -f "$target"
+		sleep 1
+	done
+
+	if [ -n "$fallback_url" ]; then
+		if curl -4 -L -fsS \
+			--connect-timeout "$CURL_CONNECT_TIMEOUT" \
+			--max-time "$CURL_MAX_TIME" \
+			"$fallback_url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
+			return 0
+		fi
+	fi
+
+	detail="$(tail -n 3 "$error_file" 2>/dev/null | tr '\r\n' '  ')"
+	fail "failed to download $label: ${detail:-download returned an empty file}"
 }
 
 install_app() {
@@ -323,31 +320,31 @@ install_app() {
 
 	[ -n "$target_tag" ] || fail "missing --target-tag"
 	case "$mode" in
-		update|reinstall) ;;
+		install|update|reinstall) ;;
 		*) fail "unsupported app mode: $mode" ;;
 	esac
 
 	tmp="/tmp/miclash-install-$$.sh"
 	TMP_FILES="$TMP_FILES $tmp"
-
 	installer_url="${MICLASH_INSTALLER_RAW_BASE}/${target_tag}/install-miclash.sh"
-	download_file "$installer_url" "$tmp" "MiClash installer"
+	download_file "$installer_url" "$tmp" "MiClash installer for ${target_tag}"
 
 	validator="sh"
 	if command -v ash >/dev/null 2>&1; then
 		validator="$(command -v ash)"
 	fi
-
-	"$validator" -n "$tmp" || fail "downloaded MiClash installer has invalid syntax"
+	"$validator" -n "$tmp" || fail "downloaded MiClash installer for $target_tag has invalid syntax"
 	chmod +x "$tmp" || fail "failed to mark MiClash installer executable"
 
-	write_status running install "Running MiClash installer"
+	write_status running install "Running MiClash installer for $target_tag"
 	"$validator" "$tmp" app \
 		--target-tag "$target_tag" \
 		--mode "$mode" \
 		--status-file "$STATUS_FILE" \
-		--token "${CURRENT_TOKEN:-}" \
-		|| fail "failed to run MiClash installer"
+		--token "${CURRENT_TOKEN:-}"
+	installer_code="$?"
+	[ "$installer_code" -eq 0 ] && return 0
+	return "$installer_code"
 }
 
 install_kernel() {
@@ -367,7 +364,8 @@ install_kernel() {
 
 	[ -n "$url" ] || fail "missing --url"
 
-	manager="$(detect_pkg_manager)"
+	manager="$(find_pkg_manager || true)"
+	[ -n "$manager" ] || fail "no supported package manager found (apk/opkg)"
 	ensure_curl_available "$manager"
 
 	mkdir -p /opt/clash/bin || fail "failed to create /opt/clash/bin"
@@ -428,6 +426,6 @@ case "${1:-}" in
 		install_kernel "$@"
 		;;
 	*)
-		fail "usage: $0 release miclash|mihomo [release|prerelease] | app --target-tag TAG [--mode update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
+		fail "usage: $0 release miclash|mihomo [release|prerelease] | app --target-tag TAG [--mode install|update|reinstall] | kernel --url URL | job app|kernel ... | status | clear-status"
 		;;
 esac

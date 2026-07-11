@@ -1,4 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const files = {
 	config: 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js',
@@ -20,6 +23,97 @@ function check(condition, message) {
 	if (!condition) {
 		console.error(message);
 		failed = true;
+	}
+}
+
+function shellPath(path) {
+	const normalized = String(path).replace(/\\/g, '/');
+	if (process.platform !== 'win32') return normalized;
+	return normalized.replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase());
+}
+
+function writeExecutable(path, content) {
+	writeFileSync(path, content);
+	chmodSync(path, 0o755);
+}
+
+function runSavedSettingsFixture() {
+	const shellCandidates = process.platform === 'win32'
+		? ['C:/Program Files/Git/bin/sh.exe', 'C:/Program Files/Git/usr/bin/sh.exe']
+		: ['/bin/sh'];
+	const shell = shellCandidates.find((candidate) => existsSync(candidate));
+	if (!shell) return { code: 127, stderr: 'No POSIX shell found' };
+
+	const dir = mkdtempSync(join(tmpdir(), 'miclash-subscription-test-'));
+	try {
+		const base = join(dir, 'clash');
+		const bin = join(base, 'bin');
+		const settings = join(base, 'settings');
+		const curl = join(bin, 'curl');
+		const clash = join(bin, 'clash');
+		const curlLog = join(dir, 'curl.log');
+		const clashLog = join(dir, 'clash.log');
+		mkdirSync(bin, { recursive: true });
+		writeFileSync(settings, [
+			'SUBSCRIPTION_URL_CONFIG_YAML=https://provider.test/api/sub/token',
+			'PROXY_MODE=tproxy',
+			'TUN_STACK=system',
+			'HWID_USER_AGENT=MiClash-Test',
+			'HWID_DEVICE_OS=OpenWrt',
+			'ENABLE_HWID=false',
+			''
+		].join('\n'));
+		writeExecutable(curl, `#!/bin/sh
+headers=""
+out=""
+url=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-D) headers="$2"; shift 2 ;;
+		-o) out="$2"; shift 2 ;;
+		http://*|https://*) url="$1"; shift ;;
+		*) shift ;;
+	esac
+done
+printf '%s\\n' "$url" >> "${shellPath(curlLog)}"
+printf 'HTTP/2 200\\n' > "$headers"
+case "$url" in
+	*/mihomo)
+		printf 'mode: rule\\nproxies:\\n  - name: test\\n    type: direct\\nrules:\\n  - MATCH,DIRECT\\n' > "$out"
+		;;
+	*)
+		printf 'Profile-Update-Interval: 3\\n' >> "$headers"
+		printf 'QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\\n' > "$out"
+		;;
+esac
+`);
+		writeExecutable(clash, `#!/bin/sh
+printf '%s\\n' "$*" >> "${shellPath(clashLog)}"
+candidate=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in -f) candidate="$2"; shift 2 ;; *) shift ;; esac
+done
+grep -q '^proxies:' "$candidate"
+`);
+
+		const script = `MICLASH_BASE_DIR="${shellPath(base)}" \\
+MICLASH_CLASH_DATA_DIR="${shellPath(base)}" \\
+MICLASH_CLASH_BIN="${shellPath(clash)}" \\
+MICLASH_SETTINGS_FILE="${shellPath(settings)}" \\
+MICLASH_CURL_BIN="${shellPath(curl)}" \\
+sh "${shellPath(files.helper)}" apply-saved-main
+`;
+		const result = spawnSync(shell, ['-s'], { input: script, encoding: 'utf8' });
+		return {
+			code: result.status,
+			stdout: result.stdout || '',
+			stderr: result.stderr || result.error?.message || '',
+			config: existsSync(join(base, 'config.yaml')) ? readFileSync(join(base, 'config.yaml'), 'utf8') : '',
+			curlLog: existsSync(curlLog) ? readFileSync(curlLog, 'utf8') : '',
+			clashLog: existsSync(clashLog) ? readFileSync(clashLog, 'utf8') : ''
+		};
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
 	}
 }
 
@@ -90,6 +184,26 @@ check(helper.includes('mv "$APPLY_PATH" "$TARGET_PATH"'),
 	'Router-side helper must replace the selected config only after validation.');
 check(helper.includes('TARGET_NAME=') && helper.includes('config2.yaml') && helper.includes('config3.yaml'),
 	'Router-side helper must restrict writes to the supported MiClash config profiles.');
+check(helper.includes('MICLASH_BASE_DIR') &&
+	helper.includes('MICLASH_CLASH_DATA_DIR') &&
+	helper.includes('MICLASH_CLASH_BIN') &&
+	helper.includes('MICLASH_SETTINGS_FILE'),
+	'Router-side helper paths must be overridable for isolated saved-settings tests.');
+check(helper.includes('apply-saved-main)') &&
+	helper.includes('load_saved_main_options()') &&
+	helper.includes('SUBSCRIPTION_URL_CONFIG_YAML'),
+	'Router-side helper must apply the saved Main subscription through the shared pipeline.');
+check(helper.includes('derive_remnawave_fallback()') &&
+	helper.includes('FALLBACK_URL="$(derive_remnawave_fallback "$URL")"'),
+	'Saved Main updates must derive and try the Remnawave /mihomo path.');
+check(helper.includes('[ -x "$CLASH_BIN" ] || fail "Install the Mihomo kernel first."'),
+	'Subscription apply must fail with an actionable kernel preflight before downloading.');
+const applyStart = helper.indexOf('\napply_subscription()');
+const applyEnd = helper.indexOf('\nprobe_interval()', applyStart);
+const applyBlock = applyStart >= 0 && applyEnd > applyStart ? helper.slice(applyStart, applyEnd) : '';
+check(applyBlock.indexOf('[ -x "$CLASH_BIN" ]') >= 0 &&
+	applyBlock.indexOf('[ -x "$CLASH_BIN" ]') < applyBlock.indexOf('download_primary_or_fallback'),
+	'Subscription apply must reject a missing kernel before making any subscription request.');
 
 check(makefile.includes('rootfs/opt/clash/bin/miclash-subscription'),
 	'Package install must include the router-side subscription helper.');
@@ -97,6 +211,23 @@ check(acl.includes('"/opt/clash/bin/miclash-subscription": [ "read", "stat", "ex
 	'LuCI ACL read permissions must allow executing the router-side subscription helper.');
 check(acl.includes('"/opt/clash/bin/miclash-subscription": [ "exec" ]'),
 	'LuCI ACL write permissions must allow executing the router-side subscription helper.');
+
+const savedSettingsResult = runSavedSettingsFixture();
+check(savedSettingsResult.code === 0,
+	`Saved Main subscription fixture must succeed: ${savedSettingsResult.stderr || savedSettingsResult.stdout}`);
+check(savedSettingsResult.curlLog.includes('https://provider.test/api/sub/token\n') &&
+	savedSettingsResult.curlLog.includes('https://provider.test/api/sub/token/mihomo\n'),
+	'Saved Main subscription must request the original URL and derived /mihomo fallback.');
+check(savedSettingsResult.clashLog.includes('-f') &&
+	savedSettingsResult.config.includes('proxies:') &&
+	savedSettingsResult.config.includes('tproxy-port: 7894'),
+	'Saved Main subscription must validate and atomically install the transformed YAML candidate.');
+check(savedSettingsResult.stdout.includes('ok=1') &&
+	savedSettingsResult.stdout.includes('mode=remnawave-client-path') &&
+	savedSettingsResult.stdout.includes('target=config.yaml') &&
+	savedSettingsResult.stdout.includes('profileUpdateIntervalHours=3') &&
+	savedSettingsResult.stdout.includes('message=Subscription downloaded and applied.'),
+	'Saved Main subscription must return neutral key/value result fields and preserve the primary interval header.');
 
 if (failed) process.exit(1);
 console.log('subscription helper flow check passed');

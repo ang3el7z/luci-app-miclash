@@ -5,6 +5,12 @@ STOP=10
 USE_PROCD=1
 
 start_service() {
+	if [ -f /tmp/miclash-package-no-autostart-autoupdate ]; then
+		rm -f /tmp/miclash-package-no-autostart-autoupdate
+		/etc/init.d/miclash-autoupdate disable >/dev/null 2>&1 || true
+		return 0
+	fi
+
 	procd_open_instance
 	procd_set_param command /opt/clash/bin/miclash-autoupdate run
 	procd_set_param respawn 3600 5 5

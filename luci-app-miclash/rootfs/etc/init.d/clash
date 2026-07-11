@@ -295,6 +295,12 @@ restart_dnsmasq() {
 }
 
 start_service() {
+	if [ -f /tmp/miclash-package-no-autostart-clash ]; then
+		rm -f /tmp/miclash-package-no-autostart-clash
+		/etc/init.d/clash disable >/dev/null 2>&1 || true
+		return 0
+	fi
+
 	msg "Starting Clash service..."
 
 	# Apply or remove the fail-closed guard before any expensive startup work.

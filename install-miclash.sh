@@ -25,6 +25,14 @@ INSTALL_ACTION=""
 PKG_UPDATED=0
 STATUS_FILE=""
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
+CURL_CONNECT_TIMEOUT=15
+CURL_MAX_TIME=300
+PKG_FILE=""
+TEMP_FILES=""
+PACKAGE_MARKERS_ACTIVE=0
+NO_AUTOSTART_CLASH_MARKER="/tmp/miclash-package-no-autostart-clash"
+NO_AUTOSTART_AUTOUPDATE_MARKER="/tmp/miclash-package-no-autostart-autoupdate"
+HARD_REINSTALL_MARKER="/tmp/miclash-hard-reinstall"
 
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
     R=$(printf '\033[0;31m') G=$(printf '\033[0;32m') Y=$(printf '\033[1;33m')
@@ -59,6 +67,19 @@ write_status() {
         printf 'updated_at=%s\n' "$(date +%s 2>/dev/null || echo 0)"
     } > "$STATUS_FILE.tmp.$$" 2>/dev/null && mv "$STATUS_FILE.tmp.$$" "$STATUS_FILE" 2>/dev/null || true
 }
+
+cleanup() {
+    for file in $TEMP_FILES; do
+        [ -n "$file" ] && rm -f "$file" 2>/dev/null || true
+    done
+    if [ "$PACKAGE_MARKERS_ACTIVE" = "1" ]; then
+        rm -f "$NO_AUTOSTART_CLASH_MARKER" \
+            "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
+            "$HARD_REINSTALL_MARKER" 2>/dev/null || true
+    fi
+}
+
+trap cleanup EXIT INT TERM
 
 normalize_version() {
     printf '%s' "$1" | sed 's/^v//; s/-r[0-9][0-9]*$//'
@@ -128,6 +149,31 @@ ensure_curl() {
     command -v curl >/dev/null 2>&1 && curl --version >/dev/null 2>&1 \
         || die "curl still unavailable after install"
     PKG_UPDATED=1
+}
+
+download_artifact() {
+    url="$1"
+    target="$2"
+    label="$3"
+    error_file="/tmp/miclash-download-error-$$"
+
+    write_status running download "Downloading $label"
+    rm -f "$target" "$error_file"
+    for family in "" "" "-4"; do
+        if curl $family -L -fsS \
+            --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+            --max-time "$CURL_MAX_TIME" \
+            "$url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
+            rm -f "$error_file"
+            return 0
+        fi
+        rm -f "$target"
+        sleep 1
+    done
+
+    detail=$(tail -n 3 "$error_file" 2>/dev/null | tr '\r\n' '  ')
+    rm -f "$error_file"
+    die "Failed to download $label: ${detail:-download returned an empty file}"
 }
 
 pkg_update() {
@@ -222,8 +268,10 @@ fetch_miclash_release() {
         MICLASH_RELEASE_API="$MICLASH_API"
     fi
 
-    write_status running download "Fetching MiClash release metadata"
-    RELEASE_JSON=$(curl -fsSL "$MICLASH_RELEASE_API") || die "Failed to fetch MiClash release data"
+    release_file="/tmp/miclash-release-$$.json"
+    TEMP_FILES="$TEMP_FILES $release_file"
+    download_artifact "$MICLASH_RELEASE_API" "$release_file" "MiClash release metadata"
+    RELEASE_JSON=$(cat "$release_file" 2>/dev/null) || die "Failed to read MiClash release data"
     [ -n "$RELEASE_JSON" ] || die "MiClash release API returned empty response"
 
     MICLASH_TAG_NAME=$(printf '%s' "$RELEASE_JSON" \
@@ -357,11 +405,18 @@ install_miclash() {
         *)         log "Installing MiClash v${MICLASH_VER}..." ;;
     esac
 
+    PACKAGE_MARKERS_ACTIVE=1
+    touch "$NO_AUTOSTART_CLASH_MARKER" "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
+        || die "Failed to prepare package service state"
+    if [ "$INSTALL_ACTION" = "reinstall" ]; then
+        touch "$HARD_REINSTALL_MARKER" || die "Failed to prepare hard reinstall"
+    fi
+
     if [ "$PKG_MGR" = "apk" ]; then
         PKG_FILE="/tmp/luci-app-miclash.apk"
+        TEMP_FILES="$TEMP_FILES $PKG_FILE"
         write_status running download "Downloading MiClash package"
-        curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
-            "$MICLASH_APK_URL" -o "$PKG_FILE" || die "Failed to download MiClash .apk"
+        download_artifact "$MICLASH_APK_URL" "$PKG_FILE" "MiClash .apk"
         write_status running install "Installing MiClash package"
         if [ "$INSTALL_ACTION" = "reinstall" ]; then
             apk add "$PKG_FILE" --allow-untrusted --force-overwrite \
@@ -372,9 +427,9 @@ install_miclash() {
         rm -f "$PKG_FILE"
     else
         PKG_FILE="/tmp/luci-app-miclash.ipk"
+        TEMP_FILES="$TEMP_FILES $PKG_FILE"
         write_status running download "Downloading MiClash package"
-        curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
-            "$MICLASH_IPK_URL" -o "$PKG_FILE" || die "Failed to download MiClash .ipk"
+        download_artifact "$MICLASH_IPK_URL" "$PKG_FILE" "MiClash .ipk"
         write_status running install "Installing MiClash package"
         if [ "$INSTALL_ACTION" = "reinstall" ]; then
             opkg install --force-reinstall "$PKG_FILE" || die "Failed to reinstall MiClash .ipk"
@@ -382,6 +437,10 @@ install_miclash() {
             opkg install "$PKG_FILE" || die "Failed to install MiClash .ipk"
         fi
         rm -f "$PKG_FILE"
+    fi
+
+    if [ "$INSTALL_ACTION" = "reinstall" ]; then
+        rm -f /opt/clash/bin/clash || die "Failed to remove Mihomo kernel after hard reinstall"
     fi
 }
 
@@ -418,7 +477,7 @@ run_app_mode() {
 
     [ -n "$MICLASH_TARGET_TAG" ] || die "missing --target-tag"
     case "$INSTALL_ACTION" in
-        update|reinstall) ;;
+        install|update|reinstall) ;;
         *) die "unsupported app mode: $INSTALL_ACTION" ;;
     esac
 
@@ -430,13 +489,16 @@ run_app_mode() {
     pkg_update
     install_deps
     install_miclash
-    write_status success done "MiClash package installed"
-    echo "MiClash package installed"
+    write_status success done "MiClash package installed; services remain stopped"
+    echo "MiClash package installed; services remain stopped"
 }
 
 install_mihomo() {
     log "Fetching latest Mihomo release..."
-    MIHOMO_JSON=$(curl -fsSL "$MIHOMO_API") || die "Failed to fetch Mihomo release data"
+    mihomo_release_file="/tmp/mihomo-release-$$.json"
+    TEMP_FILES="$TEMP_FILES $mihomo_release_file /tmp/clash.gz"
+    download_artifact "$MIHOMO_API" "$mihomo_release_file" "Mihomo release metadata"
+    MIHOMO_JSON=$(cat "$mihomo_release_file" 2>/dev/null) || die "Failed to read Mihomo release data"
     [ -n "$MIHOMO_JSON" ] || die "Mihomo release API returned empty response"
 
     MIHOMO_VER=$(printf '%s' "$MIHOMO_JSON" \
@@ -448,8 +510,7 @@ install_mihomo() {
     info "Latest Mihomo: ${B}${MIHOMO_VER}${N}"
     info "Kernel URL: ${MIHOMO_URL}"
 
-    curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
-        "$MIHOMO_URL" -o /tmp/clash.gz || die "Failed to download Mihomo kernel"
+    download_artifact "$MIHOMO_URL" /tmp/clash.gz "Mihomo kernel"
 
     mkdir -p "$(dirname "$CLASH_BIN")"
     gunzip -c /tmp/clash.gz > "$CLASH_BIN" || die "Failed to unpack Mihomo kernel"
