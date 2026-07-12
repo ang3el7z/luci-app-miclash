@@ -41,7 +41,16 @@ function same_device(left, right) {
 
 function same_identity(left, right) {
 	return same_device(left, right) && left?.inode != null && left.inode == right?.inode &&
-		left.nlink == right?.nlink && left.type == right?.type;
+		left.nlink == right?.nlink && left.size == right?.size && left.type == right?.type;
+};
+
+function canonical_root(root) {
+	return root == '/var/run/miclash' ? '/tmp/run/miclash' : root;
+};
+
+function trusted_root_path(root, resolved) {
+	return resolved == root ||
+		(root == '/var/run/miclash' && resolved == canonical_root(root));
 };
 
 function allowed_root(path) {
@@ -60,18 +69,21 @@ function secure_directory(runtime, path) {
 
 	let current = root;
 	let root_stat = runtime.fs.lstat(current);
-	if (root_stat?.type != 'directory' || runtime.fs.realpath(current) != current)
+	let canonical = runtime.fs.realpath(current);
+	if (root_stat?.type != 'directory' || !trusted_root_path(root, canonical))
 		fail('INVALID_ARGUMENT');
 
+	let current_stat = root_stat;
 	let relative = directory == root ? '' : substr(directory, length(root) + 1);
 	for (let part in length(relative) ? split(relative, '/') : []) {
 		current += '/' + part;
-		let part_stat = runtime.fs.lstat(current);
-		if (part_stat?.type != 'directory' || runtime.fs.realpath(current) != current)
+		canonical += '/' + part;
+		current_stat = runtime.fs.lstat(current);
+		if (current_stat?.type != 'directory' || runtime.fs.realpath(current) != canonical)
 			fail('INVALID_ARGUMENT');
 	}
 
-	return { path: directory, stat: runtime.fs.lstat(directory) };
+	return { path: directory, canonical, stat: current_stat };
 };
 
 function owned_temp_name(source, destination) {
@@ -85,13 +97,18 @@ function owned_temp_name(source, destination) {
 
 	let fields = split(substr(source_name, length(prefix)), '.');
 	return length(fields) == 2 &&
-		match(fields[0], /^[A-Za-z0-9_-]+$/) && match(fields[1], /^[A-Za-z0-9_-]+$/);
+		match(fields[0], /^[0-9]+-[0-9]+$/) && match(fields[1], /^[0-9A-Fa-f]{8}$/);
 };
 
 function owned_runtime_name(name) {
-	if (match(name,
-	    /^\.[A-Za-z0-9][A-Za-z0-9._-]*\.miclash\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/))
-		return true;
+	let staging = split(name, '.miclash.');
+	if (length(staging) == 2 && substr(staging[0], 0, 1) == '.' &&
+	    match(substr(staging[0], 1), /^[A-Za-z0-9][A-Za-z0-9._-]*$/)) {
+		let fields = split(staging[1], '.');
+		if (length(fields) == 2 && match(fields[0], /^[0-9]+-[0-9]+$/) &&
+		    match(fields[1], /^[0-9A-Fa-f]{8}$/))
+			return true;
+	}
 	return length(name) <= 128 && match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 };
 
@@ -103,6 +120,10 @@ function operation_id(runtime) {
 function temp_path(runtime, destination, id) {
 	return sprintf('%s/.%s.miclash.%s.%08x',
 		dirname(destination), basename(destination), id, rand());
+};
+
+function canonical_member(directory, path) {
+	return directory.canonical + '/' + basename(path);
 };
 
 function valid_digest(digest) {
@@ -165,7 +186,8 @@ export function atomic_write(runtime, path, data, mode) {
 		if (temp_stat?.type != 'file' || temp_stat.nlink != 1 ||
 		    temp_stat.size != length(data))
 			fail('INTERNAL');
-		if (runtime.fs.realpath(owned) != owned || !same_device(temp_stat, directory_stat))
+		if (runtime.fs.realpath(owned) != canonical_member(directory, owned) ||
+		    !same_device(temp_stat, directory_stat))
 			fail('INVALID_ARGUMENT');
 
 		let data_digest = runtime.digest.sha256(data);
@@ -174,7 +196,7 @@ export function atomic_write(runtime, path, data, mode) {
 			fail('INTERNAL');
 		let verified_stat = runtime.fs.lstat(owned);
 		if (!same_identity(temp_stat, verified_stat) || verified_stat.size != length(data) ||
-		    runtime.fs.realpath(owned) != owned)
+		    runtime.fs.realpath(owned) != canonical_member(directory, owned))
 			fail('INVALID_ARGUMENT');
 		if (runtime.fs.rename(owned, path) != true)
 			fail('INTERNAL');
@@ -205,11 +227,15 @@ export function atomic_replace(runtime, source, destination) {
 	let directory = secure_directory(runtime, destination);
 	let source_stat = runtime.fs.lstat(source);
 	if (source_stat?.type != 'file' || source_stat.nlink != 1 ||
-	    runtime.fs.realpath(source) != source ||
+	    runtime.fs.realpath(source) != canonical_member(directory, source) ||
 	    !same_device(source_stat, directory.stat))
 		fail('INVALID_ARGUMENT');
 	let current_stat = runtime.fs.lstat(source);
-	if (!same_identity(source_stat, current_stat))
+	let current_directory = secure_directory(runtime, destination);
+	if (!same_identity(source_stat, current_stat) ||
+	    runtime.fs.realpath(source) != canonical_member(current_directory, source) ||
+	    !same_identity(directory.stat, current_directory.stat) ||
+	    directory.canonical != current_directory.canonical)
 		fail('INVALID_ARGUMENT');
 	if (runtime.fs.rename(source, destination) != true)
 		fail('INTERNAL');
@@ -256,8 +282,9 @@ export function cleanup_runtime(runtime) {
 
 	let removed = 0;
 	for (let directory in [ runtime.paths.run, runtime.paths.tmp ]) {
+		let canonical = runtime.fs.realpath(directory);
 		if (runtime.fs.lstat(directory)?.type != 'directory' ||
-		    runtime.fs.realpath(directory) != directory)
+		    !trusted_root_path(directory, canonical))
 			continue;
 		for (let name in runtime.fs.lsdir(directory) ?? []) {
 			if (!owned_runtime_name(name))

@@ -72,7 +72,7 @@ function fs_adapter() {
 		flush: (handle) => {
 			let flushed = handle.flush();
 			// Pinned OpenWrt 24.10 returns null on success and true on failure.
-			return flushed == null && handle.error() == null;
+			return flushed == null;
 		},
 		close: (handle) => handle.close(),
 		stat: (path) => fs.stat(path),

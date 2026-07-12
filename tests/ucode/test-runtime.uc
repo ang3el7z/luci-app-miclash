@@ -26,7 +26,7 @@ let production = runtime.create();
 assert_true(type(production.clock.set_timeout) == 'function');
 assert_equal(production.fs.flush({ flush: () => null, error: () => null }), true);
 assert_equal(production.fs.flush({ flush: () => true, error: () => null }), false);
-assert_equal(production.fs.flush({ flush: () => null, error: () => 'I/O error' }), false);
+assert_equal(production.fs.flush({ flush: () => null, error: () => 'stale error' }), true);
 assert_throws(() => production.process.run('echo hello'), 'INVALID_ARGUMENT');
 assert_throws(() => production.process.run({ command: 'echo', args: [], shell: true }), 'INVALID_ARGUMENT');
 

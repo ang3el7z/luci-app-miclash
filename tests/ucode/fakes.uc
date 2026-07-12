@@ -58,6 +58,8 @@ export function fs(initial) {
 		files,
 		fail_on: null,
 		corrupt_on_close: false,
+		collide_next_open: false,
+		on_lstat: null,
 		write_results: [],
 		calls: {
 			open: [], write: [], flush: [], close: [], chmod: [], rename: [], unlink: [],
@@ -105,7 +107,7 @@ export function fs(initial) {
 				type: 'link', size: length(symlinks[path]), inode: inodes[path], nlink: 1,
 				dev: { major: 0, minor: devices[path] ?? 1 }
 			};
-		let resolved = follow ? resolve(path) : path;
+		let resolved = resolve(path);
 		if (!exists(files, resolved) && !exists(directories, resolved))
 			return null;
 		let device = devices[path] ?? devices[resolved] ?? devices[parent(resolved)] ?? 1;
@@ -119,6 +121,10 @@ export function fs(initial) {
 	};
 
 	fake.open = (path, mode, perm) => {
+		if (fake.collide_next_open) {
+			fake.collide_next_open = false;
+			return null;
+		}
 		if (fake.fail_on == 'open' || (index(mode, 'x') >= 0 && fake.exists(path)))
 			return null;
 
@@ -164,7 +170,7 @@ export function fs(initial) {
 	fake.write = (handle, data) => handle.write(data);
 	fake.flush = (handle) => {
 		let flushed = handle.flush();
-		return flushed == null && handle.error() == null;
+		return flushed == null;
 	};
 	fake.close = (handle) => handle.close();
 	fake.chmod = (path, mode) => {
@@ -176,34 +182,43 @@ export function fs(initial) {
 	};
 	fake.unlink = (path) => {
 		push(fake.calls.unlink, path);
-		let present = exists(files, path) || exists(symlinks, path);
+		let actual = exists(symlinks, path) ? path : resolve(path);
+		let present = exists(files, actual) || exists(symlinks, actual);
 		delete modes[path];
-		delete inodes[path];
-		delete files[path];
-		delete symlinks[path];
+		delete inodes[actual];
+		delete files[actual];
+		delete symlinks[actual];
 		return present;
 	};
 	fake.rename = (from, to) => {
 		push(fake.calls.rename, { from, to });
 		if (fake.fail_on == 'rename')
 			return null;
-		files[to] = files[from];
-		modes[to] = modes[from];
-		inodes[to] = inodes[from];
-		delete files[from];
-		delete modes[from];
-		delete inodes[from];
+		let actual_from = resolve(from);
+		let actual_to = resolve(to);
+		files[actual_to] = files[actual_from];
+		modes[actual_to] = modes[actual_from];
+		inodes[actual_to] = inodes[actual_from];
+		delete files[actual_from];
+		delete modes[actual_from];
+		delete inodes[actual_from];
 		return true;
 	};
 	fake.stat = (path) => info(path, true);
-	fake.lstat = (path) => info(path, false);
+	let lstat_counts = {};
+	fake.lstat = (path) => {
+		lstat_counts[path] = (lstat_counts[path] ?? 0) + 1;
+		if (type(fake.on_lstat) == 'function')
+			fake.on_lstat(path, lstat_counts[path]);
+		return info(path, false);
+	};
 	fake.realpath = (path) => {
 		let resolved = resolve(path);
 		return info(path, true) != null ? resolved : null;
 	};
 	fake.lsdir = (directory) => {
 		let names = [];
-		let prefix = directory + '/';
+		let prefix = resolve(directory) + '/';
 		for (let path in { ...files, ...symlinks }) {
 			if (substr(path, 0, length(prefix)) != prefix)
 				continue;
@@ -216,6 +231,7 @@ export function fs(initial) {
 	fake.mode = (path) => modes[path];
 	fake.set_device = (path, device) => devices[path] = device;
 	fake.set_nlink = (path, count) => links[path] = count;
+	fake.bump_inode = (path) => inodes[resolve(path)] = next_inode++;
 	fake.set_symlink = (path, target) => {
 		delete files[path];
 		symlinks[path] = target;

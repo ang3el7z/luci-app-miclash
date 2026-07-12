@@ -66,6 +66,12 @@ assert_equal(length(writers.fs.temp_paths()), 2);
 assert_true(writers.fs.temp_paths()[0] != writers.fs.temp_paths()[1]);
 assert_equal(writers.fs.readfile('/opt/clash/config.yaml'), 'second');
 
+let collided = runtime({ '/opt/clash/config.yaml': 'old' });
+collided.fs.collide_next_open = true;
+assert_equal(storage.atomic_write(collided,
+	'/opt/clash/config.yaml', 'after-collision', 0o600), true);
+assert_equal(collided.fs.readfile('/opt/clash/config.yaml'), 'after-collision');
+
 let large_data = sprintf('%020000d', 0);
 let digest_write = runtime({ '/opt/clash/config.yaml': 'old' });
 assert_equal(storage.atomic_write(
@@ -75,7 +81,7 @@ assert_equal(length(digest_write.digest.calls.file), 1);
 assert_equal(index(digest_write.fs.calls.readfile,
 	digest_write.fs.temp_paths()[0]), -1);
 
-let cross_device_source = '/opt/clash/.config.yaml.miclash.op-1.abcdef01';
+let cross_device_source = '/opt/clash/.config.yaml.miclash.1700000000000-1.abcdef01';
 let cross_device = runtime({ [cross_device_source]: 'new', '/opt/clash/config.yaml': 'old' });
 cross_device.fs.set_device(cross_device_source, 2);
 assert_throws(() => storage.atomic_replace(
@@ -83,7 +89,7 @@ assert_throws(() => storage.atomic_replace(
 assert_equal(cross_device.fs.readfile(cross_device_source), 'new');
 assert_equal(cross_device.fs.readfile('/opt/clash/config.yaml'), 'old');
 
-let owned_source = '/opt/clash/.config.yaml.miclash.op-2.abcdef02';
+let owned_source = '/opt/clash/.config.yaml.miclash.1700000000000-2.abcdef02';
 let replace = runtime({ [owned_source]: 'new', '/opt/clash/config.yaml': 'old' });
 assert_equal(storage.atomic_replace(
 	replace, owned_source, '/opt/clash/config.yaml'), true);
@@ -97,53 +103,83 @@ assert_throws(() => storage.atomic_replace(
 	foreign_source, '/opt/clash/foreign', '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
 
 let other_directory = runtime({
-	'/tmp/miclash/.config.yaml.miclash.op-3.abcdef03': 'foreign',
+	'/tmp/miclash/.config.yaml.miclash.1700000000000-3.abcdef03': 'foreign',
 	'/opt/clash/config.yaml': 'old'
 });
 assert_throws(() => storage.atomic_replace(other_directory,
-	'/tmp/miclash/.config.yaml.miclash.op-3.abcdef03', '/opt/clash/config.yaml'),
+	'/tmp/miclash/.config.yaml.miclash.1700000000000-3.abcdef03', '/opt/clash/config.yaml'),
 	'INVALID_ARGUMENT');
 
 let outside_root = runtime({
-	'/etc/.state.miclash.op-4.abcdef04': 'foreign', '/etc/state': 'old'
+	'/etc/.state.miclash.1700000000000-4.abcdef04': 'foreign', '/etc/state': 'old'
 });
 assert_throws(() => storage.atomic_replace(
-	outside_root, '/etc/.state.miclash.op-4.abcdef04', '/etc/state'), 'INVALID_ARGUMENT');
+	outside_root, '/etc/.state.miclash.1700000000000-4.abcdef04', '/etc/state'), 'INVALID_ARGUMENT');
 
 let linked_root = runtime({
-	'/tmp/miclash/.config.yaml.miclash.op-5.abcdef05': 'new',
+	'/tmp/miclash/.config.yaml.miclash.1700000000000-5.abcdef05': 'new',
 	'/tmp/miclash/config.yaml': 'old'
 });
 linked_root.fs.set_symlink('/opt/clash', '/tmp/miclash');
 assert_throws(() => storage.atomic_replace(linked_root,
-	'/opt/clash/.config.yaml.miclash.op-5.abcdef05', '/opt/clash/config.yaml'),
+	'/opt/clash/.config.yaml.miclash.1700000000000-5.abcdef05', '/opt/clash/config.yaml'),
 	'INVALID_ARGUMENT');
 
 let linked_parent = runtime({
-	'/tmp/miclash/.config.yaml.miclash.op-6.abcdef06': 'new',
+	'/tmp/miclash/.config.yaml.miclash.1700000000000-6.abcdef06': 'new',
 	'/tmp/miclash/config.yaml': 'old'
 });
 linked_parent.fs.set_symlink('/opt/clash/profiles', '/tmp/miclash');
 assert_throws(() => storage.atomic_replace(linked_parent,
-	'/opt/clash/profiles/.config.yaml.miclash.op-6.abcdef06',
+	'/opt/clash/profiles/.config.yaml.miclash.1700000000000-6.abcdef06',
 	'/opt/clash/profiles/config.yaml'), 'INVALID_ARGUMENT');
 
 let linked_source = runtime({
 	'/opt/clash/target': 'new', '/opt/clash/config.yaml': 'old'
 });
 linked_source.fs.set_symlink(
-	'/opt/clash/.config.yaml.miclash.op-7.abcdef07', '/opt/clash/target');
+	'/opt/clash/.config.yaml.miclash.1700000000000-7.abcdef07', '/opt/clash/target');
 assert_throws(() => storage.atomic_replace(linked_source,
-	'/opt/clash/.config.yaml.miclash.op-7.abcdef07', '/opt/clash/config.yaml'),
+	'/opt/clash/.config.yaml.miclash.1700000000000-7.abcdef07', '/opt/clash/config.yaml'),
 	'INVALID_ARGUMENT');
 
-let hardlinked_source_path = '/opt/clash/.config.yaml.miclash.op-8.abcdef08';
+let hardlinked_source_path = '/opt/clash/.config.yaml.miclash.1700000000000-8.abcdef08';
 let hardlinked_source = runtime({
 	[hardlinked_source_path]: 'new', '/opt/clash/config.yaml': 'old'
 });
 hardlinked_source.fs.set_nlink(hardlinked_source_path, 2);
 assert_throws(() => storage.atomic_replace(hardlinked_source,
 	hardlinked_source_path, '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
+
+for (let suffix in [ 'op-9.abcdef09', '1700000000000-9.abc',
+	'1700000000000-9.abcdefghi', '1700000000000-9.abcdef012' ]) {
+	let invalid_source = '/opt/clash/.config.yaml.miclash.' + suffix;
+	let invalid_owner = runtime({ [invalid_source]: 'new', '/opt/clash/config.yaml': 'old' });
+	assert_throws(() => storage.atomic_replace(
+		invalid_owner, invalid_source, '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
+}
+
+let changing_source_path = '/opt/clash/.config.yaml.miclash.1700000000000-10.abcdef10';
+let changing_source = runtime({
+	[changing_source_path]: 'new', '/opt/clash/config.yaml': 'old'
+});
+changing_source.fs.on_lstat = (path, count) => {
+	if (path == changing_source_path && count == 2)
+		changing_source.fs.files[path] += '-changed';
+};
+assert_throws(() => storage.atomic_replace(changing_source,
+	changing_source_path, '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
+
+let changing_parent_path = '/opt/clash/.config.yaml.miclash.1700000000000-11.abcdef11';
+let changing_parent = runtime({
+	[changing_parent_path]: 'new', '/opt/clash/config.yaml': 'old'
+});
+changing_parent.fs.on_lstat = (path, count) => {
+	if (path == '/opt/clash' && count == 2)
+		changing_parent.fs.bump_inode(path);
+};
+assert_throws(() => storage.atomic_replace(changing_parent,
+	changing_parent_path, '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
 
 let json_rt = runtime({
 	'/etc/miclash/state.json': '{"revision":3}',
@@ -170,7 +206,9 @@ for (let unsafe_path in [ 'relative/state', '/tmp/../etc/state', '/tmp//state', 
 let cleanup = runtime({
 	'/var/run/miclash/operation.json': 'run',
 	'/tmp/miclash/download': 'tmp',
-	'/tmp/miclash/.download.miclash.crash-1.abc123': 'staged',
+	'/tmp/miclash/.download.miclash.1700000000000-12.abcdef12': 'staged',
+	'/tmp/miclash/.download.miclash.crash-1.abc123': 'foreign-stage',
+	'/tmp/miclash/.download.miclash.1700000000000-12.abc': 'short-stage',
 	'/tmp/miclash/.foreign': 'foreign',
 	'/tmp/not-miclash/keep': 'outside',
 	'/opt/clash/config.yaml': 'config'
@@ -179,7 +217,12 @@ cleanup.fs.set_symlink('/tmp/miclash/config-link', '/opt/clash/config.yaml');
 assert_equal(storage.cleanup_runtime(cleanup), 3);
 assert_equal(cleanup.fs.exists('/var/run/miclash/operation.json'), false);
 assert_equal(cleanup.fs.exists('/tmp/miclash/download'), false);
-assert_equal(cleanup.fs.exists('/tmp/miclash/.download.miclash.crash-1.abc123'), false);
+assert_equal(cleanup.fs.exists(
+	'/tmp/miclash/.download.miclash.1700000000000-12.abcdef12'), false);
+assert_equal(cleanup.fs.readfile(
+	'/tmp/miclash/.download.miclash.crash-1.abc123'), 'foreign-stage');
+assert_equal(cleanup.fs.readfile(
+	'/tmp/miclash/.download.miclash.1700000000000-12.abc'), 'short-stage');
 assert_equal(cleanup.fs.readfile('/tmp/miclash/.foreign'), 'foreign');
 assert_equal(cleanup.fs.exists('/tmp/miclash/config-link'), true);
 assert_equal(cleanup.fs.readfile('/tmp/not-miclash/keep'), 'outside');
@@ -193,3 +236,20 @@ linked_cleanup_root.fs.set_symlink('/var/run/miclash', '/opt/clash');
 assert_equal(storage.cleanup_runtime(linked_cleanup_root), 1);
 assert_equal(linked_cleanup_root.fs.readfile('/opt/clash/operation.json'), 'outside');
 assert_equal(linked_cleanup_root.fs.exists('/var/run/miclash'), true);
+
+let openwrt_alias = runtime({
+	'/tmp/run/miclash/operation.json': 'run', '/tmp/miclash/download': 'tmp'
+});
+openwrt_alias.fs.set_symlink('/var', '/tmp');
+assert_equal(storage.cleanup_runtime(openwrt_alias), 2);
+assert_equal(openwrt_alias.fs.exists('/tmp/run/miclash/operation.json'), false);
+
+let alias_source = '/var/run/miclash/.state.miclash.1700000000000-13.abcdef13';
+let openwrt_alias_replace = runtime({
+	'/tmp/run/miclash/.state.miclash.1700000000000-13.abcdef13': 'new',
+	'/tmp/run/miclash/state': 'old'
+});
+openwrt_alias_replace.fs.set_symlink('/var', '/tmp');
+assert_equal(storage.atomic_replace(
+	openwrt_alias_replace, alias_source, '/var/run/miclash/state'), true);
+assert_equal(openwrt_alias_replace.fs.files['/tmp/run/miclash/state'], 'new');
