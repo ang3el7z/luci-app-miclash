@@ -24,6 +24,9 @@ iptables -t filter -N MICLASH_GUARD_FORWARD
 iptables -t filter -I FORWARD 1 -j MICLASH_GUARD_FORWARD
 iptables -t filter -A MICLASH_GUARD_FORWARD -i clash-tun -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -o clash-tun -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -m conntrack --ctstate DNAT -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -m set --match-set miclash_local4 dst -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -j DROP
 iptables -t mangle -A MICLASH_PREROUTING -i br-lan -j MICLASH_PROXY
@@ -34,8 +37,7 @@ iptables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:42 -p tcp
 iptables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:42 -p udp -j MARK --set-mark 0x3
 # device-policy inherit default-phone 02:00:00:00:00:43
 iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RETURN
-iptables -t filter -I INPUT 1 -p udp --dport 443 -j REJECT
-iptables -t filter -I FORWARD 1 -p udp --dport 443 -j REJECT
+iptables -t mangle -A MICLASH_PROXY -p udp --dport 443 -j DROP
 iptables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -p udp -j MARK --set-mark 0x3
 iptables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1
@@ -59,6 +61,9 @@ ip6tables -t filter -N MICLASH_GUARD_FORWARD
 ip6tables -t filter -I FORWARD 1 -j MICLASH_GUARD_FORWARD
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -i clash-tun -j RETURN
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -o clash-tun -j RETURN
+ip6tables -t filter -A MICLASH_GUARD_FORWARD -m conntrack --ctstate DNAT -j RETURN
+ip6tables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETURN
+ip6tables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -m set --match-set miclash_local6 dst -j RETURN
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -j DROP
 ip6tables -t mangle -A MICLASH_PREROUTING -i br-lan -j MICLASH_PROXY
@@ -68,8 +73,7 @@ ip6tables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:41 -j RE
 ip6tables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:42 -p tcp -j TPROXY --on-ip ::1 --on-port 7894 --tproxy-mark 0x1
 ip6tables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:42 -p udp -j MARK --set-mark 0x3
 ip6tables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local6 dst -j RETURN
-ip6tables -t filter -I INPUT 1 -p udp --dport 443 -j REJECT
-ip6tables -t filter -I FORWARD 1 -p udp --dport 443 -j REJECT
+ip6tables -t mangle -A MICLASH_PROXY -p udp --dport 443 -j DROP
 ip6tables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip ::1 --on-port 7894 --tproxy-mark 0x1
 ip6tables -t mangle -A MICLASH_PROXY -p udp -j MARK --set-mark 0x3
 ip6tables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1

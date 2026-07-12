@@ -43,6 +43,40 @@ normalize_routes() {
 	' > "$output"
 }
 
+validate_writable_tree() {
+	validated_root=$1
+	for relative in tmp opt opt/clash opt/clash/lst var var/etc; do
+		path=$validated_root
+		old_ifs=$IFS
+		IFS=/
+		set -- $relative
+		IFS=$old_ifs
+		for component in "$@"; do
+			path=$path/$component
+			[ ! -L "$path" ] || fail "unsafe symlink in capture root: $path"
+			if [ -e "$path" ]; then
+				[ -d "$path" ] || fail "writable capture path is not a directory: $path"
+				resolved=$(CDPATH= cd -- "$path" && pwd -P) || fail "cannot resolve writable capture path: $path"
+				case "$resolved/" in "$validated_root/"*) ;; *) fail "writable capture path escapes root: $path" ;; esac
+				path_owner=$(stat -c '%u' "$path" 2>/dev/null || fail "cannot inspect writable path owner: $path")
+				[ "$path_owner" = "$(id -u)" ] || fail "writable capture path is not owned by invoking user: $path"
+			else
+				break
+			fi
+		done
+	done
+}
+
+if [ "${1:-}" = --validate-root-tree ]; then
+	[ "$#" -eq 2 ] || fail 'usage: --validate-root-tree ROOT'
+	test_root=$2
+	case "$test_root" in /*) ;; *) fail 'validation root must be absolute' ;; esac
+	[ -d "$test_root" ] && [ ! -L "$test_root" ] || fail 'validation root must be a real directory'
+	test_root=$(CDPATH= cd -- "$test_root" && pwd -P) || fail 'cannot resolve validation root'
+	validate_writable_tree "$test_root"
+	exit 0
+fi
+
 # Pure normalization entry point used by the contract test. It cannot target
 # tracked canonical fixtures and performs no namespace or network operation.
 if [ "${1:-}" = --normalize ]; then
@@ -98,6 +132,7 @@ world_digit=$(printf '%s\n' "$mode" | sed 's/.*\(.\)$/\1/')
 case "$group_digit$world_digit" in
 	*[2367]*) fail 'capture root must not be group- or world-writable' ;;
 esac
+validate_writable_tree "$root"
 [ -f "$root/.miclash-capture-disposable" ] || \
 	fail 'capture root lacks .miclash-capture-disposable safety marker'
 [ -x "$root/bin/sh" ] || fail 'capture root needs its own executable /bin/sh'
@@ -185,7 +220,7 @@ fi
 case "$cmd:$*" in
 	'nft:list tables'*) printf '%s\n' 'table inet fw4' ;;
 	'iptables:'*'-D '*|'ip6tables:'*'-D '*|'iptables:'*'-C '*|'ip6tables:'*'-C '*) exit 1 ;;
-	'ip:'*' rule del '*) exit 1 ;;
+	'ip:rule del '*|'ip:-6 rule del '*) exit 1 ;;
 	'ip:'*'route replace default dev clash-tun'*) [ "$MICLASH_CAPTURE_TUN_EXISTS" = true ] || exit 1 ;;
 	'ip:route show default'*|'ip:-4 route show default'*)
 		[ -n "$MICLASH_CAPTURE_WAN4" ] || exit 1
@@ -211,7 +246,7 @@ esac
 exit 0
 FAKE
 chmod 0700 "$work_host/control-fake"
-for cmd in logger sysctl ubus uci; do cp "$work_host/control-fake" "$work_host/bin-common/$cmd"; done
+for cmd in logger lsmod sysctl ubus uci; do cp "$work_host/control-fake" "$work_host/bin-common/$cmd"; done
 
 # Do not expose the root's general PATH: an unexpected nft/ip/sysctl binary there
 # would defeat recording. Link only utilities which cannot mutate host networking.
@@ -241,7 +276,7 @@ tun-explicit-existing-clash-tun'
 write_scenario_settings() {
 	name=$1
 	proxy_mode=tproxy interface_mode=explicit guard=false quic=false lan=br-lan wan=eth1
-	auto_wan=false capture_wan4=eth1 capture_wan6= existing=false server_lines=
+	auto_wan=false capture_wan4=eth1 capture_wan6= existing=false expected_exit=0 server_lines=
 	case "$name" in
 		tproxy-explicit-guard-ipv4-quic) guard=true quic=true wan=pppoe-wan auto_wan=true capture_wan4=pppoe-wan server_lines='8.8.8.8' ;;
 		tproxy-exclude-open-dualstack-multiwan) interface_mode=exclude lan=br-lan wan=pppoe-wan,wwan0 capture_wan4=pppoe-wan capture_wan6=wwan0 server_lines='1.1.1.1 2606:4700:4700::1111' ;;
@@ -249,7 +284,7 @@ write_scenario_settings() {
 		tun-exclude-open-ipv6-existing) proxy_mode=tun interface_mode=exclude wan=wan6 quic=true capture_wan4= capture_wan6=wan6 existing=true server_lines='2620:fe::fe' ;;
 		mixed-explicit-guard-devices-dualstack) proxy_mode=mixed guard=true quic=true lan=br-lan,wlan0 auto_wan=true capture_wan6=eth1 ;;
 		mixed-exclude-open-quic-multiwan) proxy_mode=mixed interface_mode=exclude quic=true wan=eth1,wwan0 ;;
-		tproxy-explicit-empty-detection-guard) guard=true lan= wan= capture_wan4= ;;
+		tproxy-explicit-empty-detection-guard) guard=true lan= wan= capture_wan4= expected_exit=1 ;;
 		tun-exclude-empty-detection-guard) proxy_mode=tun interface_mode=exclude guard=true lan= wan= capture_wan4= ;;
 		mixed-explicit-guard-provider-bypass) proxy_mode=mixed guard=true auto_wan=true capture_wan6=eth1 existing=true server_lines='9.9.9.9 2620:fe::9' ;;
 		mixed-exclude-fakeip-whitelist) proxy_mode=mixed interface_mode=exclude ;;
@@ -295,20 +330,28 @@ run_backend() {
 		iptables) capture_bin="$work_chroot/bin-iptables" ;;
 		*) fail "unknown backend: $backend" ;;
 	esac
-	if ! unshare --mount --net --pid --fork /bin/sh -c \
+	capture_code=0
+	if unshare --mount --net --pid --fork /bin/sh -c \
 		'mount --make-rprivate / || exit 1; exec "$@"' isolated \
 		chroot "$root" /bin/sh -c \
 		'PATH="$1:$2"; export PATH; MICLASH_RECORD_DIR="$3"; MICLASH_CAPTURE_WAN4="$4"; MICLASH_CAPTURE_WAN6="$5"; MICLASH_CAPTURE_TUN_EXISTS="$6"; export MICLASH_RECORD_DIR MICLASH_CAPTURE_WAN4 MICLASH_CAPTURE_WAN6 MICLASH_CAPTURE_TUN_EXISTS; exec /bin/sh "$7" start' \
 		capture "$capture_bin" "$work_chroot/bin-common" "$work_chroot/records" \
 		"$capture_wan4" "$capture_wan6" "$existing" "$work_chroot/clash-rules"
 	then
-		fail "isolated legacy capture failed for $name ($backend)"
+		capture_code=0
+	else
+		capture_code=$?
 	fi
+	printf '%s=%s\n' "$backend" "$capture_code" >> "$capture_status_file"
+	[ "$capture_code" -eq "$expected_exit" ] || \
+		fail "unexpected isolated legacy exit for $name ($backend): got $capture_code expected $expected_exit"
 }
 
 printf '%s\n' "$scenario_names" | while IFS= read -r name; do
 	[ -n "$name" ] || continue
 	mkdir -p "$candidate_root/$name"
+	capture_status_file="$candidate_root/$name/capture-status.txt"
+	: > "$capture_status_file"
 	run_backend "$name" nft
 	normalize_nft "$work_host/records/nft.raw" "$candidate_root/$name/nft.candidate"
 	normalize_routes "$work_host/records/routes.raw" "$candidate_root/$name/routes.candidate"

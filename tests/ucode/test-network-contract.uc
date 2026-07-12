@@ -108,6 +108,14 @@ for (let scenario in document.scenarios) {
 			let ipt_local_at = index(iptables, ipt + ' -t filter -A MICLASH_GUARD_FORWARD -m set');
 			review(ipt_drop_at > ipt_tun_at && ipt_drop_at > ipt_local_at,
 				scenario.name + ': iptables Guard drop must follow narrow safe exceptions');
+			let ipt_dnat = ipt + ' -t filter -A MICLASH_GUARD_FORWARD -m conntrack --ctstate DNAT -j RETURN';
+			let ipt_dhcp_reply = ipt + ' -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETURN';
+			let ipt_dhcp_request = ipt + ' -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN';
+			review(index(iptables, ipt_dnat) >= 0 && index(iptables, ipt_dnat) < ipt_drop_at,
+				scenario.name + ': iptables Guard missing ordered DNAT parity');
+			review(index(iptables, ipt_dhcp_reply) >= 0 && index(iptables, ipt_dhcp_reply) < ipt_drop_at &&
+				index(iptables, ipt_dhcp_request) >= 0 && index(iptables, ipt_dhcp_request) < ipt_drop_at,
+				scenario.name + ': iptables Guard missing ordered DHCP parity');
 		}
 		review(!match(nft, /miclash_guard forward oifname [^\n]* drop/),
 			scenario.name + ': nft Guard must cover unknown WAN interfaces');
@@ -142,6 +150,16 @@ for (let scenario in document.scenarios) {
 		for (let interface in scenario.wan)
 			review(index(iptables, 'MICLASH_PREROUTING -i ' + interface + ' -j RETURN') >= 0,
 				scenario.name + ': exclusion is not scoped to MiClash chain');
+	for (let family in scenario.ip_families) {
+		let ipt = family == 'ipv4' ? 'iptables' : 'ip6tables';
+		let scoped_quic = ipt + ' -t mangle -A MICLASH_PROXY -p udp --dport 443 -j DROP';
+		let global_input = ipt + ' -t filter -I INPUT 1 -p udp --dport 443 -j REJECT';
+		let global_forward = ipt + ' -t filter -I FORWARD 1 -p udp --dport 443 -j REJECT';
+		review((index(iptables, scoped_quic) >= 0) == scenario.quic,
+			scenario.name + ': iptables QUIC state is not scoped to MICLASH_PROXY');
+		review(index(iptables, global_input) < 0 && index(iptables, global_forward) < 0,
+			scenario.name + ': iptables QUIC must not alter global built-in filter chains');
+	}
 
 	let has_iptables4 = !!match(iptables, /^iptables /) || !!match(iptables, /\niptables /);
 	let has_iptables6 = !!match(iptables, /^ip6tables /) || !!match(iptables, /\nip6tables /);
@@ -154,7 +172,7 @@ for (let scenario in document.scenarios) {
 	let nft_seen = {};
 	for (let line in split(nft, '\n')) {
 		if (!match(line, /miclash (proxy|output)/) ||
-			!match(line, /tproxy to|meta mark set|udp dport 443 reject/))
+			!match(line, /tproxy .* to|meta mark set|udp dport 443 reject/))
 			continue;
 		let family = match(line, /meta nfproto ipv4/) ? 'ipv4' :
 			match(line, /meta nfproto ipv6/) ? 'ipv6' : null;
@@ -195,22 +213,70 @@ for (let scenario in document.scenarios) {
 		review(block_policy.nft == first_policy.nft, scenario.name + ': nft block policy must have precedence');
 	if (block_policy.iptables != null)
 		review(block_policy.iptables == first_policy.iptables, scenario.name + ': iptables block policy must have precedence');
+	if (length(scenario.device_policies)) {
+		let nft_generic = null;
+		for (let line in split(nft, '\n'))
+			if (match(line, /^add rule inet miclash proxy /) &&
+				match(line, /tproxy .* to|meta mark set/) && !match(line, /ether saddr/)) {
+				nft_generic = index(nft, line);
+				break;
+			}
+		let iptables_generic = null;
+		for (let line in split(iptables, '\n'))
+			if (match(line, /tables -t mangle -A MICLASH_PROXY /) &&
+				match(line, /TPROXY|MARK --set-mark/) && !match(line, /--mac-source/)) {
+				iptables_generic = index(iptables, line);
+				break;
+			}
+		review(nft_generic != null && iptables_generic != null,
+			scenario.name + ': missing generic backend marking for precedence check');
+		for (let policy in scenario.device_policies) {
+			if (policy.action == 'inherit')
+				continue;
+			review(index(nft, policy.mac) < nft_generic,
+				scenario.name + ': nft device rule must precede generic marking: ' + policy.id);
+			review(index(iptables, policy.mac) < iptables_generic,
+				scenario.name + ': iptables device rule must precede generic marking: ' + policy.id);
+		}
+	}
 }
 
 for (let action in [ 'inherit', 'proxy', 'direct', 'block' ])
 	review(policy_actions[action], 'device policy matrix missing action: ' + action);
 
 let capture_source = read_required('tools/capture-network-contract.sh');
+review(!!match(capture_source, /validate_writable_tree/), 'capture must no-follow validate writable descendants');
 review(!!match(capture_source, /unshare --mount --net --pid/), 'capture must require mount+network+PID namespaces');
 review(!!match(capture_source, /mount --make-rprivate/), 'capture mount namespace must be private');
 review(!!match(capture_source, /findmnt/), 'capture must reject nested mounts');
 review(!!match(capture_source, /nft-batch/), 'nft fake must record batch stdin/file content');
+review(!!match(capture_source, /'ip:rule del '/) && !!match(capture_source, /'ip:-6 rule del '/),
+	'ip fake must terminate IPv4 and IPv6 cleanup loops');
 review(!!match(capture_source, /normalize_nft/) && !!match(capture_source, /normalize_routes/),
 	'capture must normalize desired nft and route state separately');
+review(!!match(capture_source, /expected_exit/) && !!match(capture_source, /capture-status.txt/),
+	'capture must record and continue only explicitly expected legacy failures');
 review(!!match(capture_source, /mixed-explicit-guard-devices-dualstack.*capture_wan6=eth1/),
 	'dual-stack device capture WAN6 must match metadata');
 review(!!match(capture_source, /mixed-explicit-guard-provider-bypass.*capture_wan6=eth1/),
 	'dual-stack provider capture WAN6 must match metadata');
+
+let symlink_refusal = fs.popen(`sh -c '
+	set -eu
+	d=$(mktemp -d)
+	trap "rm -rf -- $d" EXIT HUP INT TERM
+	mkdir -p "$d/absolute" "$d/relative" "$d/outside"
+	ln -s /tmp "$d/absolute/tmp"
+	if tools/capture-network-contract.sh --validate-root-tree "$d/absolute" >"$d/abs.out" 2>&1; then exit 1; fi
+	grep -q "unsafe symlink in capture root" "$d/abs.out"
+	ln -s ../../outside "$d/relative/opt"
+	if tools/capture-network-contract.sh --validate-root-tree "$d/relative" >"$d/rel.out" 2>&1; then exit 1; fi
+	grep -q "unsafe symlink in capture root" "$d/rel.out"
+	printf "absolute-and-relative-symlink-refusal-ok\\n"
+'`, 'r');
+let symlink_output = symlink_refusal.read('all');
+review(symlink_refusal.close() == 0 && symlink_output == 'absolute-and-relative-symlink-refusal-ok\n',
+	'capture writable-descendant symlink refusal failed: ' + symlink_output);
 
 let normalization = fs.popen(`sh -c '
 	set -eu
@@ -316,7 +382,7 @@ for (let scenario in document.scenarios) {
 		}
 		else if (backend == 'iptables') {
 			assert_match(content, /^# MiClash intended iptables contract v1\n/);
-			assert_equal(!!match(content, /--dport 443 -j REJECT/), scenario.quic,
+			assert_equal(!!match(content, /MICLASH_PROXY -p udp --dport 443 -j DROP/), scenario.quic,
 				'iptables QUIC state mismatch: ' + scenario.name);
 			if (length(scenario.fakeip_cidrs))
 				assert_match(content, /clash_fakeip_whitelist/);

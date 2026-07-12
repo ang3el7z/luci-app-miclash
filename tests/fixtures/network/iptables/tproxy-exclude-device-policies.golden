@@ -24,6 +24,9 @@ iptables -t filter -N MICLASH_GUARD_FORWARD
 iptables -t filter -I FORWARD 1 -j MICLASH_GUARD_FORWARD
 iptables -t filter -A MICLASH_GUARD_FORWARD -i clash-tun -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -o clash-tun -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -m conntrack --ctstate DNAT -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -m set --match-set miclash_local4 dst -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -j DROP
 iptables -t mangle -A MICLASH_PREROUTING -i eth1 -j RETURN
@@ -32,8 +35,7 @@ iptables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:50 -j DRO
 iptables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:51 -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:51 -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RETURN
-iptables -t filter -I INPUT 1 -p udp --dport 443 -j REJECT
-iptables -t filter -I FORWARD 1 -p udp --dport 443 -j REJECT
+iptables -t mangle -A MICLASH_PROXY -p udp --dport 443 -j DROP
 iptables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1

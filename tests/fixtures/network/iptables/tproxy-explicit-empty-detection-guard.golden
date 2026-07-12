@@ -24,6 +24,9 @@ iptables -t filter -N MICLASH_GUARD_FORWARD
 iptables -t filter -I FORWARD 1 -j MICLASH_GUARD_FORWARD
 iptables -t filter -A MICLASH_GUARD_FORWARD -i clash-tun -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -o clash-tun -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -m conntrack --ctstate DNAT -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETURN
+iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -m set --match-set miclash_local4 dst -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -j DROP
 iptables -t filter -A MICLASH_GUARD_FORWARD -j DROP
@@ -49,6 +52,9 @@ ip6tables -t filter -N MICLASH_GUARD_FORWARD
 ip6tables -t filter -I FORWARD 1 -j MICLASH_GUARD_FORWARD
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -i clash-tun -j RETURN
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -o clash-tun -j RETURN
+ip6tables -t filter -A MICLASH_GUARD_FORWARD -m conntrack --ctstate DNAT -j RETURN
+ip6tables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETURN
+ip6tables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -m set --match-set miclash_local6 dst -j RETURN
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -j DROP
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -j DROP
