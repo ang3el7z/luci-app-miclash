@@ -1,5 +1,6 @@
 import { assert_equal, assert_throws, assert_true } from './testlib.uc';
 import * as errors from 'miclash.errors';
+import * as redact from 'miclash.redact';
 import * as schema from 'miclash.schema';
 
 let busy = errors.normalize(errors.new('BUSY', 'busy', null));
@@ -34,6 +35,24 @@ for (let key in [ 'api_key', 'auth', 'authorization', 'bearer', 'cookie', 'crede
 	assert_equal(redacted[key], '[REDACTED]');
 assert_equal(redacted.nested[0].api_key, '[REDACTED]');
 assert_equal(redacted.nested[0].safe, 'visible');
+
+let credentialed_url = 'https://user:pass@example/?ToKeN=secret&safe=ok&bearer=x&telegram_token=y';
+let nested_urls = errors.new('DOWNLOAD_FAILED', 'failed', {
+	url: credentialed_url,
+	nested: [
+		{ endpoint: 'http://name:key@example/path?Cookie=c&Access.Token=a&clientSecret=s' },
+		'ordinary text ?token=must-stay',
+		'https://array-user:array-pass@example/?refresh-token=r'
+	]
+}).detail;
+assert_equal(nested_urls.url,
+	'https://***:***@example/?ToKeN=***&safe=ok&bearer=***&telegram_token=***');
+assert_equal(nested_urls.nested[0].endpoint,
+	'http://***:***@example/path?Cookie=***&Access.Token=***&clientSecret=***');
+assert_equal(nested_urls.nested[1], '[REDACTED]');
+assert_equal(nested_urls.nested[2], 'https://***:***@example/?refresh-token=***');
+assert_equal(redact.text('ordinary text ?token=must-stay'), 'ordinary text ?token=must-stay');
+assert_equal(redact.text(redact.text(credentialed_url)), redact.text(credentialed_url));
 
 assert_throws(() => schema.profile_name('config4.yaml'), 'INVALID_ARGUMENT');
 assert_equal(schema.profile_name('config2.yaml'), 'config2.yaml');

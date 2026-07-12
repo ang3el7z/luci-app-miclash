@@ -16,6 +16,91 @@ function masked(value) {
 	return value == MASK || value == '***';
 };
 
+function query_redacted(url) {
+	let query_start = index(url, '?');
+	if (query_start < 0)
+		return url;
+
+	let fragment_start = index(url, '#');
+	if (fragment_start >= 0 && fragment_start < query_start)
+		return url;
+
+	let query_end = fragment_start >= 0 ? fragment_start : length(url);
+	let query = substr(url, query_start + 1, query_end - query_start - 1);
+	let parameters = [];
+	for (let parameter in split(query, '&')) {
+		let separator = index(parameter, '=');
+		if (separator < 0) {
+			push(parameters, parameter);
+			continue;
+		}
+
+		let key = substr(parameter, 0, separator);
+		let input = substr(parameter, separator + 1);
+		push(parameters, key + '=' + (secret_key(key) && !masked(input) ? '***' : input));
+	}
+
+	return substr(url, 0, query_start + 1) + join('&', parameters) +
+	       substr(url, query_end);
+};
+
+function url_redacted(url) {
+	let scheme_end = index(url, '://');
+	if (scheme_end < 0)
+		return url;
+
+	let authority_start = scheme_end + 3;
+	let authority_end = length(url);
+	let remainder = substr(url, authority_start);
+	for (let delimiter in [ '/', '?', '#' ]) {
+		let position = index(remainder, delimiter);
+		if (position >= 0 && authority_start + position < authority_end)
+			authority_end = authority_start + position;
+	}
+
+	let authority = substr(url, authority_start, authority_end - authority_start);
+	let userinfo_end = index(authority, '@');
+	if (userinfo_end >= 0)
+		url = substr(url, 0, authority_start) + '***:***@' +
+		      substr(authority, userinfo_end + 1) + substr(url, authority_end);
+
+	return query_redacted(url);
+};
+
+function next_url_start(input) {
+	let lowered = lc(input);
+	let http = index(lowered, 'http://');
+	let https = index(lowered, 'https://');
+	if (http < 0)
+		return https;
+	if (https < 0)
+		return http;
+	return http < https ? http : https;
+};
+
+function redact_text(input) {
+	let remaining = input;
+	let output = '';
+	while (length(remaining)) {
+		let start = next_url_start(remaining);
+		if (start < 0)
+			return output + remaining;
+
+		output += substr(remaining, 0, start);
+		remaining = substr(remaining, start);
+		let end = length(remaining);
+		for (let offset = 0; offset < length(remaining); offset++)
+			if (match(substr(remaining, offset, 1), /[[:space:][:cntrl:]]/)) {
+				end = offset;
+				break;
+			}
+
+		output += url_redacted(substr(remaining, 0, end));
+		remaining = substr(remaining, end);
+	}
+	return output;
+};
+
 export function value(key, input) {
 	if (key != null && secret_key(key))
 		return masked(input) ? input : MASK;
@@ -34,23 +119,16 @@ export function value(key, input) {
 		return copy;
 	}
 
+	if (type(input) == 'string') {
+		let output = redact_text(input);
+		if (key != null || output != input)
+			return output;
+	}
+
 	return key == null ? (masked(input) ? input : MASK) : input;
 };
-
 export function text(input) {
-	if (type(input) != 'string')
-		return value(null, input);
-
-	let output = replace(input,
-		/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\/@[:space:]]*@/g,
-		'$1***:***@');
-
-	output = replace(output,
-		/([?&](auth|authorization|credential|password|passwd|secret|session|token)=)[^&#[:space:]]*/gi,
-		'$1***');
-	return replace(output,
-		/([?&](api[_-]?key|private[_-]?key|access[_-]?(key|token)|refresh[_-]?token|client[_-]?secret)=)[^&#[:space:]]*/gi,
-		'$1***');
+	return type(input) == 'string' ? redact_text(input) : value(null, input);
 };
 
 export { MASK };
