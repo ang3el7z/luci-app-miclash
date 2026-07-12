@@ -151,17 +151,19 @@ function https_request(runtime, controller, method, path, body) {
 		fail('INTERNAL');
 	let base = runtime.paths.tmp + '/curl-' + token;
 	let paths = [ base + '.config', base + '.request', base + '.status', base + '.response' ];
-	let handles = [], identities = [], failure = null, response = null;
+	let handles = [], owned = [], failure = null, response = null;
 	try {
 		for (let item in paths) {
 			let handle = runtime.fs.open(item, 'wx', 0o600);
 			if (handle == null)
 				fail('INTERNAL');
+			let record = { path: item, handle, identity: null };
+			push(owned, record);
 			push(handles, handle);
 			let identity = runtime.fs.lstat(item);
+			record.identity = identity;
 			if (identity?.type != 'file' || identity.nlink != 1 || runtime.fs.realpath(item) != item)
 				fail('INTERNAL');
-			push(identities, identity);
 		}
 		let request_body = body == null ? '' : sprintf('%J', body);
 		if (length(request_body) > MAX_RESPONSE)
@@ -173,8 +175,9 @@ function https_request(runtime, controller, method, path, body) {
 			'max-time = 3\nmax-filesize = ' + MAX_RESPONSE + '\ninsecure\n' +
 			'request = ' + curl_quote(method) + '\nurl = ' +
 			curl_quote('https://' + url_host + ':' + controller.port + path) + '\n' +
-			'write-out = ' + curl_quote('%output{/proc/self/fd/' + handles[2].fileno() + '}%{http_code}') + '\n' +
-			'data-binary = ' + curl_quote('@/proc/self/fd/' + handles[1].fileno()) + '\n';
+			'write-out = ' + curl_quote('%output{/proc/self/fd/' + handles[2].fileno() + '}%{http_code}') + '\n';
+		if (body != null)
+			config += 'data-binary = ' + curl_quote('@/proc/self/fd/' + handles[1].fileno()) + '\n';
 		if (length(controller.secret))
 			config += 'header = ' + curl_quote('Authorization: Bearer ' + controller.secret) + '\n';
 		write_all(runtime, handles[0], config);
@@ -192,9 +195,9 @@ function https_request(runtime, controller, method, path, body) {
 			if (runtime.fs.close(handle) != true)
 				fail('INTERNAL');
 		handles = [];
-		for (let i = 0; i < length(paths); i++) {
-			let current = runtime.fs.lstat(paths[i]);
-			if (!same_node(identities[i], current) || runtime.fs.realpath(paths[i]) != paths[i])
+		for (let record in owned) {
+			let current = runtime.fs.lstat(record.path);
+			if (!same_node(record.identity, current) || runtime.fs.realpath(record.path) != record.path)
 				fail('INTERNAL');
 		}
 		let status_text = runtime.fs.readfile(paths[2]);
@@ -213,9 +216,12 @@ function https_request(runtime, controller, method, path, body) {
 	}
 	for (let handle in handles)
 		try { runtime.fs.close(handle); } catch (close_error) {}
-	for (let item in paths)
+	for (let record in owned)
 		try {
-			if (runtime.fs.lstat(item) != null && runtime.fs.unlink(item) != true)
+			let current = runtime.fs.lstat(record.path);
+			if (!same_node(record.identity, current) || runtime.fs.realpath(record.path) != record.path)
+				failure = 'INTERNAL';
+			else if (runtime.fs.unlink(record.path) != true)
 				failure = 'INTERNAL';
 		} catch (unlink_error) { failure = 'INTERNAL'; }
 	if (failure != null)

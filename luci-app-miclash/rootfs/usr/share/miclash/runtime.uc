@@ -101,11 +101,13 @@ function clock_adapter() {
 	};
 };
 
-function http_adapter(clock) {
+export function create_http_adapter(clock, socket) {
 	const MAX_HEADER = 16384;
 	const MAX_BODY = 65536;
 	const TIMEOUT_MS = 2000;
-	let socket = require('socket');
+	if (type(clock?.now) != 'function' || type(socket?.connect) != 'function' ||
+	    type(socket?.poll) != 'function')
+		fail('INVALID_ARGUMENT');
 
 	function invalid_response() { fail('INVALID_RESPONSE'); };
 	function remaining(deadline) {
@@ -134,22 +136,43 @@ function http_adapter(clock) {
 	function parse_chunked(data, complete) {
 		let output = '', offset = 0;
 		while (true) {
-			let boundary = index(data, '\r\n', offset);
-			if (boundary < 0)
+			let relative = index(substr(data, offset), '\r\n');
+			if (relative < 0)
 				return complete ? invalid_response() : null;
+			let boundary = offset + relative;
 			let size_text = substr(data, offset, boundary - offset);
 			if (!match(size_text, /^[0-9A-Fa-f]+$/))
 				invalid_response();
-			let size = hexdec(size_text);
+			let size = int(size_text, 16);
 			if (size == null || size < 0)
 				invalid_response();
 			offset = boundary + 2;
 			if (size == 0) {
-				if (length(data) < offset + 2)
-					return complete ? invalid_response() : null;
-				if (substr(data, offset, 2) != '\r\n')
-					invalid_response();
-				return output;
+				let trailer_start = offset;
+				while (true) {
+					let trailer_relative = index(substr(data, offset), '\r\n');
+					if (trailer_relative < 0)
+						return complete ? invalid_response() : null;
+					let trailer_end = offset + trailer_relative;
+					if (trailer_end - trailer_start > MAX_HEADER)
+						fail('RESPONSE_TOO_LARGE');
+					let line = substr(data, offset, trailer_end - offset);
+					offset = trailer_end + 2;
+					if (!length(line)) {
+						if (length(data) != offset)
+							invalid_response();
+						return output;
+					}
+					let colon = index(line, ':');
+					if (colon < 1)
+						invalid_response();
+					let name = substr(line, 0, colon);
+					let value = trim(substr(line, colon + 1));
+					if (!match(name, /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/) ||
+					    match(value, /[[:cntrl:]]/) || lc(name) == 'content-length' ||
+					    lc(name) == 'transfer-encoding')
+						invalid_response();
+				}
 			}
 			if (length(output) + size > MAX_BODY)
 				fail('RESPONSE_TOO_LARGE');
@@ -193,6 +216,8 @@ function http_adapter(clock) {
 		if (transfer != null) {
 			if (lc(transfer) != 'chunked' || content_length != null)
 				invalid_response();
+			if (!complete)
+				return null;
 			let decoded = parse_chunked(body, complete);
 			return decoded == null ? null : { status, body: decoded };
 		}
@@ -202,6 +227,8 @@ function http_adapter(clock) {
 			let expected = int(content_length);
 			if (expected > MAX_BODY)
 				fail('RESPONSE_TOO_LARGE');
+			if (!complete)
+				return null;
 			if (length(body) < expected)
 				return complete ? invalid_response() : null;
 			if (length(body) != expected)
@@ -260,7 +287,7 @@ function http_adapter(clock) {
 							break;
 						}
 						raw += chunk;
-						if (length(raw) > MAX_HEADER + MAX_BODY + 4096)
+						if (length(raw) > MAX_HEADER + MAX_BODY + MAX_HEADER)
 							fail('RESPONSE_TOO_LARGE');
 						parsed = parse_response(raw, false);
 					}
@@ -366,7 +393,7 @@ export function create(overrides) {
 	if (runtime.process == null)
 		runtime.process = process_adapter();
 	if (runtime.http == null)
-		runtime.http = http_adapter(runtime.clock);
+		runtime.http = create_http_adapter(runtime.clock, require('socket'));
 
 	return runtime;
 };

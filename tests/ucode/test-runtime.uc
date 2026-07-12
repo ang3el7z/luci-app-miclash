@@ -83,3 +83,41 @@ assert_equal(fake_uci.get('miclash', 'core', 'enabled'), '0');
 let events = fakes.events();
 events.emit('operation', { id: 'op-1' });
 assert_equal(events.items[0].type, 'operation');
+
+function http_socket(parts) {
+	let fake = {
+		POLLIN: 1, POLLOUT: 4, POLLERR: 8, POLLHUP: 16,
+		SOCK_STREAM: 1, parts, sent: '', closed: false
+	};
+	let conn = {
+		send: (data) => { fake.sent += data; return length(data); },
+		recv: (amount) => length(fake.parts) ? shift(fake.parts) : '',
+		close: () => fake.closed = true
+	};
+	fake.connect = (address, service, hints, timeout) => conn;
+	fake.poll = (timeout, spec) => {
+		let wanted = spec[1];
+		return [ [ conn, wanted & fake.POLLOUT ? fake.POLLOUT : fake.POLLIN ] ];
+	};
+	return fake;
+};
+
+function http_response(parts) {
+	let clock = fakes.clock(0);
+	let socket = http_socket(parts);
+	return runtime.create_http_adapter(clock, socket).request({
+		host: '127.0.0.1', port: 9090, method: 'GET', path: '/version',
+		headers: {}, body: null
+	});
+};
+
+let chunk_prefix = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n';
+assert_equal(http_response([ chunk_prefix + '1\r\nx\r\n0\r\n\r\n', '' ]).body, 'x');
+assert_equal(http_response([ chunk_prefix + '1\r\nx\r\n0\r\nX-Test: yes\r\n\r\n', '' ]).body, 'x');
+assert_throws(() => http_response([ chunk_prefix + '0\r\nBad Trailer\r\n\r\n', '' ]), 'INVALID_RESPONSE');
+assert_throws(() => http_response([ chunk_prefix + '0\r\n\r\ntrailing', '' ]), 'INVALID_RESPONSE');
+assert_throws(() => http_response([ chunk_prefix + '1\r\nx\r\n0\r\n', '' ]), 'INVALID_RESPONSE');
+assert_throws(() => http_response([ chunk_prefix + '10001\r\n', '' ]), 'RESPONSE_TOO_LARGE');
+assert_throws(() => http_response([ chunk_prefix + 'FFFFFFFFFFFFFFFF\r\n', '' ]), 'INVALID_RESPONSE');
+let length_prefix = 'HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n';
+assert_throws(() => http_response([ length_prefix + 'x', 'trailing', '' ]), 'INVALID_RESPONSE');

@@ -7,21 +7,24 @@ import * as fakes from './fakes.uc';
 const SECRET = 'never-publish-this-secret';
 
 function make_ubus(running) {
-	let fake = { calls: [], running: running ?? false };
+	let fake = { calls: [], running: running ?? false, list_error: false };
 	fake.connect = () => ({
 		call: (object, method, data) => {
 			push(fake.calls, { object, method, data });
 			if (object != 'service')
 				return null;
-			if (method == 'list')
+			if (method == 'list') {
+				if (fake.list_error)
+					die('ubus failed');
 				return fake.running ? {
 					clash: { instances: { main: { running: true, pid: 42 } } }
 				} : { clash: { instances: {} } };
-			if (method == 'start' || method == 'restart')
-				fake.running = true;
-			if (method == 'stop')
-				fake.running = false;
-			return {};
+			}
+			if (method == 'state') {
+				fake.running = data.spawn;
+				return null;
+			}
+			die('unexpected ubus method');
 		}
 	});
 	return fake;
@@ -64,6 +67,7 @@ function env(options) {
 		ubus,
 		http,
 		clock,
+		random: options.random ?? fakes.entropy(),
 		observers,
 		service_options: { poll_interval_ms: 10 }
 	});
@@ -118,6 +122,9 @@ https_env.rt.process.on_run = (request) => {
 	assert_equal(request.args[0], '--');
 	assert_equal(request.args[1], '/usr/libexec/miclash/mihomo-https.uc');
 	assert_equal(index(sprintf('%J', request), SECRET), -1);
+	for (let path in https_env.filesystem.files)
+		if (match(path, /\.config$/))
+			assert_equal(index(https_env.filesystem.files[path], 'data-binary'), -1);
 	for (let path in https_env.filesystem.files) {
 		if (match(path, /\.status$/))
 			https_env.filesystem.files[path] = '200';
@@ -155,6 +162,40 @@ https_missing_helper.filesystem.unlink('/usr/libexec/miclash/mihomo-https.uc');
 assert_throws(() => mihomo_api.request(https_missing_helper.rt, 'GET', '/version'), 'INTERNAL');
 assert_equal(length(https_missing_helper.rt.process.calls), 0);
 
+for (let slot = 0; slot < 4; slot++) {
+	let suffix = [ '.config', '.request', '.status', '.response' ][slot];
+	let collision_path = '/tmp/miclash/curl-0000000000000001' + suffix;
+	let collision = env({
+		files: {
+			'/opt/clash/config.yaml': 'external-controller-tls: 127.0.0.1:9443\nsecret: safe\n',
+			[collision_path]: 'foreign'
+		}
+	});
+	assert_throws(() => mihomo_api.request(collision.rt, 'GET', '/version'), 'INTERNAL');
+	assert_equal(collision.filesystem.files[collision_path], 'foreign');
+	let remaining_temps = [];
+	for (let path in collision.filesystem.files)
+		if (index(path, '/tmp/miclash/curl-') == 0) push(remaining_temps, path);
+	assert_equal(length(remaining_temps), 1);
+	assert_equal(remaining_temps[0], collision_path);
+};
+
+let replaced = env({ files: {
+	'/opt/clash/config.yaml': 'external-controller-tls: 127.0.0.1:9443\nsecret: safe\n'
+} });
+replaced.rt.process.on_run = (request) => {
+	for (let path in replaced.filesystem.files) {
+		if (match(path, /\.status$/)) replaced.filesystem.files[path] = '200';
+		if (match(path, /\.response$/)) {
+			replaced.filesystem.files[path] = 'foreign';
+			replaced.filesystem.bump_inode(path);
+		}
+	}
+};
+assert_throws(() => mihomo_api.request(replaced.rt, 'GET', '/version'), 'INTERNAL');
+let foreign_response = '/tmp/miclash/curl-0000000000000001.response';
+assert_equal(replaced.filesystem.files[foreign_response], 'foreign');
+
 let oversized = env({ replies: { 'GET:/version': { status: 200, body: oversized_body } } });
 assert_throws(() => mihomo_api.request(oversized.rt, 'GET', '/version'), 'RESPONSE_TOO_LARGE');
 let corrupt = env({ replies: { 'GET:/version': { status: 200, body: '{bad' } } });
@@ -171,15 +212,19 @@ missing.filesystem.unlink('/opt/clash/bin/clash');
 let missing_service = service.create(missing.rt);
 assert_equal(missing_service.observe('config.yaml').state, 'missing_kernel');
 assert_throws(() => missing_service.start('config.yaml'), 'NOT_FOUND');
+assert_throws(() => missing_service.stop('config.yaml'), 'HEALTH_FAILED');
 
 let stopped = env();
 let adapter = service.create(stopped.rt);
 assert_equal(adapter.observe('config.yaml').state, 'stopped');
 assert_equal(adapter.start('config.yaml').changed, true);
-assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].method, 'start');
+assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].method, 'state');
+assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].data.spawn, true);
 assert_equal(adapter.start('config.yaml').changed, false);
 assert_equal(stopped.ubus.calls[2].data.name, 'clash');
 assert_equal(adapter.stop('config.yaml').changed, true);
+assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].method, 'state');
+assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].data.spawn, false);
 assert_equal(adapter.stop('config.yaml').changed, false);
 for (let call in stopped.ubus.calls)
 	assert_equal(call.object, 'service');
@@ -194,8 +239,37 @@ assert_equal(actions_service.restart_core('config.yaml').ok, true);
 assert_equal(actions.http.calls[1].method, 'POST');
 assert_equal(actions.http.calls[1].path, '/restart');
 assert_equal(actions_service.restart_service('config.yaml').changed, true);
-assert_equal(actions.ubus.calls[length(actions.ubus.calls) - 1].method, 'restart');
+let state_calls = [];
+for (let call in actions.ubus.calls)
+	if (call.method == 'state') push(state_calls, call);
+assert_equal(length(state_calls), 2);
+assert_equal(state_calls[0].data.spawn, false);
+assert_equal(state_calls[1].data.spawn, true);
 assert_throws(() => actions_service.reload('config4.yaml'), 'INVALID_ARGUMENT');
+
+let unknown_service_env = env();
+unknown_service_env.ubus.list_error = true;
+let unknown_service = service.create(unknown_service_env.rt);
+assert_throws(() => unknown_service.start('config.yaml'), 'HEALTH_FAILED');
+assert_throws(() => unknown_service.stop('config.yaml'), 'HEALTH_FAILED');
+assert_equal(length(filter(unknown_service_env.ubus.calls, (call) => call.method == 'state')), 0);
+
+let missing_running = env({ running: true });
+missing_running.filesystem.unlink('/opt/clash/bin/clash');
+let missing_running_service = service.create(missing_running.rt);
+assert_equal(missing_running_service.observe('config.yaml').state, 'running');
+assert_equal(missing_running_service.stop('config.yaml').changed, true);
+assert_equal(missing_running.ubus.calls[length(missing_running.ubus.calls) - 1].data.spawn, false);
+
+let restart_timeout = env({ running: true });
+restart_timeout.ubus.connect = () => ({ call: (object, method, data) => {
+	push(restart_timeout.ubus.calls, { object, method, data });
+	if (method == 'list') return { clash: { instances: { main: { running: true, pid: 42 } } } };
+	return null;
+} });
+assert_throws(() => service.create(restart_timeout.rt).restart_service('config.yaml'), 'HEALTH_FAILED');
+assert_equal(length(filter(restart_timeout.ubus.calls,
+	(call) => call.method == 'state' && call.data.spawn === true)), 0);
 
 // Readiness observes in deterministic order and never repairs.
 let order = [];
@@ -242,6 +316,18 @@ assert_equal(stopped_ready.ok, true);
 assert_equal(length(stopped_ready.components), 1);
 assert_equal(stopped_ready.components[0].component, 'process');
 assert_equal(stopped_ready.components[0].state, 'stopped');
+
+let stop_unknown_env = env({ observers: {} });
+stop_unknown_env.ubus.list_error = true;
+let stop_unknown = service.create(stop_unknown_env.rt).wait_ready(1020, 'config.yaml', { stopped: true });
+assert_equal(stop_unknown.ok, false);
+assert_equal(stop_unknown.components[0].state, 'unknown');
+
+let stop_missing_env = env({ observers: {} });
+stop_missing_env.filesystem.unlink('/opt/clash/bin/clash');
+let stop_missing = service.create(stop_missing_env.rt).wait_ready(1020, 'config.yaml', { stopped: true });
+assert_equal(stop_missing.ok, false);
+assert_equal(stop_missing.components[0].state, 'missing_kernel');
 
 // Task 6 compatibility: config expects reload(profile) + health(profile).
 assert_equal(type(actions_service.health), 'function');

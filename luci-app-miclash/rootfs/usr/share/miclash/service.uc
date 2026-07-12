@@ -29,24 +29,23 @@ export function create(runtime) {
 	};
 	function observe(value) {
 		profile(value);
-		let kernel = runtime.fs.lstat('/opt/clash/bin/clash');
-		if (kernel?.type != 'file' || kernel.nlink != 1)
-			return { state: 'missing_kernel', running: false };
 		let reply;
 		try { reply = connection().call('service', 'list', { name: SERVICE, verbose: true }); }
 		catch (error) { return { state: 'unknown', running: false }; }
 		let instances = reply?.[SERVICE]?.instances;
 		if (type(instances) != 'object')
-			return { state: 'stopped', running: false };
+			return { state: 'unknown', running: false };
 		for (let name, instance in instances)
 			if (instance?.running === true)
 				return { state: 'running', running: true, pid: type(instance.pid) == 'int' ? instance.pid : null };
+		let kernel = runtime.fs.lstat('/opt/clash/bin/clash');
+		if (kernel?.type != 'file' || kernel.nlink != 1)
+			return { state: 'missing_kernel', running: false };
 		return { state: 'stopped', running: false };
 	};
-	function service_call(method) {
-		let response = connection().call('service', method, { name: SERVICE });
-		if (response == null)
-			fail('HEALTH_FAILED');
+	function service_state(spawn) {
+		try { connection().call('service', 'state', { name: SERVICE, spawn }); }
+		catch (error) { fail('HEALTH_FAILED'); }
 	};
 	function start(value) {
 		value = profile(value);
@@ -55,14 +54,19 @@ export function create(runtime) {
 			fail('NOT_FOUND');
 		if (observed.running)
 			return { changed: false, state: 'running' };
-		service_call('start');
+		if (observed.state != 'stopped')
+			fail('HEALTH_FAILED');
+		service_state(true);
 		return { changed: true, state: 'starting' };
 	};
 	function stop(value) {
 		value = profile(value);
-		if (!observe(value).running)
+		let observed = observe(value);
+		if (observed.state == 'stopped')
 			return { changed: false, state: 'stopped' };
-		service_call('stop');
+		if (observed.state != 'running')
+			fail('HEALTH_FAILED');
+		service_state(false);
 		return { changed: true, state: 'stopping' };
 	};
 	function reload(value) {
@@ -75,11 +79,27 @@ export function create(runtime) {
 		value = profile(value);
 		return mihomo_api.request(runtime, 'POST', '/restart', {}, value);
 	};
+	function wait_stopped(value, deadline) {
+		while (true) {
+			if (observe(value).state == 'stopped')
+				return true;
+			let now = runtime.clock.now();
+			if (now >= deadline)
+				return false;
+			runtime.clock.sleep(min(poll_interval, deadline - now));
+		}
+	};
 	function restart_service(value) {
 		value = profile(value);
-		if (observe(value).state == 'missing_kernel')
+		let observed = observe(value);
+		if (observed.state == 'missing_kernel')
 			fail('NOT_FOUND');
-		service_call('restart');
+		if (observed.state == 'unknown')
+			fail('HEALTH_FAILED');
+		service_state(false);
+		if (!wait_stopped(value, runtime.clock.now() + 5000))
+			fail('HEALTH_FAILED');
+		service_state(true);
 		return { changed: true, state: 'restarting' };
 	};
 	function observer_record(name) {
@@ -95,8 +115,8 @@ export function create(runtime) {
 		let records = [];
 		let observed = observe(value);
 		if (options.stopped) {
-			let process = component('process', observed.running ? 'failed' : 'stopped');
-			process.ready = !observed.running;
+			let process = component('process', observed.state);
+			process.ready = observed.state == 'stopped';
 			push(records, process);
 			return records;
 		}
