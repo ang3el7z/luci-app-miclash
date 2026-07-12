@@ -230,7 +230,11 @@ config_port() {
 	[ -n "$port" ] && echo "$port" || echo "$fallback"
 }
 
-hot_reload_config() {
+mihomo_api_request() {
+	method="$1"
+	endpoint="$2"
+	body="${3:-}"
+
 	command -v curl >/dev/null 2>&1 || fail "curl is not installed"
 	[ -f "$CONFIG_FILE" ] || fail "config file is missing: $CONFIG_FILE"
 
@@ -245,25 +249,28 @@ hot_reload_config() {
 		port="$(config_port "$ec_tls" "9090")"
 	fi
 
-	url="$scheme://127.0.0.1:$port/configs?force=true"
+	url="$scheme://127.0.0.1:$port$endpoint"
+	set -- -fsS --connect-timeout 2 --max-time 8 -X "$method" -H "Content-Type: application/json"
+	[ "$scheme" = "https" ] && set -- "$@" -k
+	[ -n "$secret" ] && set -- "$@" -H "Authorization: Bearer $secret"
+	[ -n "$body" ] && set -- "$@" -d "$body"
+	curl "$@" "$url"
+}
+
+hot_reload_config() {
 	body='{"path":"'"$CONFIG_FILE"'"}'
 	write_status running api "Sending configuration reload to Mihomo API"
+	output="$(mihomo_api_request PUT '/configs?force=true' "$body" 2>&1)"
+	code="$?"
+	[ "$code" -eq 0 ] || fail "failed to reload Mihomo configuration: $output"
+}
 
-	if [ "$scheme" = "https" ]; then
-		if [ -n "$secret" ]; then
-			output="$(curl -fsS -k --connect-timeout 2 --max-time 8 -X PUT -H "Content-Type: application/json" -H "Authorization: Bearer $secret" -d "$body" "$url" 2>&1)"
-		else
-			output="$(curl -fsS -k --connect-timeout 2 --max-time 8 -X PUT -H "Content-Type: application/json" -d "$body" "$url" 2>&1)"
-		fi
-	else
-		if [ -n "$secret" ]; then
-			output="$(curl -fsS --connect-timeout 2 --max-time 8 -X PUT -H "Content-Type: application/json" -H "Authorization: Bearer $secret" -d "$body" "$url" 2>&1)"
-		else
-			output="$(curl -fsS --connect-timeout 2 --max-time 8 -X PUT -H "Content-Type: application/json" -d "$body" "$url" 2>&1)"
-		fi
-	fi
-
-	[ "$?" -eq 0 ] || fail "failed to reload Mihomo configuration: $output"
+restart_mihomo_api() {
+	body='{"path":"'"$CONFIG_FILE"'"}'
+	write_status running api "Restarting Mihomo kernel through API"
+	output="$(mihomo_api_request POST '/restart' "$body" 2>&1)"
+	code="$?"
+	[ "$code" -eq 0 ] || fail "failed to restart Mihomo kernel: $output"
 }
 
 stage_message() {
@@ -367,13 +374,25 @@ run_service_action() {
 			wait_ready
 			echo "Mihomo configuration reloaded"
 			;;
+		guard-reload)
+			write_status running reload "Memory guard is reloading Mihomo configuration"
+			hot_reload_config
+			wait_ready
+			echo "Mihomo configuration reloaded by memory guard"
+			;;
+		guard-core-restart)
+			write_status running restart "Memory guard is restarting the Mihomo kernel"
+			restart_mihomo_api
+			wait_ready
+			echo "Mihomo kernel restarted by memory guard"
+			;;
 		wait-ready|health)
 			CURRENT_ACTION="health"
 			wait_ready
 			echo "Clash service ready"
 			;;
 		*)
-			fail "usage: $0 start|stop|restart|reload|wait-ready|health | job start|stop|restart|reload | state | status | clear-status"
+			fail "usage: $0 start|stop|restart|reload|wait-ready|health|guard-reload|guard-core-restart | job start|stop|restart|reload | state | status | clear-status"
 			;;
 	esac
 }
@@ -392,10 +411,10 @@ case "${1:-}" in
 		shift
 		run_job "$@"
 		;;
-	start|stop|restart|reload|wait-ready|health)
+	start|stop|restart|reload|wait-ready|health|guard-reload|guard-core-restart)
 		run_service_action "$1"
 		;;
 	*)
-		fail "usage: $0 start|stop|restart|reload|wait-ready|health | job start|stop|restart|reload | state | status | clear-status"
+		fail "usage: $0 start|stop|restart|reload|wait-ready|health|guard-reload|guard-core-restart | job start|stop|restart|reload | state | status | clear-status"
 		;;
 esac

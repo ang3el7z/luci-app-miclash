@@ -126,6 +126,22 @@ write_status() {
 	} > "$tmp" && mv "$tmp" "$STATUS_FILE"
 }
 
+status_value() {
+	key="$1"
+	[ -f "$STATUS_FILE" ] || return 0
+	sed -n "s/^${key}=//p" "$STATUS_FILE" 2>/dev/null | tail -n 1
+}
+
+load_runtime_state() {
+	saved_cooldown="$(status_value cooldown_until)"
+	saved_result="$(status_value last_result)"
+	case "$saved_cooldown" in ''|*[!0-9]*) saved_cooldown=0 ;; esac
+	COOLDOWN_UNTIL="$saved_cooldown"
+	case "$saved_result" in
+		success|failed) LAST_RESULT="$saved_result" ;;
+	esac
+}
+
 reset_baseline() {
 	TRACKED_PID="$1"
 	TRACKED_STARTTIME="$(read_process_starttime "$TRACKED_PID")"
@@ -154,6 +170,26 @@ cooldown_active() {
 	[ "$COOLDOWN_UNTIL" -gt "$now" ]
 }
 
+failure_rearm_ready() {
+	[ "$LAST_RESULT" = "failed" ] || return 0
+	now="$(now_sec)"
+	[ "$now" -ge "$COOLDOWN_UNTIL" ] || return 1
+	if [ "$MEM_AVAILABLE" -ge "$RESERVE" ]; then
+		if [ "$NORMAL_SINCE" -eq 0 ]; then
+			NORMAL_SINCE="$now"
+			return 1
+		fi
+		if [ $((now - NORMAL_SINCE)) -ge "$REARM_NORMAL_SEC" ]; then
+			LAST_RESULT="rearmed"
+			NORMAL_SINCE=0
+			return 0
+		fi
+	else
+		NORMAL_SINCE=0
+	fi
+	return 1
+}
+
 observe_pressure() {
 	if is_anomaly "$BASELINE_RSS" "$CURRENT_RSS" && [ "$MEM_AVAILABLE" -lt "$RESERVE" ]; then
 		PRESSURE_COUNT=$((PRESSURE_COUNT + 1))
@@ -163,14 +199,112 @@ observe_pressure() {
 }
 
 handle_recovery_trigger() {
-	# Task 2 replaces this terminal deferral with the approved recovery ladder.
-	PHASE="recovery_pending"
-	LAST_RESULT="pending"
 	guard_log "recovery trigger: pid=$TRACKED_PID baseline_rss_kb=$BASELINE_RSS current_rss_kb=$CURRENT_RSS mem_available_kb=$MEM_AVAILABLE reserve_kb=$RESERVE psi_full_avg10=$PSI_FULL_AVG10"
+	if [ -d /tmp/miclash-service.lock ]; then
+		PHASE="recovery_deferred"
+		LAST_RESULT="service_busy"
+		guard_log "recovery deferred because another MiClash service operation is active"
+		return 1
+	fi
+	recover_memory
+}
+
+refresh_measurements() {
+	pid="$(find_mihomo_pid)"
+	[ -n "$pid" ] || return 1
+	rss="$(read_mihomo_rss_kb "$pid")"
+	case "$rss" in ''|*[!0-9]*) return 1 ;; esac
+	TRACKED_PID="$pid"
+	TRACKED_STARTTIME="$(read_process_starttime "$pid")"
+	CURRENT_RSS="$rss"
+	read_memory_metrics || return 1
+	read_memory_psi
+}
+
+finish_recovery_success() {
+	action="$1"
+	recovered_rss="$CURRENT_RSS"
+	now="$(now_sec)"
+	COOLDOWN_UNTIL=$((now + SUCCESS_COOLDOWN_SEC))
+	LAST_ACTION="$action"
+	LAST_RESULT="success"
+	reset_baseline "$TRACKED_PID"
+	CURRENT_RSS="$recovered_rss"
+	PHASE="cooldown"
+	guard_log "recovery succeeded: action=$action current_rss_kb=$CURRENT_RSS mem_available_kb=$MEM_AVAILABLE cooldown_until=$COOLDOWN_UNTIL"
+	write_status
+}
+
+finish_recovery_failure() {
+	reason="$1"
+	now="$(now_sec)"
+	COOLDOWN_UNTIL=$((now + FAILURE_COOLDOWN_SEC))
+	LAST_RESULT="failed"
+	PHASE="failure_cooldown"
+	guard_log "recovery failed: reason=$reason current_rss_kb=$CURRENT_RSS mem_available_kb=$MEM_AVAILABLE cooldown_until=$COOLDOWN_UNTIL; configuration may inherently require this memory or another component may be responsible"
+	write_status
+}
+
+run_recovery_action() {
+	action="$1"
+	before_rss="$CURRENT_RSS"
+	LAST_ACTION="$action"
+	LAST_RESULT="running"
+	PHASE="recovering"
+	write_status
+	guard_log "action=$action before_rss_kb=$before_rss mem_available_kb=$MEM_AVAILABLE reserve_kb=$RESERVE psi_full_avg10=$PSI_FULL_AVG10"
+
+	output="$("$SERVICE_BIN" "$action" 2>&1)"
+	code="$?"
+	if [ "$code" -ne 0 ]; then
+		LAST_RESULT="action_failed"
+		guard_log "action=$action failed: $output"
+		write_status
+		return 2
+	fi
+
+	sleep 60
+	if ! refresh_measurements; then
+		LAST_RESULT="measurement_failed"
+		guard_log "action=$action completed but post-action measurements are unavailable"
+		write_status
+		return 2
+	fi
+
+	guard_log "action=$action after_rss_kb=$CURRENT_RSS mem_available_kb=$MEM_AVAILABLE psi_full_avg10=$PSI_FULL_AVG10"
+	if memory_decreased "$before_rss" "$CURRENT_RSS"; then
+		finish_recovery_success "$action"
+		return 0
+	fi
+	LAST_RESULT="no_material_drop"
+	write_status
+	return 1
+}
+
+run_full_restart_once() {
+	[ "$FULL_RESTART_ATTEMPTED" -eq 0 ] || return 1
+	FULL_RESTART_ATTEMPTED=1
+	run_recovery_action restart
+}
+
+recover_memory() {
+	FULL_RESTART_ATTEMPTED=0
+	run_recovery_action guard-reload && return 0
+	reload_result="$?"
+
+	run_recovery_action guard-core-restart && return 0
+	core_result="$?"
+
+	run_full_restart_once
+	full_result="$?"
+	[ "$full_result" -eq 0 ] && return 0
+	finish_recovery_failure "reload=$reload_result core_restart=$core_result full_restart=$full_result"
+	return 1
 }
 
 run_monitor() {
 	mkdir -p "$STATE_DIR" 2>/dev/null || exit 1
+	load_runtime_state
 	guard_log "monitor started"
 	while setting_enabled; do
 		pid="$(find_mihomo_pid)"
@@ -205,6 +339,8 @@ run_monitor() {
 			fi
 		elif cooldown_active; then
 			PHASE="cooldown"
+		elif ! failure_rearm_ready; then
+			PHASE="failure_rearm_wait"
 		else
 			PHASE="monitoring"
 			observe_pressure
