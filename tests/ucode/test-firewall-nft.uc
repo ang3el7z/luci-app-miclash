@@ -70,6 +70,8 @@ for (let invalid in [
 	{ ...scenarios[0], lan: [ ':' ] },
 	{ ...scenarios[0], lan: [ 'bad/name' ] },
 	{ ...scenarios[0], lan: [ 'bad name' ] },
+	{ ...scenarios[0], lan: [ '.' ] },
+	{ ...scenarios[0], lan: [ '..' ] },
 	{ ...scenarios[0], lan: [ 'abcdefghijklmnop' ] },
 	{ ...scenarios[0], set_names: { local4: 'user-controlled-set' } },
 	{ ...scenarios[0], generation: 'bad-name' }

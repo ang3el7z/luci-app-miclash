@@ -6,7 +6,7 @@ export const LOCAL6 = '::/128, ::1/128, fc00::/7, fe80::/10, ff00::/8';
 
 function valid_interface(value) {
 	return type(value) == 'string' && length(value) > 0 && length(value) <= 15 &&
-		!!match(value, /^[A-Za-z0-9_.-]+$/);
+		value != '.' && value != '..' && !!match(value, /^[A-Za-z0-9_.-]+$/);
 };
 
 function valid_ipv4(value) {
