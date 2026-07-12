@@ -25,9 +25,9 @@ function ensure_directory(runtime, path) {
 		errors.fail('INTERNAL');
 };
 
-function healthy(service, profile) {
+function healthy(service, profile, controller_config) {
 	try {
-		let reloaded = service.reload(profile);
+		let reloaded = service.reload(profile, controller_config);
 		if (reloaded !== true && reloaded?.ok !== true)
 			return false;
 		let ready = service.health(profile);
@@ -219,15 +219,17 @@ export function create(runtime, operations, history) {
 	};
 	function activation(ctx, profile, content, source, extra) {
 		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
-			let snapshot = history.snapshot(profile, source, {
+			let previous = read_active_state(profile);
+			let snapshot = history.snapshot_bytes(profile, source, previous.content, {
 				validation_result: 'success',
 				activation_result: 'pending',
 				operation_id: ctx.id,
 				...(extra ?? {})
 			});
+			assert_active_state(profile, previous);
 			storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
 			record_active(profile, candidate_hash, ctx.id);
-			if (!healthy(runtime.service, profile)) {
+			if (!healthy(runtime.service, profile, previous.content)) {
 				history.mark_activation(profile, snapshot.revision, 'health_failed');
 				return { ok: false, error: errors.new('HEALTH_FAILED', 'HEALTH_FAILED', {
 					profile, revision: snapshot.revision

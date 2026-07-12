@@ -55,6 +55,28 @@ assert_equal(nested_urls.nested[2], 'https://***:***@example/?refresh-token=***'
 assert_equal(redact.text('ordinary text ?token=must-stay'), 'ordinary text ?token=must-stay');
 assert_equal(redact.text(redact.text(credentialed_url)), redact.text(credentialed_url));
 
+// Subscription endpoints are credentials as a field, including opaque path
+// tokens that generic URL userinfo/query filtering cannot recognize.
+let subscriptions = redact.value('root', {
+	subscription_url: 'https://example.test/opaque-uuid',
+	subscription_url_config_yaml: 'https://example.test/one',
+	subscription_url_config2_yaml: 'https://example.test/two',
+	subscription_url_config3_yaml: 'https://example.test/three',
+	nested: {
+		'Subscription-URL': 'https://example.test/four',
+		'SUBSCRIPTION.URL.CONFIG2.YAML': 'https://example.test/five',
+		subscriptionUrlConfig3Yaml: 'https://example.test/six',
+		'subscription-url-backup': 'https://example.test/seven',
+		already: redact.value('subscription_url', '[REDACTED]')
+	}
+});
+for (let key in [ 'subscription_url', 'subscription_url_config_yaml',
+	'subscription_url_config2_yaml', 'subscription_url_config3_yaml' ])
+	assert_equal(subscriptions[key], '[REDACTED]');
+for (let key in [ 'Subscription-URL', 'SUBSCRIPTION.URL.CONFIG2.YAML',
+	'subscriptionUrlConfig3Yaml', 'subscription-url-backup', 'already' ])
+	assert_equal(subscriptions.nested[key], '[REDACTED]');
+
 assert_throws(() => schema.profile_name('config4.yaml'), 'INVALID_ARGUMENT');
 assert_equal(schema.profile_name('config2.yaml'), 'config2.yaml');
 assert_throws(() => schema.enum_value('bad', [ 'start', 'stop' ]), 'INVALID_ARGUMENT');

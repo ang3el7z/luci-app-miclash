@@ -194,6 +194,49 @@ assert_equal(unhealthy_env.cfg.read_draft('config.yaml'), 'still-draft\n');
 assert_equal(length(unhealthy_env.revisions.list('config.yaml')), 1);
 assert_equal(unhealthy_env.revisions.list('config.yaml')[0].activation_result, 'health_failed');
 
+// Activation passes byte-exact pre-Active controller configuration to reload,
+// then health observes the already replaced Active. Reload failure never rolls back.
+let transition_calls = [];
+let transition_env;
+let transition_service = {
+	reload: (profile, controller_config) => {
+		push(transition_calls, { method: 'reload', profile, controller_config,
+			active: transition_env.fs.readfile('/opt/clash/config.yaml') });
+		return false;
+	},
+	health: (profile) => {
+		push(transition_calls, { method: 'health', profile,
+			active: transition_env.fs.readfile('/opt/clash/config.yaml') });
+		return false;
+	}
+};
+transition_env = environment(transition_service);
+let transition_candidate = fixture('runtime-unhealthy.yaml') + '# new controller\n';
+let transition_apply = transition_env.cfg.apply('config.yaml', transition_candidate, 'luci');
+assert_equal(finish(transition_env, transition_apply).error.code, 'HEALTH_FAILED');
+assert_equal(transition_calls[0].method, 'reload');
+assert_equal(transition_calls[0].controller_config, 'original-active\n');
+assert_equal(transition_calls[0].active, transition_candidate);
+assert_equal(transition_env.fs.readfile('/opt/clash/config.yaml'), transition_candidate);
+
+// A live Active mutation during byte snapshotting fails before replacement;
+// the snapshot still contains only the captured original bytes.
+let activation_race = environment();
+let activation_snapshot = activation_race.revisions.snapshot_bytes;
+activation_race.revisions.snapshot_bytes = (profile, source, content, metadata) => {
+	assert_equal(content, 'original-active\n');
+	let record = activation_snapshot(profile, source, content, metadata);
+	activation_race.fs.writefile('/opt/clash/config.yaml', 'external-race\n');
+	return record;
+};
+let raced_apply = activation_race.cfg.apply('config.yaml', fixture('valid.yaml'), 'luci');
+assert_equal(finish(activation_race, raced_apply).error.code, 'INTERNAL');
+assert_equal(activation_race.fs.readfile('/opt/clash/config.yaml'), 'external-race\n');
+let activation_history = activation_race.revisions.list('config.yaml');
+assert_equal(length(activation_history), 1);
+assert_equal(activation_race.revisions.read(
+	'config.yaml', activation_history[0].revision), 'original-active\n');
+
 // Manual restore takes a snapshot of the current Active before replacement.
 let restored = env.cfg.restore('config.yaml', applied_history[0].revision, 'luci');
 assert_equal(finish(env, restored).state, 'success');

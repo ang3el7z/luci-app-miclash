@@ -14,11 +14,9 @@ const RECORD_FIELDS = {
 	message: true, error: true, created_at: true, updated_at: true, finished_at: true
 };
 const ERROR_FIELDS = { code: true, message: true, detail: true };
-const ERROR_CODES = {
-	INVALID_ARGUMENT: true, NOT_FOUND: true, BUSY: true, VALIDATION_FAILED: true,
-	HEALTH_FAILED: true, DOWNLOAD_FAILED: true, PERMISSION_DENIED: true,
-	INTERRUPTED: true, CORRUPT_STATE: true, INTERNAL: true
-};
+const ERROR_CODES = {};
+for (let code in errors.CODES)
+	ERROR_CODES[code] = true;
 
 let last_millis = -1;
 let id_sequence = 0;
@@ -142,6 +140,17 @@ function owned_journal_temp(name) {
 		/^\.[0-9]{13}-[0-9]{8}-[0-9a-f]{16}\.json\.miclash\.[0-9]+-[0-9]+\.[0-9A-Fa-f]{8}$/);
 };
 
+function same_node(left, right) {
+	return left?.type != null && left.type == right?.type && left.inode == right?.inode &&
+	       left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
+};
+
+function same_temp(left, right) {
+	return left?.type == 'file' && right?.type == 'file' &&
+	       left.nlink == 1 && right.nlink == 1 && left.size == right.size &&
+	       same_node(left, right);
+};
+
 function compare_records(left, right) {
 	if (left.id == right.id)
 		return 0;
@@ -195,9 +204,17 @@ function observe_id(id) {
 
 function ensure_directory(runtime, path) {
 	let current = runtime.fs.lstat(path);
-	if (current == null)
-		runtime.fs.mkdir(path);
-	if (runtime.fs.lstat(path)?.type != 'directory')
+	if (current == null && runtime.fs.mkdir(path) != true)
+		errors.fail('INTERNAL');
+	current = runtime.fs.lstat(path);
+	if (current?.type != 'directory' || runtime.fs.realpath(path) != path ||
+	    (current.uid != null && current.uid != 0) ||
+	    runtime.fs.chmod(path, 0o700) != true)
+		errors.fail('INTERNAL');
+	let secured = runtime.fs.lstat(path);
+	if (!same_node(current, secured) || secured?.type != 'directory' ||
+	    runtime.fs.realpath(path) != path || secured.mode != 0o700 ||
+	    (secured.uid != null && secured.uid != 0))
 		errors.fail('INTERNAL');
 };
 
@@ -445,9 +462,18 @@ export function create(runtime) {
 			errors.fail('INTERNAL');
 		sort(names);
 		let staged = [];
+		let stale_temps = [];
 		for (let name in names) {
-			if (owned_journal_temp(name))
+			if (owned_journal_temp(name)) {
+				let path = journal + '/' + name;
+				let identity = runtime.fs.lstat(path);
+				if (identity?.type != 'file' || identity.nlink != 1 ||
+				    runtime.fs.realpath(path) != path ||
+				    (identity.uid != null && identity.uid != 0))
+					corrupt();
+				push(stale_temps, { path, identity });
 				continue;
+			}
 			if (!match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/))
 				corrupt();
 			let record = storage.read_json(runtime, journal + '/' + name);
@@ -469,6 +495,13 @@ export function create(runtime) {
 			push(staged, { record: prepared, changed: record.state == 'running' || record.state == 'queued' });
 		}
 		// Finish all validation before changing either disk or manager state.
+		for (let temp in stale_temps) {
+			let current = runtime.fs.lstat(temp.path);
+			if (!same_temp(temp.identity, current) || runtime.fs.realpath(temp.path) != temp.path)
+				errors.fail('INTERNAL');
+			if (runtime.fs.unlink(temp.path) != true)
+				errors.fail('INTERNAL');
+		}
 		for (let item in staged)
 			if (item.changed)
 				storage.write_json(runtime, path_for(item.record.id), item.record, 0o600);

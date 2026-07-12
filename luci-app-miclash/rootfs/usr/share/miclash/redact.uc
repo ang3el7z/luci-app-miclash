@@ -9,7 +9,8 @@ function secret_key(key) {
 	       match(normalized, /^(api|private|access)_?key$/) ||
 	       match(normalized, /^(access|refresh)_?token$/) ||
 	       match(normalized, /^client_?secret$/) ||
-	       match(normalized, /^telegram_?token$/);
+	       match(normalized, /^telegram_?token$/) ||
+	       match(normalized, /^subscription_?url/);
 };
 
 function masked(value) {

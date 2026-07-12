@@ -62,6 +62,7 @@ export function fs(initial) {
 	let files = initial ?? {};
 	let directories = { '/': true };
 	let modes = {};
+	let owners = {};
 	let devices = {};
 	let inodes = {};
 	let links = {};
@@ -75,6 +76,7 @@ export function fs(initial) {
 		corrupt_on_close: false,
 		collide_next_open: false,
 		fail_unlink_once: false,
+		ignore_chmod: false,
 		on_lstat: null,
 		write_results: [],
 		calls: {
@@ -133,6 +135,9 @@ export function fs(initial) {
 			size: exists(files, resolved) ? length(files[resolved]) : 0,
 			inode: inodes[resolved] ?? (inodes[resolved] = next_inode++),
 			nlink: links[path] ?? 1,
+			uid: owners[path] ?? owners[resolved] ?? 0,
+			mode: modes[path] ?? modes[resolved] ??
+				(exists(files, resolved) ? 0o600 : 0o755),
 			dev: { major: 0, minor: device }
 		};
 	};
@@ -203,7 +208,8 @@ export function fs(initial) {
 		push(fake.calls.chmod, { path, mode });
 		if (fake.fail_on == 'chmod')
 			return null;
-		modes[path] = mode;
+		if (!fake.ignore_chmod)
+			modes[path] = mode;
 		return true;
 	};
 	fake.unlink = (path) => {
@@ -269,6 +275,7 @@ export function fs(initial) {
 	fake.mode = (path) => modes[path];
 	fake.set_device = (path, device) => devices[path] = device;
 	fake.set_nlink = (path, count) => links[path] = count;
+	fake.set_uid = (path, uid) => owners[path] = uid;
 	fake.bump_inode = (path) => inodes[resolve(path)] = next_inode++;
 	fake.set_symlink = (path, target) => {
 		delete files[path];

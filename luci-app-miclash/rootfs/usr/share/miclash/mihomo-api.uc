@@ -37,9 +37,11 @@ function scalar(value) {
 	return value;
 };
 
-function parse_config(runtime, profile) {
+function parse_config(runtime, profile, config_content) {
 	profile = profile_name(profile ?? 'config.yaml');
-	let content = runtime.fs.readfile('/opt/clash/' + profile);
+	if (config_content != null && type(config_content) != 'string')
+		fail('INVALID_ARGUMENT');
+	let content = config_content ?? runtime.fs.readfile('/opt/clash/' + profile);
 	if (type(content) != 'string')
 		fail('NOT_FOUND');
 	if (length(content) > MAX_CONFIG)
@@ -229,13 +231,13 @@ function https_request(runtime, controller, method, path, body) {
 	return response;
 };
 
-export function request(runtime, method, path, body, profile) {
+export function request(runtime, method, path, body, profile, config_content) {
 	if (type(method) != 'string' || !exists(METHODS, method) ||
 	    type(path) != 'string' || !exists(PATHS, path) || !exists(PATHS[path], method))
 		fail('INVALID_ARGUMENT');
 	if (body != null && type(body) != 'object')
 		fail('INVALID_ARGUMENT');
-	let controller = parse_config(runtime, profile);
+	let controller = parse_config(runtime, profile, config_content);
 	let response;
 	try {
 		response = controller.scheme == 'https' ?

@@ -119,7 +119,7 @@ assert_equal(second_events[length(second_events) - 1].desired.core.proxy_mode, '
 let snapshot = state_model.snapshot();
 assert_equal(snapshot.desired.telegram.token, '[REDACTED]');
 assert_equal(snapshot.desired.core.subscription_url,
-	'https://***:***@example.test/sub?token=***');
+	'[REDACTED]');
 for (let secret in [ 'telegram-secret', 'url-secret', 'controller-secret', 'operation-secret' ])
 	assert_equal(index(sprintf('%J', snapshot), secret), -1);
 snapshot.desired.core.proxy_mode = 'tampered';
@@ -226,6 +226,7 @@ let status_reply = invoke('status');
 assert_equal(status_reply.desired.telegram.token, '[REDACTED]');
 let settings_reply = invoke('settings_get');
 assert_equal(settings_reply.telegram.token, '[REDACTED]');
+assert_equal(settings_reply.core.subscription_url, '[REDACTED]');
 let config_reply = invoke('config_read', { profile: 'config.yaml' });
 assert_equal(config_reply.profile, 'config.yaml');
 assert_equal(config_reply.content,

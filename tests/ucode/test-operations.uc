@@ -1,4 +1,5 @@
 import { assert_equal, assert_match, assert_throws, assert_true } from 'testlib';
+import * as errors from 'miclash.errors';
 import * as operations from 'miclash.operations';
 import * as fakes from 'fakes';
 
@@ -25,6 +26,27 @@ function environment(initial, start) {
 
 let env = environment();
 let manager = operations.create(env.rt);
+assert_equal(env.fs.mode('/tmp/miclash'), 0o700);
+assert_equal(env.fs.mode('/tmp/miclash/operations'), 0o700);
+
+// Journal roots are exact root-owned private directories before any access.
+let linked_root = environment();
+linked_root.fs.set_symlink('/tmp/miclash', '/tmp');
+assert_throws(() => operations.create(linked_root.rt), 'INTERNAL');
+let linked_journal = environment();
+linked_journal.fs.set_symlink('/tmp/miclash/operations', '/tmp');
+assert_throws(() => operations.create(linked_journal.rt), 'INTERNAL');
+let file_journal = environment({ '/tmp/miclash/operations': 'hostile' });
+assert_throws(() => operations.create(file_journal.rt), 'INTERNAL');
+let foreign_owner = environment();
+foreign_owner.fs.set_uid('/tmp/miclash/operations', 1000);
+assert_throws(() => operations.create(foreign_owner.rt), 'INTERNAL');
+let chmod_failure = environment();
+chmod_failure.fs.fail_on = 'chmod';
+assert_throws(() => operations.create(chmod_failure.rt), 'INTERNAL');
+let unfixable_mode = environment();
+unfixable_mode.fs.ignore_chmod = true;
+assert_throws(() => operations.create(unfixable_mode.rt), 'INTERNAL');
 let order = [];
 let release_first;
 let first = manager.submit('config.apply', 'luci', { token: 'never-store-me' }, (ctx) => {
@@ -282,6 +304,30 @@ let canonical_manager = operations.create(canonical_env.rt);
 assert_equal(canonical_manager.recover_interrupted(), 0);
 assert_equal(length(canonical_manager.list({ state: 'failure' })), 2);
 
+// Every canonical producible error survives journal recovery; a forged code
+// with an otherwise exact schema is corrupt state.
+let all_code_files = {};
+let code_ids = [];
+for (let number, code in errors.CODES) {
+	let id = sprintf('0000000000120-%08d-0123456789abcdef', number + 1);
+	let record = disk_record(id, 'failure');
+	record.error = { code, message: code == 'INTERNAL' ? 'Internal error' : code };
+	all_code_files['/tmp/miclash/operations/' + id + '.json'] = sprintf('%J\n', record);
+	push(code_ids, id);
+}
+let all_codes_env = environment(all_code_files);
+let all_codes = operations.create(all_codes_env.rt);
+assert_equal(all_codes.recover_interrupted(), 0);
+for (let number, code in errors.CODES) {
+	let recovered_code = all_codes.get(code_ids[number]);
+	assert_equal(recovered_code.state, 'failure');
+	assert_equal(recovered_code.error.code, code);
+}
+assert_corrupt((record) => {
+	record.state = 'failure';
+	record.error = { code: 'FORGED_FAILURE', message: 'FORGED_FAILURE' };
+});
+
 let hidden_bad_env = environment({
 	'/tmp/miclash/operations/.bad.json': sprintf('%J\n', disk_record(
 		'0000000000100-00000001-0123456789abcdef', 'success'))
@@ -317,6 +363,54 @@ assert_equal(length(retry_manager.list()), 0);
 retry_env.fs.lsdir = retry_lsdir;
 assert_equal(retry_manager.recover_interrupted(), 1);
 assert_equal(retry_manager.get(retry_id).state, 'interrupted');
+
+// Recovery removes only identity-stable storage atomic temps, and only after
+// every journal record has passed preflight validation.
+let temp_id = '0000000000310-00000001-0123456789abcdef';
+let temp_name = '.' + temp_id + '.json.miclash.1-1.01234567';
+let temp_path = '/tmp/miclash/operations/' + temp_name;
+let stale_temp = environment({ [temp_path]: 'partial journal' });
+let stale_manager = operations.create(stale_temp.rt);
+assert_equal(stale_manager.recover_interrupted(), 0);
+assert_equal(stale_temp.fs.lstat(temp_path), null);
+
+let malformed_with_temp = environment({
+	[temp_path]: 'partial journal',
+	'/tmp/miclash/operations/bad.json': '{}'
+});
+assert_throws(() => operations.create(malformed_with_temp.rt).recover_interrupted(),
+	'CORRUPT_STATE');
+assert_equal(malformed_with_temp.fs.readfile(temp_path), 'partial journal');
+
+let replaced_temp = environment({ [temp_path]: 'partial journal' });
+let replacement_manager = operations.create(replaced_temp.rt);
+let original_lstat = replaced_temp.fs.lstat;
+let temp_lstats = 0;
+replaced_temp.fs.lstat = (path) => {
+	if (path == temp_path && ++temp_lstats == 2)
+		replaced_temp.fs.bump_inode(path);
+	return original_lstat(path);
+};
+assert_throws(() => replacement_manager.recover_interrupted(), 'INTERNAL');
+assert_equal(replaced_temp.fs.readfile(temp_path), 'partial journal');
+
+let unlink_temp = environment({ [temp_path]: 'partial journal' });
+let unlink_manager = operations.create(unlink_temp.rt);
+unlink_temp.fs.fail_unlink_once = true;
+assert_throws(() => unlink_manager.recover_interrupted(), 'INTERNAL');
+assert_equal(unlink_temp.fs.readfile(temp_path), 'partial journal');
+assert_equal(unlink_manager.recover_interrupted(), 0);
+assert_equal(unlink_temp.fs.lstat(temp_path), null);
+
+let linked_temp = environment();
+linked_temp.fs.set_symlink(temp_path, '/tmp/foreign-journal');
+assert_throws(() => operations.create(linked_temp.rt).recover_interrupted(), 'CORRUPT_STATE');
+assert_equal(linked_temp.fs.lstat(temp_path)?.type, 'link');
+let hardlinked_temp = environment({ [temp_path]: 'foreign hardlink' });
+hardlinked_temp.fs.set_nlink(temp_path, 2);
+assert_throws(() => operations.create(hardlinked_temp.rt).recover_interrupted(),
+	'CORRUPT_STATE');
+assert_equal(hardlinked_temp.fs.readfile(temp_path), 'foreign hardlink');
 
 // IDs stay schema/safe-name compatible, strictly ordered, and have random suffixes.
 let ids_env = environment({}, 5000);

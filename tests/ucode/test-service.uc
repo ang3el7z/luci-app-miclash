@@ -206,6 +206,34 @@ for (let i = 0; i < 21; i++) deep += ']';
 let too_deep = env({ replies: { 'GET:/version': { status: 200, body: deep } } });
 assert_throws(() => mihomo_api.request(too_deep.rt, 'GET', '/version'), 'INVALID_RESPONSE');
 
+// Reload transports through the controller that was live before activation,
+// while subsequent health probes parse the newly active TLS controller.
+let transition = env({ running: true, files: {
+	'/opt/clash/config.yaml':
+		'external-controller-tls: 127.0.0.1:9443\nsecret: new-secret\n'
+} });
+let transition_service = service.create(transition.rt);
+let prior_controller =
+	'external-controller: 127.0.0.1:9191\nsecret: old-secret\n';
+assert_equal(transition_service.reload('config.yaml', prior_controller).ok, true);
+assert_equal(transition.http.calls[0].port, 9191);
+assert_equal(transition.http.calls[0].headers.Authorization, 'Bearer old-secret');
+transition.rt.process.on_run = (request) => {
+	for (let path in transition.filesystem.files) {
+		if (match(path, /\.config$/)) {
+			assert_true(index(transition.filesystem.files[path], 'https://127.0.0.1:9443/version') >= 0);
+			assert_true(index(transition.filesystem.files[path], 'Bearer new-secret') >= 0);
+		}
+		if (match(path, /\.status$/)) transition.filesystem.files[path] = '200';
+		if (match(path, /\.response$/)) transition.filesystem.files[path] = '{}';
+	}
+};
+assert_equal(transition_service.health('config.yaml'), true);
+assert_throws(() => transition_service.reload('config.yaml', 42), 'INVALID_ARGUMENT');
+let oversized_config = '';
+for (let i = 0; i < 257; i++) oversized_config += sprintf('%4096s', 'x');
+assert_throws(() => transition_service.reload('config.yaml', oversized_config), 'INVALID_ARGUMENT');
+
 // Observation and lifecycle are idempotent and only use procd's ubus service methods.
 let missing = env();
 missing.filesystem.unlink('/opt/clash/bin/clash');

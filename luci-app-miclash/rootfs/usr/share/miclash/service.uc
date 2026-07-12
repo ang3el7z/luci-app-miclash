@@ -69,11 +69,11 @@ export function create(runtime) {
 		service_state(false);
 		return { changed: true, state: 'stopping' };
 	};
-	function reload(value) {
+	function reload(value, controller_config) {
 		value = profile(value);
 		return mihomo_api.request(runtime, 'PUT', '/configs?force=true', {
 			path: '/opt/clash/' + value
-		}, value);
+		}, value, controller_config);
 	};
 	function restart_core(value) {
 		value = profile(value);
