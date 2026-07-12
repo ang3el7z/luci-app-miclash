@@ -90,7 +90,7 @@ assert_equal(env.process.calls[0].command, '/usr/bin/ucode');
 assert_equal(join(' ', env.process.calls[0].args),
 	'-- /usr/libexec/miclash/validate-config.uc /tmp/miclash/candidates/' +
 	invalid.id + '/config.yaml');
-assert_equal(env.process.calls[0].timeout_ms, 31000);
+assert_equal(env.process.calls[0].timeout_ms, 0);
 assert_equal(exists(env.process.calls[0], 'capture_limit'), false);
 
 // Helper/protocol and parent execution failures are infrastructure errors;

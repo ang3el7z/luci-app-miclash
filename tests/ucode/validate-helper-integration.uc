@@ -24,25 +24,28 @@ for (let path in [ '/opt', '/opt/clash', '/opt/clash/bin', '/tmp/miclash',
 	'/tmp/miclash/candidates', candidate_dir ])
 	ensure_dir(path);
 
-let fixture = '#!' + ucode + ' --\n' +
-	'let fs = require("fs");\n' +
-	'fs.writefile("' + marker + '", sprintf("%J", ARGV));\n' +
-	'print("validator-stdout-secret\\n");\n' +
-	'warn("validator-stderr-secret\\n");\n' +
-	'let content = fs.readfile(ARGV[3]);\n' +
-	'exit(content == "inner125\\n" ? 125 : 7);\n';
+let fixture = '#!/bin/sh\n' +
+	'printf "%s\\n" "$@" > "' + marker + '"\n' +
+	'printf "validator-stdout-secret\\n"\n' +
+	'printf "validator-stderr-secret\\n" >&2\n' +
+	'content="$(cat "$4")"\n' +
+	'if [ "$content" = signal ]; then kill -9 "$$"; fi\n' +
+	'if [ "$content" = inner125 ]; then exit 125; fi\n' +
+	'exit 7\n';
 assert_true(fs.writefile(validator, fixture) > 0);
 assert_equal(fs.chmod(validator, 0o700), true);
 assert_true(fs.writefile(candidate, 'ordinary\n') > 0);
 
 let code = system([ ucode, '--', helper, candidate ], 31000);
 assert_equal(code, 7);
-assert_equal(fs.readfile(marker), sprintf('%J', [
-	'-d', '/opt/clash', '-f', candidate, '-t'
+assert_equal(fs.readfile(marker), join('\n', [
+	'-d', '/opt/clash', '-f', candidate, '-t', ''
 ]));
 
 assert_true(fs.writefile(candidate, 'inner125\n') > 0);
 assert_equal(system([ ucode, '--', helper, candidate ], 31000), 126);
+assert_true(fs.writefile(candidate, 'signal\n') > 0);
+assert_equal(system([ ucode, '--', helper, candidate ], 31000), 124);
 assert_equal(system([ ucode, '--', helper, '/tmp/not-owned.yaml' ], 1000), 125);
 
 assert_equal(fs.unlink(marker), true);

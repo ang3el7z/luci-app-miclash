@@ -4,7 +4,6 @@ import * as storage from 'miclash.storage';
 
 const PROFILES = [ 'config.yaml', 'config2.yaml', 'config3.yaml' ];
 const VALIDATION_HELPER = '/usr/libexec/miclash/validate-config.uc';
-const VALIDATION_TIMEOUT = 31000;
 
 function same_node(left, right) {
 	return left?.type != null && left.type == right?.type && left.inode == right?.inode &&
@@ -172,7 +171,7 @@ export function create(runtime, operations, history) {
 			let response = runtime.process.run({
 				command: '/usr/bin/ucode',
 				args: [ '--', VALIDATION_HELPER, candidate ],
-				timeout_ms: VALIDATION_TIMEOUT
+				timeout_ms: 0
 			});
 			if (type(response?.code) != 'int' || response.code < 0 ||
 			    response.code == 125 || response.code >= 254)
