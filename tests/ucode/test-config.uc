@@ -9,11 +9,17 @@ function fixture(name) {
 	return require('fs').readfile('tests/fixtures/config/' + name);
 };
 
+function validation_key(id) {
+	return '/usr/bin/ucode:-- /usr/libexec/miclash/validate-config.uc ' +
+		'/tmp/miclash/candidates/' + id + '/config.yaml';
+};
+
 function environment(service, setup) {
 	let fs = fakes.fs({
 		'/opt/clash/config.yaml': 'original-active\n',
 		'/opt/clash/config2.yaml': 'second-active\n',
-		'/opt/clash/config3.yaml': 'third-active\n'
+		'/opt/clash/config3.yaml': 'third-active\n',
+		'/usr/libexec/miclash/validate-config.uc': 'installed-helper\n'
 	});
 	for (let path in [ '/tmp', '/tmp/miclash', '/tmp/miclash/operations',
 		'/opt', '/opt/clash' ])
@@ -68,8 +74,7 @@ let before = env.fs.readfile('/opt/clash/config.yaml');
 let invalid_key;
 let invalid = env.cfg.validate('config.yaml', fixture('invalid.yaml'), 'luci');
 env.process.replies = {};
-invalid_key = '/opt/clash/bin/clash:-d /opt/clash -f /tmp/miclash/candidates/' +
-	invalid.id + '/config.yaml -t';
+invalid_key = validation_key(invalid.id);
 env.process.replies[invalid_key] = {
 	code: 1
 };
@@ -81,8 +86,37 @@ assert_equal(env.fs.readfile('/opt/clash/config.yaml'), before);
 assert_equal(env.cfg.read_draft('config.yaml'), 'draft-secret: value\n');
 assert_equal(env.fs.lstat('/tmp/miclash/candidates/' + invalid.id), null);
 assert_equal(length(env.revisions.list('config.yaml')), 0);
-assert_equal(env.process.calls[0].timeout_ms, 30000);
+assert_equal(env.process.calls[0].command, '/usr/bin/ucode');
+assert_equal(join(' ', env.process.calls[0].args),
+	'-- /usr/libexec/miclash/validate-config.uc /tmp/miclash/candidates/' +
+	invalid.id + '/config.yaml');
+assert_equal(env.process.calls[0].timeout_ms, 31000);
 assert_equal(exists(env.process.calls[0], 'capture_limit'), false);
+
+// Helper/protocol and parent execution failures are infrastructure errors;
+// helper timeout 124 remains an ordinary canonical validation failure.
+let helper_errors = environment();
+let helper_protocol = helper_errors.cfg.validate('config.yaml', fixture('valid.yaml'), 'luci');
+helper_errors.process.replies[validation_key(helper_protocol.id)] = { code: 125 };
+assert_equal(finish(helper_errors, helper_protocol).error.code, 'INTERNAL');
+let helper_parent = helper_errors.cfg.validate('config.yaml', fixture('valid.yaml'), 'luci');
+helper_errors.process.replies[validation_key(helper_parent.id)] = { code: -9 };
+assert_equal(finish(helper_errors, helper_parent).error.code, 'INTERNAL');
+let helper_exec = helper_errors.cfg.validate('config.yaml', fixture('valid.yaml'), 'luci');
+helper_errors.process.replies[validation_key(helper_exec.id)] = { code: 255 };
+assert_equal(finish(helper_errors, helper_exec).error.code, 'INTERNAL');
+let helper_timeout = helper_errors.cfg.validate('config.yaml', fixture('valid.yaml'), 'luci');
+helper_errors.process.replies[validation_key(helper_timeout.id)] = { code: 124 };
+let helper_timeout_done = finish(helper_errors, helper_timeout);
+assert_equal(helper_timeout_done.error.code, 'VALIDATION_FAILED');
+assert_equal(sprintf('%J', helper_timeout_done.error.detail),
+	'{ "profile": "config.yaml" }');
+
+let missing_helper = environment();
+missing_helper.fs.unlink('/usr/libexec/miclash/validate-config.uc');
+let missing_validation = missing_helper.cfg.validate(
+	'config.yaml', fixture('valid.yaml'), 'luci');
+assert_equal(finish(missing_helper, missing_validation).error.code, 'INTERNAL');
 
 // Candidate cleanup failures are visible and can never be reported as a
 // successful validation while owned temporary content remains behind.
@@ -94,8 +128,7 @@ assert_equal(cleanup_env.fs.lstat('/tmp/miclash/candidates/' + cleanup.id)?.type
 	'directory');
 
 let invalid_apply = env.cfg.apply('config.yaml', fixture('invalid.yaml'), 'luci');
-env.process.replies['/opt/clash/bin/clash:-d /opt/clash -f /tmp/miclash/candidates/' +
-	invalid_apply.id + '/config.yaml -t'] = { code: 1 };
+env.process.replies[validation_key(invalid_apply.id)] = { code: 1 };
 assert_equal(finish(env, invalid_apply).error.code, 'VALIDATION_FAILED');
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), before);
 assert_equal(length(env.revisions.list('config.yaml')), 0);
@@ -104,7 +137,7 @@ assert_equal(length(env.revisions.list('config.yaml')), 0);
 // before either history or Active can change.
 let tampered_env = environment();
 tampered_env.process.on_run = (request) => {
-	let path = request.args[3];
+	let path = request.args[2];
 	tampered_env.fs.files[path] += '# tampered\n';
 };
 let tampered = tampered_env.cfg.apply('config.yaml', fixture('valid.yaml'), 'luci');
@@ -118,7 +151,9 @@ let valid_two = env.cfg.validate('config.yaml', fixture('valid.yaml'), 'luci');
 finish(env, valid_one);
 finish(env, valid_two);
 assert_true(valid_one.id != valid_two.id);
-assert_true(env.process.calls[1].args[3] != env.process.calls[2].args[3]);
+let call_count = length(env.process.calls);
+assert_true(env.process.calls[call_count - 2].args[2] !=
+	env.process.calls[call_count - 1].args[2]);
 
 // Apply validates the immutable Candidate, snapshots exact previous Active,
 // atomically replaces Active, retains Draft, and records native runtime hashes.
@@ -203,8 +238,7 @@ assert_equal(external_race.cfg.detect_external('config.yaml').changed, true);
 let invalid_external = fixture('invalid.yaml');
 env.fs.writefile('/opt/clash/config.yaml', invalid_external);
 let reject_external = env.cfg.adopt_external('config.yaml', 'system');
-env.process.replies['/opt/clash/bin/clash:-d /opt/clash -f /tmp/miclash/candidates/' +
-	reject_external.id + '/config.yaml -t'] = { code: 1 };
+env.process.replies[validation_key(reject_external.id)] = { code: 1 };
 assert_equal(finish(env, reject_external).error.code, 'VALIDATION_FAILED');
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), invalid_external);
 assert_equal(length(env.revisions.list('config.yaml')), length(external_history));

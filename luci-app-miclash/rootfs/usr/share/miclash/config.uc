@@ -3,8 +3,8 @@ import * as schema from 'miclash.schema';
 import * as storage from 'miclash.storage';
 
 const PROFILES = [ 'config.yaml', 'config2.yaml', 'config3.yaml' ];
-const MIHOMO = '/opt/clash/bin/clash';
-const VALIDATION_TIMEOUT = 30000;
+const VALIDATION_HELPER = '/usr/libexec/miclash/validate-config.uc';
+const VALIDATION_TIMEOUT = 31000;
 
 function same_node(left, right) {
 	return left?.type != null && left.type == right?.type && left.inode == right?.inode &&
@@ -165,11 +165,18 @@ export function create(runtime, operations, history) {
 			    runtime.fs.realpath(candidate) != candidate ||
 			    runtime.digest.sha256_file(candidate) != hash)
 				errors.fail('INTERNAL');
+			let helper = runtime.fs.lstat(VALIDATION_HELPER);
+			if (helper?.type != 'file' || helper.nlink != 1 ||
+			    runtime.fs.realpath(VALIDATION_HELPER) != VALIDATION_HELPER)
+				errors.fail('INTERNAL');
 			let response = runtime.process.run({
-				command: MIHOMO,
-				args: [ '-d', '/opt/clash', '-f', candidate, '-t' ],
+				command: '/usr/bin/ucode',
+				args: [ '--', VALIDATION_HELPER, candidate ],
 				timeout_ms: VALIDATION_TIMEOUT
 			});
+			if (type(response?.code) != 'int' || response.code < 0 ||
+			    response.code == 125 || response.code >= 254)
+				errors.fail('INTERNAL');
 			if (response.code != 0)
 				outcome = { ok: false, error: validation_error(profile) };
 			else {
