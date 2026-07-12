@@ -13,7 +13,7 @@ if [ -z "$UCODE_BIN" ] || ! command -v "$UCODE_BIN" >/dev/null 2>&1; then
 	exit 127
 fi
 
-UCODE_PATH="${UCODE_PATH:-$repo_root/luci-app-miclash/rootfs/usr/share/ucode}"
+UCODE_PATH="${UCODE_PATH:-$repo_root/tests/ucode:$repo_root/luci-app-miclash/rootfs/usr/share}"
 export UCODE_PATH
 
 run_ucode_test() {
@@ -33,7 +33,11 @@ run_ucode_test() {
 failures=0
 tests=0
 
-for test_file in "$repo_root"/tests/ucode/test-*.uc; do
+if [ "$#" -eq 0 ]; then
+	set -- "$repo_root"/tests/ucode/test-*.uc
+fi
+
+for test_file in "$@"; do
 	tests=$((tests + 1))
 	echo "==> ${test_file#"$repo_root"/}"
 	if ! run_ucode_test "$test_file"; then

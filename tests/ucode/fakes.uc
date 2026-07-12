@@ -1,0 +1,108 @@
+const PROCESS_FIELDS = {
+	command: true,
+	args: true,
+	env: true,
+	timeout_ms: true,
+	stdin: true
+};
+
+function invalid() {
+	die('INVALID_ARGUMENT');
+};
+
+function process_key(request) {
+	return request.command + ':' + join(' ', request.args ?? []);
+};
+
+export function process(replies) {
+	let fake = { calls: [] };
+
+	fake.run = (request) => {
+		if (type(request) != 'object')
+			invalid();
+		for (let name in request)
+			if (!exists(PROCESS_FIELDS, name))
+				invalid();
+		if (type(request.command) != 'string' ||
+		    request.args != null && type(request.args) != 'array')
+			invalid();
+
+		push(fake.calls, request);
+		let reply = (replies ?? {})[process_key(request)];
+		return reply ?? { code: 0, stdout: '', stderr: '' };
+	};
+
+	return fake;
+};
+
+export function clock(start) {
+	let current = start ?? 0;
+	let fake = { timers: [] };
+
+	fake.now = () => current;
+	fake.advance = (milliseconds) => {
+		current += milliseconds;
+		for (let timer in fake.timers) {
+			if (timer.active && timer.due <= current) {
+				timer.active = false;
+				timer.callback();
+			}
+		}
+		return current;
+	};
+	fake.sleep = fake.advance;
+	fake.set_timeout = (milliseconds, callback) => {
+		let timer = { due: current + milliseconds, callback, active: true };
+		timer.cancel = () => timer.active = false;
+		push(fake.timers, timer);
+		return timer;
+	};
+
+	return fake;
+};
+
+export function fs(initial) {
+	let files = initial ?? {};
+	return {
+		files,
+		readfile: (path) => files[path],
+		writefile: (path, data) => files[path] = data,
+		exists: (path) => exists(files, path),
+		unlink: (path) => delete files[path],
+		rename: (from, to) => {
+			files[to] = files[from];
+			delete files[from];
+			return true;
+		},
+		mkdir: (path) => true,
+		stat: (path) => exists(files, path) ? { type: 'file', size: length(files[path]) } : null
+	};
+};
+
+export function uci(initial) {
+	let values = initial ?? {};
+	return {
+		values,
+		get: (config, section, option) => values[config]?.[section]?.[option],
+		set: (config, section, option, value) => {
+			values[config] ??= {};
+			values[config][section] ??= {};
+			values[config][section][option] = value;
+			return true;
+		},
+		delete: (config, section, option) => delete values[config]?.[section]?.[option],
+		commit: (config) => true
+	};
+};
+
+export function events() {
+	let collector = { items: [] };
+	collector.emit = (type, data) => push(collector.items, { type, data });
+	collector.logger = {
+		debug: (message) => collector.emit('debug', message),
+		info: (message) => collector.emit('info', message),
+		warn: (message) => collector.emit('warn', message),
+		error: (message) => collector.emit('error', message)
+	};
+	return collector;
+};
