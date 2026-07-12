@@ -62,13 +62,24 @@ function process_run(request) {
 };
 
 function fs_adapter() {
+	let fs = require('fs');
 	return {
-		readfile: (path) => require('fs').readfile(path),
-		writefile: (path, data) => require('fs').writefile(path, data),
-		stat: (path) => require('fs').stat(path),
-		mkdir: (path) => require('fs').mkdir(path),
-		unlink: (path) => require('fs').unlink(path),
-		rename: (from, to) => require('fs').rename(from, to)
+		readfile: (path) => fs.readfile(path),
+		writefile: (path, data) => fs.writefile(path, data),
+		open: (path, mode, perm) => fs.open(path, mode, perm),
+		write: (handle, data) => handle.write(data),
+		flush: (handle) => {
+			let flushed = handle.flush();
+			// OpenWrt 24.10 ucode returns null after a successful fflush().
+			return flushed ?? handle.error() == null;
+		},
+		close: (handle) => handle.close(),
+		stat: (path) => fs.stat(path),
+		mkdir: (path) => fs.mkdir(path),
+		lsdir: (path) => fs.lsdir(path),
+		chmod: (path, mode) => fs.chmod(path, mode),
+		unlink: (path) => fs.unlink(path),
+		rename: (from, to) => fs.rename(from, to)
 	};
 };
 

@@ -9,6 +9,7 @@ assert_equal(busy.message, 'busy');
 assert_true(busy.detail == null);
 
 assert_equal(errors.normalize({ message: 'NOT_FOUND' }).code, 'NOT_FOUND');
+assert_equal(errors.normalize({ message: 'CORRUPT_STATE' }).code, 'CORRUPT_STATE');
 assert_equal(errors.normalize({ message: 'unexpected secret' }).code, 'INTERNAL');
 assert_equal(errors.new('DOWNLOAD_FAILED', 'failed', {
 	url: 'https://example.com',
