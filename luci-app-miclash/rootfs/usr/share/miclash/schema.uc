@@ -89,7 +89,7 @@ export function secret(value) {
 
 export function profile_name(value) {
 	validate({ type: 'string', max_length: 12 }, value);
-	if (!match(value, /^config[0-3]\.yaml$/))
+	if (value != 'config.yaml' && value != 'config2.yaml' && value != 'config3.yaml')
 		invalid();
 	return value;
 };

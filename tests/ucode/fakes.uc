@@ -1,17 +1,27 @@
 import { process_result, validate_process_request } from 'miclash.runtime';
+import { sha256 } from 'digest';
 
 function process_key(request) {
 	return request.command + ':' + join(' ', request.args ?? []);
 };
 
 export function process(replies) {
-	let fake = { calls: [] };
+	let fake = { calls: [], replies: replies ?? {}, on_run: null };
 
 	fake.run = (request) => {
 		validate_process_request(request);
 
 		push(fake.calls, request);
-		let reply = (replies ?? {})[process_key(request)];
+		if (type(fake.on_run) == 'function')
+			fake.on_run(request);
+		let reply = fake.replies[process_key(request)];
+		if (request.capture_limit != null) {
+			let output = (reply?.stdout ?? '') + (reply?.stderr ?? '');
+			let truncated = length(output) > request.capture_limit;
+			if (truncated)
+				output = substr(output, 0, request.capture_limit);
+			return process_result(reply?.code ?? 0, output, null, truncated);
+		}
 		return process_result(reply?.code ?? 0, reply?.stdout, reply?.stderr);
 	};
 
@@ -75,7 +85,7 @@ export function fs(initial) {
 		write_results: [],
 		calls: {
 			open: [], write: [], flush: [], close: [], chmod: [], rename: [], unlink: [],
-			readfile: []
+			readfile: [], rmdir: []
 		},
 		writefile: (path, data) => files[path] = data,
 		exists: (path) => exists(files, path) || exists(symlinks, path),
@@ -85,6 +95,7 @@ export function fs(initial) {
 		push(fake.calls.readfile, path);
 		return files[path];
 	};
+	fake.read = (handle, amount) => handle.read(amount);
 
 	function parent(path) {
 		let parts = split(path, '/');
@@ -148,6 +159,13 @@ export function fs(initial) {
 		push(fake.calls.open, { path, mode, perm });
 		let offset = 0;
 		let handle = { path, closed: false, last_error: null };
+		handle.read = (amount) => {
+			if (handle.closed)
+				return null;
+			let data = substr(files[path], offset, amount);
+			offset += length(data);
+			return data;
+		};
 		handle.write = (data) => {
 			if (handle.closed || fake.fail_on == 'write')
 				return null;
@@ -205,6 +223,14 @@ export function fs(initial) {
 		delete files[actual];
 		delete symlinks[actual];
 		return present;
+	};
+	fake.rmdir = (path) => {
+		push(fake.calls.rmdir, path);
+		if (!exists(directories, path) || length(fake.lsdir(path)))
+			return null;
+		delete directories[path];
+		delete inodes[path];
+		return true;
 	};
 	fake.rename = (from, to) => {
 		push(fake.calls.rename, { from, to });
@@ -264,12 +290,12 @@ export function digest(fs) {
 	let fake = { calls: { data: [], file: [] } };
 	fake.sha256 = (data) => {
 		push(fake.calls.data, length(data));
-		return sprintf('fake-%d-%s', length(data), data);
+		return sha256(data);
 	};
 	fake.sha256_file = (path) => {
 		push(fake.calls.file, path);
 		let data = fs.files[path];
-		return type(data) == 'string' ? sprintf('fake-%d-%s', length(data), data) : null;
+		return type(data) == 'string' ? sha256(data) : null;
 	};
 	return fake;
 };

@@ -51,6 +51,9 @@ assert_process_rejected({ command: 'echo', env: { 'BAD-NAME': 'value' } });
 assert_process_rejected({ command: 'echo', env: { GOOD_NAME: 1 } });
 assert_process_rejected({ command: 'echo', timeout_ms: -1 });
 assert_process_rejected({ command: 'echo', timeout_ms: 1.5 });
+assert_process_rejected({ command: 'echo', capture_limit: 0 });
+assert_process_rejected({ command: 'echo', capture_limit: 8193 });
+assert_process_rejected({ command: 'echo', capture_limit: 1.5 });
 assert_process_rejected({ command: 'echo', shell: true });
 assert_process_rejected({ command: 'echo', stdin: '' });
 assert_process_boundary_rejected({ command: 'echo' + sprintf('%c', 0) + 'hidden' });
@@ -63,6 +66,16 @@ assert_true(exists(production_result, 'stdout'));
 assert_true(exists(production_result, 'stderr'));
 assert_equal(production_result.stdout, null);
 assert_equal(production_result.stderr, null);
+
+let captured_fake = fakes.process({
+	'/bin/echo:hello': { code: 0, stdout: sprintf('%09000d', 0), stderr: 'ignored' }
+});
+let captured_result = captured_fake.run({
+	command: '/bin/echo', args: [ 'hello' ], capture_limit: 8192
+});
+assert_equal(length(captured_result.stdout), 8192);
+assert_equal(captured_result.stderr, null);
+assert_equal(captured_result.truncated, true);
 
 let fake_result = validation_fake.run({ command: '/bin/true' });
 assert_equal(fake_result.code, 0);
