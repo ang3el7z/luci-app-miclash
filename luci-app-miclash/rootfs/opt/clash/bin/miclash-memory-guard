@@ -11,6 +11,7 @@ SUCCESS_MIN_DROP_KB=8192
 SUCCESS_COOLDOWN_SEC=21600
 FAILURE_COOLDOWN_SEC=86400
 REARM_NORMAL_SEC=1800
+ACTION_BUSY_EXIT=75
 
 SETTINGS_FILE="${MICLASH_SETTINGS_FILE:-/opt/clash/settings}"
 STATE_DIR="${MICLASH_MEMORY_GUARD_STATE_DIR:-/tmp/miclash-memory-guard}"
@@ -19,6 +20,7 @@ BASELINE_SAMPLES_FILE="$STATE_DIR/baseline.samples"
 PROC_ROOT="${MICLASH_PROC_ROOT:-/proc}"
 SERVICE_BIN="${MICLASH_SERVICE_BIN:-/opt/clash/bin/miclash-service}"
 SERVICE_INIT="${MICLASH_SERVICE_INIT:-/etc/init.d/miclash-memory-guard}"
+MANUAL_OPERATION_FILE="/tmp/miclash-service/manual-operation"
 LOGGER_TAG="miclash-memory-guard"
 
 PHASE="starting"
@@ -36,6 +38,7 @@ LAST_ACTION="none"
 LAST_RESULT="none"
 COOLDOWN_UNTIL=0
 NORMAL_SINCE=0
+LAST_MANUAL_OPERATION=""
 
 calc_reserve_kb() {
 	value=$(($1 / 10))
@@ -162,6 +165,25 @@ reset_baseline() {
 	guard_log "tracking pid=$TRACKED_PID; baseline warm-up started"
 }
 
+read_manual_operation() {
+	[ -f "$MANUAL_OPERATION_FILE" ] || return 0
+	cat "$MANUAL_OPERATION_FILE" 2>/dev/null
+}
+
+detect_manual_operation() {
+	generation="$(read_manual_operation)"
+	[ -n "$generation" ] || return 1
+	if [ -z "$LAST_MANUAL_OPERATION" ]; then
+		LAST_MANUAL_OPERATION="$generation"
+		return 1
+	fi
+	[ "$generation" != "$LAST_MANUAL_OPERATION" ] || return 1
+	LAST_MANUAL_OPERATION="$generation"
+	reset_baseline "$TRACKED_PID"
+	guard_log "baseline reset after manual MiClash service operation: generation=$generation"
+	return 0
+}
+
 collect_baseline_sample() {
 	mkdir -p "$STATE_DIR" 2>/dev/null || return 1
 	printf '%s\n' "$CURRENT_RSS" >> "$BASELINE_SAMPLES_FILE"
@@ -208,12 +230,6 @@ observe_pressure() {
 
 handle_recovery_trigger() {
 	guard_log "recovery trigger: pid=$TRACKED_PID baseline_rss_kb=$BASELINE_RSS current_rss_kb=$CURRENT_RSS mem_available_kb=$MEM_AVAILABLE reserve_kb=$RESERVE psi_full_avg10=$PSI_FULL_AVG10"
-	if [ -d /tmp/miclash-service.lock ]; then
-		PHASE="recovery_deferred"
-		LAST_RESULT="service_busy"
-		guard_log "recovery deferred because another MiClash service operation is active"
-		return 1
-	fi
 	recover_memory
 }
 
@@ -262,8 +278,18 @@ run_recovery_action() {
 	write_status
 	guard_log "action=$action before_rss_kb=$before_rss mem_available_kb=$MEM_AVAILABLE reserve_kb=$RESERVE psi_full_avg10=$PSI_FULL_AVG10"
 
-	output="$("$SERVICE_BIN" "$action" 2>&1)"
+	if [ "$action" = "restart" ]; then
+		output="$(MICLASH_MEMORY_GUARD_ACTION=1 "$SERVICE_BIN" "$action" 2>&1)"
+	else
+		output="$("$SERVICE_BIN" "$action" 2>&1)"
+	fi
 	code="$?"
+	if [ "$code" -eq "$ACTION_BUSY_EXIT" ]; then
+		LAST_RESULT="service_busy"
+		guard_log "action=$action deferred because another MiClash service operation is active"
+		write_status
+		return "$ACTION_BUSY_EXIT"
+	fi
 	if [ "$code" -ne 0 ]; then
 		LAST_RESULT="action_failed"
 		guard_log "action=$action failed: $output"
@@ -295,17 +321,38 @@ run_full_restart_once() {
 	run_recovery_action restart
 }
 
+defer_busy_recovery() {
+	PHASE="recovery_deferred"
+	LAST_RESULT="service_busy"
+	PRESSURE_COUNT=0
+	guard_log "recovery cycle deferred because another MiClash service operation is active"
+	write_status
+	return 1
+}
+
 recover_memory() {
 	FULL_RESTART_ATTEMPTED=0
 	run_recovery_action guard-reload && return 0
 	reload_result="$?"
+	if [ "$reload_result" -eq "$ACTION_BUSY_EXIT" ]; then
+		defer_busy_recovery
+		return 1
+	fi
 
 	run_recovery_action guard-core-restart && return 0
 	core_result="$?"
+	if [ "$core_result" -eq "$ACTION_BUSY_EXIT" ]; then
+		defer_busy_recovery
+		return 1
+	fi
 
 	run_full_restart_once
 	full_result="$?"
 	[ "$full_result" -eq 0 ] && return 0
+	if [ "$full_result" -eq "$ACTION_BUSY_EXIT" ]; then
+		defer_busy_recovery
+		return 1
+	fi
 	finish_recovery_failure "reload=$reload_result core_restart=$core_result full_restart=$full_result"
 	return 1
 }
@@ -313,6 +360,7 @@ recover_memory() {
 run_monitor() {
 	mkdir -p "$STATE_DIR" 2>/dev/null || exit 1
 	load_runtime_state
+	LAST_MANUAL_OPERATION="$(read_manual_operation)"
 	guard_log "monitor started"
 	while setting_enabled; do
 		pid="$(find_mihomo_pid)"
@@ -338,6 +386,7 @@ run_monitor() {
 			continue
 		fi
 		read_memory_psi
+		detect_manual_operation || true
 
 		now="$(now_sec)"
 		if [ "$BASELINE_RSS" -eq 0 ]; then
@@ -369,7 +418,7 @@ run_monitor() {
 sync_guard_service() {
 	if setting_enabled; then
 		"$SERVICE_INIT" enable >/dev/null 2>&1 || return 1
-		"$SERVICE_INIT" start >/dev/null 2>&1 || return 1
+		"$SERVICE_INIT" running >/dev/null 2>&1 || "$SERVICE_INIT" start >/dev/null 2>&1 || return 1
 		guard_log "service enabled and started"
 	else
 		"$SERVICE_INIT" stop >/dev/null 2>&1 || true

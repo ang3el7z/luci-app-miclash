@@ -8,6 +8,7 @@ STATUS_DIR="/tmp/miclash-service"
 STATUS_FILE="/tmp/miclash-service/status"
 STATUS_OUT="/tmp/miclash-service/stdout"
 STATUS_ERR="/tmp/miclash-service/stderr"
+MANUAL_OPERATION_FILE="/tmp/miclash-service/manual-operation"
 CLASH_INIT="/etc/init.d/clash"
 CLASH_RULES="/opt/clash/bin/clash-rules"
 CLASH_BIN="/opt/clash/bin/clash"
@@ -124,6 +125,12 @@ fail() {
 	exit 1
 }
 
+busy() {
+	write_status failed busy "ERROR: $*"
+	echo "ERROR: $*" >&2
+	exit 75
+}
+
 require_kernel() {
 	[ -x "$CLASH_BIN" ] || fail "Install the Mihomo kernel first."
 }
@@ -149,7 +156,7 @@ acquire_lock() {
 	old_pid=""
 	[ -f "$LOCK_DIR/pid" ] && old_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
 	if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-		fail "another MiClash service operation is already running (pid $old_pid)"
+		busy "another MiClash service operation is already running (pid $old_pid)"
 	fi
 
 	rm -rf "$LOCK_DIR" 2>/dev/null || true
@@ -195,6 +202,14 @@ run_job() {
 
 now_sec() {
 	date +%s 2>/dev/null || echo 0
+}
+
+record_manual_operation() {
+	[ "${MICLASH_MEMORY_GUARD_ACTION:-0}" = "1" ] && return 0
+	mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
+	tmp="$MANUAL_OPERATION_FILE.tmp.$$"
+	printf '%s:%s:%s\n' "$(now_sec)" "$$" "$CURRENT_ACTION" > "$tmp" 2>/dev/null &&
+		mv "$tmp" "$MANUAL_OPERATION_FILE" 2>/dev/null || true
 }
 
 is_service_running() {
@@ -352,6 +367,7 @@ run_service_action() {
 			"$CLASH_INIT" enable || fail "failed to enable Clash service"
 			"$CLASH_INIT" start || fail "failed to start Clash service"
 			wait_ready
+			record_manual_operation
 			echo "Clash service started"
 			;;
 		stop)
@@ -359,6 +375,7 @@ run_service_action() {
 			"$CLASH_INIT" stop || fail "failed to stop Clash service"
 			"$CLASH_INIT" disable || fail "failed to disable Clash service"
 			wait_stopped
+			record_manual_operation
 			echo "Clash service stopped"
 			;;
 		restart)
@@ -366,12 +383,14 @@ run_service_action() {
 			write_status running restart "Restarting Clash service"
 			"$CLASH_INIT" restart || fail "failed to restart Clash service"
 			wait_ready
+			record_manual_operation
 			echo "Clash service restarted"
 			;;
 		reload)
 			write_status running reload "Reloading Mihomo configuration"
 			hot_reload_config
 			wait_ready
+			record_manual_operation
 			echo "Mihomo configuration reloaded"
 			;;
 		guard-reload)

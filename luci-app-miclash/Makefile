@@ -182,6 +182,10 @@ endef
 
 define Package/$(PKG_NAME)/prerm
 #!/bin/sh
+[ -n "$$IPKG_INSTROOT" ] || {
+	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard stop >/dev/null 2>&1 || true
+	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard disable >/dev/null 2>&1 || true
+}
 exit 0
 endef
 
