@@ -123,8 +123,11 @@ assert_throws(() => compile({ ...scenarios[4], lan: repeated('br-lan', 64), wan:
 
 function runtime_with(options) {
 	let calls = [], fail_at = options?.fail_at ?? null, sequence = 0;
+	let save_count = 0;
 	let inventory_visible = true;
+	let orphan_visible = !!options?.orphan_generation;
 	let guard_wrong = !!options?.guard_before_anchor_is_wrong;
+	let task_hook_count = options?.no_anchors ? 0 : 1;
 	let legacy_hooks = {
 		iptables: { MICLASH_PREROUTING: !!options?.legacy, MICLASH_OUTPUT: !!options?.legacy },
 		ip6tables: { MICLASH_PREROUTING: false, MICLASH_OUTPUT: false }
@@ -150,15 +153,30 @@ function runtime_with(options) {
 			if (table == 'mangle') push(lines, '-A PREROUTING -j MCL_AN_PR', '-A OUTPUT -j MCL_AN_OU');
 			else {
 				push(lines, '-A INPUT -j MCL_AN_TI');
-				if (options?.guard && !guard_wrong) push(lines, '-A FORWARD -j MICLASH_GUARD_FORWARD');
-				push(lines, '-A FORWARD -j MCL_AN_TF');
-				if (options?.guard && guard_wrong) push(lines, '-A FORWARD -j MICLASH_GUARD_FORWARD');
+				if (task_hook_count == 2) {
+					push(lines, '-A FORWARD -j MCL_AN_TF');
+					if (options?.guard) push(lines, '-A FORWARD -j MICLASH_GUARD_FORWARD');
+					push(lines, '-A FORWARD -j MCL_AN_TF');
+				}
+				else {
+					if (options?.guard && !guard_wrong) push(lines, '-A FORWARD -j MICLASH_GUARD_FORWARD');
+					if (task_hook_count) push(lines, '-A FORWARD -j MCL_AN_TF');
+					if (options?.guard && guard_wrong) push(lines, '-A FORWARD -j MICLASH_GUARD_FORWARD');
+				}
 			}
 		}
 		if (options?.remaining_generation && table == 'mangle')
 			push(lines, ':MCL_PR_' + options.remaining_generation + ' - [0:0]');
 		if (options?.retained_old && table == 'mangle' && base == 'iptables')
 			push(lines, ':MCL_PR_aaaaaaaaaaaa - [0:0]');
+		if (orphan_visible && base == 'iptables') {
+			let orphan = options.orphan_generation;
+			if (table == 'mangle')
+				for (let prefix in (options?.partial_orphan ? [ 'PR' ] : [ 'PR', 'PX', 'OU' ]))
+					push(lines, ':MCL_' + prefix + '_' + orphan + ' - [0:0]');
+			else if (!options?.partial_orphan)
+				for (let prefix in [ 'TI', 'TF' ]) push(lines, ':MCL_' + prefix + '_' + orphan + ' - [0:0]');
+		}
 		let inventory = options?.inventory ?? staged?.inventory ?? [];
 		if (inventory_visible)
 			for (let item in inventory) if (item.command == base && item.args[1] == table) {
@@ -176,6 +194,14 @@ function runtime_with(options) {
 			}
 			push(lines, '-A MCL_PX_' + extra_id + ' -p icmp -j RETURN');
 		}
+		if (options?.foreign_generation_jump && table == 'mangle' && base == 'iptables')
+			push(lines, '-A PREROUTING -j MCL_PR_bbbbbbbbbbbb');
+		if (options?.foreign_generation_goto && table == 'mangle' && base == 'iptables')
+			push(lines, '-A PREROUTING -g MCL_PR_bbbbbbbbbbbb');
+		if (options?.foreign_generation_long_goto && table == 'mangle' && base == 'iptables')
+			push(lines, '-A PREROUTING --goto MCL_PR_bbbbbbbbbbbb');
+		if (options?.orphan_foreign_edge && table == 'mangle' && base == 'iptables')
+			push(lines, '-A PREROUTING -j MCL_PR_' + options.orphan_generation);
 		if (table == 'mangle') {
 			if (legacy_hooks[base].MICLASH_PREROUTING) push(lines, '-A PREROUTING -j MICLASH_PREROUTING');
 			if (legacy_hooks[base].MICLASH_OUTPUT) push(lines, '-A OUTPUT -j MICLASH_OUTPUT');
@@ -200,6 +226,10 @@ function runtime_with(options) {
 					push(lines, 'add ' + item.args[1] + ' ' + item.args[2]);
 			}
 			if (options?.retained_old) push(lines, 'create MCL_L4_aaaaaaaaaaaa hash:net family inet');
+			if (orphan_visible && !options?.partial_orphan) {
+				push(lines, 'create MCL_L4_' + options.orphan_generation + ' hash:net family inet');
+				push(lines, 'create MCL_F4_' + options.orphan_generation + ' hash:net family inet');
+			}
 			if (options?.extra_set_member) push(lines, 'add MCL_L4_bbbbbbbbbbbb 11.0.0.0/8');
 			return { code: 0, stdout: join('\n', lines) + '\n', stderr: null };
 		}
@@ -212,11 +242,20 @@ function runtime_with(options) {
 		if (options?.no_anchors && (request.args[2] == '-C' || request.args[2] == '-L') &&
 		    index([ 'MCL_AN_PR', 'MCL_AN_OU', 'MCL_AN_TI', 'MCL_AN_TF' ], request.args[length(request.args) - 1]) >= 0)
 			return { code: 1, stdout: null, stderr: null };
+		if (options?.orphan_generation && !orphan_visible &&
+		    ((request.args[2] == '-L' && substr(request.args[3] ?? '', -12) == options.orphan_generation) ||
+		     (request.command == 'ipset' && request.args[0] == 'list' &&
+		      substr(request.args[1] ?? '', -12) == options.orphan_generation)))
+			return { code: 1, stdout: null, stderr: null };
 		if (options?.absent && request.command == 'ipset' && request.args[0] == 'list' && request.args[1] == '-name')
 			return { code: 0, stdout: '', stderr: null };
 		if (options?.absent && (request.args[2] == '-C' || request.args[2] == '-L' ||
 		    (request.command == 'ipset' && request.args[0] == 'list')))
 			return { code: 1, stdout: null, stderr: null };
+		if (request.command == 'iptables-save' || request.command == 'ip6tables-save') save_count++;
+		if (options?.capture_fail_at == save_count &&
+		    (request.command == 'iptables-save' || request.command == 'ip6tables-save'))
+			return { code: options.capture_failure == 'status' ? 1 : 0, stdout: null, stderr: null };
 		if (reply == null && (request.command == 'iptables-save' || request.command == 'ip6tables-save'))
 			return { code, stdout: saved(request.command, request.args[1]), stderr: null };
 		if (code == 0 && (request.command == 'iptables' || request.command == 'ip6tables') &&
@@ -227,14 +266,31 @@ function runtime_with(options) {
 		}
 		if (code == 0 && request.args[2] == '-D' && legacy_hooks[request.command]?.[request.args[length(request.args) - 1]])
 			legacy_hooks[request.command][request.args[length(request.args) - 1]] = false;
-		if (code == 0 && request.args[2] == '-A' && request.args[3] == 'FORWARD' &&
-		    request.args[length(request.args) - 1] == 'MCL_AN_TF') guard_wrong = false;
+		if (code == 0 && request.args[3] == 'FORWARD' &&
+		    request.args[length(request.args) - 1] == 'MCL_AN_TF') {
+			if (request.args[2] == '-A') { task_hook_count++; guard_wrong = false; }
+			if (request.args[2] == '-D' && task_hook_count) task_hook_count--;
+		}
 		if (code == 0 && request.args[2] == '-X' && match(request.args[3] ?? '', /^MCL_.._bbbbbbbbbbbb$/))
 			inventory_visible = false;
+		if (code == 0 && request.args[2] == '-X' &&
+		    substr(request.args[3] ?? '', -12) == options?.orphan_generation) orphan_visible = false;
 		return { code: reply?.code ?? code, stdout: reply?.stdout ?? null,
 			stderr: reply?.stderr ?? null };
 	};
-	return { process: p };
+	let runtime = { process: p };
+	if (options?.capture_failure && options.capture_failure != 'status') {
+		runtime.fs = fs();
+		runtime.fs.popen = () => {
+			if (options.capture_failure == 'open') return null;
+			return {
+				read: () => options.capture_failure == 'read' ? null :
+					options.capture_failure == 'oversize' ? sprintf('%04096d', 0) : '',
+				close: () => options.capture_failure == 'close' ? 1 : 0
+			};
+		};
+	}
+	return runtime;
 };
 
 let prep_failure = runtime_with({ fail_when: (r) => r.args[2] == '-N' &&
@@ -257,6 +313,25 @@ let post_log = encoded(post_switch.process.calls);
 assert_true(index(post_log, '-X","MCL_PR_aaaaaaaaaaaa') < 0 &&
 	index(post_log, '-X","MCL_PR_bbbbbbbbbbbb') < 0,
 	'post-switch failure keeps both generations');
+
+for (let failure in [ 'open', 'read', 'close', 'status', 'oversize' ]) {
+	let before_capture = runtime_with({ capture_failure: failure, capture_fail_at: 2 });
+	assert_throws(() => apply(before_capture, staged), 'INTERNAL');
+	let removed_b = false;
+	for (let request in before_capture.process.calls)
+		removed_b = removed_b || (request.args[2] == '-X' && request.args[3] == 'MCL_PR_bbbbbbbbbbbb');
+	assert_true(removed_b,
+		'pre-switch ' + failure + ' capture failure rolls back prepared B');
+	let after_capture = runtime_with({ capture_failure: failure, capture_fail_at: 11 });
+	let repair = apply(after_capture, staged);
+	assert_equal(repair.repair_needed, true,
+		'post-switch ' + failure + ' capture failure returns repair-needed');
+	let removed_a = false;
+	for (let request in after_capture.process.calls)
+		removed_a = removed_a || (request.args[2] == '-X' && request.args[3] == 'MCL_PR_aaaaaaaaaaaa');
+	assert_true(!removed_a,
+		'post-switch capture failure retains A');
+}
 
 for (let failure in [
 	{ name: 'anchor creation', match: (r) => index(r.args, 'MCL_AN_PR') >= 0 },
@@ -359,10 +434,32 @@ for (let request in reordered_guard.process.calls) {
 }
 assert_true(moved_delete && moved_append, 'Guard ordering repair moves only the Task 4 anchor');
 
+let guard_append_failure = runtime_with({ guard: true, guard_before_anchor_is_wrong: true,
+	fail_when: (r) => r.args[2] == '-A' && r.args[3] == 'FORWARD' && r.args[length(r.args) - 1] == 'MCL_AN_TF' });
+assert_throws(() => apply(guard_append_failure, staged), 'INTERNAL');
+let deleted_before_append = false;
+for (let request in guard_append_failure.process.calls)
+	deleted_before_append = deleted_before_append || (request.args[2] == '-D' && request.args[3] == 'FORWARD' &&
+		request.args[length(request.args) - 1] == 'MCL_AN_TF');
+assert_true(!deleted_before_append, 'failed Guard-order append keeps the original Task 4 hook active');
+
+let guard_verify_failure = apply(runtime_with({ guard: true, guard_before_anchor_is_wrong: true,
+	capture_failure: 'read', capture_fail_at: 2 }), staged);
+assert_equal(guard_verify_failure.repair_needed, true,
+	'Guard transitional verification failure returns repair-needed with detectable duplicate hooks');
+let guard_delete_failure = apply(runtime_with({ guard: true, guard_before_anchor_is_wrong: true,
+	fail_when: (r) => r.args[2] == '-D' && r.args[3] == 'FORWARD' &&
+		r.args[length(r.args) - 1] == 'MCL_AN_TF' }), staged);
+assert_equal(guard_delete_failure.repair_needed, true,
+	'Guard old-hook delete failure returns repair-needed instead of opening the path');
+
 assert_throws(() => apply(runtime_with({ extra_generation_rule: true }), staged), 'INTERNAL');
 assert_throws(() => apply(runtime_with({ missing_set_member: true }), staged), 'INTERNAL');
 assert_throws(() => apply(runtime_with({ extra_set_member: true }), staged), 'INTERNAL');
 assert_throws(() => apply(runtime_with({ wrong_set_schema: true }), staged), 'INTERNAL');
+assert_throws(() => apply(runtime_with({ foreign_generation_jump: true }), staged), 'INTERNAL');
+assert_throws(() => apply(runtime_with({ foreign_generation_goto: true }), staged), 'INTERNAL');
+assert_throws(() => apply(runtime_with({ foreign_generation_long_goto: true }), staged), 'INTERNAL');
 let same_id_extra = apply(runtime_with({ inventory: idempotent.inventory,
 	extra_generation_rule: true }), idempotent);
 assert_equal(same_id_extra.stage, 'verify-generation',
@@ -474,7 +571,7 @@ assert_throws(() => cleanup(invalid_cleanup,
 	{ preserve_guard: true, generations: [ 'bad' ] }), 'INVALID_ARGUMENT');
 assert_equal(length(invalid_cleanup.process.calls), 0,
 	'cleanup validates every generation before its first mutation');
-let clean = runtime_with({ absent: true, no_anchors: true });
+let clean = runtime_with({ absent: true, no_anchors: true, inventory: [] });
 let clean_state = cleanup(clean, { preserve_guard: true, generations: [ 'aaaaaaaaaaaa' ] });
 assert_equal(clean_state.guard_preserved, true, 'cleanup explicitly preserves Guard');
 assert_true(index(encoded(clean.process.calls), 'MICLASH_GUARD_FORWARD') < 0,
@@ -484,5 +581,24 @@ assert_equal(cleanup(legacy_cleanup, { preserve_guard: true, generations: [] }).
 	'cleanup removes exact owned legacy hooks before proving absence');
 assert_true(index(encoded(legacy_cleanup.process.calls), 'MICLASH_PREROUTING') >= 0,
 	'legacy cleanup explicitly detaches the owned PREROUTING hook');
+let orphan_cleanup = runtime_with({ no_anchors: true, inventory: [], orphan_generation: 'cccccccccccc' });
+assert_equal(cleanup(orphan_cleanup, { preserve_guard: true, generations: [] }).clean, true,
+	'cleanup discovers and removes complete unlisted owned generations');
+let orphan_removed = false;
+for (let request in orphan_cleanup.process.calls)
+	orphan_removed = orphan_removed || (request.args[2] == '-X' && request.args[3] == 'MCL_PR_cccccccccccc');
+assert_true(orphan_removed, 'global cleanup does not depend on caller generation hints');
+let ambiguous_cleanup = runtime_with({ no_anchors: true, inventory: [],
+	orphan_generation: 'dddddddddddd', partial_orphan: true });
+assert_throws(() => cleanup(ambiguous_cleanup, { preserve_guard: true, generations: [] }), 'INTERNAL');
+for (let request in ambiguous_cleanup.process.calls)
+	assert_true(request.args[2] != '-D' && request.args[2] != '-F' && request.args[2] != '-X' &&
+		request.args[0] != 'destroy', 'ambiguous owned inventory fails before mutation');
+let referenced_orphan = runtime_with({ no_anchors: true, inventory: [],
+	orphan_generation: 'eeeeeeeeeeee', orphan_foreign_edge: true });
+assert_throws(() => cleanup(referenced_orphan, { preserve_guard: true, generations: [] }), 'INTERNAL');
+for (let request in referenced_orphan.process.calls)
+	assert_true(request.args[2] != '-D' && request.args[2] != '-F' && request.args[2] != '-X' &&
+		request.args[0] != 'destroy', 'foreign-referenced orphan fails before cleanup mutation');
 assert_throws(() => cleanup(runtime_with(),
 	{ preserve_guard: true, generations: [ 'aaaaaaaaaaaa' ] }), 'INTERNAL');
