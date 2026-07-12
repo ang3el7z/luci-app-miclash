@@ -8,7 +8,6 @@ import { atomic_write } from 'miclash.storage';
 const STATE_PATH = '/etc/miclash/guard-bootstrap.json';
 const STATUS_PATH = '/var/run/miclash/guard-bootstrap.json';
 const BATCH_PATH = '/tmp/miclash/guard-bootstrap.nft';
-const TABLES = [ 'miclash_guard_bootstrap_v1', 'miclash_guard_emergency_v1' ];
 
 function nft_binary(runtime) {
 	for (let path in [ '/usr/sbin/nft', '/sbin/nft', '/usr/bin/nft' ])
@@ -28,59 +27,32 @@ function ensure_directories(runtime) {
 	return true;
 };
 
-function table_installed(runtime, table) {
-	let inspect = nft_binary(runtime) + ' list chain inet ' + table + ' protected_direct_drop_v1';
-	return run(runtime, '/bin/sh', [ '-c',
-		inspect + " 2>/dev/null | grep -Fq 'meta nfproto ipv4 drop' && " +
-		inspect + " 2>/dev/null | grep -Fq 'meta nfproto ipv6 drop'"
-	]);
+function capture(command) {
+	let pipe = require('fs').popen(command + ' 2>/dev/null', 'r');
+	if (pipe == null)
+		return null;
+	let output = pipe.read('all');
+	return pipe.close() == 0 ? output : null;
 };
 
-function installed(runtime) {
-	for (let table in TABLES)
-		if (table_installed(runtime, table))
-			return true;
-	return false;
-};
-
-function ruleset(table) {
-	return join('\n', [
-		'add table inet ' + table,
-		'add chain inet ' + table + ' protected_direct_drop_v1 { type filter hook forward priority -310; policy accept; }',
-		'add rule inet ' + table + ' protected_direct_drop_v1 iifname "clash-tun" accept',
-		'add rule inet ' + table + ' protected_direct_drop_v1 oifname "clash-tun" accept',
-		'add rule inet ' + table + ' protected_direct_drop_v1 ct status dnat accept',
-		'add rule inet ' + table + ' protected_direct_drop_v1 udp sport 67 udp dport 68 accept',
-		'add rule inet ' + table + ' protected_direct_drop_v1 udp sport 68 udp dport 67 accept',
-		'add rule inet ' + table + ' protected_direct_drop_v1 ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } accept',
-		'add rule inet ' + table + ' protected_direct_drop_v1 ip6 daddr { ::/128, ::1/128, fc00::/7, fe80::/10, ff00::/8 } accept',
-		'add rule inet ' + table + ' protected_direct_drop_v1 meta nfproto ipv4 drop comment "miclash-guard-bootstrap"',
-		'add rule inet ' + table + ' protected_direct_drop_v1 meta nfproto ipv6 drop comment "miclash-guard-bootstrap"',
-		''
-	]);
-};
-
-function install_rules(runtime) {
-	if (installed(runtime))
-		return true;
-	if (!ensure_directories(runtime))
-		return false;
-
-	for (let table in TABLES) {
-		atomic_write(runtime, BATCH_PATH, ruleset(table), 0o600);
-		if (run(runtime, nft_binary(runtime), [ '-f', BATCH_PATH ]) && table_installed(runtime, table))
-			return true;
-	}
-	return false;
-};
-
-function remove_rules(runtime) {
+function nft_io(runtime) {
 	let nft = nft_binary(runtime);
-	for (let table in TABLES)
-		if (table_installed(runtime, table) &&
-		    !run(runtime, nft, [ 'delete', 'table', 'inet', table ]))
-			return false;
-	return !installed(runtime);
+	return {
+		list_tables: () => capture(nft + ' -j list tables'),
+		list_table: (table) => capture(nft + ' -j list table inet ' + table),
+		apply: (table, batch) => {
+			if (!ensure_directories(runtime))
+				return false;
+			atomic_write(runtime, BATCH_PATH, batch, 0o600);
+			return run(runtime, nft, [ '-f', BATCH_PATH ]);
+		},
+		remove: (tables, batch) => {
+			if (!ensure_directories(runtime))
+				return false;
+			atomic_write(runtime, BATCH_PATH, batch, 0o600);
+			return run(runtime, nft, [ '-f', BATCH_PATH ]);
+		}
+	};
 };
 
 function write_json(runtime, path, value, mode) {
@@ -115,19 +87,23 @@ function legacy_enabled(runtime) {
 	return found;
 };
 
-function observations(runtime) {
+function observations(runtime, backend) {
 	return {
 		persisted: persisted(runtime),
-		installed: { verified: installed(runtime), enabled: true },
+		installed: {
+			verified: backend.installed(),
+			enabled: true,
+			occupied: backend.occupied()
+		},
 		legacy_enabled: legacy_enabled(runtime)
 	};
 };
 
-function production_adapter(runtime) {
+function production_adapter(runtime, backend) {
 	return {
-		verify: (wanted) => wanted.enabled ? installed(runtime) : !installed(runtime),
-		install: () => install_rules(runtime),
-		remove: () => remove_rules(runtime),
+		verify: (wanted) => wanted.enabled ? backend.installed() : backend.absent(),
+		install: () => backend.install(),
+		remove: () => backend.remove(),
 		persist: (wanted) => write_json(runtime, STATE_PATH, {
 			schema_version: 1,
 			enabled: wanted.enabled
@@ -144,7 +120,8 @@ function main() {
 		die('usage: guard-bootstrap.uc {install|disable|remove}\n');
 
 	let runtime = runtime_module.create();
-	runtime.observers.guard = production_adapter(runtime);
+	let backend = guard.create_nft_backend(nft_io(runtime));
+	runtime.observers.guard = production_adapter(runtime, backend);
 	let wanted;
 	if (ARGV[0] == 'disable' || ARGV[0] == 'remove')
 		wanted = {
@@ -156,7 +133,7 @@ function main() {
 		let settings = null;
 		try { settings = settings_module.load(runtime); }
 		catch (error) {}
-		wanted = guard.desired(settings, observations(runtime));
+		wanted = guard.desired(settings, observations(runtime, backend));
 	}
 
 	guard.install_bootstrap(runtime, wanted);

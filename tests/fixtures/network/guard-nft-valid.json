@@ -1,0 +1,172 @@
+{
+  "nftables": [
+    {
+      "metainfo": {
+        "version": "1.1.3",
+        "release_name": "Commodore Bullmoose #4",
+        "json_schema_version": 1
+      }
+    },
+    {
+      "table": {
+        "family": "inet",
+        "name": "miclash_guard_bootstrap_v1",
+        "handle": 1
+      }
+    },
+    {
+      "chain": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "name": "protected_direct_drop_v1",
+        "handle": 1,
+        "type": "filter",
+        "hook": "forward",
+        "prio": -310,
+        "policy": "accept"
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 2,
+        "expr": [
+          { "match": { "op": "==", "left": { "meta": { "key": "iifname" } }, "right": "clash-tun" } },
+          { "accept": null }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 3,
+        "expr": [
+          { "match": { "op": "==", "left": { "meta": { "key": "oifname" } }, "right": "clash-tun" } },
+          { "accept": null }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 4,
+        "expr": [
+          { "match": { "op": "in", "left": { "ct": { "key": "status" } }, "right": "dnat" } },
+          { "accept": null }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 5,
+        "expr": [
+          { "match": { "op": "==", "left": { "payload": { "protocol": "udp", "field": "sport" } }, "right": 67 } },
+          { "match": { "op": "==", "left": { "payload": { "protocol": "udp", "field": "dport" } }, "right": 68 } },
+          { "accept": null }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 6,
+        "expr": [
+          { "match": { "op": "==", "left": { "payload": { "protocol": "udp", "field": "sport" } }, "right": 68 } },
+          { "match": { "op": "==", "left": { "payload": { "protocol": "udp", "field": "dport" } }, "right": 67 } },
+          { "accept": null }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 8,
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": { "payload": { "protocol": "ip", "field": "daddr" } },
+              "right": {
+                "set": [
+                  { "prefix": { "addr": "0.0.0.0", "len": 8 } },
+                  { "prefix": { "addr": "10.0.0.0", "len": 8 } },
+                  { "prefix": { "addr": "100.64.0.0", "len": 10 } },
+                  { "prefix": { "addr": "127.0.0.0", "len": 8 } },
+                  { "prefix": { "addr": "169.254.0.0", "len": 16 } },
+                  { "prefix": { "addr": "172.16.0.0", "len": 12 } },
+                  { "prefix": { "addr": "192.168.0.0", "len": 16 } },
+                  { "prefix": { "addr": "224.0.0.0", "len": 3 } }
+                ]
+              }
+            }
+          },
+          { "accept": null }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 10,
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": { "payload": { "protocol": "ip6", "field": "daddr" } },
+              "right": {
+                "set": [
+                  { "prefix": { "addr": "::", "len": 127 } },
+                  { "prefix": { "addr": "fc00::", "len": 7 } },
+                  { "prefix": { "addr": "fe80::", "len": 10 } },
+                  { "prefix": { "addr": "ff00::", "len": 8 } }
+                ]
+              }
+            }
+          },
+          { "accept": null }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 11,
+        "comment": "miclash-guard-bootstrap",
+        "expr": [
+          { "match": { "op": "==", "left": { "meta": { "key": "nfproto" } }, "right": "ipv4" } },
+          { "drop": null }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "miclash_guard_bootstrap_v1",
+        "chain": "protected_direct_drop_v1",
+        "handle": 12,
+        "comment": "miclash-guard-bootstrap",
+        "expr": [
+          { "match": { "op": "==", "left": { "meta": { "key": "nfproto" } }, "right": "ipv6" } },
+          { "drop": null }
+        ]
+      }
+    }
+  ]
+}
