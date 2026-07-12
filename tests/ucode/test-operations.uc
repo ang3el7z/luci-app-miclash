@@ -255,6 +255,33 @@ assert_corrupt((record) => record.error = {
 assert_corrupt((record) => record.error = {
 	code: 'INTERNAL', message: 'safe', detail: { token: 'raw-secret' }
 });
+assert_corrupt((record) => {
+	record.state = 'failure';
+	record.progress = 20;
+	record.error = { code: 'INTERNAL', message: 'raw secret failure' };
+});
+assert_corrupt((record) => {
+	record.state = 'failure';
+	record.progress = 20;
+	record.error = { code: 'DOWNLOAD_FAILED', message: 'custom download message' };
+});
+
+let canonical_internal = '0000000000110-00000001-0123456789abcdef';
+let canonical_download = '0000000000110-00000002-0123456789abcdef';
+let canonical_internal_record = disk_record(canonical_internal, 'failure');
+canonical_internal_record.error = { code: 'INTERNAL', message: 'Internal error' };
+let canonical_download_record = disk_record(canonical_download, 'failure');
+canonical_download_record.error = { code: 'DOWNLOAD_FAILED', message: 'DOWNLOAD_FAILED' };
+let canonical_env = environment({
+	['/tmp/miclash/operations/' + canonical_internal + '.json']:
+		sprintf('%J\n', canonical_internal_record),
+	['/tmp/miclash/operations/' + canonical_download + '.json']:
+		sprintf('%J\n', canonical_download_record)
+});
+let canonical_manager = operations.create(canonical_env.rt);
+assert_equal(canonical_manager.recover_interrupted(), 0);
+assert_equal(length(canonical_manager.list({ state: 'failure' })), 2);
+
 let hidden_bad_env = environment({
 	'/tmp/miclash/operations/.bad.json': sprintf('%J\n', disk_record(
 		'0000000000100-00000001-0123456789abcdef', 'success'))
@@ -275,6 +302,21 @@ assert_throws(() => preflight.recover_interrupted(), 'CORRUPT_STATE');
 assert_equal(length(preflight.list()), 0);
 assert_equal(json(preflight_env.fs.files[
 	'/tmp/miclash/operations/' + preflight_valid + '.json']).state, 'running');
+
+// Inaccessible journal enumeration fails closed and remains retryable.
+let retry_id = '0000000000300-00000001-0123456789abcdef';
+let retry_env = environment({
+	['/tmp/miclash/operations/' + retry_id + '.json']:
+		sprintf('%J\n', disk_record(retry_id, 'running'))
+});
+let retry_manager = operations.create(retry_env.rt);
+let retry_lsdir = retry_env.fs.lsdir;
+retry_env.fs.lsdir = (path) => null;
+assert_throws(() => retry_manager.recover_interrupted(), 'INTERNAL');
+assert_equal(length(retry_manager.list()), 0);
+retry_env.fs.lsdir = retry_lsdir;
+assert_equal(retry_manager.recover_interrupted(), 1);
+assert_equal(retry_manager.get(retry_id).state, 'interrupted');
 
 // IDs stay schema/safe-name compatible, strictly ordered, and have random suffixes.
 let ids_env = environment({}, 5000);

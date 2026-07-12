@@ -113,6 +113,8 @@ function valid_disk_record(record, filename) {
 			type(record.error.code) == 'string' && exists(ERROR_CODES, record.error.code) &&
 			type(record.error.message) == 'string' && length(record.error.message) > 0 &&
 			length(record.error.message) <= 512 && !unsafe_text(record.error.message) &&
+			record.error.message == (record.error.code == 'INTERNAL' ?
+				'Internal error' : record.error.code) &&
 			(fields == 2 || exists(record.error, 'detail'));
 	}
 	if (!error_valid)
@@ -438,7 +440,9 @@ export function create(runtime) {
 		if (recovery_done)
 			return 0;
 		let recovered = 0;
-		let names = runtime.fs.lsdir(journal) ?? [];
+		let names = runtime.fs.lsdir(journal);
+		if (type(names) != 'array')
+			errors.fail('INTERNAL');
 		sort(names);
 		let staged = [];
 		for (let name in names) {
