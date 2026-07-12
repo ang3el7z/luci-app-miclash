@@ -6,8 +6,51 @@ const CHAINS = {
 	tun_input: 'MCL_AN_TI', tun_forward: 'MCL_AN_TF'
 };
 
+const INPUT_LIMITS = { interfaces: 64, servers: 256, fakeip: 256, policies: 128, families: 2 };
+const MAX_ESTIMATED_COMMANDS = 1024;
+const MAX_COMPILED_ARGV_BYTES = 262144;
+
 function request(command, args, properties) {
 	return { command, args: [ ...args ], ...(properties ?? {}) };
+};
+
+function validate_bounds(desired) {
+	if (type(desired) != 'object') fail('INVALID_ARGUMENT');
+	for (let key in [ 'lan', 'wan', 'server_ips', 'fakeip_cidrs', 'device_policies', 'ip_families' ])
+		if (type(desired[key]) != 'array') fail('INVALID_ARGUMENT');
+	if (length(desired.lan) > INPUT_LIMITS.interfaces || length(desired.wan) > INPUT_LIMITS.interfaces ||
+	    length(desired.server_ips) > INPUT_LIMITS.servers || length(desired.fakeip_cidrs) > INPUT_LIMITS.fakeip ||
+	    length(desired.device_policies) > INPUT_LIMITS.policies || length(desired.ip_families) > INPUT_LIMITS.families)
+		fail('INVALID_ARGUMENT');
+	if (desired.previous_ip_families != null &&
+	    (type(desired.previous_ip_families) != 'array' || length(desired.previous_ip_families) > INPUT_LIMITS.families))
+		fail('INVALID_ARGUMENT');
+	for (let families in [ desired.ip_families, desired.previous_ip_families ?? [] ]) {
+		let seen = {};
+		for (let family in families) {
+			if (seen[family]) fail('INVALID_ARGUMENT');
+			seen[family] = true;
+		}
+	}
+	for (let policy in desired.device_policies)
+		if (type(policy) != 'object' || type(policy.id) != 'string' || length(policy.id) > 64)
+			fail('INVALID_ARGUMENT');
+	let estimate = 200 + length(desired.ip_families) * (length(desired.lan) + length(desired.wan) +
+		2 * length(desired.server_ips) + 3 * length(desired.fakeip_cidrs) + 2 * length(desired.device_policies));
+	if (estimate > MAX_ESTIMATED_COMMANDS) fail('INVALID_ARGUMENT');
+};
+
+function validate_compiled_volume(compiled) {
+	let bytes = 0;
+	for (let item in [ ...compiled.inventory, ...compiled.rollback, ...compiled.stages.anchors,
+		...compiled.stages.prepare, ...compiled.stages.verify_prepared, ...compiled.stages.switch,
+		...compiled.stages.verify_active, ...compiled.stages.retire ]) {
+		bytes += length(item.command);
+		for (let arg in item.args) bytes += length(arg);
+		for (let arg in item.on_success ?? []) bytes += length(arg);
+		for (let arg in item.on_failure ?? []) bytes += length(arg);
+		if (bytes > MAX_COMPILED_ARGV_BYTES) fail('INVALID_ARGUMENT');
+	}
 };
 
 function add(commands, command, args, properties) {
@@ -324,6 +367,7 @@ function canonical_desired(desired, id) {
 };
 
 export function compile(desired) {
+	validate_bounds(desired);
 	validate(desired);
 	if (desired.previous_ip_families != null) {
 		if (type(desired.previous_ip_families) != 'array') fail('INVALID_ARGUMENT');
@@ -335,9 +379,13 @@ export function compile(desired) {
 	if (canonical.previous_generation == id &&
 	    !same_families(canonical.previous_ip_families, canonical.ip_families)) fail('INVALID_ARGUMENT');
 	let transaction = staged(canonical, model, id);
-	return { generation: id, previous_generation: desired.previous_generation ?? null,
+	let inventory = length(transaction.stages.prepare) ? [ ...transaction.stages.prepare ] :
+		[ ...staged({ ...canonical, previous_generation: null, previous_ip_families: [] }, model, id).stages.prepare ];
+	let compiled = { generation: id, previous_generation: desired.previous_generation ?? null,
 		model: { schema_version: 1, normalized: model }, stages: transaction.stages,
-		rollback: transaction.rollback, desired: canonical };
+		rollback: transaction.rollback, inventory, desired: canonical };
+	validate_compiled_volume(compiled);
+	return compiled;
 };
 
 function anchor_generation(text, chain, target_prefix) {
@@ -380,32 +428,208 @@ function count_target(text, chain, target) {
 	return count;
 };
 
+function exact_position(text, wanted) {
+	let position = 0;
+	for (let raw in split(text ?? '', '\n')) {
+		let line = trim(raw);
+		if (substr(line, 0, 3) == '-A ') position++;
+		if (line == wanted) return position;
+	}
+	return null;
+};
+
+function guard_order_valid(text) {
+	let guard = '-A FORWARD -j MICLASH_GUARD_FORWARD';
+	let owned = '-A FORWARD -j ' + CHAINS.tun_forward;
+	let guard_exact = count_line(text, guard), owned_exact = count_line(text, owned);
+	if (count_target(text, 'FORWARD', 'MICLASH_GUARD_FORWARD') != guard_exact || guard_exact > 1 ||
+	    count_target(text, 'FORWARD', CHAINS.tun_forward) != owned_exact || owned_exact > 1) return false;
+	if (guard_exact == 1 && owned_exact == 1)
+		return exact_position(text, guard) < exact_position(text, owned);
+	return true;
+};
+
+function fixed_capture(runtime, executable, table) {
+	const MAX_CAPTURE = 262144;
+	let fixed = null;
+	if ((executable == 'iptables-save' || executable == 'ip6tables-save') &&
+	    (table == 'mangle' || table == 'filter')) fixed = executable + ' -t ' + table;
+	else if (executable == 'ipset' && table == 'save') fixed = 'ipset save';
+	else fail('INVALID_ARGUMENT');
+	let popen = runtime.fs?.popen ?? require('fs').popen;
+	if (type(popen) != 'function') fail('INTERNAL');
+	let pipe = popen(fixed, 'r');
+	if (pipe == null) fail('INTERNAL');
+	let output = '', failed = false;
+	while (true) {
+		let chunk;
+		try { chunk = pipe.read(4096); } catch (error) { failed = true; break; }
+		if (type(chunk) != 'string') { failed = true; break; }
+		if (!length(chunk)) break;
+		if (length(output) + length(chunk) > MAX_CAPTURE) { failed = true; break; }
+		output += chunk;
+	}
+	let closed = null;
+	try { closed = pipe.close(); } catch (error) { failed = true; }
+	if (failed || (closed !== 0 && closed !== true)) fail('INTERNAL');
+	return output;
+};
+
+function output_or_capture(runtime, result, executable, table) {
+	if (result.code != 0) return null;
+	return type(result.stdout) == 'string' ? result.stdout : fixed_capture(runtime, executable, table);
+};
+
+function ensure_guard_order(runtime, families) {
+	for (let family in families) {
+		let executable = family == 'ipv6' ? 'ip6tables' : 'iptables', save = executable + '-save';
+		let result = runtime.process.run({ command: save, args: [ '-t', 'filter' ] });
+		let output = output_or_capture(runtime, result, save, 'filter');
+		if (output == null || !guard_order_valid(output)) {
+			let guard = '-A FORWARD -j MICLASH_GUARD_FORWARD';
+			let owned = '-A FORWARD -j ' + CHAINS.tun_forward;
+			if (output == null || count_line(output, guard) != 1 || count_line(output, owned) != 1 ||
+			    count_target(output, 'FORWARD', 'MICLASH_GUARD_FORWARD') != 1 ||
+			    count_target(output, 'FORWARD', CHAINS.tun_forward) != 1 ||
+			    exact_position(output, owned) > exact_position(output, guard)) fail('INTERNAL');
+			if (runtime.process.run({ command: executable,
+				args: [ '-t', 'filter', '-D', 'FORWARD', '-j', CHAINS.tun_forward ] }).code != 0 ||
+			    runtime.process.run({ command: executable,
+				args: [ '-t', 'filter', '-A', 'FORWARD', '-j', CHAINS.tun_forward ] }).code != 0) fail('INTERNAL');
+			let verified = runtime.process.run({ command: save, args: [ '-t', 'filter' ] });
+			let verified_output = output_or_capture(runtime, verified, save, 'filter');
+			if (verified_output == null || !guard_order_valid(verified_output)) fail('INTERNAL');
+		}
+	}
+};
+
+function normalized_token(value) {
+	if (match(value, /\/32$/) && index(value, '.') >= 0) return substr(value, 0, length(value) - 3);
+	if (match(value, /\/128$/) && index(value, ':') >= 0) return substr(value, 0, length(value) - 4);
+	if (match(value, /\/0xffffffff$/)) return substr(value, 0, length(value) - 11);
+	if (match(value, /^0x0+[0-9A-Fa-f]+$/)) {
+		let digits = substr(value, 2);
+		while (length(digits) > 1 && substr(digits, 0, 1) == '0') digits = substr(digits, 1);
+		return '0x' + lc(digits);
+	}
+	return value;
+};
+
+function normalized_rule(fields) {
+	let head = [ fields[0], fields[1] ], matches = [], target = [], i = 2, in_target = false;
+	while (i < length(fields)) {
+		let field = fields[i] == '--set-xmark' ? '--set-mark' : fields[i];
+		if (field == '-j') { in_target = true; push(target, '-j ' + fields[i + 1]); i += 2; continue; }
+		if (field == '-m' && (fields[i + 1] == 'udp' || fields[i + 1] == 'tcp')) { i += 2; continue; }
+		let width = field == '--match-set' ? 3 : 2;
+		let unit = field;
+		for (let offset = 1; offset < width && i + offset < length(fields) && fields[i + offset] != '-j'; offset++)
+			unit += ' ' + normalized_token(fields[i + offset]);
+		push(in_target ? target : matches, unit);
+		i += width;
+	}
+	return join(' ', [ ...head, ...sort(matches), ...sort(target) ]);
+};
+
+function sorted_json(values) { return sprintf('%J', sort(values)); };
+
+function verify_generation(runtime, compiled) {
+	let suffix = '_' + compiled.generation, expected_chains = {}, expected_rules = {};
+	let expected_sets = [], expected_members = {}, expected_set_schema = {};
+	for (let item in compiled.inventory) {
+		if (item.command == 'iptables' || item.command == 'ip6tables') {
+			let key = item.command + '-save:' + item.args[1];
+			expected_chains[key] ??= []; expected_rules[key] ??= {};
+			if (item.args[2] == '-N') push(expected_chains[key], item.args[3]);
+			else if (item.args[2] == '-A') {
+				let fields = [];
+				for (let i = 2; i < length(item.args); i++) push(fields, item.args[i]);
+				expected_rules[key][item.args[3]] ??= [];
+				push(expected_rules[key][item.args[3]], normalized_rule(fields));
+			}
+		}
+		else if (item.command == 'ipset' && item.args[0] == 'create') {
+			push(expected_sets, item.args[1]); expected_members[item.args[1]] = [];
+			expected_set_schema[item.args[1]] = item.args[2] + ':family=' + item.args[4];
+		}
+		else if (item.command == 'ipset' && item.args[0] == 'add')
+			push(expected_members[item.args[1]], normalized_token(item.args[2]));
+	}
+	for (let executable in [ 'iptables-save', 'ip6tables-save' ])
+		for (let table in [ 'mangle', 'filter' ]) {
+			let key = executable + ':' + table;
+			let result = runtime.process.run({ command: executable, args: [ '-t', table ] });
+			let output = output_or_capture(runtime, result, executable, table);
+			if (output == null) return false;
+			let chains = [], rules = {};
+			for (let raw in split(output, '\n')) {
+				let line = trim(raw);
+				let declaration = match(line, /^:([^ ]+) /);
+				if (declaration && substr(declaration[1], -length(suffix)) == suffix)
+					push(chains, declaration[1]);
+				let fields = split(line, ' ');
+				if (length(fields) >= 3 && fields[0] == '-A' &&
+				    substr(fields[1], -length(suffix)) == suffix) {
+					rules[fields[1]] ??= [];
+					push(rules[fields[1]], normalized_rule(fields));
+				}
+			}
+			if (sorted_json(chains) != sorted_json(expected_chains[key] ?? []) ||
+			    length(keys(rules)) != length(keys(expected_rules[key] ?? {}))) return false;
+			for (let chain, wanted in expected_rules[key] ?? {})
+				if (sprintf('%J', rules[chain] ?? []) != sprintf('%J', wanted)) return false;
+		}
+	let set_result = runtime.process.run({ command: 'ipset', args: [ 'save' ] });
+	let set_output = output_or_capture(runtime, set_result, 'ipset', 'save');
+	if (set_output == null) return false;
+	let sets = [], members = {}, set_schema = {};
+	for (let raw in split(set_output, '\n')) {
+		let fields = split(trim(raw), ' ');
+		if (length(fields) >= 2 && fields[0] == 'create' && substr(fields[1], -length(suffix)) == suffix) {
+			push(sets, fields[1]); members[fields[1]] = [];
+			let family = null;
+			for (let i = 3; i + 1 < length(fields); i++) if (fields[i] == 'family') family = fields[i + 1];
+			set_schema[fields[1]] = (fields[2] ?? '') + ':family=' + (family ?? '');
+		}
+		else if (length(fields) >= 3 && fields[0] == 'add' && substr(fields[1], -length(suffix)) == suffix)
+			push(members[fields[1]], normalized_token(fields[2]));
+	}
+	if (sorted_json(sets) != sorted_json(expected_sets)) return false;
+	for (let set in expected_sets)
+		if (set_schema[set] != expected_set_schema[set] ||
+		    sorted_json(members[set] ?? []) != sorted_json(expected_members[set] ?? [])) return false;
+	return true;
+};
+
 export function observe(runtime) {
 	let found = null, families = [], valid = true, legacy = false;
 	for (let item in [ [ 'iptables-save', 'ipv4' ], [ 'ip6tables-save', 'ipv6' ] ]) {
 		let mangle = runtime.process.run({ command: item[0], args: [ '-t', 'mangle' ] });
 		let filter = runtime.process.run({ command: item[0], args: [ '-t', 'filter' ] });
-		if (mangle.code != 0 || filter.code != 0 || type(mangle.stdout) != 'string' || type(filter.stdout) != 'string') {
+		let mangle_output = output_or_capture(runtime, mangle, item[0], 'mangle');
+		let filter_output = output_or_capture(runtime, filter, item[0], 'filter');
+		if (mangle_output == null || filter_output == null) {
 			valid = false; continue;
 		}
-		let ids = [ anchor_generation(mangle.stdout, CHAINS.prerouting, 'MCL_PR_'),
-			anchor_generation(mangle.stdout, CHAINS.output, 'MCL_OU_'),
-			anchor_generation(filter.stdout, CHAINS.tun_input, 'MCL_TI_'),
-			anchor_generation(filter.stdout, CHAINS.tun_forward, 'MCL_TF_') ];
+		let ids = [ anchor_generation(mangle_output, CHAINS.prerouting, 'MCL_PR_'),
+			anchor_generation(mangle_output, CHAINS.output, 'MCL_OU_'),
+			anchor_generation(filter_output, CHAINS.tun_input, 'MCL_TI_'),
+			anchor_generation(filter_output, CHAINS.tun_forward, 'MCL_TF_') ];
 		let id = ids[0];
 		for (let value in ids) if (value == null || value != id) { valid = false; id = null; }
 		let absent = id == '-';
-		for (let hook in [ [ mangle.stdout, '-A PREROUTING -j ' + CHAINS.prerouting ],
-			[ mangle.stdout, '-A OUTPUT -j ' + CHAINS.output ],
-			[ filter.stdout, '-A INPUT -j ' + CHAINS.tun_input ],
-			[ filter.stdout, '-A FORWARD -j ' + CHAINS.tun_forward ] ])
+		for (let hook in [ [ mangle_output, '-A PREROUTING -j ' + CHAINS.prerouting ],
+			[ mangle_output, '-A OUTPUT -j ' + CHAINS.output ],
+			[ filter_output, '-A INPUT -j ' + CHAINS.tun_input ],
+			[ filter_output, '-A FORWARD -j ' + CHAINS.tun_forward ] ])
 			if (count_line(hook[0], hook[1]) != (absent ? 0 : 1)) { valid = false; id = null; }
-		for (let hook in [ [ mangle.stdout, 'PREROUTING', CHAINS.prerouting ],
-			[ mangle.stdout, 'OUTPUT', CHAINS.output ], [ filter.stdout, 'INPUT', CHAINS.tun_input ],
-			[ filter.stdout, 'FORWARD', CHAINS.tun_forward ] ])
+		for (let hook in [ [ mangle_output, 'PREROUTING', CHAINS.prerouting ],
+			[ mangle_output, 'OUTPUT', CHAINS.output ], [ filter_output, 'INPUT', CHAINS.tun_input ],
+			[ filter_output, 'FORWARD', CHAINS.tun_forward ] ])
 			if (count_target(hook[0], hook[1], hook[2]) != (absent ? 0 : 1)) { valid = false; id = null; }
-		if (index(mangle.stdout, '-A PREROUTING -j MICLASH_PREROUTING') >= 0 ||
-		    index(mangle.stdout, '-A OUTPUT -j MICLASH_OUTPUT') >= 0) legacy = true;
+		if (!guard_order_valid(filter_output)) { valid = false; id = null; }
+		if (index(mangle_output, '-A PREROUTING -j MICLASH_PREROUTING') >= 0 ||
+		    index(mangle_output, '-A OUTPUT -j MICLASH_OUTPUT') >= 0) legacy = true;
 		if (id == null || id == '' || id == '-') continue;
 		if (found != null && found != id) return { installed: false, generation: null, families: [], source: 'ambiguous' };
 		found = id; push(families, item[1]);
@@ -437,20 +661,25 @@ function generation_absent(runtime, id, families) {
 		let executable = family == 'ipv6' ? 'ip6tables-save' : 'iptables-save';
 		for (let table in [ 'mangle', 'filter' ]) {
 			let result = runtime.process.run({ command: executable, args: [ '-t', table ] });
-			if (result.code != 0 || type(result.stdout) != 'string') return false;
-			documents[executable + ':' + table] = result.stdout;
+			let output = output_or_capture(runtime, result, executable, table);
+			if (output == null) return false;
+			documents[executable + ':' + table] = output;
 		}
 		let n = names(id, family == 'ipv6');
 		for (let object in [ [ 'mangle', n.prerouting ], [ 'mangle', n.proxy ], [ 'mangle', n.output ],
 			[ 'filter', n.tun_input ], [ 'filter', n.tun_forward ] ])
 			if (index(documents[executable + ':' + object[0]], ':' + object[1] + ' ') >= 0) return false;
 	}
-	let sets = runtime.process.run({ command: 'ipset', args: [ 'list', '-name' ] });
-	if (sets.code != 0 || type(sets.stdout) != 'string') return false;
+	let sets = runtime.process.run({ command: 'ipset', args: [ 'save' ] });
+	let set_output = output_or_capture(runtime, sets, 'ipset', 'save');
+	if (set_output == null) return false;
 	for (let family in families) {
 		let n = names(id, family == 'ipv6');
 		for (let set in [ n.local, n.fake ])
-			for (let line in split(sets.stdout, '\n')) if (trim(line) == set) return false;
+			for (let line in split(set_output, '\n')) {
+				let fields = split(trim(line), ' ');
+				if (length(fields) >= 2 && fields[0] == 'create' && fields[1] == set) return false;
+			}
 	}
 	return true;
 };
@@ -467,8 +696,19 @@ export function apply(runtime, compiled) {
 	try { expected = compile(compiled.desired); }
 	catch (error) { fail('INVALID_ARGUMENT'); }
 	if (sprintf('%J', compiled) != sprintf('%J', expected)) fail('INVALID_ARGUMENT');
+	ensure_guard_order(runtime, compiled.desired.previous_ip_families.length ?
+		compiled.desired.previous_ip_families : compiled.desired.ip_families);
 	if (!run_all(runtime, compiled.stages.anchors)) fail('INTERNAL');
 	if (!run_all(runtime, compiled.stages.prepare) || !run_all(runtime, compiled.stages.verify_prepared)) {
+		if (!rollback_ok(runtime, compiled))
+			return { installed: true, generation: compiled.previous_generation, repair_needed: true,
+				error: 'INTERNAL', stage: 'rollback' };
+		fail('INTERNAL');
+	}
+	if (!verify_generation(runtime, compiled)) {
+		if (compiled.previous_generation == compiled.generation)
+			return { installed: true, generation: compiled.generation, repair_needed: true,
+				error: 'INTERNAL', stage: 'verify-generation' };
 		if (!rollback_ok(runtime, compiled))
 			return { installed: true, generation: compiled.previous_generation, repair_needed: true,
 				error: 'INTERNAL', stage: 'rollback' };
@@ -504,7 +744,14 @@ export function apply(runtime, compiled) {
 	    !same_families(active.families, compiled.desired.ip_families))
 		return { installed: true, generation: compiled.generation, repair_needed: true,
 			error: 'INTERNAL', stage: 'verify-active' };
+	if (!verify_generation(runtime, compiled))
+		return { installed: true, generation: compiled.generation, repair_needed: true,
+			error: 'INTERNAL', stage: 'verify-generation' };
 	if (!run_all(runtime, compiled.stages.retire))
+		return { installed: true, generation: compiled.generation, repair_needed: true,
+			error: 'INTERNAL', stage: 'retire' };
+	if (compiled.previous_generation != null && compiled.previous_generation != compiled.generation &&
+	    !generation_absent(runtime, compiled.previous_generation, compiled.desired.previous_ip_families))
 		return { installed: true, generation: compiled.generation, repair_needed: true,
 			error: 'INTERNAL', stage: 'retire' };
 	return { installed: true, generation: compiled.generation, repair_needed: false };
@@ -513,6 +760,18 @@ export function apply(runtime, compiled) {
 export function cleanup(runtime, mode) {
 	if (mode?.preserve_guard !== true || type(mode.generations ?? []) != 'array') fail('INVALID_ARGUMENT');
 	for (let id in mode.generations) if (!match(id, /^[0-9a-f]{12}$/)) fail('INVALID_ARGUMENT');
+	for (let executable in [ 'iptables', 'ip6tables' ]) {
+		let save = executable + '-save';
+		let result = runtime.process.run({ command: save, args: [ '-t', 'mangle' ] });
+		let output = output_or_capture(runtime, result, save, 'mangle');
+		if (output == null) fail('INTERNAL');
+		for (let legacy in [ [ 'PREROUTING', 'MICLASH_PREROUTING' ], [ 'OUTPUT', 'MICLASH_OUTPUT' ] ]) {
+			let exact = count_line(output, '-A ' + legacy[0] + ' -j ' + legacy[1]);
+			if (count_target(output, legacy[0], legacy[1]) != exact || exact > 1) fail('INTERNAL');
+			if (exact == 1 && runtime.process.run({ command: executable,
+				args: [ '-t', 'mangle', '-D', legacy[0], '-j', legacy[1] ] }).code != 0) fail('INTERNAL');
+		}
+	}
 	for (let item in [ [ 'iptables', 'mangle', 'PREROUTING', CHAINS.prerouting ],
 		[ 'iptables', 'mangle', 'OUTPUT', CHAINS.output ], [ 'iptables', 'filter', 'INPUT', CHAINS.tun_input ],
 		[ 'iptables', 'filter', 'FORWARD', CHAINS.tun_forward ], [ 'ip6tables', 'mangle', 'PREROUTING', CHAINS.prerouting ],
@@ -544,16 +803,18 @@ export function cleanup(runtime, mode) {
 		}
 	}
 	let state = observe(runtime);
-	if (!state.valid || state.installed) fail('INTERNAL');
+	if (!state.valid || state.installed || state.legacy) fail('INTERNAL');
 	let saves = {};
 	for (let executable in [ 'iptables-save', 'ip6tables-save' ])
 		for (let table in [ 'mangle', 'filter' ]) {
 			let result = runtime.process.run({ command: executable, args: [ '-t', table ] });
-			if (result.code != 0 || type(result.stdout) != 'string') fail('INTERNAL');
-			saves[executable + ':' + table] = result.stdout;
+			let output = output_or_capture(runtime, result, executable, table);
+			if (output == null) fail('INTERNAL');
+			saves[executable + ':' + table] = output;
 		}
-	let sets = runtime.process.run({ command: 'ipset', args: [ 'list', '-name' ] });
-	if (sets.code != 0 || type(sets.stdout) != 'string') fail('INTERNAL');
+	let sets = runtime.process.run({ command: 'ipset', args: [ 'save' ] });
+	let set_output = output_or_capture(runtime, sets, 'ipset', 'save');
+	if (set_output == null) fail('INTERNAL');
 	for (let id in mode.generations)
 		for (let family in [ 'ipv4', 'ipv6' ]) {
 			let n = names(id, family == 'ipv6');
@@ -562,7 +823,10 @@ export function cleanup(runtime, mode) {
 				[ 'filter', n.tun_input ], [ 'filter', n.tun_forward ] ])
 				if (index(saves[save + ':' + object[0]], ':' + object[1] + ' ') >= 0) fail('INTERNAL');
 			for (let set in [ n.local, n.fake ])
-				for (let line in split(sets.stdout, '\n')) if (trim(line) == set) fail('INTERNAL');
+				for (let line in split(set_output, '\n')) {
+					let fields = split(trim(line), ' ');
+					if (length(fields) >= 2 && fields[0] == 'create' && fields[1] == set) fail('INTERNAL');
+				}
 		}
 	return { clean: true, guard_preserved: true };
 };

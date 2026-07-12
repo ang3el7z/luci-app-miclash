@@ -1,5 +1,6 @@
 import { assert_equal, assert_throws, assert_true } from './testlib.uc';
 import { compile, observe, apply, cleanup } from 'miclash.firewall.iptables';
+import { fs } from './fakes.uc';
 
 let filesystem = require('fs');
 let root = 'tests/fixtures/network';
@@ -50,10 +51,6 @@ for (let desired in scenarios) {
 	}
 	assert_true(index(encoded(compiled), 'MICLASH_GUARD_FORWARD') < 0,
 		desired.name + ': Task 4 never owns or weakens Guard');
-	for (let hook in compiled.stages.anchors)
-		if ((hook.args[3] == 'PREROUTING' || hook.args[3] == 'OUTPUT' ||
-		     hook.args[3] == 'INPUT' || hook.args[3] == 'FORWARD') && hook.args[2] == '-A')
-			assert_true(true, desired.name + ': owned anchor is appended after unrelated logic');
 }
 
 let desired = { ...scenarios[0], generation: 'bbbbbbbbbbbb',
@@ -104,8 +101,30 @@ for (let invalid in [
 	{ ...scenarios[0], set_names: { local4: 'foreign' } }
 ]) assert_throws(() => compile(invalid), 'INVALID_ARGUMENT');
 
+function repeated(value, count) { let values = []; for (let i = 0; i < count; i++) push(values, value); return values; };
+assert_throws(() => compile({ ...scenarios[0], lan: repeated('br-lan', 65) }), 'INVALID_ARGUMENT');
+assert_throws(() => compile({ ...scenarios[0], server_ips: repeated('192.0.2.1', 257) }), 'INVALID_ARGUMENT');
+assert_throws(() => compile({ ...scenarios[0], fakeip_cidrs: repeated('198.18.0.0/16', 257) }), 'INVALID_ARGUMENT');
+let many_policies = [];
+for (let i = 0; i < 129; i++) push(many_policies, { id: 'p' + i,
+	mac: sprintf('02:00:00:00:%02x:%02x', int(i / 256), i % 256), action: 'proxy' });
+assert_throws(() => compile({ ...scenarios[0], device_policies: many_policies }), 'INVALID_ARGUMENT');
+assert_throws(() => compile({ ...scenarios[0], previous_ip_families: [ 'ipv4', 'ipv6', 'ipv4' ] }), 'INVALID_ARGUMENT');
+assert_throws(() => compile({ ...scenarios[0], ip_families: [ 'ipv4', 'ipv4' ] }), 'INVALID_ARGUMENT');
+assert_throws(() => compile({ ...scenarios[0], device_policies: [ {
+	id: sprintf('%065d', 1), mac: '02:00:00:00:00:01', action: 'proxy'
+} ] }), 'INVALID_ARGUMENT');
+let volume_policies = [];
+for (let i = 0; i < 128; i++) push(volume_policies, { id: 'v' + i,
+	mac: sprintf('02:00:00:01:%02x:%02x', int(i / 256), i % 256), action: 'proxy' });
+assert_throws(() => compile({ ...scenarios[4], lan: repeated('br-lan', 64), wan: repeated('eth1', 64),
+	server_ips: repeated('192.0.2.1', 256), fakeip_cidrs: repeated('198.18.0.0/16', 256),
+	device_policies: volume_policies }), 'INVALID_ARGUMENT');
+
 function runtime_with(options) {
 	let calls = [], fail_at = options?.fail_at ?? null, sequence = 0;
+	let inventory_visible = true;
+	let guard_wrong = !!options?.guard_before_anchor_is_wrong;
 	let legacy_hooks = {
 		iptables: { MICLASH_PREROUTING: !!options?.legacy, MICLASH_OUTPUT: !!options?.legacy },
 		ip6tables: { MICLASH_PREROUTING: false, MICLASH_OUTPUT: false }
@@ -129,10 +148,34 @@ function runtime_with(options) {
 		}
 		if (!options?.no_anchors) {
 			if (table == 'mangle') push(lines, '-A PREROUTING -j MCL_AN_PR', '-A OUTPUT -j MCL_AN_OU');
-			else push(lines, '-A INPUT -j MCL_AN_TI', '-A FORWARD -j MCL_AN_TF');
+			else {
+				push(lines, '-A INPUT -j MCL_AN_TI');
+				if (options?.guard && !guard_wrong) push(lines, '-A FORWARD -j MICLASH_GUARD_FORWARD');
+				push(lines, '-A FORWARD -j MCL_AN_TF');
+				if (options?.guard && guard_wrong) push(lines, '-A FORWARD -j MICLASH_GUARD_FORWARD');
+			}
 		}
 		if (options?.remaining_generation && table == 'mangle')
 			push(lines, ':MCL_PR_' + options.remaining_generation + ' - [0:0]');
+		if (options?.retained_old && table == 'mangle' && base == 'iptables')
+			push(lines, ':MCL_PR_aaaaaaaaaaaa - [0:0]');
+		let inventory = options?.inventory ?? staged?.inventory ?? [];
+		if (inventory_visible)
+			for (let item in inventory) if (item.command == base && item.args[1] == table) {
+				if (item.args[2] == '-N') push(lines, ':' + item.args[3] + ' - [0:0]');
+				else if (item.args[2] == '-A') {
+					let fields = [];
+					for (let i = 2; i < length(item.args); i++) push(fields, item.args[i]);
+					push(lines, join(' ', fields));
+				}
+			}
+		if (options?.extra_generation_rule && table == 'mangle' && base == 'iptables') {
+			let extra_id = 'bbbbbbbbbbbb';
+			for (let item in inventory) if (item.command == 'iptables' && item.args[2] == '-N') {
+				extra_id = substr(item.args[3], -12); break;
+			}
+			push(lines, '-A MCL_PX_' + extra_id + ' -p icmp -j RETURN');
+		}
 		if (table == 'mangle') {
 			if (legacy_hooks[base].MICLASH_PREROUTING) push(lines, '-A PREROUTING -j MICLASH_PREROUTING');
 			if (legacy_hooks[base].MICLASH_OUTPUT) push(lines, '-A OUTPUT -j MICLASH_OUTPUT');
@@ -147,11 +190,27 @@ function runtime_with(options) {
 		let code = sequence == fail_at || (type(options?.fail_when) == 'function' && options.fail_when(request)) ? 1 : 0;
 		let key = request.command + ':' + join(' ', request.args);
 		let reply = options?.replies?.[key];
+		if (reply == null && request.command == 'ipset' && request.args[0] == 'save') {
+			let lines = [], inventory = options?.inventory ?? staged?.inventory ?? [];
+			if (inventory_visible) for (let item in inventory) {
+				if (item.command != 'ipset') continue;
+				if (item.args[0] == 'create') push(lines, 'create ' + item.args[1] +
+					(options?.wrong_set_schema ? ' hash:ip family ' : ' hash:net family ') + item.args[4]);
+				else if (item.args[0] == 'add' && !(options?.missing_set_member && item.args[2] == '10.0.0.0/8'))
+					push(lines, 'add ' + item.args[1] + ' ' + item.args[2]);
+			}
+			if (options?.retained_old) push(lines, 'create MCL_L4_aaaaaaaaaaaa hash:net family inet');
+			if (options?.extra_set_member) push(lines, 'add MCL_L4_bbbbbbbbbbbb 11.0.0.0/8');
+			return { code: 0, stdout: join('\n', lines) + '\n', stderr: null };
+		}
 		if (reply == null && request.command == 'ipset' && request.args[0] == 'list' && request.args[1] == '-name')
 			return { code: 0, stdout: options?.remaining_generation ? 'MCL_L4_' + options.remaining_generation + '\n' : '', stderr: null };
 		if (request.args[2] == '-C' && (request.args[length(request.args) - 1] == 'MICLASH_PREROUTING' ||
 		    request.args[length(request.args) - 1] == 'MICLASH_OUTPUT') &&
 		    !legacy_hooks[request.command][request.args[length(request.args) - 1]])
+			return { code: 1, stdout: null, stderr: null };
+		if (options?.no_anchors && (request.args[2] == '-C' || request.args[2] == '-L') &&
+		    index([ 'MCL_AN_PR', 'MCL_AN_OU', 'MCL_AN_TI', 'MCL_AN_TF' ], request.args[length(request.args) - 1]) >= 0)
 			return { code: 1, stdout: null, stderr: null };
 		if (options?.absent && request.command == 'ipset' && request.args[0] == 'list' && request.args[1] == '-name')
 			return { code: 0, stdout: '', stderr: null };
@@ -168,14 +227,22 @@ function runtime_with(options) {
 		}
 		if (code == 0 && request.args[2] == '-D' && legacy_hooks[request.command]?.[request.args[length(request.args) - 1]])
 			legacy_hooks[request.command][request.args[length(request.args) - 1]] = false;
+		if (code == 0 && request.args[2] == '-A' && request.args[3] == 'FORWARD' &&
+		    request.args[length(request.args) - 1] == 'MCL_AN_TF') guard_wrong = false;
+		if (code == 0 && request.args[2] == '-X' && match(request.args[3] ?? '', /^MCL_.._bbbbbbbbbbbb$/))
+			inventory_visible = false;
 		return { code: reply?.code ?? code, stdout: reply?.stdout ?? null,
 			stderr: reply?.stderr ?? null };
 	};
 	return { process: p };
 };
 
-let prep_failure = runtime_with({ fail_at: length(staged.stages.anchors) + 2 });
-assert_throws(() => apply(prep_failure, staged), 'INTERNAL');
+let prep_failure = runtime_with({ fail_when: (r) => r.args[2] == '-N' &&
+	index(r.args, 'MCL_PX_bbbbbbbbbbbb') >= 0 });
+let prep_error = null, prep_result = null;
+try { prep_result = apply(prep_failure, staged); } catch (error) { prep_error = error; }
+assert_equal(prep_error?.code ?? prep_error?.message, 'INTERNAL',
+	'preparation failure must throw after verified rollback: result=' + encoded(prep_result) + ' error=' + encoded(prep_error));
 let prep_log = encoded(prep_failure.process.calls);
 assert_true(index(prep_log, 'MCL_PR_aaaaaaaaaaaa') < 0,
 	'preparation failure never modifies or removes selected generation A');
@@ -211,6 +278,8 @@ let retire_failure = runtime_with({ fail_when: (r) => r.args[2] == '-X' &&
 	index(r.args, 'MCL_PR_aaaaaaaaaaaa') >= 0 });
 assert_equal(apply(retire_failure, staged).repair_needed, true,
 	'old-generation retirement failure cannot report success');
+assert_equal(apply(runtime_with({ retained_old: true }), staged).repair_needed, true,
+	'fresh structural inventory must prove old A absent after retirement');
 
 let rollback_failure = runtime_with({ fail_when: (r) =>
 	(r.args[2] == '-L' && index(r.args, 'MCL_TI_bbbbbbbbbbbb') >= 0) ||
@@ -275,6 +344,30 @@ for (let i = 0; i < length(calls); i++) {
 assert_true(verify_at != null && retire_at != null && verify_at < retire_at,
 	'old A is removed only after active B verification');
 
+let reordered_guard = runtime_with({ guard: true, guard_before_anchor_is_wrong: true });
+assert_equal(apply(reordered_guard, staged).repair_needed, false,
+	'apply repairs Task 4 forwarding anchor behind an existing Guard hook');
+let moved_delete = false, moved_append = false;
+for (let request in reordered_guard.process.calls) {
+	if (request.args[3] == 'FORWARD' && request.args[length(request.args) - 1] == 'MCL_AN_TF') {
+		moved_delete = moved_delete || request.args[2] == '-D';
+		moved_append = moved_append || request.args[2] == '-A';
+	}
+	if (index(request.args, 'MICLASH_GUARD_FORWARD') >= 0)
+		assert_true(request.args[2] != '-D' && request.args[2] != '-I' && request.args[2] != '-A',
+			'Guard ordering never mutates the Guard hook');
+}
+assert_true(moved_delete && moved_append, 'Guard ordering repair moves only the Task 4 anchor');
+
+assert_throws(() => apply(runtime_with({ extra_generation_rule: true }), staged), 'INTERNAL');
+assert_throws(() => apply(runtime_with({ missing_set_member: true }), staged), 'INTERNAL');
+assert_throws(() => apply(runtime_with({ extra_set_member: true }), staged), 'INTERNAL');
+assert_throws(() => apply(runtime_with({ wrong_set_schema: true }), staged), 'INTERNAL');
+let same_id_extra = apply(runtime_with({ inventory: idempotent.inventory,
+	extra_generation_rule: true }), idempotent);
+assert_equal(same_id_extra.stage, 'verify-generation',
+	'same-generation reconciliation rejects extra generation rules structurally');
+
 let tampered = json(encoded(staged));
 tampered.stages.prepare[0] = command('sh', [ '-c', 'iptables -F; nft delete table inet miclash_guard_bootstrap_v1' ]);
 let rejected_runtime = runtime_with();
@@ -302,6 +395,42 @@ function exact_replies(id, counters, extra) {
 	replies['ip6tables-save:-t filter'] = { stdout: '*filter\nCOMMIT\n' };
 	return replies;
 };
+
+function capture_runtime(outputs, mode) {
+	let rt = runtime_with(), calls = [];
+	rt.fs = fs();
+	rt.process.run = (request) => ({ code: 0, stdout: null, stderr: null });
+	rt.fs.popen = (fixed, access) => {
+		push(calls, fixed);
+		let value = outputs[fixed] ?? '', offset = 0;
+		return {
+			read: (amount) => {
+				if (mode == 'read-error') return null;
+				if (mode == 'oversize') return sprintf('%04096d', 0);
+				let chunk = substr(value, offset, amount); offset += length(chunk); return chunk;
+			},
+			close: () => mode == 'close-error' ? 1 : 0
+		};
+	};
+	rt.capture_calls = calls;
+	return rt;
+};
+
+let capture_docs = exact_replies('cab123cab123');
+let captured_rt = capture_runtime({
+	'iptables-save -t mangle': capture_docs['iptables-save:-t mangle'].stdout,
+	'iptables-save -t filter': capture_docs['iptables-save:-t filter'].stdout,
+	'ip6tables-save -t mangle': capture_docs['ip6tables-save:-t mangle'].stdout,
+	'ip6tables-save -t filter': capture_docs['ip6tables-save:-t filter'].stdout
+});
+assert_equal(observe(captured_rt).generation, 'cab123cab123',
+	'production status-only adapter uses bounded fixed-command capture');
+assert_equal(encoded(captured_rt.capture_calls), encoded([
+	'iptables-save -t mangle', 'iptables-save -t filter',
+	'ip6tables-save -t mangle', 'ip6tables-save -t filter'
+]), 'capture surface is limited to fixed save commands');
+for (let mode in [ 'read-error', 'close-error', 'oversize' ])
+	assert_throws(() => observe(capture_runtime(capture_docs, mode)), 'INTERNAL');
 
 let observed = observe(runtime_with({ replies: exact_replies('cab123cab123') }));
 assert_equal(observed.generation, 'cab123cab123',
@@ -350,5 +479,10 @@ let clean_state = cleanup(clean, { preserve_guard: true, generations: [ 'aaaaaaa
 assert_equal(clean_state.guard_preserved, true, 'cleanup explicitly preserves Guard');
 assert_true(index(encoded(clean.process.calls), 'MICLASH_GUARD_FORWARD') < 0,
 	'cleanup never invokes Guard chains');
+let legacy_cleanup = runtime_with({ no_anchors: true, legacy: true, inventory: [] });
+assert_equal(cleanup(legacy_cleanup, { preserve_guard: true, generations: [] }).clean, true,
+	'cleanup removes exact owned legacy hooks before proving absence');
+assert_true(index(encoded(legacy_cleanup.process.calls), 'MICLASH_PREROUTING') >= 0,
+	'legacy cleanup explicitly detaches the owned PREROUTING hook');
 assert_throws(() => cleanup(runtime_with(),
 	{ preserve_guard: true, generations: [ 'aaaaaaaaaaaa' ] }), 'INTERNAL');
