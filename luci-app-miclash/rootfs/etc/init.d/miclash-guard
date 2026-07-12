@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+
+START=12
+STOP=88
+
+start() {
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc install
+}
+
+reload() {
+	start
+}
+
+# Guard ownership intentionally outlives ordinary MiClash/Mihomo service stops.
+stop() {
+	return 0
+}

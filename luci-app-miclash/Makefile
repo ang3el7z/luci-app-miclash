@@ -10,7 +10,7 @@ PKG_MAINTAINER:=ang3el7z
 
 LUCI_TITLE:=LuCI Support for MiClash
 LUCI_DEPENDS:=+luci-base +zlib +libcurl +curl +coreutils-base64 +kmod-tun \
-	+ucode-mod-fs +ucode-mod-math +ucode-mod-digest +ucode-mod-socket
+	+nftables +ucode-mod-fs +ucode-mod-math +ucode-mod-digest +ucode-mod-socket
 LUCI_PKGARCH:=all
 
 PKG_CONFIG_DEPENDS:= \
@@ -78,6 +78,7 @@ endef
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./rootfs/etc/init.d/clash $(1)/etc/init.d/
+	$(INSTALL_BIN) ./rootfs/etc/init.d/miclash-guard $(1)/etc/init.d/
 	$(INSTALL_BIN) ./rootfs/etc/init.d/miclash-autoupdate $(1)/etc/init.d/
 	$(INSTALL_BIN) ./rootfs/etc/init.d/miclash-memory-guard $(1)/etc/init.d/
 
@@ -157,6 +158,8 @@ if [ -f /opt/clash/.settings.upgrade.bak ]; then
 fi
 [ -n "$$IPKG_INSTROOT" ] || {
 	/etc/init.d/rpcd reload
+	/etc/init.d/miclash-guard enable 2>/dev/null || true
+	/etc/init.d/miclash-guard start || exit 1
 	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
 	rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*
 
@@ -189,6 +192,14 @@ endef
 define Package/$(PKG_NAME)/prerm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
+	case "$$1" in
+		upgrade|update) ;;
+		*)
+			[ -x /usr/bin/ucode ] && [ -f /usr/share/miclash/guard-bootstrap.uc ] && \
+				/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc remove >/dev/null 2>&1 || true
+			[ -x /etc/init.d/miclash-guard ] && /etc/init.d/miclash-guard disable >/dev/null 2>&1 || true
+			;;
+	esac
 	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard stop >/dev/null 2>&1 || true
 	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard disable >/dev/null 2>&1 || true
 }
@@ -246,6 +257,10 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /etc/init.d/miclash-autoupdate
 	rm -f /etc/init.d/miclash-memory-guard
 	rm -f /etc/apk/protected_paths.d/miclash.list
+	case "$$1" in
+		upgrade|update) ;;
+		*) rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json ;;
+	esac
 
 	# Preserve the manually installed core on ordinary upgrades. An explicit
 	# hard reinstall intentionally starts over without it.
