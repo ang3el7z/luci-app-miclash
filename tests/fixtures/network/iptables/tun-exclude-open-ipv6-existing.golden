@@ -18,9 +18,11 @@ ip6tables -t mangle -A MICLASH_PROXY -d 2620:fe::fe -j RETURN
 ip6tables -t mangle -A MICLASH_PROXY -p udp --dport 443 -j DROP
 ip6tables -t mangle -A MICLASH_PROXY -p tcp -j MARK --set-mark 0x1
 ip6tables -t mangle -A MICLASH_PROXY -p udp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN
 ip6tables -t mangle -A MICLASH_OUTPUT -d 2620:fe::fe -j RETURN
-ip6tables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1
-ip6tables -t mangle -A MICLASH_OUTPUT -p udp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p tcp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p udp -j MARK --set-mark 0x1
 ip6tables -t filter -I INPUT 1 -i clash-tun -j ACCEPT
 ip6tables -t filter -I FORWARD 1 -i clash-tun -j ACCEPT
 ip6tables -t filter -I FORWARD 1 -o clash-tun -j ACCEPT

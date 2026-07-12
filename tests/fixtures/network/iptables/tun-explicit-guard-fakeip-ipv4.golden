@@ -37,8 +37,10 @@ iptables -t mangle -A MICLASH_PREROUTING -i br-lan -j MICLASH_PROXY
 iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RETURN
 iptables -t mangle -A MICLASH_PROXY -m set --match-set clash_fakeip_whitelist dst -p tcp -j MARK --set-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -m set --match-set clash_fakeip_whitelist dst -p udp -j MARK --set-mark 0x1
-iptables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1
-iptables -t mangle -A MICLASH_OUTPUT -p udp -j MARK --set-mark 0x1
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p tcp -j MARK --set-mark 0x1
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p udp -j MARK --set-mark 0x1
 iptables -t filter -I INPUT 1 -i clash-tun -j ACCEPT
 iptables -t filter -I FORWARD 1 -i clash-tun -j ACCEPT
 iptables -t filter -I FORWARD 1 -o clash-tun -j ACCEPT

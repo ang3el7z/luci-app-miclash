@@ -38,5 +38,7 @@ iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RET
 iptables -t mangle -A MICLASH_PROXY -p udp --dport 443 -j DROP
 iptables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
-iptables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1
-iptables -t mangle -A MICLASH_OUTPUT -p udp -j MARK --set-mark 0x1
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p tcp -j MARK --set-mark 0x1
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p udp -j MARK --set-mark 0x1

@@ -34,8 +34,10 @@ iptables -t filter -A MICLASH_GUARD_FORWARD -j DROP
 iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RETURN
 iptables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
-iptables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1
-iptables -t mangle -A MICLASH_OUTPUT -p udp -j MARK --set-mark 0x1
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p tcp -j MARK --set-mark 0x1
+iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p udp -j MARK --set-mark 0x1
 ipset create miclash_local6 hash:net family inet6 -exist
 ipset flush miclash_local6
 ipset add miclash_local6 ::/128 -exist
@@ -62,5 +64,7 @@ ip6tables -t filter -A MICLASH_GUARD_FORWARD -j DROP
 ip6tables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local6 dst -j RETURN
 ip6tables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip ::1 --on-port 7894 --tproxy-mark 0x1
 ip6tables -t mangle -A MICLASH_PROXY -p udp -j TPROXY --on-ip ::1 --on-port 7894 --tproxy-mark 0x1
-ip6tables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1
-ip6tables -t mangle -A MICLASH_OUTPUT -p udp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p tcp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p udp -j MARK --set-mark 0x1

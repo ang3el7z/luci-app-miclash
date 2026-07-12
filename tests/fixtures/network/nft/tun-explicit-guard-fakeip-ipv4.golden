@@ -27,7 +27,9 @@ add rule inet miclash prerouting iifname { "br-lan" } jump proxy
 add rule inet miclash proxy ip daddr @local4 return
 add rule inet miclash proxy ip6 daddr @local6 return
 add rule inet miclash proxy meta nfproto ipv4 ip daddr @fakeip_whitelist4 meta l4proto { tcp, udp } meta mark set 0x1
-add rule inet miclash output meta nfproto ipv4 meta l4proto { tcp, udp } meta mark set 0x1
+add rule inet miclash output meta mark 0x0002 return
+add rule inet miclash output meta mark and 0xff00 != 0 return
+add rule inet miclash output meta nfproto ipv4 meta mark 0x0 meta l4proto { tcp, udp } meta mark set 0x1
 add chain inet miclash tun_input { type filter hook input priority filter; policy accept; }
 add rule inet miclash tun_input iifname "clash-tun" accept comment "miclash-fwd"
 add chain inet miclash tun_forward { type filter hook forward priority filter; policy accept; }

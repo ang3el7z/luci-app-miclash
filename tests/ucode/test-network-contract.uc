@@ -129,6 +129,17 @@ for (let scenario in document.scenarios) {
 		scenario.name + ': iptables OUTPUT hook is unreachable');
 	review(!match(iptables, / -A PREROUTING [^\n]* -j RETURN/),
 		scenario.name + ': built-in PREROUTING must never RETURN for exclusions');
+	let nft_output_mark = index(nft, 'add rule inet miclash output meta nfproto');
+	let nft_exact_loop = index(nft, 'add rule inet miclash output meta mark 0x0002 return');
+	let nft_upper_loop = index(nft, 'add rule inet miclash output meta mark and 0xff00 != 0 return');
+	review(nft_output_mark >= 0 && nft_exact_loop >= 0 && nft_exact_loop < nft_output_mark,
+		scenario.name + ': nft mark 0x0002 loop prevention must precede OUTPUT marking');
+	review(nft_upper_loop >= 0 && nft_upper_loop < nft_output_mark,
+		scenario.name + ': nft upper-bit loop prevention must precede OUTPUT marking');
+	for (let line in split(nft, '\n'))
+		if (match(line, /^add rule inet miclash output .*meta mark set/))
+			review(!!match(line, /meta mark 0x0 .*meta mark set/),
+				scenario.name + ': nft generic OUTPUT marking must match only mark zero: ' + line);
 	for (let command in scenario.ip_families)
 		if (command == 'ipv4') {
 			review(index(iptables, 'iptables -t mangle -N MICLASH_PREROUTING') <
@@ -152,6 +163,17 @@ for (let scenario in document.scenarios) {
 				scenario.name + ': exclusion is not scoped to MiClash chain');
 	for (let family in scenario.ip_families) {
 		let ipt = family == 'ipv4' ? 'iptables' : 'ip6tables';
+		let ipt_output_mark = index(iptables, ipt + ' -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p');
+		let ipt_exact_loop = index(iptables, ipt + ' -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN');
+		let ipt_upper_loop = index(iptables, ipt + ' -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN');
+		review(ipt_output_mark >= 0 && ipt_exact_loop >= 0 && ipt_exact_loop < ipt_output_mark,
+			scenario.name + ': iptables mark 0x0002 loop prevention must precede OUTPUT marking for ' + family);
+		review(ipt_upper_loop >= 0 && ipt_upper_loop < ipt_output_mark,
+			scenario.name + ': iptables upper-bit loop prevention must precede OUTPUT marking for ' + family);
+		for (let line in split(iptables, '\n'))
+			if (index(line, ipt + ' -t mangle -A MICLASH_OUTPUT ') == 0 && match(line, /MARK --set-mark/))
+				review(!!match(line, /-m mark --mark 0x0 .*MARK --set-mark/),
+					scenario.name + ': iptables generic OUTPUT marking must match only mark zero: ' + line);
 		let scoped_quic = ipt + ' -t mangle -A MICLASH_PROXY -p udp --dport 443 -j DROP';
 		let global_input = ipt + ' -t filter -I INPUT 1 -p udp --dport 443 -j REJECT';
 		let global_forward = ipt + ' -t filter -I FORWARD 1 -p udp --dport 443 -j REJECT';
