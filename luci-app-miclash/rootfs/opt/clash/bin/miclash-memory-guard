@@ -358,6 +358,18 @@ run_monitor() {
 	guard_log "monitor stopped because the setting is disabled"
 }
 
+sync_guard_service() {
+	if setting_enabled; then
+		"$SERVICE_INIT" enable >/dev/null 2>&1 || return 1
+		"$SERVICE_INIT" start >/dev/null 2>&1 || return 1
+		guard_log "service enabled and started"
+	else
+		"$SERVICE_INIT" stop >/dev/null 2>&1 || true
+		"$SERVICE_INIT" disable >/dev/null 2>&1 || return 1
+		guard_log "service stopped and disabled"
+	fi
+}
+
 case "${1:-}" in
 	reserve)
 		[ "$#" -eq 2 ] || exit 2
@@ -379,6 +391,10 @@ case "${1:-}" in
 	run)
 		[ "$#" -eq 1 ] || exit 2
 		run_monitor
+		;;
+	sync)
+		[ "$#" -eq 1 ] || exit 2
+		sync_guard_service
 		;;
 	*)
 		echo "usage: $0 reserve MEMTOTAL_KB | anomaly BASELINE_KB RSS_KB | decreased BEFORE_KB AFTER_KB | median N1 N2 N3 N4 N5 N6" >&2

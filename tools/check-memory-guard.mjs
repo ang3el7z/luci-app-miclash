@@ -25,6 +25,9 @@ assert.notEqual(guard(['anomaly', 0, 90000]).status, 0);
 const source = readFileSync(guardPath, 'utf8');
 const servicePath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service';
 const service = readFileSync(servicePath, 'utf8');
+const initPath = 'luci-app-miclash/rootfs/etc/init.d/miclash-memory-guard';
+const makefile = readFileSync('luci-app-miclash/Makefile', 'utf8');
+const acl = readFileSync('luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json', 'utf8');
 for (const marker of [
 	'SAMPLE_INTERVAL_SEC=60',
 	'PRESSURE_SAMPLES_REQUIRED=5',
@@ -75,5 +78,17 @@ assert.match(source, /failure_rearm_ready\(\)[\s\S]*REARM_NORMAL_SEC/);
 assert.match(source, /run_monitor\(\)[\s\S]*load_runtime_state/);
 assert.match(service, /guard-core-restart[\s\S]*restart_mihomo_api[\s\S]*wait_ready/);
 assert.match(service, /guard-reload[\s\S]*hot_reload_config[\s\S]*wait_ready/);
+assert.ok(existsSync(initPath), `missing init service: ${initPath}`);
+const init = existsSync(initPath) ? readFileSync(initPath, 'utf8') : '';
+assert.match(init, /procd_set_param command \/opt\/clash\/bin\/miclash-memory-guard run/);
+assert.match(init, /ENABLE_MEMORY_GUARD=true/);
+assert.match(source, /sync_guard_service\(\)/);
+assert.match(makefile, /rootfs\/etc\/init\.d\/miclash-memory-guard/);
+assert.match(makefile, /rootfs\/opt\/clash\/bin\/miclash-memory-guard/);
+assert.match(makefile, /miclash-memory-guard sync/);
+assert.match(makefile, /miclash-memory-guard stop/);
+assert.match(makefile, /miclash-memory-guard disable/);
+assert.match(makefile, /rm -rf \/tmp\/miclash-memory-guard/);
+assert.match(acl, /"\/opt\/clash\/bin\/miclash-memory-guard": \[ "exec" \]/);
 
 console.log('memory guard check passed');
