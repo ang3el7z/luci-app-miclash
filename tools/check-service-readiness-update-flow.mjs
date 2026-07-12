@@ -171,7 +171,8 @@ check(!config.includes('require view.miclash.service') &&
 check(!existsSync(files.service),
 	'Obsolete service.js module must be removed after miclash-service owns service state.');
 
-check(serviceJob.includes('STATUS_FILE="/tmp/miclash-service/status"'),
+check(serviceJob.includes('STATUS_DIR="${MICLASH_SERVICE_STATUS_DIR:-/tmp/miclash-service}"') &&
+	serviceJob.includes('STATUS_FILE="$STATUS_DIR/status"'),
 	'Service job script must write a persistent status file.');
 check(serviceJob.includes('CURRENT_TOKEN=') &&
 	serviceJob.includes("printf 'token=%s\\n'") &&

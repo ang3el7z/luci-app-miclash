@@ -317,6 +317,7 @@ function defaultOperationalSettings() {
 		blockQuic: true,
 		internetOnlyMiclash: false,
 		useTmpfsRules: true,
+		enableMemoryGuard: false,
 		autoHideNotifications: true,
 		autoUpdateConfig: true,
 		autoUpdateIntervalHours: '4',
@@ -359,6 +360,7 @@ async function loadOperationalSettings() {
 				case 'BLOCK_QUIC': settings.blockQuic = value === 'true'; break;
 				case 'INTERNET_ONLY_MICLASH': settings.internetOnlyMiclash = value === 'true'; break;
 				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
+				case 'ENABLE_MEMORY_GUARD': settings.enableMemoryGuard = value === 'true'; break;
 				case 'AUTO_HIDE_NOTIFICATIONS': settings.autoHideNotifications = value !== 'false'; break;
 				case 'AUTO_UPDATE_CONFIG': settings.autoUpdateConfig = value !== 'false'; break;
 				case 'AUTO_UPDATE_INTERVAL_HOURS':
@@ -464,7 +466,7 @@ async function detectWanInterface() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, enableMemoryGuard, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
 	let detectedLan = '';
 	let detectedWan = '';
 	const cleanAutoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalHours);
@@ -491,6 +493,7 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 	settings.BLOCK_QUIC = blockQuic;
 	settings.INTERNET_ONLY_MICLASH = internetOnlyMiclash;
 	settings.USE_TMPFS_RULES = useTmpfsRules;
+	settings.ENABLE_MEMORY_GUARD = enableMemoryGuard;
 	settings.AUTO_HIDE_NOTIFICATIONS = autoHideNotifications !== false;
 	settings.AUTO_UPDATE_CONFIG = autoUpdateConfig !== false;
 	settings.AUTO_UPDATE_INTERVAL_HOURS = cleanAutoUpdateIntervalHours;

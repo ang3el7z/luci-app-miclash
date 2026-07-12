@@ -1377,3 +1377,11 @@ msgstr "每 24 小时"
 
 msgid "Reloading Mihomo configuration..."
 msgstr "正在重新加载 Mihomo 配置..."
+msgid "Monitor abnormal Mihomo memory usage"
+msgstr "监控 Mihomo 异常内存使用"
+
+msgid "Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure."
+msgstr "学习 Mihomo 的正常内存占用，仅在系统持续内存压力下执行分阶段恢复。"
+
+msgid "Failed to synchronize memory guard service."
+msgstr "无法同步内存监控服务。"
