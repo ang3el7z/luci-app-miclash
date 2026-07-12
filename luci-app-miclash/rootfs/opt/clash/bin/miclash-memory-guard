@@ -1,0 +1,251 @@
+#!/bin/sh
+
+SAMPLE_INTERVAL_SEC=60
+PRESSURE_SAMPLES_REQUIRED=5
+WARMUP_SEC=900
+BASELINE_SAMPLES_REQUIRED=6
+MIN_RESERVE_KB=16384
+MAX_RESERVE_KB=65536
+MIN_GROWTH_KB=16384
+SUCCESS_MIN_DROP_KB=8192
+SUCCESS_COOLDOWN_SEC=21600
+FAILURE_COOLDOWN_SEC=86400
+REARM_NORMAL_SEC=1800
+
+SETTINGS_FILE="${MICLASH_SETTINGS_FILE:-/opt/clash/settings}"
+STATE_DIR="${MICLASH_MEMORY_GUARD_STATE_DIR:-/tmp/miclash-memory-guard}"
+STATUS_FILE="$STATE_DIR/status"
+BASELINE_SAMPLES_FILE="$STATE_DIR/baseline.samples"
+PROC_ROOT="${MICLASH_PROC_ROOT:-/proc}"
+SERVICE_BIN="${MICLASH_SERVICE_BIN:-/opt/clash/bin/miclash-service}"
+SERVICE_INIT="${MICLASH_SERVICE_INIT:-/etc/init.d/miclash-memory-guard}"
+LOGGER_TAG="miclash-memory-guard"
+
+PHASE="starting"
+TRACKED_PID=""
+TRACKED_STARTTIME=""
+BASELINE_STARTED_AT=0
+BASELINE_RSS=0
+CURRENT_RSS=0
+MEM_TOTAL=0
+MEM_AVAILABLE=0
+RESERVE=0
+PSI_FULL_AVG10="unavailable"
+PRESSURE_COUNT=0
+LAST_ACTION="none"
+LAST_RESULT="none"
+COOLDOWN_UNTIL=0
+NORMAL_SINCE=0
+
+calc_reserve_kb() {
+	value=$(($1 / 10))
+	[ "$value" -lt "$MIN_RESERVE_KB" ] && value="$MIN_RESERVE_KB"
+	[ "$value" -gt "$MAX_RESERVE_KB" ] && value="$MAX_RESERVE_KB"
+	printf '%s\n' "$value"
+}
+
+is_anomaly() {
+	baseline="$1"
+	current="$2"
+	[ "$baseline" -gt 0 ] || return 1
+	[ "$current" -ge $((baseline + MIN_GROWTH_KB)) ] || return 1
+	[ $((current * 100)) -ge $((baseline * 150)) ]
+}
+
+memory_decreased() {
+	before="$1"
+	after="$2"
+	drop=$((before - after))
+	[ "$drop" -ge "$SUCCESS_MIN_DROP_KB" ] || return 1
+	[ $((drop * 100)) -ge $((before * 10)) ]
+}
+
+median_six() {
+	printf '%s\n' "$@" | sort -n | awk 'NR == 3 { a = $1 } NR == 4 { print int((a + $1) / 2) }'
+}
+
+now_sec() {
+	date +%s 2>/dev/null || echo 0
+}
+
+guard_log() {
+	logger -p daemon.info -t "$LOGGER_TAG" "$*"
+}
+
+setting_enabled() {
+	grep -q '^ENABLE_MEMORY_GUARD=true$' "$SETTINGS_FILE" 2>/dev/null
+}
+
+find_mihomo_pid() {
+	pidof clash 2>/dev/null | awk '{ print $1 }'
+}
+
+read_process_starttime() {
+	pid="$1"
+	awk '{ print $22 }' "$PROC_ROOT/$pid/stat" 2>/dev/null
+}
+
+read_mihomo_rss_kb() {
+	pid="$1"
+	awk '/^VmRSS:/ { print $2; exit }' "$PROC_ROOT/$pid/status" 2>/dev/null
+}
+
+read_memory_metrics() {
+	MEM_TOTAL="$(awk '/^MemTotal:/ { print $2; exit }' "$PROC_ROOT/meminfo" 2>/dev/null)"
+	MEM_AVAILABLE="$(awk '/^MemAvailable:/ { print $2; exit }' "$PROC_ROOT/meminfo" 2>/dev/null)"
+	case "$MEM_TOTAL:$MEM_AVAILABLE" in
+		*[!0-9:]*|:*) return 1 ;;
+	esac
+	RESERVE="$(calc_reserve_kb "$MEM_TOTAL")"
+	return 0
+}
+
+read_memory_psi() {
+	PSI_FULL_AVG10="unavailable"
+	[ -r "$PROC_ROOT/pressure/memory" ] || return 0
+	PSI_FULL_AVG10="$(awk '/^full / { for (i = 1; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$PROC_ROOT/pressure/memory" 2>/dev/null)"
+	[ -n "$PSI_FULL_AVG10" ] || PSI_FULL_AVG10="unavailable"
+}
+
+write_status() {
+	mkdir -p "$STATE_DIR" 2>/dev/null || return 1
+	tmp="$STATUS_FILE.tmp.$$"
+	{
+		printf 'phase=%s\n' "$PHASE"
+		printf 'pid=%s\n' "$TRACKED_PID"
+		printf 'baseline_rss_kb=%s\n' "$BASELINE_RSS"
+		printf 'current_rss_kb=%s\n' "$CURRENT_RSS"
+		printf 'mem_available_kb=%s\n' "$MEM_AVAILABLE"
+		printf 'reserve_kb=%s\n' "$RESERVE"
+		printf 'psi_full_avg10=%s\n' "$PSI_FULL_AVG10"
+		printf 'pressure_samples=%s\n' "$PRESSURE_COUNT"
+		printf 'last_action=%s\n' "$LAST_ACTION"
+		printf 'last_result=%s\n' "$LAST_RESULT"
+		printf 'cooldown_until=%s\n' "$COOLDOWN_UNTIL"
+		printf 'updated_at=%s\n' "$(now_sec)"
+	} > "$tmp" && mv "$tmp" "$STATUS_FILE"
+}
+
+reset_baseline() {
+	TRACKED_PID="$1"
+	TRACKED_STARTTIME="$(read_process_starttime "$TRACKED_PID")"
+	BASELINE_STARTED_AT="$(now_sec)"
+	BASELINE_RSS=0
+	CURRENT_RSS=0
+	PRESSURE_COUNT=0
+	rm -f "$BASELINE_SAMPLES_FILE" 2>/dev/null || true
+	PHASE="warming_up"
+	guard_log "tracking pid=$TRACKED_PID; baseline warm-up started"
+}
+
+collect_baseline_sample() {
+	mkdir -p "$STATE_DIR" 2>/dev/null || return 1
+	printf '%s\n' "$CURRENT_RSS" >> "$BASELINE_SAMPLES_FILE"
+	count="$(wc -l < "$BASELINE_SAMPLES_FILE" | tr -d ' ')"
+	[ "$count" -ge "$BASELINE_SAMPLES_REQUIRED" ] || return 1
+	BASELINE_RSS="$(sort -n "$BASELINE_SAMPLES_FILE" | awk 'NR == 3 { a = $1 } NR == 4 { print int((a + $1) / 2); exit }')"
+	PHASE="monitoring"
+	guard_log "baseline learned: pid=$TRACKED_PID baseline_rss_kb=$BASELINE_RSS"
+	return 0
+}
+
+cooldown_active() {
+	now="$(now_sec)"
+	[ "$COOLDOWN_UNTIL" -gt "$now" ]
+}
+
+observe_pressure() {
+	if is_anomaly "$BASELINE_RSS" "$CURRENT_RSS" && [ "$MEM_AVAILABLE" -lt "$RESERVE" ]; then
+		PRESSURE_COUNT=$((PRESSURE_COUNT + 1))
+	else
+		PRESSURE_COUNT=0
+	fi
+}
+
+handle_recovery_trigger() {
+	# Task 2 replaces this terminal deferral with the approved recovery ladder.
+	PHASE="recovery_pending"
+	LAST_RESULT="pending"
+	guard_log "recovery trigger: pid=$TRACKED_PID baseline_rss_kb=$BASELINE_RSS current_rss_kb=$CURRENT_RSS mem_available_kb=$MEM_AVAILABLE reserve_kb=$RESERVE psi_full_avg10=$PSI_FULL_AVG10"
+}
+
+run_monitor() {
+	mkdir -p "$STATE_DIR" 2>/dev/null || exit 1
+	guard_log "monitor started"
+	while setting_enabled; do
+		pid="$(find_mihomo_pid)"
+		if [ -z "$pid" ] || [ ! -r "$PROC_ROOT/$pid/status" ]; then
+			PHASE="waiting_for_mihomo"
+			TRACKED_PID=""
+			write_status
+			sleep "$SAMPLE_INTERVAL_SEC"
+			continue
+		fi
+
+		starttime="$(read_process_starttime "$pid")"
+		if [ "$pid" != "$TRACKED_PID" ] || [ "$starttime" != "$TRACKED_STARTTIME" ]; then
+			reset_baseline "$pid"
+		fi
+
+		CURRENT_RSS="$(read_mihomo_rss_kb "$pid")"
+		case "$CURRENT_RSS" in ''|*[!0-9]*) sleep "$SAMPLE_INTERVAL_SEC"; continue ;; esac
+		if ! read_memory_metrics; then
+			PHASE="metrics_unavailable"
+			write_status
+			sleep "$SAMPLE_INTERVAL_SEC"
+			continue
+		fi
+		read_memory_psi
+
+		now="$(now_sec)"
+		if [ "$BASELINE_RSS" -eq 0 ]; then
+			if [ $((now - BASELINE_STARTED_AT)) -ge "$WARMUP_SEC" ]; then
+				PHASE="learning_baseline"
+				collect_baseline_sample || true
+			fi
+		elif cooldown_active; then
+			PHASE="cooldown"
+		else
+			PHASE="monitoring"
+			observe_pressure
+			if [ "$PRESSURE_COUNT" -ge "$PRESSURE_SAMPLES_REQUIRED" ]; then
+				handle_recovery_trigger
+				PRESSURE_COUNT=0
+			fi
+		fi
+
+		write_status
+		sleep "$SAMPLE_INTERVAL_SEC"
+	done
+	PHASE="disabled"
+	write_status
+	guard_log "monitor stopped because the setting is disabled"
+}
+
+case "${1:-}" in
+	reserve)
+		[ "$#" -eq 2 ] || exit 2
+		calc_reserve_kb "$2"
+		;;
+	anomaly)
+		[ "$#" -eq 3 ] || exit 2
+		is_anomaly "$2" "$3"
+		;;
+	decreased)
+		[ "$#" -eq 3 ] || exit 2
+		memory_decreased "$2" "$3"
+		;;
+	median)
+		[ "$#" -eq 7 ] || exit 2
+		shift
+		median_six "$@"
+		;;
+	run)
+		[ "$#" -eq 1 ] || exit 2
+		run_monitor
+		;;
+	*)
+		echo "usage: $0 reserve MEMTOTAL_KB | anomaly BASELINE_KB RSS_KB | decreased BEFORE_KB AFTER_KB | median N1 N2 N3 N4 N5 N6" >&2
+		exit 2
+		;;
+esac
