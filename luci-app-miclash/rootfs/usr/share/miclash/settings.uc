@@ -237,7 +237,7 @@ export function load(runtime) {
 	return load_cursor(cursor(runtime));
 };
 
-export function save(runtime, patch) {
+export function validate_patch(patch) {
 	if (type(patch) != 'object')
 		invalid();
 
@@ -253,6 +253,12 @@ export function save(runtime, patch) {
 			normalized_patch[section][option] = normalize(kind, value, null, true);
 		}
 	}
+
+	return normalized_patch;
+};
+
+export function save(runtime, patch) {
+	let normalized_patch = validate_patch(patch);
 
 	let uci = cursor(runtime);
 	for (let section, values in normalized_patch)

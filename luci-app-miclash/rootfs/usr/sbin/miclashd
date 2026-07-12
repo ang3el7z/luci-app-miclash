@@ -1,0 +1,45 @@
+#!/usr/bin/ucode
+
+import * as uloop from 'uloop';
+import * as runtime from 'miclash.runtime';
+import * as daemon from 'miclash.daemon';
+
+if (uloop.init() !== true)
+	die('INTERNAL');
+
+let process = daemon.compose(runtime.create());
+let observation_timer = null;
+observation_timer = uloop.timer(0, () => {
+	try { process.state.observe('config.yaml'); }
+	catch (error) {}
+	if (!shutting_down)
+		observation_timer.set(10000);
+});
+if (observation_timer == null) {
+	try { process.close(); } catch (close_error) {}
+	uloop.done();
+	die('INTERNAL');
+}
+
+let shutting_down = false;
+function shutdown() {
+	if (shutting_down)
+		return;
+	shutting_down = true;
+	process.drain();
+	try { observation_timer.cancel(); } catch (timer_error) {}
+	try { process.close(); } catch (close_error) {}
+	uloop.end();
+};
+
+let termination = uloop.signal('SIGTERM', shutdown);
+if (termination == null) {
+	shutdown();
+	uloop.done();
+	die('INTERNAL');
+}
+
+uloop.run();
+shutdown();
+try { termination.delete(); } catch (signal_error) {}
+uloop.done();

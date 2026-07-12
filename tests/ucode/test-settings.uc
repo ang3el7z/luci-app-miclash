@@ -79,6 +79,13 @@ assert_equal(defaults.backup.include_secrets, false);
 assert_equal(defaults.meta.schema_version, 1);
 
 let normalized_env = fake_runtime();
+assert_json_equal(settings.validate_patch({
+	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
+	updates: { interval_hours: '24' }
+}), {
+	interfaces: { included: [ 'br-lan', 'wlan0' ] },
+	updates: { interval_hours: 24 }
+});
 let normalized = settings.save(normalized_env.rt, {
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
 	updates: { interval_hours: '24' },

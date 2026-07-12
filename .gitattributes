@@ -1,4 +1,5 @@
 * text=auto
+.gitattributes text eol=lf
 
 *.sh text eol=lf
 *.js text eol=lf
@@ -15,4 +16,5 @@ Makefile text eol=lf
 luci-app-miclash/rootfs/etc/init.d/* text eol=lf
 luci-app-miclash/rootfs/etc/hotplug.d/**/* text eol=lf
 luci-app-miclash/rootfs/opt/clash/bin/* text eol=lf
+luci-app-miclash/rootfs/usr/sbin/* text eol=lf
 install-miclash.sh text eol=lf
