@@ -107,8 +107,6 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json $(1)/usr/share/rpcd/acl.d/
 	$(INSTALL_DIR) $(1)/usr/share/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/*.uc $(1)/usr/share/miclash/
-	$(INSTALL_DIR) $(1)/usr/libexec/miclash
-	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/capture.uc $(1)/usr/libexec/miclash/
 
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/miclash
 	$(CP) ./rootfs/www/luci-static/resources/view/miclash/* $(1)/www/luci-static/resources/view/miclash/

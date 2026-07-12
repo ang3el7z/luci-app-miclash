@@ -43,18 +43,12 @@ export function create(runtime) {
 		return { yaml: base + '.yaml', json: base + '.json', lock: base + '.lock' };
 	};
 
-	let api = {};
-	api.snapshot = (profile, source, metadata) => {
+	function snapshot_content(profile, source, content, metadata) {
 		profile = schema.profile_name(profile);
 		if (type(source) != 'string' || !exists(SOURCES, source) ||
+		    type(content) != 'string' ||
 		    (metadata != null && type(metadata) != 'object'))
 			errors.fail('INVALID_ARGUMENT');
-		let active = '/opt/clash/' + profile;
-		let active_stat = runtime.fs.lstat(active);
-		let content = runtime.fs.readfile(active);
-		if (active_stat?.type != 'file' || active_stat.nlink != 1 ||
-		    runtime.fs.realpath(active) != active || type(content) != 'string')
-			errors.fail('NOT_FOUND');
 
 		let revision;
 		let destination;
@@ -116,6 +110,20 @@ export function create(runtime) {
 			errors.fail(failure);
 		}
 		return record;
+	};
+
+	let api = {};
+	api.snapshot_bytes = (profile, source, content, metadata) =>
+		snapshot_content(profile, source, content, metadata);
+	api.snapshot = (profile, source, metadata) => {
+		profile = schema.profile_name(profile);
+		let active = '/opt/clash/' + profile;
+		let active_stat = runtime.fs.lstat(active);
+		let content = runtime.fs.readfile(active);
+		if (active_stat?.type != 'file' || active_stat.nlink != 1 ||
+		    runtime.fs.realpath(active) != active || type(content) != 'string')
+			errors.fail('NOT_FOUND');
+		return snapshot_content(profile, source, content, metadata);
 	};
 	api.list = (profile) => {
 		profile = schema.profile_name(profile);

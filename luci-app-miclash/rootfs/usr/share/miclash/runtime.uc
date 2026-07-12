@@ -5,20 +5,11 @@ const PROCESS_FIELDS = {
 	command: true,
 	args: true,
 	env: true,
-	timeout_ms: true,
-	capture_limit: true
+	timeout_ms: true
 };
-
-const CAPTURE_HELPER = '/usr/libexec/miclash/capture.uc';
 
 function contains_nul(value) {
 	return index(value, sprintf('%c', 0)) >= 0;
-};
-
-function same_identity(left, right) {
-	return left?.type == 'file' && right?.type == 'file' && left.nlink == 1 &&
-	       right.nlink == 1 && left.inode == right.inode &&
-	       left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
 };
 
 export function validate_process_request(request) {
@@ -45,29 +36,18 @@ export function validate_process_request(request) {
 	if (request.timeout_ms != null &&
 	    (type(request.timeout_ms) != 'int' || request.timeout_ms < 0))
 		fail('INVALID_ARGUMENT');
-	if (request.capture_limit != null &&
-	    (type(request.capture_limit) != 'int' || request.capture_limit < 1 ||
-	     request.capture_limit > 8192))
-		fail('INVALID_ARGUMENT');
-	if (request.capture_limit != null &&
-	    (request.timeout_ms == null || request.timeout_ms < 1 || request.timeout_ms > 300000))
-		fail('INVALID_ARGUMENT');
-
 	return request;
 };
 
-export function process_result(code, stdout, stderr, truncated) {
-	let result = {
+export function process_result(code, stdout, stderr) {
+	return {
 		code,
 		stdout: stdout ?? null,
 		stderr: stderr ?? null
 	};
-	if (truncated != null)
-		result.truncated = truncated;
-	return result;
 };
 
-function process_adapter(fs, random, paths) {
+function process_adapter() {
 	function plain_command(request) {
 		let command = [ request.command, ...(request.args ?? []) ];
 		if (request.env != null) {
@@ -79,84 +59,11 @@ function process_adapter(fs, random, paths) {
 		return command;
 	};
 
-	function secure_capture_root() {
-		let stat = fs.lstat(paths.tmp);
-		if (stat == null)
-			fs.mkdir(paths.tmp);
-		if (fs.lstat(paths.tmp)?.type != 'directory' || fs.realpath(paths.tmp) != paths.tmp ||
-		    fs.chmod(paths.tmp, 0o700) != true)
-			fail('INTERNAL');
-	};
-
 	return {
 		run: (request) => {
 			validate_process_request(request);
 			let command = plain_command(request);
-			if (request.capture_limit == null)
-				return process_result(system(command, request.timeout_ms ?? 0), null, null);
-
-			secure_capture_root();
-			let output = null;
-			let created = null;
-			let handle = null;
-			let identity = null;
-			let result = null;
-			let failure = null;
-			try {
-				for (let attempt = 0; attempt < 16; attempt++) {
-					output = paths.tmp + '/.capture-' + random.hex(8);
-					handle = fs.open(output, 'w+x', 0o600);
-					if (handle != null) {
-						created = output;
-						break;
-					}
-				}
-				if (handle == null)
-					fail('INTERNAL');
-				identity = fs.lstat(created);
-				if (identity?.type != 'file' || identity.nlink != 1 ||
-				    fs.realpath(created) != created)
-					fail('INTERNAL');
-
-				let helper = [ '/usr/bin/ucode', '--', CAPTURE_HELPER,
-					sprintf('%d', handle.fileno()), sprintf('%d', request.capture_limit),
-					sprintf('%d', request.timeout_ms), ...command ];
-				let code = system(helper, request.timeout_ms + 1000);
-				let current = fs.lstat(created);
-				if (!same_identity(identity, current) || fs.realpath(created) != created ||
-				    fs.seek(handle, 0, 0) != true)
-					fail('INTERNAL');
-				let captured = fs.read(handle, request.capture_limit + 1);
-				if (type(captured) != 'string' || fs.close(handle) != true)
-					fail('INTERNAL');
-				handle = null;
-				let truncated = length(captured) > request.capture_limit;
-				if (truncated)
-					captured = substr(captured, 0, request.capture_limit);
-				result = process_result(code, captured, null, truncated);
-			}
-			catch (error) {
-				failure = error?.code ?? error?.message;
-			}
-			if (handle != null) {
-				try {
-					if (fs.close(handle) != true)
-						failure = 'INTERNAL';
-				}
-				catch (close_error) { failure = 'INTERNAL'; }
-			}
-			if (created != null) {
-				try {
-					let owned = fs.lstat(created);
-					if (!same_identity(identity, owned) || fs.realpath(created) != created ||
-					    fs.unlink(created) != true)
-						failure = 'INTERNAL';
-				}
-				catch (unlink_error) { failure = 'INTERNAL'; }
-			}
-			if (failure != null)
-				fail(failure == 'INVALID_ARGUMENT' ? 'INVALID_ARGUMENT' : 'INTERNAL');
-			return result;
+			return process_result(system(command, request.timeout_ms ?? 0), null, null);
 		}
 	};
 };
@@ -168,8 +75,6 @@ function fs_adapter() {
 		writefile: (path, data) => fs.writefile(path, data),
 		open: (path, mode, perm) => fs.open(path, mode, perm),
 		write: (handle, data) => handle.write(data),
-		read: (handle, amount) => handle.read(amount),
-		seek: (handle, offset, position) => handle.seek(offset, position),
 		flush: (handle) => {
 			let flushed = handle.flush();
 			// Pinned OpenWrt 24.10 returns null on success and true on failure.
@@ -272,7 +177,7 @@ export function create(overrides) {
 		runtime[name] = adapter;
 	}
 	if (runtime.process == null)
-		runtime.process = process_adapter(runtime.fs, runtime.random, runtime.paths);
+		runtime.process = process_adapter();
 
 	return runtime;
 };

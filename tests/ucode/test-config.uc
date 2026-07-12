@@ -9,7 +9,7 @@ function fixture(name) {
 	return require('fs').readfile('tests/fixtures/config/' + name);
 };
 
-function environment(service) {
+function environment(service, setup) {
 	let fs = fakes.fs({
 		'/opt/clash/config.yaml': 'original-active\n',
 		'/opt/clash/config2.yaml': 'second-active\n',
@@ -18,6 +18,8 @@ function environment(service) {
 	for (let path in [ '/tmp', '/tmp/miclash', '/tmp/miclash/operations',
 		'/opt', '/opt/clash' ])
 		fs.mkdir(path);
+	if (type(setup) == 'function')
+		setup(fs);
 	let clock = fakes.clock(1700000000000);
 	let process = fakes.process();
 	let rt = {
@@ -61,7 +63,7 @@ assert_equal(env.cfg.read_draft('config.yaml'), 'draft-secret: value\n');
 assert_equal(env.fs.mode('/opt/clash/history/drafts/config.yaml'), 0o600);
 
 // Validation is queued, uses the operation ID as its unique owned Candidate,
-// captures at most 8 KiB, and never changes Active or Draft.
+// returns only canonical safe errors, and never changes Active or Draft.
 let before = env.fs.readfile('/opt/clash/config.yaml');
 let invalid_key;
 let invalid = env.cfg.validate('config.yaml', fixture('invalid.yaml'), 'luci');
@@ -69,23 +71,18 @@ env.process.replies = {};
 invalid_key = '/opt/clash/bin/clash:-d /opt/clash -f /tmp/miclash/candidates/' +
 	invalid.id + '/config.yaml -t';
 env.process.replies[invalid_key] = {
-	code: 1,
-	stdout: 'validation https://user:pass@example.test/?token=raw-secret ' +
-		sprintf('%09000d', 0),
-	stderr: 'invalid'
+	code: 1
 };
 let invalid_done = finish(env, invalid);
 assert_equal(invalid_done.state, 'failure');
 assert_equal(invalid_done.error.code, 'VALIDATION_FAILED');
-assert_true(length(invalid_done.error.detail.output) <= 8192);
-assert_equal(invalid_done.error.detail.truncated, true);
-assert_true(index(sprintf('%J', invalid_done), 'raw-secret') < 0);
+assert_equal(sprintf('%J', invalid_done.error.detail), '{ "profile": "config.yaml" }');
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), before);
 assert_equal(env.cfg.read_draft('config.yaml'), 'draft-secret: value\n');
 assert_equal(env.fs.lstat('/tmp/miclash/candidates/' + invalid.id), null);
 assert_equal(length(env.revisions.list('config.yaml')), 0);
 assert_equal(env.process.calls[0].timeout_ms, 30000);
-assert_equal(env.process.calls[0].capture_limit, 8192);
+assert_equal(exists(env.process.calls[0], 'capture_limit'), false);
 
 // Candidate cleanup failures are visible and can never be reported as a
 // successful validation while owned temporary content remains behind.
@@ -98,7 +95,7 @@ assert_equal(cleanup_env.fs.lstat('/tmp/miclash/candidates/' + cleanup.id)?.type
 
 let invalid_apply = env.cfg.apply('config.yaml', fixture('invalid.yaml'), 'luci');
 env.process.replies['/opt/clash/bin/clash:-d /opt/clash -f /tmp/miclash/candidates/' +
-	invalid_apply.id + '/config.yaml -t'] = { code: 1, stderr: 'invalid apply' };
+	invalid_apply.id + '/config.yaml -t'] = { code: 1 };
 assert_equal(finish(env, invalid_apply).error.code, 'VALIDATION_FAILED');
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), before);
 assert_equal(length(env.revisions.list('config.yaml')), 0);
@@ -183,11 +180,31 @@ let external_history = env.revisions.list('config.yaml');
 assert_equal(external_history[length(external_history) - 1].source, 'external');
 assert_equal(env.cfg.detect_external('config.yaml').changed, false);
 
+// External adoption snapshots the exact validated bytes. A mutation after the
+// snapshot but before tracking fails closed and never marks the race as adopted.
+let external_race = environment();
+let external_bytes = fixture('valid.yaml') + '# validated external\n';
+external_race.fs.writefile('/opt/clash/config.yaml', external_bytes);
+assert_true(type(external_race.revisions.snapshot_bytes) == 'function');
+let snapshot_bytes = external_race.revisions.snapshot_bytes;
+external_race.revisions.snapshot_bytes = (profile, source, content, metadata) => {
+	let record = snapshot_bytes(profile, source, content, metadata);
+	external_race.fs.writefile('/opt/clash/config.yaml', 'changed during adoption\n');
+	return record;
+};
+let raced_adoption = external_race.cfg.adopt_external('config.yaml', 'system');
+assert_equal(finish(external_race, raced_adoption).error.code, 'INTERNAL');
+let raced_history = external_race.revisions.list('config.yaml');
+assert_equal(length(raced_history), 1);
+assert_equal(external_race.revisions.read('config.yaml', raced_history[0].revision),
+	external_bytes);
+assert_equal(external_race.cfg.detect_external('config.yaml').changed, true);
+
 let invalid_external = fixture('invalid.yaml');
 env.fs.writefile('/opt/clash/config.yaml', invalid_external);
 let reject_external = env.cfg.adopt_external('config.yaml', 'system');
 env.process.replies['/opt/clash/bin/clash:-d /opt/clash -f /tmp/miclash/candidates/' +
-	reject_external.id + '/config.yaml -t'] = { code: 1, stderr: 'bad external' };
+	reject_external.id + '/config.yaml -t'] = { code: 1 };
 assert_equal(finish(env, reject_external).error.code, 'VALIDATION_FAILED');
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), invalid_external);
 assert_equal(length(env.revisions.list('config.yaml')), length(external_history));
@@ -221,3 +238,37 @@ linked.fs.set_symlink('/tmp/miclash/candidates', '/opt/clash');
 let linked_validation = linked.cfg.validate('config.yaml', fixture('valid.yaml'), 'luci');
 assert_equal(finish(linked, linked_validation).error.code, 'INTERNAL');
 assert_equal(linked.fs.readfile('/opt/clash/config.yaml'), 'original-active\n');
+
+// Initialization removes only exact owned stale Candidate trees. Foreign
+// layouts and symlinks are untouched, while cleanup I/O failure is visible.
+let stale_id = '1700000000000-0000000000000001';
+let stale = environment(null, (fs) => {
+	fs.mkdir('/tmp/miclash/candidates');
+	fs.mkdir('/tmp/miclash/candidates/' + stale_id);
+	fs.writefile('/tmp/miclash/candidates/' + stale_id + '/config.yaml', 'stale\n');
+});
+assert_equal(stale.fs.lstat('/tmp/miclash/candidates/' + stale_id), null);
+assert_equal(stale.fs.lstat('/tmp/miclash/candidates')?.type, 'directory');
+
+let foreign_id = 'foreign-operation';
+let preserved = environment(null, (fs) => {
+	fs.mkdir('/tmp/miclash/candidates');
+	fs.mkdir('/tmp/miclash/candidates/' + foreign_id);
+	fs.writefile('/tmp/miclash/candidates/' + foreign_id + '/config.yaml', 'foreign\n');
+	fs.writefile('/tmp/miclash/candidates/' + foreign_id + '/notes', 'keep\n');
+	fs.set_symlink('/tmp/miclash/candidates/symlink-operation', '/opt/clash');
+});
+assert_equal(preserved.fs.readfile(
+	'/tmp/miclash/candidates/' + foreign_id + '/config.yaml'), 'foreign\n');
+assert_equal(preserved.fs.lstat('/tmp/miclash/candidates/symlink-operation')?.type, 'link');
+
+assert_throws(() => environment(null, (fs) => {
+	fs.set_symlink('/tmp/miclash/candidates', '/opt/clash');
+}), 'INTERNAL');
+
+assert_throws(() => environment(null, (fs) => {
+	fs.mkdir('/tmp/miclash/candidates');
+	fs.mkdir('/tmp/miclash/candidates/' + stale_id);
+	fs.writefile('/tmp/miclash/candidates/' + stale_id + '/config.yaml', 'stale\n');
+	fs.fail_unlink_once = true;
+}), 'INTERNAL');

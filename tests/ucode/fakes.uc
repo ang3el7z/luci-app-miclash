@@ -15,14 +15,7 @@ export function process(replies) {
 		if (type(fake.on_run) == 'function')
 			fake.on_run(request);
 		let reply = fake.replies[process_key(request)];
-		if (request.capture_limit != null) {
-			let output = (reply?.stdout ?? '') + (reply?.stderr ?? '');
-			let truncated = length(output) > request.capture_limit;
-			if (truncated)
-				output = substr(output, 0, request.capture_limit);
-			return process_result(reply?.code ?? 0, output, null, truncated);
-		}
-		return process_result(reply?.code ?? 0, reply?.stdout, reply?.stderr);
+		return process_result(reply?.code ?? 0, null, null);
 	};
 
 	return fake;
@@ -261,7 +254,7 @@ export function fs(initial) {
 	fake.lsdir = (directory) => {
 		let names = [];
 		let prefix = resolve(directory) + '/';
-		for (let path in { ...files, ...symlinks }) {
+		for (let path in { ...directories, ...files, ...symlinks }) {
 			if (substr(path, 0, length(prefix)) != prefix)
 				continue;
 			let name = substr(path, length(prefix));
