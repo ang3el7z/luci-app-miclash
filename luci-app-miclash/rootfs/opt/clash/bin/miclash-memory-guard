@@ -93,9 +93,8 @@ read_mihomo_rss_kb() {
 read_memory_metrics() {
 	MEM_TOTAL="$(awk '/^MemTotal:/ { print $2; exit }' "$PROC_ROOT/meminfo" 2>/dev/null)"
 	MEM_AVAILABLE="$(awk '/^MemAvailable:/ { print $2; exit }' "$PROC_ROOT/meminfo" 2>/dev/null)"
-	case "$MEM_TOTAL:$MEM_AVAILABLE" in
-		*[!0-9:]*|:*) return 1 ;;
-	esac
+	case "$MEM_TOTAL" in ''|*[!0-9]*) return 1 ;; esac
+	case "$MEM_AVAILABLE" in ''|*[!0-9]*) return 1 ;; esac
 	RESERVE="$(calc_reserve_kb "$MEM_TOTAL")"
 	return 0
 }
@@ -105,6 +104,15 @@ read_memory_psi() {
 	[ -r "$PROC_ROOT/pressure/memory" ] || return 0
 	PSI_FULL_AVG10="$(awk '/^full / { for (i = 1; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$PROC_ROOT/pressure/memory" 2>/dev/null)"
 	[ -n "$PSI_FULL_AVG10" ] || PSI_FULL_AVG10="unavailable"
+}
+
+print_snapshot() {
+	read_memory_metrics || return 1
+	read_memory_psi
+	printf 'mem_total_kb=%s\n' "$MEM_TOTAL"
+	printf 'mem_available_kb=%s\n' "$MEM_AVAILABLE"
+	printf 'reserve_kb=%s\n' "$RESERVE"
+	printf 'psi_full_avg10=%s\n' "$PSI_FULL_AVG10"
 }
 
 write_status() {
@@ -388,6 +396,10 @@ case "${1:-}" in
 		shift
 		median_six "$@"
 		;;
+	snapshot)
+		[ "$#" -eq 1 ] || exit 2
+		print_snapshot
+		;;
 	run)
 		[ "$#" -eq 1 ] || exit 2
 		run_monitor
@@ -397,7 +409,7 @@ case "${1:-}" in
 		sync_guard_service
 		;;
 	*)
-		echo "usage: $0 reserve MEMTOTAL_KB | anomaly BASELINE_KB RSS_KB | decreased BEFORE_KB AFTER_KB | median N1 N2 N3 N4 N5 N6" >&2
+		echo "usage: $0 reserve MEMTOTAL_KB | anomaly BASELINE_KB RSS_KB | decreased BEFORE_KB AFTER_KB | median N1 N2 N3 N4 N5 N6 | snapshot | run | sync" >&2
 		exit 2
 		;;
 esac

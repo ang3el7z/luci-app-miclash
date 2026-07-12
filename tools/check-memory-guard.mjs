@@ -1,14 +1,19 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 
 const guardPath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-memory-guard';
 const sh = process.platform === 'win32'
 	? 'C:/Program Files/Git/bin/sh.exe'
 	: '/bin/sh';
 
-function guard(args) {
-	return spawnSync(sh, [guardPath, ...args.map(String)], { encoding: 'utf8' });
+function guard(args, env = {}) {
+	return spawnSync(sh, [guardPath, ...args.map(String)], {
+		encoding: 'utf8',
+		env: { ...process.env, ...env }
+	});
 }
 
 assert.ok(existsSync(guardPath), `missing memory guard: ${guardPath}`);
@@ -21,6 +26,23 @@ assert.equal(guard(['decreased', 100000, 80000]).status, 0);
 assert.notEqual(guard(['decreased', 100000, 95000]).status, 0);
 assert.equal(guard(['median', 10, 40, 20, 60, 30, 50]).stdout.trim(), '35');
 assert.notEqual(guard(['anomaly', 0, 90000]).status, 0);
+
+const fakeProc = mkdtempSync(path.join(os.tmpdir(), 'miclash-memory-guard-'));
+try {
+	mkdirSync(path.join(fakeProc, 'pressure'));
+	writeFileSync(path.join(fakeProc, 'pressure', 'memory'), 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n');
+	writeFileSync(path.join(fakeProc, 'meminfo'), 'MemTotal:       262144 kB\nMemAvailable:    20000 kB\n');
+	const snapshot = guard(['snapshot'], { MICLASH_PROC_ROOT: fakeProc });
+	assert.equal(snapshot.status, 0);
+	assert.match(snapshot.stdout, /mem_total_kb=262144/);
+	assert.match(snapshot.stdout, /mem_available_kb=20000/);
+	assert.match(snapshot.stdout, /psi_full_avg10=unavailable/);
+
+	writeFileSync(path.join(fakeProc, 'meminfo'), 'MemTotal:       262144 kB\n');
+	assert.notEqual(guard(['snapshot'], { MICLASH_PROC_ROOT: fakeProc }).status, 0);
+} finally {
+	rmSync(fakeProc, { recursive: true, force: true });
+}
 
 const source = readFileSync(guardPath, 'utf8');
 const servicePath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service';
@@ -100,6 +122,12 @@ assert.match(settingsModel, /settings\.ENABLE_MEMORY_GUARD = enableMemoryGuard/)
 assert.match(config, /id="sbox-memory-guard"/);
 assert.match(config, /fs\.exec\('\/opt\/clash\/bin\/miclash-memory-guard', \['sync'\]\)/);
 assert.match(config, /formState\.enableMemoryGuard/);
+assert.match(source, /usage: \$0[^"]*snapshot[^"]*run[^"]*sync/);
+for (const forbidden of ['reboot', 'drop_caches', 'swapon', 'swapoff']) {
+	assert.ok(!source.includes(forbidden), `memory guard must not invoke ${forbidden}`);
+}
+assert.ok(!/AX3000T|router model|device model/i.test(source),
+	'memory guard must not contain router-model-specific behavior');
 for (const catalog of [ruPo, zhPo]) {
 	assert.ok(catalog.includes('msgid "Monitor abnormal Mihomo memory usage"'));
 	assert.ok(catalog.includes('msgid "Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure."'));
