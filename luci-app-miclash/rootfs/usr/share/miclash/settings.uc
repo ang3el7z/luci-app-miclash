@@ -264,10 +264,12 @@ export function save(runtime, patch) {
 	for (let section, values in normalized_patch)
 		for (let option, value in values) {
 			let kind = FIELDS[section][option];
-			uci.set(CONFIG, section, option, encoded(kind, value));
+			if (uci.set(CONFIG, section, option, encoded(kind, value)) !== true)
+				fail('INTERNAL');
 		}
 
-	uci.commit(CONFIG);
+	if (uci.commit(CONFIG) !== true)
+		fail('INTERNAL');
 	return load_cursor(uci);
 };
 

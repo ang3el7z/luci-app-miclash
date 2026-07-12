@@ -38,7 +38,11 @@ assert.ok(daemon.indexOf('process.drain()') < daemon.indexOf('observation_timer.
 	'shutdown must reject mutations before cancelling observation');
 assert.ok(composition.indexOf('state_model.close()') < composition.indexOf('state_model.flush()'),
 	'shutdown must detach subscriptions before the final state flush');
-assert.ok(composition.indexOf('state_model.flush()') < composition.lastIndexOf('disconnect()'),
+const closeStart = composition.indexOf('// NORMAL_CLOSE_BEGIN');
+const closeEnd = composition.indexOf('// NORMAL_CLOSE_END');
+assert.ok(closeStart >= 0 && closeEnd > closeStart, 'normal close markers must exist');
+const normalClose = composition.slice(closeStart, closeEnd);
+assert.ok(normalClose.indexOf('state_model.flush()') < normalClose.indexOf('disconnect()'),
 	'shutdown must flush defined state before disconnecting ubus');
 assert.match(init, /procd_set_param respawn 3600 5 5/);
 assert.match(init,

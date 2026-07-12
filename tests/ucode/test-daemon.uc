@@ -1,11 +1,12 @@
-import { assert_equal, assert_true } from 'testlib';
+import { assert_equal, assert_throws, assert_true } from 'testlib';
 import * as daemon from 'miclash.daemon';
 
 let order = [];
 let connect_count = 0, disconnect_count = 0;
 let connection = {
+	call: () => null,
 	publish: (name, methods) => { push(order, 'publish'); return { name }; },
-	disconnect: () => { disconnect_count++; return true; }
+	disconnect: () => { disconnect_count++; push(order, 'disconnect'); return true; }
 };
 let rt = {
 	ubus: { connect: () => { connect_count++; push(order, 'connect'); return connection; } },
@@ -60,3 +61,21 @@ assert_equal(process.close(), true);
 assert_equal(process.close(), false);
 assert_equal(disconnect_count, 1);
 assert_true(index(order, 'state.close') < index(order, 'state.flush'));
+assert_true(index(order, 'state.flush') < index(order, 'disconnect'));
+
+function malformed_connection(candidate) {
+	let count = 0;
+	let original = candidate.disconnect;
+	if (type(original) == 'function')
+		candidate.disconnect = () => { count++; return original(); };
+	let runtime = {
+		ubus: { connect: () => candidate }, clock: { now: () => 0 },
+		paths: { tmp: '/tmp/miclash' }
+	};
+	assert_throws(() => daemon.compose(runtime, factories), 'INTERNAL');
+	return count;
+};
+
+assert_equal(malformed_connection({ call: () => null, disconnect: () => true }), 1);
+assert_equal(malformed_connection({ publish: () => ({}), disconnect: () => true }), 1);
+assert_equal(malformed_connection({ call: () => null, publish: () => ({}) }), 0);

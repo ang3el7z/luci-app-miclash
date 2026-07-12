@@ -301,11 +301,15 @@ export function uci(initial) {
 	let fake = {
 		values,
 		set_calls: 0,
-		commit_calls: 0
+		commit_calls: 0,
+		fail_set_at: null,
+		fail_commit: false
 	};
 	fake.get = (config, section, option) => values[config]?.[section]?.[option];
 	fake.set = (config, section, option, value) => {
 		fake.set_calls++;
+		if (fake.fail_set_at == fake.set_calls)
+			return null;
 		values[config] ??= {};
 		values[config][section] ??= {};
 		values[config][section][option] = value;
@@ -314,6 +318,8 @@ export function uci(initial) {
 	fake.delete = (config, section, option) => delete values[config]?.[section]?.[option];
 	fake.commit = (config) => {
 		fake.commit_calls++;
+		if (fake.fail_commit)
+			return null;
 		return true;
 	};
 	return fake;

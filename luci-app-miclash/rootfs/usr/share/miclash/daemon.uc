@@ -22,19 +22,25 @@ export function compose(runtime, overrides) {
 	operation_manager.recover_interrupted();
 
 	let connection = runtime.ubus.connect();
-	if (connection == null || type(connection.publish) != 'function' ||
-	    type(connection.disconnect) != 'function')
+	if (connection == null)
 		errors.fail('INTERNAL');
 	let disconnected = false;
 	function disconnect() {
 		if (disconnected)
 			return false;
+		if (type(connection.disconnect) != 'function')
+			return false;
 		disconnected = true;
-		connection.disconnect();
+		if (connection.disconnect() !== true)
+			errors.fail('INTERNAL');
 		return true;
 	};
 
 	try {
+		if (type(connection.publish) != 'function' ||
+		    type(connection.disconnect) != 'function' ||
+		    type(connection.call) != 'function')
+			errors.fail('INTERNAL');
 		// Domain adapters borrow the daemon-owned connection. They never own or close it.
 		runtime.ubus = { connect: () => connection };
 		let service_adapter = modules.service.create(runtime);
@@ -72,6 +78,7 @@ export function compose(runtime, overrides) {
 			connection,
 			published,
 			drain: () => app.set_draining(true),
+			// NORMAL_CLOSE_BEGIN
 			close: () => {
 				if (closed)
 					return false;
@@ -86,8 +93,9 @@ export function compose(runtime, overrides) {
 				catch (error) { failure ??= 'INTERNAL'; }
 				if (failure != null)
 					errors.fail(failure);
-				return true;
-			}
+					return true;
+			},
+			// NORMAL_CLOSE_END
 		};
 	}
 	catch (error) {

@@ -21,11 +21,18 @@ let service = {
 	wait_ready: (deadline, profile, options) => ({ ok: true })
 };
 let settings_value = { core: { proxy_mode: 'tproxy' } };
-let validated = 0, saved = 0, desired = null;
+let validated = 0, saved = 0, fail_save = false;
+let desired = { core: { proxy_mode: 'tproxy' } };
 let settings = {
 	get: () => settings_value,
 	validate: (patch) => { validated++; return patch; },
-	set: (patch) => { saved++; settings_value = patch; return patch; }
+	set: (patch) => {
+		saved++;
+		if (fail_save)
+			die('INTERNAL');
+		settings_value = patch;
+		return patch;
+	}
 };
 let config = {
 	list_profiles: () => [ 'config.yaml' ],
@@ -75,6 +82,13 @@ submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(saved, 1);
 assert_equal(desired.core.proxy_mode, 'tun');
 assert_equal(setting_record.id, submitted[length(submitted) - 1].record.id);
+
+fail_save = true;
+let failed_setting = app.settings_set({ core: { proxy_mode: 'mixed' } }, 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'INTERNAL');
+assert_equal(failed_setting.id, submitted[length(submitted) - 1].record.id);
+assert_equal(desired.core.proxy_mode, 'tun');
+fail_save = false;
 
 app.set_draining(true);
 for (let mutation in [

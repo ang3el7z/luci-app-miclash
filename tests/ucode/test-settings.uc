@@ -108,6 +108,23 @@ assert_throws(() => settings.save(atomic_env.rt, {
 }), 'INVALID_ARGUMENT');
 assert_equal(atomic_env.cursor.set_calls, 0);
 assert_equal(atomic_env.cursor.commit_calls, 0);
+
+let failed_set_env = fake_runtime();
+failed_set_env.cursor.fail_set_at = 2;
+assert_throws(() => settings.save(failed_set_env.rt, {
+	core: { proxy_mode: 'tun', tun_stack: 'gvisor' }
+}), 'INTERNAL');
+assert_equal(failed_set_env.cursor.set_calls, 2);
+assert_equal(failed_set_env.cursor.commit_calls, 0);
+
+let failed_commit_env = fake_runtime();
+failed_commit_env.cursor.fail_commit = true;
+assert_throws(() => settings.save(failed_commit_env.rt, {
+	core: { proxy_mode: 'tun' }
+}), 'INTERNAL');
+assert_equal(failed_commit_env.cursor.set_calls, 1);
+assert_equal(failed_commit_env.cursor.commit_calls, 1);
+
 assert_throws(() => settings.migrate_legacy(fake_runtime().rt, fixture('legacy-malformed')), 'INVALID_ARGUMENT');
 assert_throws(() => settings.migrate_legacy(fake_runtime().rt,
 	'SUBSCRIPTION_URL=https://safe.example/sub\nnot-an-assignment'), 'INVALID_ARGUMENT');
