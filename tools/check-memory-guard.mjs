@@ -54,6 +54,13 @@ try {
 	assert.equal(readFileSync(path.join(statusDir, 'status'), 'utf8'), 'state=running\nphase=restart\n',
 		'busy contender must not overwrite status owned by the lock holder');
 
+	rmSync(path.join(lockDir, 'pid'));
+	const pidlessBusy = spawnSync(sh, [servicePath, 'stop'], {
+		encoding: 'utf8', env: { ...process.env, ...env }
+	});
+	assert.equal(pidlessBusy.status, 75, pidlessBusy.stderr);
+	assert.match(pidlessBusy.stderr, /initializing its lock/);
+
 	const contenderScript = path.join(lockHarness, 'contend.sh');
 	writeFileSync(contenderScript,
 		'#!/bin/sh\n"$1" stop >"$2" 2>"$3" & a=$!\n"$1" stop >"$4" 2>"$5" & b=$!\nwait "$a"; ra=$?\nwait "$b"; rb=$?\nprintf "%s %s\\n" "$ra" "$rb"\n');
@@ -154,6 +161,8 @@ assert.match(service, /busy\(\)[\s\S]*exit 75/);
 assert.doesNotMatch(service.match(/busy\(\) \{[\s\S]*?\n\}/)?.[0] || '', /write_status/);
 assert.match(service, /busy "another MiClash service operation is already running/);
 assert.match(service, /mv "\$LOCK_DIR" "\$stale_lock"/);
+assert.match(service, /LOCK_OWNER_GRACE_SEC=5/);
+assert.match(service, /stat -c %Y "\$LOCK_DIR"/);
 assert.ok(!source.includes('if [ -d /tmp/miclash-service.lock ]'),
 	'guard must let miclash-service distinguish live and stale locks');
 assert.match(source, /ACTION_BUSY_EXIT=75/);

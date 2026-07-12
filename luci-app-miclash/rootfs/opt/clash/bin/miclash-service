@@ -4,6 +4,7 @@ set -u
 
 LOCK_DIR="${MICLASH_SERVICE_LOCK_DIR:-/tmp/miclash-service.lock}"
 LOCK_ACQUIRED=0
+LOCK_OWNER_GRACE_SEC=5
 STATUS_DIR="${MICLASH_SERVICE_STATUS_DIR:-/tmp/miclash-service}"
 STATUS_FILE="$STATUS_DIR/status"
 STATUS_OUT="$STATUS_DIR/stdout"
@@ -156,6 +157,18 @@ acquire_lock() {
 	[ -f "$LOCK_DIR/pid" ] && old_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
 	if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
 		busy "another MiClash service operation is already running (pid $old_pid)"
+	fi
+	if [ -z "$old_pid" ]; then
+		lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || true)"
+		now="$(now_sec)"
+		case "$lock_mtime:$now" in
+			*[!0-9:]*|:*)
+				busy "another MiClash service operation is initializing its lock"
+				;;
+		esac
+		if [ $((now - lock_mtime)) -lt "$LOCK_OWNER_GRACE_SEC" ]; then
+			busy "another MiClash service operation is initializing its lock"
+		fi
 	fi
 
 	stale_lock="$LOCK_DIR.stale.$$"
