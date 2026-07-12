@@ -853,6 +853,7 @@ function discover_generations(runtime) {
 		}
 		push(ids, id);
 	}
+	let stable_edges = {};
 	for (let key, output in documents) {
 		let family = substr(key, 0, length('ip6tables-save')) == 'ip6tables-save' ? 'ipv6' : 'ipv4';
 		for (let raw in split(output, '\n')) {
@@ -865,83 +866,76 @@ function discover_generations(runtime) {
 				target[1] == 'TI' ? CHAINS.tun_input : target[1] == 'TF' ? CHAINS.tun_forward :
 				'MCL_PR_' + target[2];
 			if (fields[1] != expected_source) fail('INTERNAL');
+			if (target[1] != 'PX') {
+				let exact = '-A ' + expected_source + ' -j ' + edge.target;
+				if (trim(raw) != exact) fail('INTERNAL');
+				let edge_key = key + ':' + exact;
+				stable_edges[edge_key] = (stable_edges[edge_key] ?? 0) + 1;
+				if (stable_edges[edge_key] > 1) fail('INTERNAL');
+			}
 		}
 	}
-	return sort(ids);
+	return { ids: sort(ids), state, documents, set_output };
+};
+
+function chain_count(text, chain) {
+	let count = 0, prefix = ':' + chain + ' ';
+	for (let raw in split(text, '\n')) {
+		let line = trim(raw);
+		if (substr(line, 0, length(prefix)) == prefix) count++;
+	}
+	return count;
+};
+
+function cleanup_plan(runtime) {
+	let discovery = discover_generations(runtime), commands = [];
+	for (let executable in [ 'iptables', 'ip6tables' ]) {
+		let save = executable + '-save', mangle = discovery.documents[save + ':mangle'];
+		for (let legacy in [ [ 'PREROUTING', 'MICLASH_PREROUTING' ], [ 'OUTPUT', 'MICLASH_OUTPUT' ] ]) {
+			let line = '-A ' + legacy[0] + ' -j ' + legacy[1], exact = count_line(mangle, line);
+			if (count_target(mangle, legacy[0], legacy[1]) != exact || exact > 1) fail('INTERNAL');
+			if (exact == 1) push(commands, request(executable,
+				[ '-t', 'mangle', '-D', legacy[0], '-j', legacy[1] ]));
+		}
+		for (let item in [ [ 'mangle', 'PREROUTING', CHAINS.prerouting ],
+			[ 'mangle', 'OUTPUT', CHAINS.output ], [ 'filter', 'INPUT', CHAINS.tun_input ],
+			[ 'filter', 'FORWARD', CHAINS.tun_forward ] ]) {
+			let output = discovery.documents[save + ':' + item[0]], line = '-A ' + item[1] + ' -j ' + item[2];
+			let exact = count_line(output, line), declarations = chain_count(output, item[2]);
+			if (count_target(output, item[1], item[2]) != exact || exact > 1 || declarations > 1 ||
+			    (declarations == 0 && exact != 0)) fail('INTERNAL');
+			if (declarations == 1 && anchor_generation(output, item[2],
+				item[2] == CHAINS.prerouting ? 'MCL_PR_' : item[2] == CHAINS.output ? 'MCL_OU_' :
+				item[2] == CHAINS.tun_input ? 'MCL_TI_' : 'MCL_TF_') == null) fail('INTERNAL');
+			if (exact == 1) push(commands, request(executable,
+				[ '-t', item[0], '-D', item[1], '-j', item[2] ]));
+			if (declarations == 1) {
+				push(commands, request(executable, [ '-t', item[0], '-F', item[2] ]));
+				push(commands, request(executable, [ '-t', item[0], '-X', item[2] ]));
+			}
+		}
+	}
+	for (let id, families in discovery.state)
+		for (let family in families) {
+			let executable = family == 'ipv6' ? 'ip6tables' : 'iptables', n = names(id, family == 'ipv6');
+			for (let item in [ [ 'mangle', n.prerouting ], [ 'mangle', n.proxy ], [ 'mangle', n.output ],
+				[ 'filter', n.tun_input ], [ 'filter', n.tun_forward ] ])
+				push(commands, request(executable, [ '-t', item[0], '-F', item[1] ]));
+			for (let item in [ [ 'mangle', n.prerouting ], [ 'mangle', n.proxy ], [ 'mangle', n.output ],
+				[ 'filter', n.tun_input ], [ 'filter', n.tun_forward ] ])
+				push(commands, request(executable, [ '-t', item[0], '-X', item[1] ]));
+			for (let set in [ n.local, n.fake ]) push(commands, request('ipset', [ 'destroy', set ]));
+		}
+	return { commands, ids: discovery.ids };
 };
 
 export function cleanup(runtime, mode) {
 	if (mode?.preserve_guard !== true || type(mode.generations ?? []) != 'array') fail('INVALID_ARGUMENT');
 	for (let id in mode.generations) if (!match(id, /^[0-9a-f]{12}$/)) fail('INVALID_ARGUMENT');
-	let generations = discover_generations(runtime);
-	for (let executable in [ 'iptables', 'ip6tables' ]) {
-		let save = executable + '-save';
-		let result = runtime.process.run({ command: save, args: [ '-t', 'mangle' ] });
-		let output = output_or_capture(runtime, result, save, 'mangle');
-		if (output == null) fail('INTERNAL');
-		for (let legacy in [ [ 'PREROUTING', 'MICLASH_PREROUTING' ], [ 'OUTPUT', 'MICLASH_OUTPUT' ] ]) {
-			let exact = count_line(output, '-A ' + legacy[0] + ' -j ' + legacy[1]);
-			if (count_target(output, legacy[0], legacy[1]) != exact || exact > 1) fail('INTERNAL');
-			if (exact == 1 && runtime.process.run({ command: executable,
-				args: [ '-t', 'mangle', '-D', legacy[0], '-j', legacy[1] ] }).code != 0) fail('INTERNAL');
-		}
-	}
-	for (let item in [ [ 'iptables', 'mangle', 'PREROUTING', CHAINS.prerouting ],
-		[ 'iptables', 'mangle', 'OUTPUT', CHAINS.output ], [ 'iptables', 'filter', 'INPUT', CHAINS.tun_input ],
-		[ 'iptables', 'filter', 'FORWARD', CHAINS.tun_forward ], [ 'ip6tables', 'mangle', 'PREROUTING', CHAINS.prerouting ],
-		[ 'ip6tables', 'mangle', 'OUTPUT', CHAINS.output ], [ 'ip6tables', 'filter', 'INPUT', CHAINS.tun_input ],
-		[ 'ip6tables', 'filter', 'FORWARD', CHAINS.tun_forward ] ]) {
-		let hook = [ '-t', item[1], '-C', item[2], '-j', item[3] ];
-		if (runtime.process.run({ command: item[0], args: hook }).code == 0 &&
-		    runtime.process.run({ command: item[0], args: [ '-t', item[1], '-D', item[2], '-j', item[3] ] }).code != 0)
-			fail('INTERNAL');
-		if (runtime.process.run({ command: item[0], args: hook }).code == 0) fail('INTERNAL');
-		let exists_args = [ '-t', item[1], '-L', item[3] ];
-		if (runtime.process.run({ command: item[0], args: exists_args }).code == 0) {
-			if (runtime.process.run({ command: item[0], args: [ '-t', item[1], '-F', item[3] ] }).code != 0 ||
-			    runtime.process.run({ command: item[0], args: [ '-t', item[1], '-X', item[3] ] }).code != 0)
-				fail('INTERNAL');
-		}
-		if (runtime.process.run({ command: item[0], args: exists_args }).code == 0) fail('INTERNAL');
-	}
-	for (let id in generations) {
-		for (let family in [ 'ipv4', 'ipv6' ]) {
-			if (!run_all(runtime, inventory_commands(id, family, 'retire'))) fail('INTERNAL');
-			let ipv6 = family == 'ipv6', executable = ipv6 ? 'ip6tables' : 'iptables', n = names(id, ipv6);
-			for (let object in [ [ 'mangle', n.prerouting ], [ 'mangle', n.proxy ], [ 'mangle', n.output ],
-				[ 'filter', n.tun_input ], [ 'filter', n.tun_forward ] ])
-				if (runtime.process.run({ command: executable, args: [ '-t', object[0], '-L', object[1] ] }).code == 0)
-					fail('INTERNAL');
-			for (let set in [ n.local, n.fake ])
-				if (runtime.process.run({ command: 'ipset', args: [ 'list', set ] }).code == 0) fail('INTERNAL');
-		}
-	}
-	let state = observe(runtime);
-	if (!state.valid || state.installed || state.legacy) fail('INTERNAL');
-	let saves = {};
-	for (let executable in [ 'iptables-save', 'ip6tables-save' ])
-		for (let table in [ 'mangle', 'filter' ]) {
-			let result = runtime.process.run({ command: executable, args: [ '-t', table ] });
-			let output = output_or_capture(runtime, result, executable, table);
-			if (output == null) fail('INTERNAL');
-			saves[executable + ':' + table] = output;
-		}
-	let sets = runtime.process.run({ command: 'ipset', args: [ 'save' ] });
-	let set_output = output_or_capture(runtime, sets, 'ipset', 'save');
-	if (set_output == null) fail('INTERNAL');
-	for (let id in generations)
-		for (let family in [ 'ipv4', 'ipv6' ]) {
-			let n = names(id, family == 'ipv6');
-			let save = family == 'ipv6' ? 'ip6tables-save' : 'iptables-save';
-			for (let object in [ [ 'mangle', n.prerouting ], [ 'mangle', n.proxy ], [ 'mangle', n.output ],
-				[ 'filter', n.tun_input ], [ 'filter', n.tun_forward ] ])
-				if (index(saves[save + ':' + object[0]], ':' + object[1] + ' ') >= 0) fail('INTERNAL');
-			for (let set in [ n.local, n.fake ])
-				for (let line in split(set_output, '\n')) {
-					let fields = split(trim(line), ' ');
-					if (length(fields) >= 2 && fields[0] == 'create' && fields[1] == set) fail('INTERNAL');
-				}
-			}
-	if (length(discover_generations(runtime))) fail('INTERNAL');
+	let plan = cleanup_plan(runtime);
+	for (let item in plan.commands)
+		if (runtime.process.run({ command: item.command, args: item.args }).code != 0) fail('INTERNAL');
+	let remaining = cleanup_plan(runtime);
+	if (length(remaining.commands) || length(remaining.ids)) fail('INTERNAL');
 	return { clean: true, guard_preserved: true };
 };

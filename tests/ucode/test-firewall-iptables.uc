@@ -130,7 +130,7 @@ function runtime_with(options) {
 	let task_hook_count = options?.no_anchors ? 0 : 1;
 	let legacy_hooks = {
 		iptables: { MICLASH_PREROUTING: !!options?.legacy, MICLASH_OUTPUT: !!options?.legacy },
-		ip6tables: { MICLASH_PREROUTING: false, MICLASH_OUTPUT: false }
+		ip6tables: { MICLASH_PREROUTING: !!options?.ip6_legacy, MICLASH_OUTPUT: !!options?.ip6_legacy }
 	};
 	let states = options?.states ?? {
 		iptables: { MCL_AN_PR: 'aaaaaaaaaaaa', MCL_AN_OU: 'aaaaaaaaaaaa',
@@ -205,7 +205,17 @@ function runtime_with(options) {
 		if (table == 'mangle') {
 			if (legacy_hooks[base].MICLASH_PREROUTING) push(lines, '-A PREROUTING -j MICLASH_PREROUTING');
 			if (legacy_hooks[base].MICLASH_OUTPUT) push(lines, '-A OUTPUT -j MICLASH_OUTPUT');
+			if (base == 'ip6tables' && options?.ip6_legacy_duplicate)
+				push(lines, '-A PREROUTING -j MICLASH_PREROUTING', '-A PREROUTING -j MICLASH_PREROUTING');
 		}
+		if (base == 'ip6tables' && table == 'filter' && options?.duplicate_permanent_hook)
+			push(lines, '-A FORWARD -j MCL_AN_TF');
+		if (base == 'iptables' && table == 'mangle' && options?.parameterized_canonical_edge)
+			push(lines, '-A MCL_AN_PR -s 192.0.2.0/24 -j MCL_PR_bbbbbbbbbbbb');
+		if (base == 'iptables' && table == 'mangle' && options?.duplicate_canonical_edge)
+			push(lines, '-A MCL_AN_PR -j MCL_PR_bbbbbbbbbbbb');
+		if (base == 'ip6tables' && table == 'mangle' && options?.cross_family_partial)
+			push(lines, ':MCL_PR_bbbbbbbbbbbb - [0:0]');
 		push(lines, 'COMMIT', '');
 		return join('\n', lines);
 	};
@@ -600,5 +610,22 @@ assert_throws(() => cleanup(referenced_orphan, { preserve_guard: true, generatio
 for (let request in referenced_orphan.process.calls)
 	assert_true(request.args[2] != '-D' && request.args[2] != '-F' && request.args[2] != '-X' &&
 		request.args[0] != 'destroy', 'foreign-referenced orphan fails before cleanup mutation');
+
+function assert_cleanup_preflight_failure(options, message) {
+	let rt = runtime_with({ ...options, states: {
+		iptables: { MCL_AN_PR: 'bbbbbbbbbbbb', MCL_AN_OU: 'bbbbbbbbbbbb', MCL_AN_TI: 'bbbbbbbbbbbb', MCL_AN_TF: 'bbbbbbbbbbbb' },
+		ip6tables: { MCL_AN_PR: '', MCL_AN_OU: '', MCL_AN_TI: '', MCL_AN_TF: '' }
+	} });
+	assert_throws(() => cleanup(rt, { preserve_guard: true, generations: [] }), 'INTERNAL');
+	for (let request in rt.process.calls)
+		assert_true(request.args[2] != '-D' && request.args[2] != '-F' && request.args[2] != '-X' &&
+			request.args[0] != 'destroy', message + ': zero mutations before full preflight');
+};
+assert_cleanup_preflight_failure({ legacy: true, ip6_legacy_duplicate: true },
+	'valid IPv4 plus duplicate IPv6 legacy');
+assert_cleanup_preflight_failure({ duplicate_permanent_hook: true }, 'duplicate permanent hook');
+assert_cleanup_preflight_failure({ parameterized_canonical_edge: true }, 'parameterized canonical-source edge');
+assert_cleanup_preflight_failure({ duplicate_canonical_edge: true }, 'duplicate canonical incoming edge');
+assert_cleanup_preflight_failure({ cross_family_partial: true }, 'cross-family partial generation inventory');
 assert_throws(() => cleanup(runtime_with(),
 	{ preserve_guard: true, generations: [ 'aaaaaaaaaaaa' ] }), 'INTERNAL');
