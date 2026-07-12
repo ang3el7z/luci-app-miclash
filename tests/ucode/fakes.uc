@@ -67,6 +67,7 @@ export function fs(initial) {
 	let links = {};
 	let symlinks = {};
 	let next_inode = 100;
+	let next_fd = 10;
 	let created = [];
 	let fake = {
 		files,
@@ -151,7 +152,9 @@ export function fs(initial) {
 		push(created, path);
 		push(fake.calls.open, { path, mode, perm });
 		let offset = 0;
+		let fd = next_fd++;
 		let handle = { path, closed: false, last_error: null };
+		handle.fileno = () => fd;
 		handle.read = (amount) => {
 			if (handle.closed)
 				return null;

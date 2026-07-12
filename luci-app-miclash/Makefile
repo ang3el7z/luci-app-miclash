@@ -10,7 +10,7 @@ PKG_MAINTAINER:=ang3el7z
 
 LUCI_TITLE:=LuCI Support for MiClash
 LUCI_DEPENDS:=+luci-base +zlib +libcurl +curl +coreutils-base64 +kmod-tun \
-	+ucode-mod-fs +ucode-mod-math +ucode-mod-digest
+	+ucode-mod-fs +ucode-mod-math +ucode-mod-digest +ucode-mod-socket
 LUCI_PKGARCH:=all
 
 PKG_CONFIG_DEPENDS:= \
@@ -109,6 +109,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/*.uc $(1)/usr/share/miclash/
 	$(INSTALL_DIR) $(1)/usr/libexec/miclash
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/validate-config.uc $(1)/usr/libexec/miclash/
+	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/mihomo-https.uc $(1)/usr/libexec/miclash/
 
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/miclash
 	$(CP) ./rootfs/www/luci-static/resources/view/miclash/* $(1)/www/luci-static/resources/view/miclash/

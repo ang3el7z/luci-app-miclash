@@ -66,7 +66,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/ucode-build
-          key: ${{ runner.os }}-ucode-${{ env.UCODE_REVISION }}-digest
+          key: ${{ runner.os }}-ucode-${{ env.UCODE_REVISION }}-digest-socket
 
       - name: Build OpenWrt 24.10 ucode revision
         if: steps.ucode-cache.outputs.cache-hit != 'true'
@@ -80,6 +80,7 @@ jobs:
             -DDIGEST_SUPPORT=ON \
             -DFS_SUPPORT=ON \
             -DMATH_SUPPORT=ON \
+            -DSOCKET_SUPPORT=ON \
             -DNL80211_SUPPORT=OFF \
             -DRESOLV_SUPPORT=OFF \
             -DRTNL_SUPPORT=OFF \

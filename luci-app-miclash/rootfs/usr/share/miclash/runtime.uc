@@ -96,7 +96,191 @@ function fs_adapter() {
 function clock_adapter() {
 	return {
 		now: () => time() * 1000,
+		sleep: (milliseconds) => require('uloop').run(milliseconds),
 		set_timeout: (milliseconds, callback) => require('uloop').timer(milliseconds, callback)
+	};
+};
+
+function http_adapter(clock) {
+	const MAX_HEADER = 16384;
+	const MAX_BODY = 65536;
+	const TIMEOUT_MS = 2000;
+	let socket = require('socket');
+
+	function invalid_response() { fail('INVALID_RESPONSE'); };
+	function remaining(deadline) {
+		let value = deadline - clock.now();
+		return value > 0 ? value : 0;
+	};
+	function send_all(conn, data, deadline) {
+		let offset = 0;
+		while (offset < length(data)) {
+			let events = socket.poll(remaining(deadline),
+				[ conn, socket.POLLOUT | socket.POLLERR | socket.POLLHUP ]);
+			if (!length(events) || !(events[0][1] & socket.POLLOUT))
+				fail('HEALTH_FAILED');
+			let written = conn.send(substr(data, offset));
+			if (type(written) != 'int' || written < 1)
+				fail('HEALTH_FAILED');
+			offset += written;
+		}
+	};
+	function header_value(headers, name) {
+		for (let key, value in headers)
+			if (lc(key) == name)
+				return value;
+		return null;
+	};
+	function parse_chunked(data, complete) {
+		let output = '', offset = 0;
+		while (true) {
+			let boundary = index(data, '\r\n', offset);
+			if (boundary < 0)
+				return complete ? invalid_response() : null;
+			let size_text = substr(data, offset, boundary - offset);
+			if (!match(size_text, /^[0-9A-Fa-f]+$/))
+				invalid_response();
+			let size = hexdec(size_text);
+			if (size == null || size < 0)
+				invalid_response();
+			offset = boundary + 2;
+			if (size == 0) {
+				if (length(data) < offset + 2)
+					return complete ? invalid_response() : null;
+				if (substr(data, offset, 2) != '\r\n')
+					invalid_response();
+				return output;
+			}
+			if (length(output) + size > MAX_BODY)
+				fail('RESPONSE_TOO_LARGE');
+			if (length(data) < offset + size + 2)
+				return complete ? invalid_response() : null;
+			output += substr(data, offset, size);
+			offset += size;
+			if (substr(data, offset, 2) != '\r\n')
+				invalid_response();
+			offset += 2;
+		}
+	};
+	function parse_response(raw, complete) {
+		let boundary = index(raw, '\r\n\r\n');
+		if (boundary < 0) {
+			if (length(raw) > MAX_HEADER)
+				fail('RESPONSE_TOO_LARGE');
+			return complete ? invalid_response() : null;
+		}
+		if (boundary > MAX_HEADER)
+			fail('RESPONSE_TOO_LARGE');
+		let lines = split(substr(raw, 0, boundary), '\r\n');
+		let status_line = shift(lines);
+		let matched = match(status_line, /^HTTP\/1\.[01] ([0-9]{3})( |$)/);
+		if (!matched)
+			invalid_response();
+		let status = int(matched[1]), headers = {};
+		for (let line in lines) {
+			let colon = index(line, ':');
+			if (colon < 1)
+				invalid_response();
+			let name = trim(substr(line, 0, colon));
+			let value = trim(substr(line, colon + 1));
+			if (!match(name, /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/) || exists(headers, lc(name)))
+				invalid_response();
+			headers[lc(name)] = value;
+		}
+		let body = substr(raw, boundary + 4);
+		let transfer = header_value(headers, 'transfer-encoding');
+		let content_length = header_value(headers, 'content-length');
+		if (transfer != null) {
+			if (lc(transfer) != 'chunked' || content_length != null)
+				invalid_response();
+			let decoded = parse_chunked(body, complete);
+			return decoded == null ? null : { status, body: decoded };
+		}
+		if (content_length != null) {
+			if (!match(content_length, /^(0|[1-9][0-9]*)$/))
+				invalid_response();
+			let expected = int(content_length);
+			if (expected > MAX_BODY)
+				fail('RESPONSE_TOO_LARGE');
+			if (length(body) < expected)
+				return complete ? invalid_response() : null;
+			if (length(body) != expected)
+				invalid_response();
+			return { status, body };
+		}
+		if (length(body) > MAX_BODY)
+			fail('RESPONSE_TOO_LARGE');
+		return complete ? { status, body } : null;
+	};
+
+	return {
+		request: (request) => {
+			if (type(request) != 'object' ||
+			    (request.host != '127.0.0.1' && request.host != '::1') ||
+			    type(request.port) != 'int' || request.port < 1 || request.port > 65535 ||
+			    type(request.method) != 'string' || type(request.path) != 'string' ||
+			    type(request.headers) != 'object')
+				fail('INVALID_ARGUMENT');
+			let body = request.body == null ? '' : sprintf('%J', request.body);
+			if (length(body) > MAX_BODY)
+				fail('INVALID_ARGUMENT');
+			let deadline = clock.now() + TIMEOUT_MS;
+			let conn = socket.connect({ address: request.host, port: request.port }, null,
+				{ socktype: socket.SOCK_STREAM }, TIMEOUT_MS);
+			if (conn == null)
+				fail('HEALTH_FAILED');
+			let request_text = request.method + ' ' + request.path + ' HTTP/1.1\r\n' +
+				'Host: ' + (request.host == '::1' ? '[::1]' : request.host) + ':' + request.port + '\r\n' +
+				'Connection: close\r\nContent-Type: application/json\r\n';
+			for (let name, value in request.headers) {
+				if (!match(name, /^[A-Za-z0-9-]+$/) || type(value) != 'string' || match(value, /[\r\n]/)) {
+					conn.close();
+					fail('INVALID_ARGUMENT');
+				}
+				request_text += name + ': ' + value + '\r\n';
+			}
+			request_text += 'Content-Length: ' + length(body) + '\r\n\r\n' + body;
+			let raw = '', parsed = null;
+			try {
+				send_all(conn, request_text, deadline);
+				while (parsed == null) {
+					let wait = remaining(deadline);
+					if (wait <= 0)
+						fail('HEALTH_FAILED');
+					let events = socket.poll(wait, [ conn, socket.POLLIN | socket.POLLERR | socket.POLLHUP ]);
+					if (!length(events))
+						fail('HEALTH_FAILED');
+					let flags = events[0][1];
+					if (flags & socket.POLLIN) {
+						let chunk = conn.recv(4096);
+						if (chunk == null)
+							fail('HEALTH_FAILED');
+						if (!length(chunk)) {
+							parsed = parse_response(raw, true);
+							break;
+						}
+						raw += chunk;
+						if (length(raw) > MAX_HEADER + MAX_BODY + 4096)
+							fail('RESPONSE_TOO_LARGE');
+						parsed = parse_response(raw, false);
+					}
+					else if (flags & (socket.POLLERR | socket.POLLHUP)) {
+						parsed = parse_response(raw, true);
+						break;
+					}
+				}
+			}
+			catch (error) {
+				try { conn.close(); } catch (close_error) {}
+				let code = error?.code ?? error?.message;
+				if (code == 'RESPONSE_TOO_LARGE' || code == 'INVALID_RESPONSE' ||
+				    code == 'INVALID_ARGUMENT')
+					fail(code);
+				fail('HEALTH_FAILED');
+			}
+			conn.close();
+			return parsed;
+		}
 	};
 };
 
@@ -164,9 +348,12 @@ export function create(overrides) {
 		digest,
 		random,
 		clock,
+		http: null,
 		process: null,
 		ubus: ubus_adapter(),
 		uci: uci_adapter(),
+		observers: {},
+		service_options: {},
 		logger: logger_adapter(),
 		paths
 	};
@@ -178,6 +365,8 @@ export function create(overrides) {
 	}
 	if (runtime.process == null)
 		runtime.process = process_adapter();
+	if (runtime.http == null)
+		runtime.http = http_adapter(runtime.clock);
 
 	return runtime;
 };
