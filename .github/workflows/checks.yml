@@ -1,0 +1,159 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  repository-checks:
+    name: Repository checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install gettext
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq gettext
+
+      - name: Run repository checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          for check in tools/check-*.mjs; do
+            node "$check"
+          done
+
+      - name: Parse JSON files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files -z '*.json' |
+            xargs -0 -r -n1 node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))'
+
+      - name: Check PO files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files -z '*.po' |
+            xargs -0 -r -n1 msgfmt --check --output-file=/dev/null
+
+      - name: Check test runner shell syntax
+        run: sh -n tools/run-ucode-tests.sh
+
+  ucode-tests:
+    name: Host ucode tests
+    runs-on: ubuntu-22.04
+    env:
+      UCODE_REVISION: 3f64c8089bf3ea4847c96b91df09fbfcaec19e1d
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq cmake build-essential libjson-c-dev pkg-config
+
+      - name: Build OpenWrt 24.10 ucode revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/jow-/ucode.git "$RUNNER_TEMP/ucode-src"
+          git -C "$RUNNER_TEMP/ucode-src" checkout --detach "$UCODE_REVISION"
+          cmake -S "$RUNNER_TEMP/ucode-src" -B "$RUNNER_TEMP/ucode-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDIGEST_SUPPORT=OFF \
+            -DFS_SUPPORT=ON \
+            -DMATH_SUPPORT=ON \
+            -DNL80211_SUPPORT=OFF \
+            -DRESOLV_SUPPORT=OFF \
+            -DRTNL_SUPPORT=OFF \
+            -DSTRUCT_SUPPORT=ON \
+            -DUBUS_SUPPORT=OFF \
+            -DUCI_SUPPORT=OFF \
+            -DULOOP_SUPPORT=OFF \
+            -DDEBUG_SUPPORT=ON \
+            -DLOG_SUPPORT=OFF
+          cmake --build "$RUNNER_TEMP/ucode-build" --parallel
+
+      - name: Verify host ucode
+        shell: bash
+        run: |
+          set -euo pipefail
+          UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode"
+          output="$("$UCODE_BIN" -e 'print("ucode host binary ready\n")')"
+          test "$output" = "ucode host binary ready"
+
+      - name: Run ucode tests
+        shell: bash
+        run: UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/run-ucode-tests.sh
+
+  package-build:
+    name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk_version: "24.10.2"
+            package_manager: opkg
+            arch: x86/64
+          - sdk_version: "25.12.0-rc2"
+            package_manager: apk
+            arch: x86/64
+    env:
+      PACKAGE_NAME: luci-app-miclash
+      SDK_NAME: -sdk-
+      SDK_URL_PATH: https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/targets/${{ matrix.arch }}/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install SDK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq gettext libncurses5-dev rsync xsltproc build-essential gawk unzip
+
+      - name: Create build directories
+        run: |
+          echo "SDK_DL_DIR=$(mktemp -d)" >> "$GITHUB_ENV"
+          echo "SDK_HOME=$(mktemp -d)" >> "$GITHUB_ENV"
+
+      - name: Download and verify OpenWrt SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SDK_DL_DIR"
+
+          if ! wget -q -O - "$SDK_URL_PATH/sha256sums" | grep -- "$SDK_NAME" > sha256sums.small 2>/dev/null; then
+            echo "Cannot find SDK archive in sha256sums for $SDK_URL_PATH" >&2
+            exit 1
+          fi
+
+          SDK_FILE="$(cut -d' ' -f2 < sha256sums.small | sed 's/*//g')"
+          wget -q -O "$SDK_FILE" "$SDK_URL_PATH/$SDK_FILE"
+
+          if ! sha256sum -c ./sha256sums.small >/dev/null 2>&1; then
+            echo "SDK checksum verification failed." >&2
+            exit 1
+          fi
+
+          tar -xf "$SDK_FILE" -C "$SDK_HOME" --strip=1
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SDK_HOME"
+          ./scripts/feeds update > /dev/null 2>&1
+          ./scripts/feeds install -a > /dev/null 2>&1
+          ln -s "${{ github.workspace }}/luci-app-miclash" "package/$PACKAGE_NAME"
+          make defconfig > /dev/null 2>&1
+          make -j"$(nproc)" "package/${PACKAGE_NAME}/compile" V=s
