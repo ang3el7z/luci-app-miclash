@@ -418,12 +418,22 @@ function count_line(text, wanted) {
 	return count;
 };
 
-function count_target(text, chain, target) {
-	let count = 0, prefix = '-A ' + chain + ' ';
+function verdict(fields) {
+	for (let i = 0; i + 1 < length(fields); i++)
+		if (fields[i] == '-j' || fields[i] == '--jump' || fields[i] == '-g' || fields[i] == '--goto')
+			return { kind: fields[i] == '-g' || fields[i] == '--goto' ? 'goto' : 'jump', target: fields[i + 1] };
+	return null;
+};
+
+function exact_owned_edge_count(text, source, target, wanted) {
+	let count = 0;
 	for (let raw in split(text ?? '', '\n')) {
-		let line = trim(raw);
-		if (substr(line, 0, length(prefix)) == prefix &&
-		    substr(line, -length(' -j ' + target)) == ' -j ' + target) count++;
+		let line = trim(raw), fields = split(line, ' ');
+		if (fields[0] != '-A') continue;
+		let edge = verdict(fields);
+		if (edge == null || edge.target != target) continue;
+		if (fields[1] != source || edge.kind != 'jump' || line != wanted) return null;
+		count++;
 	}
 	return count;
 };
@@ -442,8 +452,8 @@ function guard_order_valid(text) {
 	let guard = '-A FORWARD -j MICLASH_GUARD_FORWARD';
 	let owned = '-A FORWARD -j ' + CHAINS.tun_forward;
 	let guard_exact = count_line(text, guard), owned_exact = count_line(text, owned);
-	if (count_target(text, 'FORWARD', 'MICLASH_GUARD_FORWARD') != guard_exact || guard_exact > 1 ||
-	    count_target(text, 'FORWARD', CHAINS.tun_forward) != owned_exact || owned_exact > 1) return false;
+	if (exact_owned_edge_count(text, 'FORWARD', 'MICLASH_GUARD_FORWARD', guard) != guard_exact || guard_exact > 1 ||
+	    exact_owned_edge_count(text, 'FORWARD', CHAINS.tun_forward, owned) != owned_exact || owned_exact > 1) return false;
 	if (guard_exact == 1 && owned_exact == 1)
 		return exact_position(text, guard) < exact_position(text, owned);
 	return true;
@@ -451,8 +461,8 @@ function guard_order_valid(text) {
 
 function guard_transition_valid(text) {
 	let guard = '-A FORWARD -j MICLASH_GUARD_FORWARD', owned = '-A FORWARD -j ' + CHAINS.tun_forward;
-	if (count_line(text, guard) != 1 || count_target(text, 'FORWARD', 'MICLASH_GUARD_FORWARD') != 1 ||
-	    count_line(text, owned) != 2 || count_target(text, 'FORWARD', CHAINS.tun_forward) != 2) return false;
+	if (count_line(text, guard) != 1 || exact_owned_edge_count(text, 'FORWARD', 'MICLASH_GUARD_FORWARD', guard) != 1 ||
+	    count_line(text, owned) != 2 || exact_owned_edge_count(text, 'FORWARD', CHAINS.tun_forward, owned) != 2) return false;
 	let positions = [], position = 0, guard_position = null;
 	for (let raw in split(text, '\n')) {
 		let line = trim(raw);
@@ -504,8 +514,8 @@ function ensure_guard_order(runtime, families) {
 			let guard = '-A FORWARD -j MICLASH_GUARD_FORWARD';
 			let owned = '-A FORWARD -j ' + CHAINS.tun_forward;
 			if (output == null || count_line(output, guard) != 1 || count_line(output, owned) != 1 ||
-			    count_target(output, 'FORWARD', 'MICLASH_GUARD_FORWARD') != 1 ||
-			    count_target(output, 'FORWARD', CHAINS.tun_forward) != 1 ||
+			    exact_owned_edge_count(output, 'FORWARD', 'MICLASH_GUARD_FORWARD', guard) != 1 ||
+			    exact_owned_edge_count(output, 'FORWARD', CHAINS.tun_forward, owned) != 1 ||
 			    exact_position(output, owned) > exact_position(output, guard)) fail('INTERNAL');
 			if (runtime.process.run({ command: executable,
 				args: [ '-t', 'filter', '-A', 'FORWARD', '-j', CHAINS.tun_forward ] }).code != 0) fail('INTERNAL');
@@ -553,13 +563,6 @@ function normalized_rule(fields) {
 };
 
 function sorted_json(values) { return sprintf('%J', sort(values)); };
-
-function verdict(fields) {
-	for (let i = 0; i + 1 < length(fields); i++)
-		if (fields[i] == '-j' || fields[i] == '--jump' || fields[i] == '-g' || fields[i] == '--goto')
-			return { kind: fields[i] == '-g' || fields[i] == '--goto' ? 'goto' : 'jump', target: fields[i + 1] };
-	return null;
-};
 
 function verify_generation(runtime, compiled, active) {
 	let suffix = '_' + compiled.generation, expected_chains = {}, expected_rules = {};
@@ -672,10 +675,15 @@ export function observe(runtime) {
 		for (let hook in [ [ mangle_output, 'PREROUTING', CHAINS.prerouting ],
 			[ mangle_output, 'OUTPUT', CHAINS.output ], [ filter_output, 'INPUT', CHAINS.tun_input ],
 			[ filter_output, 'FORWARD', CHAINS.tun_forward ] ])
-			if (count_target(hook[0], hook[1], hook[2]) != (absent ? 0 : 1)) { valid = false; id = null; }
+			if (exact_owned_edge_count(hook[0], hook[1], hook[2],
+			    '-A ' + hook[1] + ' -j ' + hook[2]) != (absent ? 0 : 1)) { valid = false; id = null; }
 		if (!guard_order_valid(filter_output)) { valid = false; id = null; }
-		if (index(mangle_output, '-A PREROUTING -j MICLASH_PREROUTING') >= 0 ||
-		    index(mangle_output, '-A OUTPUT -j MICLASH_OUTPUT') >= 0) legacy = true;
+		for (let hook in [ [ 'PREROUTING', 'MICLASH_PREROUTING' ], [ 'OUTPUT', 'MICLASH_OUTPUT' ] ]) {
+			let line = '-A ' + hook[0] + ' -j ' + hook[1], exact = count_line(mangle_output, line);
+			let edges = exact_owned_edge_count(mangle_output, hook[0], hook[1], line);
+			if (edges == null || edges != exact || exact > 1) { valid = false; id = null; legacy = true; }
+			else if (exact == 1) legacy = true;
+		}
 		if (id == null || id == '' || id == '-') continue;
 		if (found != null && found != id) return { installed: false, generation: null, families: [], source: 'ambiguous' };
 		found = id; push(families, item[1]);
@@ -893,7 +901,7 @@ function cleanup_plan(runtime) {
 		let save = executable + '-save', mangle = discovery.documents[save + ':mangle'];
 		for (let legacy in [ [ 'PREROUTING', 'MICLASH_PREROUTING' ], [ 'OUTPUT', 'MICLASH_OUTPUT' ] ]) {
 			let line = '-A ' + legacy[0] + ' -j ' + legacy[1], exact = count_line(mangle, line);
-			if (count_target(mangle, legacy[0], legacy[1]) != exact || exact > 1) fail('INTERNAL');
+			if (exact_owned_edge_count(mangle, legacy[0], legacy[1], line) != exact || exact > 1) fail('INTERNAL');
 			if (exact == 1) push(commands, request(executable,
 				[ '-t', 'mangle', '-D', legacy[0], '-j', legacy[1] ]));
 		}
@@ -902,7 +910,7 @@ function cleanup_plan(runtime) {
 			[ 'filter', 'FORWARD', CHAINS.tun_forward ] ]) {
 			let output = discovery.documents[save + ':' + item[0]], line = '-A ' + item[1] + ' -j ' + item[2];
 			let exact = count_line(output, line), declarations = chain_count(output, item[2]);
-			if (count_target(output, item[1], item[2]) != exact || exact > 1 || declarations > 1 ||
+			if (exact_owned_edge_count(output, item[1], item[2], line) != exact || exact > 1 || declarations > 1 ||
 			    (declarations == 0 && exact != 0)) fail('INTERNAL');
 			if (declarations == 1 && anchor_generation(output, item[2],
 				item[2] == CHAINS.prerouting ? 'MCL_PR_' : item[2] == CHAINS.output ? 'MCL_OU_' :
