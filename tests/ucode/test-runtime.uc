@@ -33,6 +33,11 @@ function assert_process_rejected(request) {
 	assert_throws(() => validation_fake.run(request), 'INVALID_ARGUMENT');
 };
 
+function assert_process_boundary_rejected(request) {
+	assert_throws(() => runtime.validate_process_request(request), 'INVALID_ARGUMENT');
+	assert_throws(() => validation_fake.run(request), 'INVALID_ARGUMENT');
+};
+
 assert_process_rejected({ command: '', args: [] });
 assert_process_rejected({ command: 'echo', args: [ 1 ] });
 assert_process_rejected({ command: 'echo', env: [] });
@@ -42,6 +47,8 @@ assert_process_rejected({ command: 'echo', timeout_ms: -1 });
 assert_process_rejected({ command: 'echo', timeout_ms: 1.5 });
 assert_process_rejected({ command: 'echo', shell: true });
 assert_process_rejected({ command: 'echo', stdin: '' });
+assert_process_boundary_rejected({ command: 'echo' + sprintf('%c', 0) + 'hidden' });
+assert_process_boundary_rejected({ command: 'echo', args: [ 'safe', 'bad' + sprintf('%c', 0) + 'hidden' ] });
 assert_equal(length(validation_fake.calls), 0);
 
 let production_result = production.process.run({ command: '/bin/true' });

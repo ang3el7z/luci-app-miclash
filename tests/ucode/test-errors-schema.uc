@@ -52,12 +52,46 @@ assert_throws(() => schema.managed_update_url('http://example.com/update'), 'INV
 assert_equal(schema.managed_update_url('https://example.com/update'), 'https://example.com/update');
 assert_equal(schema.url('http://example.com:8080/path?q=1#fragment'), 'http://example.com:8080/path?q=1#fragment');
 assert_equal(schema.managed_update_url('https://example.com:8443/update'), 'https://example.com:8443/update');
+assert_equal(schema.url('https://updates.example.com/path'), 'https://updates.example.com/path');
+assert_equal(schema.url('http://192.168.1.1:65535/path?q=1'), 'http://192.168.1.1:65535/path?q=1');
 assert_throws(() => schema.url('https://'), 'INVALID_ARGUMENT');
 assert_throws(() => schema.url('https://?query'), 'INVALID_ARGUMENT');
 assert_throws(() => schema.url('https:///path'), 'INVALID_ARGUMENT');
 assert_throws(() => schema.url('https://user@example.com/path'), 'INVALID_ARGUMENT');
 assert_throws(() => schema.url('https://example.com/has\tspace'), 'INVALID_ARGUMENT');
 assert_throws(() => schema.url(sprintf('https://example.com/%c', 1)), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://example..com/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://-example.com/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://example-.com/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://256.1.1.1/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://192.168.001.1/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://1.2.3/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://example.com:/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://example.com:abc/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://example.com:0/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://example.com:65536/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://[2001:db8::1]/path'), 'INVALID_ARGUMENT');
+
+let variant_redaction = errors.new('INTERNAL', 'failed', {
+	nested: [ {
+		'Access-Key': 'one',
+		ACCESS_TOKEN: 'two',
+		'access token': 'three',
+		accessToken: 'four',
+		'Refresh.Token': 'five',
+		refreshToken: 'six',
+		'CLIENT-SECRET': 'seven',
+		clientSecret: 'eight',
+		monkey: 'visible',
+		session_count: 2
+	} ]
+}).detail.nested[0];
+for (let key in [ 'Access-Key', 'ACCESS_TOKEN', 'access token', 'accessToken',
+	'Refresh.Token', 'refreshToken', 'CLIENT-SECRET', 'clientSecret' ])
+	assert_equal(variant_redaction[key], '[REDACTED]');
+assert_equal(variant_redaction.monkey, 'visible');
+assert_equal(variant_redaction.session_count, 2);
+
 assert_throws(() => schema.object({ action: 'start', extra: true }, {
 	action: { type: 'string', enum: [ 'start', 'stop' ] }
 }), 'INVALID_ARGUMENT');

@@ -94,11 +94,72 @@ export function profile_name(value) {
 	return value;
 };
 
+function validate_dns_host(host) {
+	if (length(host) > 253)
+		invalid();
+
+	for (let label in split(host, '.'))
+		if (!length(label) || length(label) > 63 ||
+		    !match(label, /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/))
+			invalid();
+};
+
+function validate_ipv4_host(host) {
+	let octets = split(host, '.');
+	if (length(octets) != 4)
+		invalid();
+
+	for (let octet in octets) {
+		if (!match(octet, /^(0|[1-9][0-9]*)$/))
+			invalid();
+		let number = int(octet);
+		if (number == null || number < 0 || number > 255)
+			invalid();
+	}
+};
+
+function validate_url_host(host) {
+	if (match(host, /^[0-9.]+$/) && index(host, '.') >= 0)
+		validate_ipv4_host(host);
+	else
+		validate_dns_host(host);
+};
+
 function validated_url(value) {
 	validate({ type: 'string', max_length: 2048 }, value);
-	if (match(value, /[[:space:][:cntrl:]]/) ||
-	    !match(value, /^https?:\/\/[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?([\/?#][^[:space:][:cntrl:]]*)?$/))
+	if (match(value, /[[:space:][:cntrl:]]/))
 		invalid();
+
+	let offset;
+	if (match(value, /^https:\/\//))
+		offset = 8;
+	else if (match(value, /^http:\/\//))
+		offset = 7;
+	else
+		invalid();
+
+	let remainder = substr(value, offset);
+	let boundary = length(remainder);
+	for (let delimiter in [ '/', '?', '#' ]) {
+		let position = index(remainder, delimiter);
+		if (position >= 0 && position < boundary)
+			boundary = position;
+	}
+
+	let authority = substr(remainder, 0, boundary);
+	let parts = split(authority, ':');
+	if (!length(authority) || length(parts) > 2)
+		invalid();
+
+	validate_url_host(parts[0]);
+	if (length(parts) == 2) {
+		if (!match(parts[1], /^[0-9]+$/))
+			invalid();
+		let port = int(parts[1]);
+		if (port == null || port < 1 || port > 65535)
+			invalid();
+	}
+
 	return value;
 };
 

@@ -18,8 +18,16 @@ function known_code(code) {
 	return false;
 };
 
+function secret_key(key) {
+	let normalized = replace(lc(key), /[^a-z0-9]+/g, '_');
+	return match(normalized, /^(auth|authorization|bearer|cookie|credential|password|secret|session|token)$/) ||
+	       match(normalized, /^(api|private|access)_?key$/) ||
+	       match(normalized, /^(access|refresh)_?token$/) ||
+	       match(normalized, /^client_?secret$/);
+};
+
 function redact(value, key) {
-	if (key != null && match(lc(key), /^(api_key|auth|authorization|bearer|cookie|credential|password|private_key|secret|session|token)$/))
+	if (key != null && secret_key(key))
 		return '[REDACTED]';
 
 	if (type(value) == 'array') {

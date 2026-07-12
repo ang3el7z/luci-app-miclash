@@ -7,6 +7,10 @@ const PROCESS_FIELDS = {
 	timeout_ms: true
 };
 
+function contains_nul(value) {
+	return index(value, sprintf('%c', 0)) >= 0;
+};
+
 export function validate_process_request(request) {
 	if (type(request) != 'object')
 		fail('INVALID_ARGUMENT');
@@ -15,18 +19,18 @@ export function validate_process_request(request) {
 		if (!exists(PROCESS_FIELDS, name))
 			fail('INVALID_ARGUMENT');
 
-	if (type(request.command) != 'string' || !length(request.command))
+	if (type(request.command) != 'string' || !length(request.command) || contains_nul(request.command))
 		fail('INVALID_ARGUMENT');
 	if (request.args != null && type(request.args) != 'array')
 		fail('INVALID_ARGUMENT');
 	for (let arg in request.args ?? [])
-		if (type(arg) != 'string')
+		if (type(arg) != 'string' || contains_nul(arg))
 			fail('INVALID_ARGUMENT');
 	if (request.env != null && type(request.env) != 'object')
 		fail('INVALID_ARGUMENT');
 	for (let name, value in request.env ?? {})
 		if (!match(name, /^[A-Za-z_][A-Za-z0-9_]*$/) ||
-		    type(value) != 'string' || match(value, /[\u0000]/))
+		    type(value) != 'string' || contains_nul(value))
 			fail('INVALID_ARGUMENT');
 	if (request.timeout_ms != null &&
 	    (type(request.timeout_ms) != 'int' || request.timeout_ms < 0))
