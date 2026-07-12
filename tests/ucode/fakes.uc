@@ -64,18 +64,25 @@ export function fs(initial) {
 
 export function uci(initial) {
 	let values = initial ?? {};
-	return {
+	let fake = {
 		values,
-		get: (config, section, option) => values[config]?.[section]?.[option],
-		set: (config, section, option, value) => {
-			values[config] ??= {};
-			values[config][section] ??= {};
-			values[config][section][option] = value;
-			return true;
-		},
-		delete: (config, section, option) => delete values[config]?.[section]?.[option],
-		commit: (config) => true
+		set_calls: 0,
+		commit_calls: 0
 	};
+	fake.get = (config, section, option) => values[config]?.[section]?.[option];
+	fake.set = (config, section, option, value) => {
+		fake.set_calls++;
+		values[config] ??= {};
+		values[config][section] ??= {};
+		values[config][section][option] = value;
+		return true;
+	};
+	fake.delete = (config, section, option) => delete values[config]?.[section]?.[option];
+	fake.commit = (config) => {
+		fake.commit_calls++;
+		return true;
+	};
+	return fake;
 };
 
 export function events() {

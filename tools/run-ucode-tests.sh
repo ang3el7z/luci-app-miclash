@@ -19,6 +19,10 @@ export UCODE_PATH
 run_ucode_test() {
 	test_file="$1"
 	shift
+	ucode_module_dir="$(dirname -- "$UCODE_BIN")"
+	if [ -f "$ucode_module_dir/fs.so" ]; then
+		set -- "$@" -L "$ucode_module_dir/*.so"
+	fi
 	old_ifs="$IFS"
 	IFS=:
 	for module_path in $UCODE_PATH; do

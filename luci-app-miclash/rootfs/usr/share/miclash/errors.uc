@@ -1,3 +1,5 @@
+import * as redact from 'miclash.redact';
+
 const CODES = [
 	'INVALID_ARGUMENT',
 	'NOT_FOUND',
@@ -18,35 +20,6 @@ function known_code(code) {
 	return false;
 };
 
-function secret_key(key) {
-	let normalized = replace(lc(key), /[^a-z0-9]+/g, '_');
-	return match(normalized, /^(auth|authorization|bearer|cookie|credential|password|secret|session|token)$/) ||
-	       match(normalized, /^(api|private|access)_?key$/) ||
-	       match(normalized, /^(access|refresh)_?token$/) ||
-	       match(normalized, /^client_?secret$/);
-};
-
-function redact(value, key) {
-	if (key != null && secret_key(key))
-		return '[REDACTED]';
-
-	if (type(value) == 'array') {
-		let copy = [];
-		for (let item in value)
-			push(copy, redact(item, null));
-		return copy;
-	}
-
-	if (type(value) == 'object') {
-		let copy = {};
-		for (let name, item in value)
-			copy[name] = redact(item, name);
-		return copy;
-	}
-
-	return key == null ? '[REDACTED]' : value;
-};
-
 export function new(code, message, detail) {
 	if (!known_code(code))
 		code = 'INTERNAL';
@@ -57,7 +30,7 @@ export function new(code, message, detail) {
 	};
 
 	if (detail != null)
-		error.detail = redact(detail, null);
+		error.detail = redact.value(null, detail);
 
 	return error;
 };

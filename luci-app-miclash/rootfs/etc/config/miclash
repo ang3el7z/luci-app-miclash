@@ -1,0 +1,48 @@
+config core 'core'
+	option proxy_mode 'tproxy'
+	option tun_stack 'system'
+	option block_quic '1'
+	option use_tmpfs_rules '1'
+	option hwid_enabled '0'
+	option hwid_user_agent 'MiClash'
+	option hwid_device_os 'OpenWrt'
+	option subscription_url ''
+	option subscription_url_config_yaml ''
+	option subscription_url_config2_yaml ''
+	option subscription_url_config3_yaml ''
+
+config interfaces 'interfaces'
+	option mode 'exclude'
+	option auto_detect_lan '1'
+	option auto_detect_wan '1'
+	option detected_lan ''
+	option detected_wan ''
+
+config guard 'guard'
+	option enabled '0'
+	option auto_fakeip_whitelist '1'
+
+config memory 'memory'
+	option enabled '0'
+
+config updates 'updates'
+	option auto_subscription '1'
+	option interval_hours '4'
+	option miclash_release_channel 'release'
+	option mihomo_release_channel 'release'
+
+config telegram 'telegram'
+	option enabled '0'
+	option token ''
+	option user_id ''
+
+config notifications 'notifications'
+	option auto_hide '1'
+
+config backup 'backup'
+	option enabled '0'
+	option retention '5'
+	option include_secrets '0'
+
+config meta 'meta'
+	option schema_version '1'
