@@ -1430,3 +1430,11 @@ msgstr "Каждые 24 часа"
 
 msgid "Reloading Mihomo configuration..."
 msgstr "Перезагрузка конфигурации Mihomo..."
+msgid "Monitor abnormal Mihomo memory usage"
+msgstr "Контролировать аномальное потребление памяти Mihomo"
+
+msgid "Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure."
+msgstr "Определяет нормальное потребление памяти Mihomo и применяет поэтапное восстановление только при длительном дефиците памяти в системе."
+
+msgid "Failed to synchronize memory guard service."
+msgstr "Не удалось синхронизировать службу контроля памяти."

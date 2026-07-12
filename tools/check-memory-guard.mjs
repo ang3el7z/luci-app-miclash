@@ -28,6 +28,10 @@ const service = readFileSync(servicePath, 'utf8');
 const initPath = 'luci-app-miclash/rootfs/etc/init.d/miclash-memory-guard';
 const makefile = readFileSync('luci-app-miclash/Makefile', 'utf8');
 const acl = readFileSync('luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json', 'utf8');
+const settingsModel = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/settings-model.js', 'utf8');
+const config = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js', 'utf8');
+const ruPo = readFileSync('luci-app-miclash/rootfs/po/ru/miclash.po', 'utf8');
+const zhPo = readFileSync('luci-app-miclash/rootfs/po/zh-cn/miclash.po', 'utf8');
 for (const marker of [
 	'SAMPLE_INTERVAL_SEC=60',
 	'PRESSURE_SAMPLES_REQUIRED=5',
@@ -90,5 +94,15 @@ assert.match(makefile, /miclash-memory-guard stop/);
 assert.match(makefile, /miclash-memory-guard disable/);
 assert.match(makefile, /rm -rf \/tmp\/miclash-memory-guard/);
 assert.match(acl, /"\/opt\/clash\/bin\/miclash-memory-guard": \[ "exec" \]/);
+assert.match(settingsModel, /enableMemoryGuard: false/);
+assert.match(settingsModel, /case 'ENABLE_MEMORY_GUARD': settings\.enableMemoryGuard = value === 'true'/);
+assert.match(settingsModel, /settings\.ENABLE_MEMORY_GUARD = enableMemoryGuard/);
+assert.match(config, /id="sbox-memory-guard"/);
+assert.match(config, /fs\.exec\('\/opt\/clash\/bin\/miclash-memory-guard', \['sync'\]\)/);
+assert.match(config, /formState\.enableMemoryGuard/);
+for (const catalog of [ruPo, zhPo]) {
+	assert.ok(catalog.includes('msgid "Monitor abnormal Mihomo memory usage"'));
+	assert.ok(catalog.includes('msgid "Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure."'));
+}
 
 console.log('memory guard check passed');
