@@ -61,7 +61,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -yq cmake build-essential libjson-c-dev pkg-config
 
+      - name: Restore host ucode build
+        id: ucode-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/ucode-build
+          key: ${{ runner.os }}-ucode-${{ env.UCODE_REVISION }}
+
       - name: Build OpenWrt 24.10 ucode revision
+        if: steps.ucode-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -105,7 +113,7 @@ jobs:
           - sdk_version: "24.10.2"
             package_manager: opkg
             arch: x86/64
-          - sdk_version: "25.12.0-rc2"
+          - sdk_version: "25.12.5"
             package_manager: apk
             arch: x86/64
     env:
