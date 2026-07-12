@@ -26,7 +26,35 @@ let production = runtime.create();
 assert_true(type(production.clock.set_timeout) == 'function');
 assert_throws(() => production.process.run('echo hello'), 'INVALID_ARGUMENT');
 assert_throws(() => production.process.run({ command: 'echo', args: [], shell: true }), 'INVALID_ARGUMENT');
-assert_throws(() => production.process.run({ command: 'echo', args: [], stdin: 'data' }), 'INVALID_ARGUMENT');
+
+let validation_fake = fakes.process();
+function assert_process_rejected(request) {
+	assert_throws(() => production.process.run(request), 'INVALID_ARGUMENT');
+	assert_throws(() => validation_fake.run(request), 'INVALID_ARGUMENT');
+};
+
+assert_process_rejected({ command: '', args: [] });
+assert_process_rejected({ command: 'echo', args: [ 1 ] });
+assert_process_rejected({ command: 'echo', env: [] });
+assert_process_rejected({ command: 'echo', env: { 'BAD-NAME': 'value' } });
+assert_process_rejected({ command: 'echo', env: { GOOD_NAME: 1 } });
+assert_process_rejected({ command: 'echo', timeout_ms: -1 });
+assert_process_rejected({ command: 'echo', timeout_ms: 1.5 });
+assert_process_rejected({ command: 'echo', shell: true });
+assert_process_rejected({ command: 'echo', stdin: '' });
+assert_equal(length(validation_fake.calls), 0);
+
+let production_result = production.process.run({ command: '/bin/true' });
+assert_equal(production_result.code, 0);
+assert_true(exists(production_result, 'stdout'));
+assert_true(exists(production_result, 'stderr'));
+assert_equal(production_result.stdout, null);
+assert_equal(production_result.stderr, null);
+
+let fake_result = validation_fake.run({ command: '/bin/true' });
+assert_equal(fake_result.code, 0);
+assert_equal(fake_result.stdout, null);
+assert_equal(fake_result.stderr, null);
 
 let fake_fs = fakes.fs({ '/etc/miclash/config': 'old' });
 assert_equal(fake_fs.readfile('/etc/miclash/config'), 'old');

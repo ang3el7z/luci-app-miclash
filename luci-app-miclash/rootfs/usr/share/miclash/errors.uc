@@ -19,7 +19,7 @@ function known_code(code) {
 };
 
 function redact(value, key) {
-	if (key != null && match(lc(key), /(authorization|cookie|password|secret|token)/))
+	if (key != null && match(lc(key), /^(api_key|auth|authorization|bearer|cookie|credential|password|private_key|secret|session|token)$/))
 		return '[REDACTED]';
 
 	if (type(value) == 'array') {
@@ -36,7 +36,7 @@ function redact(value, key) {
 		return copy;
 	}
 
-	return value;
+	return key == null ? '[REDACTED]' : value;
 };
 
 export function new(code, message, detail) {

@@ -13,6 +13,27 @@ assert_equal(errors.new('DOWNLOAD_FAILED', 'failed', {
 	url: 'https://example.com',
 	token: 'do-not-leak'
 }).detail.token, '[REDACTED]');
+assert_equal(errors.new('DOWNLOAD_FAILED', 'failed', 'scalar secret').detail, '[REDACTED]');
+
+let redacted = errors.new('INTERNAL', 'failed', {
+	api_key: 'one',
+	auth: 'two',
+	authorization: 'three',
+	bearer: 'four',
+	cookie: 'five',
+	credential: 'six',
+	password: 'seven',
+	private_key: 'eight',
+	secret: 'nine',
+	session: 'ten',
+	token: 'eleven',
+	nested: [ { api_key: 'nested-secret', safe: 'visible' } ]
+}).detail;
+for (let key in [ 'api_key', 'auth', 'authorization', 'bearer', 'cookie', 'credential',
+	'password', 'private_key', 'secret', 'session', 'token' ])
+	assert_equal(redacted[key], '[REDACTED]');
+assert_equal(redacted.nested[0].api_key, '[REDACTED]');
+assert_equal(redacted.nested[0].safe, 'visible');
 
 assert_throws(() => schema.profile_name('config4.yaml'), 'INVALID_ARGUMENT');
 assert_equal(schema.profile_name('config2.yaml'), 'config2.yaml');
@@ -29,6 +50,14 @@ assert_equal(schema.archive_name('backup-1.tar.gz'), 'backup-1.tar.gz');
 assert_throws(() => schema.archive_name('../backup.tar.gz'), 'INVALID_ARGUMENT');
 assert_throws(() => schema.managed_update_url('http://example.com/update'), 'INVALID_ARGUMENT');
 assert_equal(schema.managed_update_url('https://example.com/update'), 'https://example.com/update');
+assert_equal(schema.url('http://example.com:8080/path?q=1#fragment'), 'http://example.com:8080/path?q=1#fragment');
+assert_equal(schema.managed_update_url('https://example.com:8443/update'), 'https://example.com:8443/update');
+assert_throws(() => schema.url('https://'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://?query'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https:///path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://user@example.com/path'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url('https://example.com/has\tspace'), 'INVALID_ARGUMENT');
+assert_throws(() => schema.url(sprintf('https://example.com/%c', 1)), 'INVALID_ARGUMENT');
 assert_throws(() => schema.object({ action: 'start', extra: true }, {
 	action: { type: 'string', enum: [ 'start', 'stop' ] }
 }), 'INVALID_ARGUMENT');

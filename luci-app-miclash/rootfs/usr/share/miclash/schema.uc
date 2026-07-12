@@ -94,16 +94,21 @@ export function profile_name(value) {
 	return value;
 };
 
-export function url(value) {
+function validated_url(value) {
 	validate({ type: 'string', max_length: 2048 }, value);
-	if (!match(value, /^https?:\/\/[^ ]+$/))
+	if (match(value, /[[:space:][:cntrl:]]/) ||
+	    !match(value, /^https?:\/\/[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?([\/?#][^[:space:][:cntrl:]]*)?$/))
 		invalid();
 	return value;
 };
 
+export function url(value) {
+	return validated_url(value);
+};
+
 export function managed_update_url(value) {
-	validate({ type: 'string', max_length: 2048 }, value);
-	if (!match(value, /^https:\/\/[^ ]+$/))
+	validated_url(value);
+	if (!match(value, /^https:\/\//))
 		invalid();
 	return value;
 };

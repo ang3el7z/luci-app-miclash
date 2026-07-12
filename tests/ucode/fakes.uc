@@ -1,14 +1,4 @@
-const PROCESS_FIELDS = {
-	command: true,
-	args: true,
-	env: true,
-	timeout_ms: true,
-	stdin: true
-};
-
-function invalid() {
-	die('INVALID_ARGUMENT');
-};
+import { process_result, validate_process_request } from 'miclash.runtime';
 
 function process_key(request) {
 	return request.command + ':' + join(' ', request.args ?? []);
@@ -18,18 +8,11 @@ export function process(replies) {
 	let fake = { calls: [] };
 
 	fake.run = (request) => {
-		if (type(request) != 'object')
-			invalid();
-		for (let name in request)
-			if (!exists(PROCESS_FIELDS, name))
-				invalid();
-		if (type(request.command) != 'string' ||
-		    request.args != null && type(request.args) != 'array')
-			invalid();
+		validate_process_request(request);
 
 		push(fake.calls, request);
 		let reply = (replies ?? {})[process_key(request)];
-		return reply ?? { code: 0, stdout: '', stderr: '' };
+		return process_result(reply?.code ?? 0, reply?.stdout, reply?.stderr);
 	};
 
 	return fake;

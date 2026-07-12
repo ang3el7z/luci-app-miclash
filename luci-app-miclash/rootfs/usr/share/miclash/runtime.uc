@@ -4,11 +4,10 @@ const PROCESS_FIELDS = {
 	command: true,
 	args: true,
 	env: true,
-	timeout_ms: true,
-	stdin: true
+	timeout_ms: true
 };
 
-function validate_process_request(request) {
+export function validate_process_request(request) {
 	if (type(request) != 'object')
 		fail('INVALID_ARGUMENT');
 
@@ -25,33 +24,37 @@ function validate_process_request(request) {
 			fail('INVALID_ARGUMENT');
 	if (request.env != null && type(request.env) != 'object')
 		fail('INVALID_ARGUMENT');
+	for (let name, value in request.env ?? {})
+		if (!match(name, /^[A-Za-z_][A-Za-z0-9_]*$/) ||
+		    type(value) != 'string' || match(value, /[\u0000]/))
+			fail('INVALID_ARGUMENT');
 	if (request.timeout_ms != null &&
 	    (type(request.timeout_ms) != 'int' || request.timeout_ms < 0))
-		fail('INVALID_ARGUMENT');
-	if (request.stdin != null && type(request.stdin) != 'string')
 		fail('INVALID_ARGUMENT');
 
 	return request;
 };
 
+export function process_result(code, stdout, stderr) {
+	return {
+		code,
+		stdout: stdout ?? null,
+		stderr: stderr ?? null
+	};
+};
+
 function process_run(request) {
 	validate_process_request(request);
-
-	if (request.stdin != null && length(request.stdin))
-		fail('INVALID_ARGUMENT');
 
 	let command = [ request.command, ...(request.args ?? []) ];
 	if (request.env != null) {
 		let environment = [ '/usr/bin/env' ];
-		for (let name, value in request.env) {
-			if (!match(name, /^[A-Za-z_][A-Za-z0-9_]*$/) || type(value) != 'string' || match(value, /[\u0000]/))
-				fail('INVALID_ARGUMENT');
+		for (let name, value in request.env)
 			push(environment, name + '=' + value);
-		}
 		command = [ ...environment, ...command ];
 	}
 
-	return { code: system(command, request.timeout_ms ?? 0) };
+	return process_result(system(command, request.timeout_ms ?? 0), null, null);
 };
 
 function fs_adapter() {
