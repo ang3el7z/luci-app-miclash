@@ -49,17 +49,27 @@ export function fs(initial) {
 	let directories = { '/': true };
 	let modes = {};
 	let devices = {};
+	let inodes = {};
+	let links = {};
+	let symlinks = {};
+	let next_inode = 100;
 	let created = [];
 	let fake = {
 		files,
 		fail_on: null,
 		corrupt_on_close: false,
 		write_results: [],
-		calls: { open: [], write: [], flush: [], close: [], chmod: [], rename: [], unlink: [] },
-		readfile: (path) => files[path],
+		calls: {
+			open: [], write: [], flush: [], close: [], chmod: [], rename: [], unlink: [],
+			readfile: []
+		},
 		writefile: (path, data) => files[path] = data,
-		exists: (path) => exists(files, path),
+		exists: (path) => exists(files, path) || exists(symlinks, path),
 		mkdir: (path) => directories[path] = true
+	};
+	fake.readfile = (path) => {
+		push(fake.calls.readfile, path);
+		return files[path];
 	};
 
 	function parent(path) {
@@ -79,18 +89,47 @@ export function fs(initial) {
 
 	for (let path in files)
 		remember_directories(path);
+	for (let path in files)
+		inodes[path] = next_inode++;
+
+	function resolve(path) {
+		for (let link, target in symlinks)
+			if (path == link || substr(path, 0, length(link) + 1) == link + '/')
+				return target + substr(path, length(link));
+		return path;
+	};
+
+	function info(path, follow) {
+		if (!follow && exists(symlinks, path))
+			return {
+				type: 'link', size: length(symlinks[path]), inode: inodes[path], nlink: 1,
+				dev: { major: 0, minor: devices[path] ?? 1 }
+			};
+		let resolved = follow ? resolve(path) : path;
+		if (!exists(files, resolved) && !exists(directories, resolved))
+			return null;
+		let device = devices[path] ?? devices[resolved] ?? devices[parent(resolved)] ?? 1;
+		return {
+			type: exists(files, resolved) ? 'file' : 'directory',
+			size: exists(files, resolved) ? length(files[resolved]) : 0,
+			inode: inodes[resolved] ?? (inodes[resolved] = next_inode++),
+			nlink: links[path] ?? 1,
+			dev: { major: 0, minor: device }
+		};
+	};
 
 	fake.open = (path, mode, perm) => {
-		if (fake.fail_on == 'open' || (index(mode, 'x') >= 0 && exists(files, path)))
+		if (fake.fail_on == 'open' || (index(mode, 'x') >= 0 && fake.exists(path)))
 			return null;
 
 		files[path] = '';
+		inodes[path] = next_inode++;
 		modes[path] = perm;
 		remember_directories(path);
 		push(created, path);
 		push(fake.calls.open, { path, mode, perm });
 		let offset = 0;
-		let handle = { path, closed: false };
+		let handle = { path, closed: false, last_error: null };
 		handle.write = (data) => {
 			if (handle.closed || fake.fail_on == 'write')
 				return null;
@@ -105,8 +144,14 @@ export function fs(initial) {
 		};
 		handle.flush = () => {
 			push(fake.calls.flush, path);
-			return fake.fail_on == 'flush' ? null : true;
+			if (fake.fail_on == 'flush') {
+				handle.last_error = 'I/O error';
+				return true;
+			}
+			handle.last_error = null;
+			return null;
 		};
+		handle.error = () => handle.last_error;
 		handle.close = () => {
 			push(fake.calls.close, path);
 			handle.closed = true;
@@ -117,7 +162,10 @@ export function fs(initial) {
 		return handle;
 	};
 	fake.write = (handle, data) => handle.write(data);
-	fake.flush = (handle) => handle.flush();
+	fake.flush = (handle) => {
+		let flushed = handle.flush();
+		return flushed == null && handle.error() == null;
+	};
 	fake.close = (handle) => handle.close();
 	fake.chmod = (path, mode) => {
 		push(fake.calls.chmod, { path, mode });
@@ -128,8 +176,12 @@ export function fs(initial) {
 	};
 	fake.unlink = (path) => {
 		push(fake.calls.unlink, path);
+		let present = exists(files, path) || exists(symlinks, path);
 		delete modes[path];
-		return delete files[path];
+		delete inodes[path];
+		delete files[path];
+		delete symlinks[path];
+		return present;
 	};
 	fake.rename = (from, to) => {
 		push(fake.calls.rename, { from, to });
@@ -137,36 +189,56 @@ export function fs(initial) {
 			return null;
 		files[to] = files[from];
 		modes[to] = modes[from];
+		inodes[to] = inodes[from];
 		delete files[from];
 		delete modes[from];
+		delete inodes[from];
 		return true;
 	};
-	fake.stat = (path) => {
-		if (!exists(files, path) && !exists(directories, path))
-			return null;
-		let device = devices[path] ?? devices[parent(path)] ?? 1;
-		return {
-			type: exists(files, path) ? 'file' : 'directory',
-			size: exists(files, path) ? length(files[path]) : 0,
-			dev: { major: 0, minor: device }
-		};
+	fake.stat = (path) => info(path, true);
+	fake.lstat = (path) => info(path, false);
+	fake.realpath = (path) => {
+		let resolved = resolve(path);
+		return info(path, true) != null ? resolved : null;
 	};
 	fake.lsdir = (directory) => {
 		let names = [];
 		let prefix = directory + '/';
-		for (let path in files) {
+		for (let path in { ...files, ...symlinks }) {
 			if (substr(path, 0, length(prefix)) != prefix)
 				continue;
 			let name = substr(path, length(prefix));
-			if (length(name) && index(name, '/') < 0)
+			if (length(name) && index(name, '/') < 0 && index(names, name) < 0)
 				push(names, name);
 		}
 		return names;
 	};
 	fake.mode = (path) => modes[path];
 	fake.set_device = (path, device) => devices[path] = device;
+	fake.set_nlink = (path, count) => links[path] = count;
+	fake.set_symlink = (path, target) => {
+		delete files[path];
+		symlinks[path] = target;
+		inodes[path] = next_inode++;
+		remember_directories(path);
+		return true;
+	};
 	fake.temp_paths = () => created;
 
+	return fake;
+};
+
+export function digest(fs) {
+	let fake = { calls: { data: [], file: [] } };
+	fake.sha256 = (data) => {
+		push(fake.calls.data, length(data));
+		return sprintf('fake-%d-%s', length(data), data);
+	};
+	fake.sha256_file = (path) => {
+		push(fake.calls.file, path);
+		let data = fs.files[path];
+		return type(data) == 'string' ? sprintf('fake-%d-%s', length(data), data) : null;
+	};
 	return fake;
 };
 

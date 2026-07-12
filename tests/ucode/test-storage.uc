@@ -3,8 +3,10 @@ import * as fakes from './fakes.uc';
 import * as storage from 'miclash.storage';
 
 function runtime(initial) {
+	let fake_fs = fakes.fs(initial);
 	return {
-		fs: fakes.fs(initial),
+		fs: fake_fs,
+		digest: fakes.digest(fake_fs),
 		clock: fakes.clock(1700000000000),
 		paths: {
 			run: '/var/run/miclash',
@@ -64,18 +66,84 @@ assert_equal(length(writers.fs.temp_paths()), 2);
 assert_true(writers.fs.temp_paths()[0] != writers.fs.temp_paths()[1]);
 assert_equal(writers.fs.readfile('/opt/clash/config.yaml'), 'second');
 
-let cross_device = runtime({ '/opt/clash/source': 'new', '/opt/clash/config.yaml': 'old' });
-cross_device.fs.set_device('/opt/clash/source', 2);
+let large_data = sprintf('%020000d', 0);
+let digest_write = runtime({ '/opt/clash/config.yaml': 'old' });
+assert_equal(storage.atomic_write(
+	digest_write, '/opt/clash/config.yaml', large_data, 0o600), true);
+assert_equal(length(digest_write.digest.calls.data), 1);
+assert_equal(length(digest_write.digest.calls.file), 1);
+assert_equal(index(digest_write.fs.calls.readfile,
+	digest_write.fs.temp_paths()[0]), -1);
+
+let cross_device_source = '/opt/clash/.config.yaml.miclash.op-1.abcdef01';
+let cross_device = runtime({ [cross_device_source]: 'new', '/opt/clash/config.yaml': 'old' });
+cross_device.fs.set_device(cross_device_source, 2);
 assert_throws(() => storage.atomic_replace(
-	 cross_device, '/opt/clash/source', '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
-assert_equal(cross_device.fs.readfile('/opt/clash/source'), 'new');
+	 cross_device, cross_device_source, '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
+assert_equal(cross_device.fs.readfile(cross_device_source), 'new');
 assert_equal(cross_device.fs.readfile('/opt/clash/config.yaml'), 'old');
 
-let replace = runtime({ '/opt/clash/source': 'new', '/opt/clash/config.yaml': 'old' });
+let owned_source = '/opt/clash/.config.yaml.miclash.op-2.abcdef02';
+let replace = runtime({ [owned_source]: 'new', '/opt/clash/config.yaml': 'old' });
 assert_equal(storage.atomic_replace(
-	replace, '/opt/clash/source', '/opt/clash/config.yaml'), true);
+	replace, owned_source, '/opt/clash/config.yaml'), true);
 assert_equal(replace.fs.readfile('/opt/clash/config.yaml'), 'new');
-assert_equal(replace.fs.exists('/opt/clash/source'), false);
+assert_equal(replace.fs.exists(owned_source), false);
+
+let foreign_source = runtime({
+	'/opt/clash/foreign': 'foreign', '/opt/clash/config.yaml': 'old'
+});
+assert_throws(() => storage.atomic_replace(
+	foreign_source, '/opt/clash/foreign', '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
+
+let other_directory = runtime({
+	'/tmp/miclash/.config.yaml.miclash.op-3.abcdef03': 'foreign',
+	'/opt/clash/config.yaml': 'old'
+});
+assert_throws(() => storage.atomic_replace(other_directory,
+	'/tmp/miclash/.config.yaml.miclash.op-3.abcdef03', '/opt/clash/config.yaml'),
+	'INVALID_ARGUMENT');
+
+let outside_root = runtime({
+	'/etc/.state.miclash.op-4.abcdef04': 'foreign', '/etc/state': 'old'
+});
+assert_throws(() => storage.atomic_replace(
+	outside_root, '/etc/.state.miclash.op-4.abcdef04', '/etc/state'), 'INVALID_ARGUMENT');
+
+let linked_root = runtime({
+	'/tmp/miclash/.config.yaml.miclash.op-5.abcdef05': 'new',
+	'/tmp/miclash/config.yaml': 'old'
+});
+linked_root.fs.set_symlink('/opt/clash', '/tmp/miclash');
+assert_throws(() => storage.atomic_replace(linked_root,
+	'/opt/clash/.config.yaml.miclash.op-5.abcdef05', '/opt/clash/config.yaml'),
+	'INVALID_ARGUMENT');
+
+let linked_parent = runtime({
+	'/tmp/miclash/.config.yaml.miclash.op-6.abcdef06': 'new',
+	'/tmp/miclash/config.yaml': 'old'
+});
+linked_parent.fs.set_symlink('/opt/clash/profiles', '/tmp/miclash');
+assert_throws(() => storage.atomic_replace(linked_parent,
+	'/opt/clash/profiles/.config.yaml.miclash.op-6.abcdef06',
+	'/opt/clash/profiles/config.yaml'), 'INVALID_ARGUMENT');
+
+let linked_source = runtime({
+	'/opt/clash/target': 'new', '/opt/clash/config.yaml': 'old'
+});
+linked_source.fs.set_symlink(
+	'/opt/clash/.config.yaml.miclash.op-7.abcdef07', '/opt/clash/target');
+assert_throws(() => storage.atomic_replace(linked_source,
+	'/opt/clash/.config.yaml.miclash.op-7.abcdef07', '/opt/clash/config.yaml'),
+	'INVALID_ARGUMENT');
+
+let hardlinked_source_path = '/opt/clash/.config.yaml.miclash.op-8.abcdef08';
+let hardlinked_source = runtime({
+	[hardlinked_source_path]: 'new', '/opt/clash/config.yaml': 'old'
+});
+hardlinked_source.fs.set_nlink(hardlinked_source_path, 2);
+assert_throws(() => storage.atomic_replace(hardlinked_source,
+	hardlinked_source_path, '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
 
 let json_rt = runtime({
 	'/etc/miclash/state.json': '{"revision":3}',
@@ -102,11 +170,26 @@ for (let unsafe_path in [ 'relative/state', '/tmp/../etc/state', '/tmp//state', 
 let cleanup = runtime({
 	'/var/run/miclash/operation.json': 'run',
 	'/tmp/miclash/download': 'tmp',
+	'/tmp/miclash/.download.miclash.crash-1.abc123': 'staged',
+	'/tmp/miclash/.foreign': 'foreign',
 	'/tmp/not-miclash/keep': 'outside',
 	'/opt/clash/config.yaml': 'config'
 });
-assert_equal(storage.cleanup_runtime(cleanup), 2);
+cleanup.fs.set_symlink('/tmp/miclash/config-link', '/opt/clash/config.yaml');
+assert_equal(storage.cleanup_runtime(cleanup), 3);
 assert_equal(cleanup.fs.exists('/var/run/miclash/operation.json'), false);
 assert_equal(cleanup.fs.exists('/tmp/miclash/download'), false);
+assert_equal(cleanup.fs.exists('/tmp/miclash/.download.miclash.crash-1.abc123'), false);
+assert_equal(cleanup.fs.readfile('/tmp/miclash/.foreign'), 'foreign');
+assert_equal(cleanup.fs.exists('/tmp/miclash/config-link'), true);
 assert_equal(cleanup.fs.readfile('/tmp/not-miclash/keep'), 'outside');
 assert_equal(cleanup.fs.readfile('/opt/clash/config.yaml'), 'config');
+
+let linked_cleanup_root = runtime({
+	'/opt/clash/operation.json': 'outside',
+	'/tmp/miclash/download': 'owned'
+});
+linked_cleanup_root.fs.set_symlink('/var/run/miclash', '/opt/clash');
+assert_equal(storage.cleanup_runtime(linked_cleanup_root), 1);
+assert_equal(linked_cleanup_root.fs.readfile('/opt/clash/operation.json'), 'outside');
+assert_equal(linked_cleanup_root.fs.exists('/var/run/miclash'), true);

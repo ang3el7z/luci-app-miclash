@@ -1,4 +1,5 @@
 import { fail } from 'miclash.errors';
+import { sha256 as digest_sha256, sha256_file as digest_sha256_file } from 'digest';
 
 const PROCESS_FIELDS = {
 	command: true,
@@ -70,11 +71,13 @@ function fs_adapter() {
 		write: (handle, data) => handle.write(data),
 		flush: (handle) => {
 			let flushed = handle.flush();
-			// OpenWrt 24.10 ucode returns null after a successful fflush().
-			return flushed ?? handle.error() == null;
+			// Pinned OpenWrt 24.10 returns null on success and true on failure.
+			return flushed == null && handle.error() == null;
 		},
 		close: (handle) => handle.close(),
 		stat: (path) => fs.stat(path),
+		lstat: (path) => fs.lstat(path),
+		realpath: (path) => fs.realpath(path),
 		mkdir: (path) => fs.mkdir(path),
 		lsdir: (path) => fs.lsdir(path),
 		chmod: (path, mode) => fs.chmod(path, mode),
@@ -87,6 +90,13 @@ function clock_adapter() {
 	return {
 		now: () => time() * 1000,
 		set_timeout: (milliseconds, callback) => require('uloop').timer(milliseconds, callback)
+	};
+};
+
+function digest_adapter() {
+	return {
+		sha256: (data) => digest_sha256(data),
+		sha256_file: (path) => digest_sha256_file(path)
 	};
 };
 
@@ -110,6 +120,7 @@ function logger_adapter() {
 export function create(overrides) {
 	let runtime = {
 		fs: fs_adapter(),
+		digest: digest_adapter(),
 		clock: clock_adapter(),
 		process: { run: process_run },
 		ubus: ubus_adapter(),
