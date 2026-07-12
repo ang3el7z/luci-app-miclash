@@ -43,18 +43,20 @@ assert_equal(manager.get(first.id).state, 'running');
 assert_equal(manager.get(second.id).state, 'queued');
 assert_equal(join(',', order), 'first');
 
-// Exact read-only kinds are compatible with a running mutation; unknown kinds are mutations.
+// Every submitted worker is a mutation. Immediate get/list reads remain available.
 let status = manager.submit('status', 'luci', {}, () => push(order, 'status'));
+let config_read = manager.submit('config.read', 'luci', {}, () => push(order, 'config.read'));
 let unknown = manager.submit('future.unknown', 'luci', {}, () => push(order, 'unknown'));
 env.clock.advance(0);
-assert_equal(manager.get(status.id).state, 'success');
+assert_equal(manager.get(status.id).state, 'queued');
+assert_equal(manager.get(config_read.id).state, 'queued');
 assert_equal(manager.get(unknown.id).state, 'queued');
-assert_equal(join(',', order), 'first,status');
+assert_equal(join(',', order), 'first');
 assert_equal(manager.get(first.id).state, 'running');
-assert_equal(length(manager.list({ state: 'queued' })), 2);
+assert_equal(length(manager.list({ state: 'queued' })), 4);
 release_first();
 env.clock.advance(0);
-assert_equal(join(',', order), 'first,status,second,unknown');
+assert_equal(join(',', order), 'first,second,status,config.read,unknown');
 assert_equal(manager.get(second.id).state, 'success');
 assert_equal(manager.get(unknown.id).state, 'success');
 
@@ -125,12 +127,19 @@ assert_equal(length(broken_manager.list()), 0);
 let start_failure = environment();
 let start_failure_manager = operations.create(start_failure.rt);
 let start_ran = 0;
+let next_ran = 0;
+let start_events = [];
+start_failure_manager.subscribe((event) => push(start_events, event));
 let start_record = start_failure_manager.submit('config.apply', 'luci', {}, () => start_ran++);
+let next_record = start_failure_manager.submit('service.restart', 'luci', {}, () => next_ran++);
+let durable_events = length(start_events);
 start_failure.fs.fail_on = 'rename';
 start_failure.clock.advance(0);
 assert_equal(start_ran, 0);
-assert_equal(start_failure_manager.get(start_record.id).state, 'failure');
-assert_equal(start_failure_manager.get(start_record.id).error.code, 'INTERNAL');
+assert_equal(next_ran, 0);
+assert_equal(start_failure_manager.get(start_record.id).state, 'queued');
+assert_equal(start_failure_manager.get(next_record.id).state, 'queued');
+assert_equal(length(start_events), durable_events);
 
 let finish_failure = environment();
 let finish_failure_manager = operations.create(finish_failure.rt);
@@ -158,12 +167,114 @@ let recovered_env = {
 };
 let recovered = operations.create(recovered_env);
 assert_equal(recovered.recover_interrupted(), 2);
+assert_equal(recovered.recover_interrupted(), 0);
 for (let id in [ running.id, queued.id ]) {
 	let record = recovered.get(id);
 	assert_equal(record.state, 'interrupted');
 	assert_equal(record.error.code, 'INTERRUPTED');
 	assert_true(record.finished_at != null);
 }
+recovered.submit('status', 'system', {}, () => null);
+assert_throws(() => recovered.recover_interrupted(), 'BUSY');
+
+let live_recovery = environment();
+let live_manager = operations.create(live_recovery.rt);
+live_manager.submit('status', 'system', {}, () => null);
+assert_throws(() => live_manager.recover_interrupted(), 'BUSY');
+
+function disk_record(id, state) {
+	let terminal = state == 'success' || state == 'failure' || state == 'interrupted';
+	return {
+		id,
+		kind: 'config.apply',
+		source: 'system',
+		state,
+		stage: state == 'interrupted' ? 'interrupted' : 'queued',
+		progress: state == 'success' ? 100 : 0,
+		message: '',
+		error: state == 'failure' || state == 'interrupted' ?
+			{ code: state == 'interrupted' ? 'INTERRUPTED' : 'INTERNAL', message: 'safe' } : null,
+		created_at: 100,
+		updated_at: terminal ? 200 : 100,
+		finished_at: terminal ? 200 : null
+	};
+};
+
+function assert_corrupt(mutator) {
+	let id = '0000000000100-00000001-0123456789abcdef';
+	let record = disk_record(id, 'success');
+	mutator(record);
+	let filename = record.id + '.json';
+	let path = '/tmp/miclash/operations/' + filename;
+	let corrupt_env = environment({ [path]: sprintf('%J\n', record) });
+	let corrupt_manager = operations.create(corrupt_env.rt);
+	assert_throws(() => corrupt_manager.recover_interrupted(), 'CORRUPT_STATE');
+	assert_equal(length(corrupt_manager.list()), 0);
+};
+
+// Recovery validates the exact complete schema and state invariants as CORRUPT_STATE.
+for (let index, mutator in [
+	(record) => record.extra = true,
+	(record) => record.id = 'bad-id',
+	(record) => record.kind = 'bad kind',
+	(record) => record.kind = 'safe' + sprintf('%c', 0),
+	(record) => record.source = 'remote',
+	(record) => record.state = 'unknown',
+	(record) => record.stage = 'bad stage',
+	(record) => record.stage = 'safe' + sprintf('%c', 0),
+	(record) => record.progress = 101,
+	(record) => record.message = 'bad' + sprintf('%c', 0),
+	(record) => record.created_at = '100',
+	(record) => record.updated_at = 99,
+	(record) => record.finished_at = null,
+	(record) => record.error = { code: 'INTERNAL', message: 'unexpected' }
+]) assert_corrupt(mutator);
+
+assert_corrupt((record) => {
+	record.state = 'failure';
+	record.progress = 1;
+	record.error = null;
+});
+assert_corrupt((record) => {
+	record.state = 'running';
+	record.progress = 1;
+	record.error = null;
+});
+assert_corrupt((record) => {
+	record.state = 'queued';
+	record.progress = 1;
+	record.finished_at = null;
+	record.error = null;
+});
+assert_corrupt((record) => record.error = {
+	code: 'NOT_A_CODE', message: 'bad', extra: true
+});
+assert_corrupt((record) => record.error = {
+	code: 'INTERNAL', message: 'safe' + sprintf('%c', 0)
+});
+assert_corrupt((record) => record.error = {
+	code: 'INTERNAL', message: 'safe', detail: { token: 'raw-secret' }
+});
+let hidden_bad_env = environment({
+	'/tmp/miclash/operations/.bad.json': sprintf('%J\n', disk_record(
+		'0000000000100-00000001-0123456789abcdef', 'success'))
+});
+assert_throws(() => operations.create(hidden_bad_env.rt).recover_interrupted(), 'CORRUPT_STATE');
+
+// One malformed file prevents loading, ID observation, or interrupting any valid file.
+let preflight_valid = '0000000000200-00000001-0123456789abcdef';
+let preflight_bad = '0000000000200-00000002-0123456789abcdef';
+let preflight_env = environment({
+	['/tmp/miclash/operations/' + preflight_valid + '.json']:
+		sprintf('%J\n', disk_record(preflight_valid, 'running')),
+	['/tmp/miclash/operations/' + preflight_bad + '.json']:
+		sprintf('%J\n', { ...disk_record(preflight_bad, 'success'), extra: true })
+});
+let preflight = operations.create(preflight_env.rt);
+assert_throws(() => preflight.recover_interrupted(), 'CORRUPT_STATE');
+assert_equal(length(preflight.list()), 0);
+assert_equal(json(preflight_env.fs.files[
+	'/tmp/miclash/operations/' + preflight_valid + '.json']).state, 'running');
 
 // IDs stay schema/safe-name compatible, strictly ordered, and have random suffixes.
 let ids_env = environment({}, 5000);
@@ -206,21 +317,33 @@ assert_throws(() => retention.list({ state: 'bogus' }), 'INVALID_ARGUMENT');
 assert_throws(() => retention.get('../bad'), 'INVALID_ARGUMENT');
 assert_throws(() => retention.subscribe('not a callback'), 'INVALID_ARGUMENT');
 
-// Retention is based on completion time, and never removes active work.
-let late_env = environment();
-let late = operations.create(late_env.rt);
-let finish_late;
-let old_but_active = late.submit('config.apply', 'system', {}, (ctx) => {
-	finish_late = () => ctx.complete();
-	return false;
-});
-late_env.clock.advance(0);
-for (let number = 0; number < 101; number++) {
-	late.submit('status', 'system', {}, () => null);
-	late_env.clock.advance(1);
+// Retention unlink failure is housekeeping: terminal state and FIFO continue.
+let prune_env = environment();
+let prune_manager = operations.create(prune_env.rt);
+for (let number = 0; number < 100; number++) {
+	prune_manager.submit('status', 'system', {}, () => null);
+	prune_env.clock.advance(0);
 }
-assert_equal(late.get(old_but_active.id).state, 'running');
-assert_equal(length(late.list()), 101);
-finish_late();
-assert_equal(late.get(old_but_active.id).state, 'success');
-assert_equal(length(late.list()), 100);
+prune_env.fs.fail_unlink_once = true;
+let prune_101 = prune_manager.submit('status', 'system', {}, () => null);
+let prune_102 = prune_manager.submit('status', 'system', {}, () => null);
+prune_env.clock.advance(0);
+assert_equal(prune_manager.get(prune_101.id).state, 'success');
+assert_equal(prune_manager.get(prune_102.id).state, 'success');
+assert_equal(length(prune_manager.list()), 100);
+
+// Each subscription has its own identity even when callbacks are identical.
+let subscription_env = environment();
+let subscription_manager = operations.create(subscription_env.rt);
+let subscription_calls = 0;
+let same_callback = (event) => subscription_calls++;
+let unsubscribe_first = subscription_manager.subscribe(same_callback);
+let unsubscribe_second = subscription_manager.subscribe(same_callback);
+assert_equal(unsubscribe_first(), true);
+subscription_manager.submit('status', 'system', {}, () => null);
+subscription_env.clock.advance(0);
+assert_equal(subscription_calls, 3);
+assert_equal(unsubscribe_second(), true);
+subscription_manager.submit('status', 'system', {}, () => null);
+subscription_env.clock.advance(0);
+assert_equal(subscription_calls, 3);

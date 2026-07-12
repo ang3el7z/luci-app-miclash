@@ -4,27 +4,21 @@ import * as schema from 'miclash.schema';
 import * as storage from 'miclash.storage';
 
 const JOURNAL_LIMIT = 100;
-const READ_ONLY_KINDS = {
-	status: true,
-	health: true,
-	'operation.get': true,
-	'operation.list': true,
-	'config.list': true,
-	'config.read': true,
-	'history.list': true,
-	'history.diff': true,
-	'settings.get': true,
-	'diagnostics.summary': true,
-	'diagnostics.route_test': true,
-	'backup.list': true,
-	'devices.list': true,
-	'devices.policy_list': true
-};
 const SOURCES = { luci: true, telegram: true, auto: true, system: true };
 const STATES = {
 	queued: true, running: true, success: true, failure: true, interrupted: true
 };
 const FILTERS = { state: true, kind: true, source: true };
+const RECORD_FIELDS = {
+	id: true, kind: true, source: true, state: true, stage: true, progress: true,
+	message: true, error: true, created_at: true, updated_at: true, finished_at: true
+};
+const ERROR_FIELDS = { code: true, message: true, detail: true };
+const ERROR_CODES = {
+	INVALID_ARGUMENT: true, NOT_FOUND: true, BUSY: true, VALIDATION_FAILED: true,
+	HEALTH_FAILED: true, DOWNLOAD_FAILED: true, PERMISSION_DENIED: true,
+	INTERRUPTED: true, CORRUPT_STATE: true, INTERNAL: true
+};
 
 let last_millis = -1;
 let id_sequence = 0;
@@ -33,14 +27,22 @@ function invalid() {
 	errors.fail('INVALID_ARGUMENT');
 };
 
+function corrupt() {
+	errors.fail('CORRUPT_STATE');
+};
+
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
 	catch (error) { errors.fail('INTERNAL'); }
 };
 
+function unsafe_text(value) {
+	return index(value, sprintf('%c', 0)) >= 0 || match(value, /[[:cntrl:]]/);
+};
+
 function safe_kind(value) {
 	if (type(value) != 'string' || !length(value) || length(value) > 128 ||
-	    !match(value, /^[A-Za-z0-9][A-Za-z0-9._-]*$/))
+	    unsafe_text(value) || !match(value, /^[A-Za-z0-9][A-Za-z0-9._-]*$/))
 		invalid();
 	return value;
 };
@@ -53,14 +55,14 @@ function safe_source(value) {
 
 function safe_stage(value) {
 	if (type(value) != 'string' || !length(value) || length(value) > 64 ||
-	    !match(value, /^[A-Za-z0-9][A-Za-z0-9._-]*$/))
+	    unsafe_text(value) || !match(value, /^[A-Za-z0-9][A-Za-z0-9._-]*$/))
 		invalid();
 	return value;
 };
 
 function safe_message(value) {
 	if (type(value) != 'string' || length(value) > 512 ||
-	    match(value, /[[:cntrl:]]/))
+	    unsafe_text(value))
 		invalid();
 	return redact.text(value);
 };
@@ -68,6 +70,74 @@ function safe_message(value) {
 function completed(record) {
 	return record.state == 'success' || record.state == 'failure' ||
 	       record.state == 'interrupted';
+};
+
+function exact_fields(value, allowed, required_count) {
+	if (type(value) != 'object')
+		return false;
+	let count = 0;
+	for (let name in value) {
+		if (!exists(allowed, name))
+			return false;
+		count++;
+	}
+	return count == required_count;
+};
+
+function valid_disk_record(record, filename) {
+	if (!exact_fields(record, RECORD_FIELDS, 11) ||
+	    type(record.id) != 'string' ||
+	    !match(record.id, /^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$/) ||
+	    filename != record.id + '.json' ||
+	    type(record.kind) != 'string' || !length(record.kind) || length(record.kind) > 128 ||
+	    unsafe_text(record.kind) || !match(record.kind, /^[A-Za-z0-9][A-Za-z0-9._-]*$/) ||
+	    type(record.source) != 'string' || !exists(SOURCES, record.source) ||
+	    type(record.state) != 'string' || !exists(STATES, record.state) ||
+	    type(record.stage) != 'string' || !length(record.stage) || length(record.stage) > 64 ||
+	    unsafe_text(record.stage) || !match(record.stage, /^[A-Za-z0-9][A-Za-z0-9._-]*$/) ||
+	    type(record.progress) != 'int' || record.progress < 0 || record.progress > 100 ||
+	    type(record.message) != 'string' || length(record.message) > 512 ||
+	    unsafe_text(record.message) ||
+	    type(record.created_at) != 'int' || record.created_at < 0 ||
+	    type(record.updated_at) != 'int' || record.updated_at < record.created_at)
+		return false;
+
+	let error_valid = record.error == null;
+	if (record.error != null) {
+		let fields = 0;
+		if (type(record.error) == 'object')
+			for (let name in record.error)
+				fields++;
+		error_valid = (fields == 2 || fields == 3) &&
+			exact_fields(record.error, ERROR_FIELDS, fields) &&
+			type(record.error.code) == 'string' && exists(ERROR_CODES, record.error.code) &&
+			type(record.error.message) == 'string' && length(record.error.message) > 0 &&
+			length(record.error.message) <= 512 && !unsafe_text(record.error.message) &&
+			(fields == 2 || exists(record.error, 'detail'));
+	}
+	if (!error_valid)
+		return false;
+	if (sprintf('%J', redact.value('operation', record)) != sprintf('%J', record))
+		return false;
+
+	if (record.state == 'queued')
+		return record.stage == 'queued' && record.progress == 0 && record.message == '' &&
+		       record.error == null && record.finished_at == null &&
+		       record.updated_at == record.created_at;
+	if (record.state == 'running')
+		return record.error == null && record.finished_at == null;
+	if (type(record.finished_at) != 'int' || record.finished_at != record.updated_at)
+		return false;
+	if (record.state == 'success')
+		return record.progress == 100 && record.error == null;
+	if (record.state == 'interrupted')
+		return record.stage == 'interrupted' && record.error?.code == 'INTERRUPTED';
+	return record.state == 'failure' && record.error != null;
+};
+
+function owned_journal_temp(name) {
+	return match(name,
+		/^\.[0-9]{13}-[0-9]{8}-[0-9a-f]{16}\.json\.miclash\.[0-9]+-[0-9]+\.[0-9A-Fa-f]{8}$/);
 };
 
 function compare_records(left, right) {
@@ -144,7 +214,11 @@ export function create(runtime) {
 	let mutation_queue = [];
 	let active_mutation = null;
 	let mutation_timer_pending = false;
+	let scheduler_frozen = false;
+	let live_started = false;
+	let recovery_done = false;
 	let subscribers = [];
+	let subscription_sequence = 0;
 	let start;
 
 	function path_for(id) {
@@ -160,16 +234,20 @@ export function create(runtime) {
 
 	function publish(record) {
 		let event = clone(redact.value('operation', record));
-		for (let callback in subscribers) {
-			try { callback(clone(event)); }
+		for (let subscription in subscribers) {
+			try { subscription.callback(clone(event)); }
 			catch (error) {}
 		}
 	};
 
 	function remove_record(record) {
-		if (runtime.fs.unlink(path_for(record.id)) != true)
-			errors.fail('INTERNAL');
+		let removed;
+		try { removed = runtime.fs.unlink(path_for(record.id)); }
+		catch (error) { return false; }
+		if (removed != true)
+			return false;
 		delete records[record.id];
+		return true;
 	};
 
 	function prune() {
@@ -179,7 +257,11 @@ export function create(runtime) {
 				push(finished, record);
 		sort(finished, compare_completed);
 		while (length(finished) > JOURNAL_LIMIT)
-			remove_record(shift(finished));
+			if (!remove_record(finished[0]))
+				return false;
+			else
+				shift(finished);
+		return true;
 	};
 
 	function public_record(record) {
@@ -187,7 +269,8 @@ export function create(runtime) {
 	};
 
 	function schedule_mutation() {
-		if (active_mutation != null || mutation_timer_pending || !length(mutation_queue))
+		if (scheduler_frozen || active_mutation != null || mutation_timer_pending ||
+		    !length(mutation_queue))
 			return;
 		mutation_timer_pending = true;
 		runtime.clock.set_timeout(0, () => {
@@ -217,11 +300,11 @@ export function create(runtime) {
 		persist(record);
 		entry.finished = true;
 		publish(records[entry.id]);
-		prune();
 		if (active_mutation == entry.id) {
 			active_mutation = null;
 			schedule_mutation();
 		}
+		try { prune(); } catch (prune_error) {}
 		return true;
 	};
 
@@ -236,17 +319,7 @@ export function create(runtime) {
 		running.updated_at = runtime.clock.now();
 		try { persist(running); }
 		catch (error) {
-			entry.finished = true;
-			let failed = clone(record);
-			failed.state = 'failure';
-			failed.error = errors.new('INTERNAL', 'Internal error', null);
-			failed.updated_at = runtime.clock.now();
-			failed.finished_at = failed.updated_at;
-			records[entry.id] = redact.value('operation', failed);
-			if (mutation && active_mutation == entry.id) {
-				active_mutation = null;
-				schedule_mutation();
-			}
+			scheduler_frozen = true;
 			return;
 		}
 		publish(records[entry.id]);
@@ -308,14 +381,11 @@ export function create(runtime) {
 		// Persist before making the operation runnable. A failed initial journal
 		// write leaves no in-memory operation and never invokes the worker.
 		persist(record);
+		live_started = true;
 		let entry = { id, worker, finished: false };
 		publish(records[id]);
-		if (exists(READ_ONLY_KINDS, kind))
-			runtime.clock.set_timeout(0, () => start(entry, false));
-		else {
-			push(mutation_queue, entry);
-			schedule_mutation();
-		}
+		push(mutation_queue, entry);
+		schedule_mutation();
 		return public_record(records[id]);
 	};
 	manager.get = (id) => {
@@ -347,7 +417,8 @@ export function create(runtime) {
 	manager.subscribe = (callback) => {
 		if (type(callback) != 'function')
 			invalid();
-		push(subscribers, callback);
+		let id = ++subscription_sequence;
+		push(subscribers, { id, callback });
 		let active = true;
 		return () => {
 			if (!active)
@@ -355,43 +426,57 @@ export function create(runtime) {
 			active = false;
 			let remaining = [];
 			for (let item in subscribers)
-				if (item != callback)
+				if (item.id != id)
 					push(remaining, item);
 			subscribers = remaining;
 			return true;
 		};
 	};
 	manager.recover_interrupted = () => {
+		if (live_started)
+			errors.fail('BUSY');
+		if (recovery_done)
+			return 0;
 		let recovered = 0;
 		let names = runtime.fs.lsdir(journal) ?? [];
 		sort(names);
+		let staged = [];
 		for (let name in names) {
-			if (!match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/))
+			if (owned_journal_temp(name))
 				continue;
+			if (!match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/))
+				corrupt();
 			let record = storage.read_json(runtime, journal + '/' + name);
-			if (type(record) != 'object' || type(record.id) != 'string' ||
-			    name != record.id + '.json')
-				errors.fail('CORRUPT_STATE');
-			schema.operation_id(record.id);
-			observe_id(record.id);
-			safe_kind(record.kind);
-			safe_source(record.source);
-			if (!exists(STATES, record.state))
-				errors.fail('CORRUPT_STATE');
-			records[record.id] = redact.value('operation', record);
+			if (!valid_disk_record(record, name))
+				corrupt();
+			let prepared = clone(redact.value('operation', record));
 			if (record.state == 'running' || record.state == 'queued') {
-				record.state = 'interrupted';
-				record.stage = 'interrupted';
-				record.message = 'Interrupted by daemon restart';
-				record.error = errors.new('INTERRUPTED', 'INTERRUPTED', null);
-				record.updated_at = runtime.clock.now();
-				record.finished_at = record.updated_at;
-				persist(record);
-				publish(records[record.id]);
+				let finished = runtime.clock.now();
+				if (finished < prepared.updated_at)
+					finished = prepared.updated_at;
+				prepared.state = 'interrupted';
+				prepared.stage = 'interrupted';
+				prepared.message = 'Interrupted by daemon restart';
+				prepared.error = errors.new('INTERRUPTED', 'INTERRUPTED', null);
+				prepared.updated_at = finished;
+				prepared.finished_at = finished;
 				recovered++;
 			}
+			push(staged, { record: prepared, changed: record.state == 'running' || record.state == 'queued' });
 		}
-		prune();
+		// Finish all validation before changing either disk or manager state.
+		for (let item in staged)
+			if (item.changed)
+				storage.write_json(runtime, path_for(item.record.id), item.record, 0o600);
+		for (let item in staged)
+			records[item.record.id] = item.record;
+		for (let item in staged)
+			observe_id(item.record.id);
+		for (let item in staged)
+			if (item.changed)
+				publish(item.record);
+		recovery_done = true;
+		try { prune(); } catch (prune_error) {}
 		return recovered;
 	};
 

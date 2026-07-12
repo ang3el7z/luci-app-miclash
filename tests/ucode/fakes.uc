@@ -70,6 +70,7 @@ export function fs(initial) {
 		fail_on: null,
 		corrupt_on_close: false,
 		collide_next_open: false,
+		fail_unlink_once: false,
 		on_lstat: null,
 		write_results: [],
 		calls: {
@@ -193,6 +194,10 @@ export function fs(initial) {
 	};
 	fake.unlink = (path) => {
 		push(fake.calls.unlink, path);
+		if (fake.fail_unlink_once) {
+			fake.fail_unlink_once = false;
+			return null;
+		}
 		let actual = exists(symlinks, path) ? path : resolve(path);
 		let present = exists(files, actual) || exists(symlinks, actual);
 		delete modes[path];
