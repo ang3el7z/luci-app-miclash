@@ -54,6 +54,9 @@ assert_process_rejected({ command: 'echo', timeout_ms: 1.5 });
 assert_process_rejected({ command: 'echo', capture_limit: 0 });
 assert_process_rejected({ command: 'echo', capture_limit: 8193 });
 assert_process_rejected({ command: 'echo', capture_limit: 1.5 });
+assert_process_rejected({ command: 'echo', capture_limit: 8192 });
+assert_process_rejected({ command: 'echo', capture_limit: 8192, timeout_ms: 0 });
+assert_process_rejected({ command: 'echo', capture_limit: 8192, timeout_ms: 300001 });
 assert_process_rejected({ command: 'echo', shell: true });
 assert_process_rejected({ command: 'echo', stdin: '' });
 assert_process_boundary_rejected({ command: 'echo' + sprintf('%c', 0) + 'hidden' });
@@ -71,7 +74,7 @@ let captured_fake = fakes.process({
 	'/bin/echo:hello': { code: 0, stdout: sprintf('%09000d', 0), stderr: 'ignored' }
 });
 let captured_result = captured_fake.run({
-	command: '/bin/echo', args: [ 'hello' ], capture_limit: 8192
+	command: '/bin/echo', args: [ 'hello' ], capture_limit: 8192, timeout_ms: 30000
 });
 assert_equal(length(captured_result.stdout), 8192);
 assert_equal(captured_result.stderr, null);

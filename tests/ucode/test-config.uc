@@ -87,6 +87,15 @@ assert_equal(length(env.revisions.list('config.yaml')), 0);
 assert_equal(env.process.calls[0].timeout_ms, 30000);
 assert_equal(env.process.calls[0].capture_limit, 8192);
 
+// Candidate cleanup failures are visible and can never be reported as a
+// successful validation while owned temporary content remains behind.
+let cleanup_env = environment();
+cleanup_env.fs.fail_unlink_once = true;
+let cleanup = cleanup_env.cfg.validate('config.yaml', fixture('valid.yaml'), 'luci');
+assert_equal(finish(cleanup_env, cleanup).error.code, 'INTERNAL');
+assert_equal(cleanup_env.fs.lstat('/tmp/miclash/candidates/' + cleanup.id)?.type,
+	'directory');
+
 let invalid_apply = env.cfg.apply('config.yaml', fixture('invalid.yaml'), 'luci');
 env.process.replies['/opt/clash/bin/clash:-d /opt/clash -f /tmp/miclash/candidates/' +
 	invalid_apply.id + '/config.yaml -t'] = { code: 1, stderr: 'invalid apply' };

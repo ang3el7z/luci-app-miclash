@@ -138,8 +138,19 @@ export function create(runtime, operations, history) {
 		catch (error) {
 			failure = errors.normalize(error).code;
 		}
-		try { runtime.fs.unlink(candidate); } catch (unlink_error) {}
-		try { runtime.fs.rmdir(directory); } catch (rmdir_error) {}
+		let cleanup_failed = false;
+		try {
+			if (runtime.fs.unlink(candidate) != true)
+				cleanup_failed = true;
+		}
+		catch (unlink_error) { cleanup_failed = true; }
+		try {
+			if (runtime.fs.rmdir(directory) != true)
+				cleanup_failed = true;
+		}
+		catch (rmdir_error) { cleanup_failed = true; }
+		if (cleanup_failed)
+			failure = 'INTERNAL';
 		if (failure != null)
 			errors.fail(failure);
 		return outcome;

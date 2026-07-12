@@ -15,6 +15,12 @@ function contains_nul(value) {
 	return index(value, sprintf('%c', 0)) >= 0;
 };
 
+function same_identity(left, right) {
+	return left?.type == 'file' && right?.type == 'file' && left.nlink == 1 &&
+	       right.nlink == 1 && left.inode == right.inode &&
+	       left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
+};
+
 export function validate_process_request(request) {
 	if (type(request) != 'object')
 		fail('INVALID_ARGUMENT');
@@ -42,6 +48,9 @@ export function validate_process_request(request) {
 	if (request.capture_limit != null &&
 	    (type(request.capture_limit) != 'int' || request.capture_limit < 1 ||
 	     request.capture_limit > 8192))
+		fail('INVALID_ARGUMENT');
+	if (request.capture_limit != null &&
+	    (request.timeout_ms == null || request.timeout_ms < 1 || request.timeout_ms > 300000))
 		fail('INVALID_ARGUMENT');
 
 	return request;
@@ -90,33 +99,32 @@ function process_adapter(fs, random, paths) {
 			let output = null;
 			let created = null;
 			let handle = null;
+			let identity = null;
 			let result = null;
 			let failure = null;
 			try {
 				for (let attempt = 0; attempt < 16; attempt++) {
 					output = paths.tmp + '/.capture-' + random.hex(8);
-					handle = fs.open(output, 'wx', 0o600);
+					handle = fs.open(output, 'w+x', 0o600);
 					if (handle != null) {
 						created = output;
 						break;
 					}
 				}
-				if (handle == null || fs.close(handle) != true)
+				if (handle == null)
 					fail('INTERNAL');
-				handle = null;
-				let stat = fs.lstat(created);
-				if (stat?.type != 'file' || stat.nlink != 1 || fs.realpath(created) != created)
+				identity = fs.lstat(created);
+				if (identity?.type != 'file' || identity.nlink != 1 ||
+				    fs.realpath(created) != created)
 					fail('INTERNAL');
 
-				let helper = [ '/usr/bin/ucode', CAPTURE_HELPER, created,
-					sprintf('%d', request.timeout_ms ?? 0), ...command ];
-				let code = system(helper, (request.timeout_ms ?? 0) > 0 ?
-					request.timeout_ms + 1000 : 0);
-				stat = fs.lstat(created);
-				if (stat?.type != 'file' || stat.nlink != 1 || fs.realpath(created) != created)
-					fail('INTERNAL');
-				handle = fs.open(created, 'r');
-				if (handle == null)
+				let helper = [ '/usr/bin/ucode', '--', CAPTURE_HELPER,
+					sprintf('%d', handle.fileno()), sprintf('%d', request.capture_limit),
+					sprintf('%d', request.timeout_ms), ...command ];
+				let code = system(helper, request.timeout_ms + 1000);
+				let current = fs.lstat(created);
+				if (!same_identity(identity, current) || fs.realpath(created) != created ||
+				    fs.seek(handle, 0, 0) != true)
 					fail('INTERNAL');
 				let captured = fs.read(handle, request.capture_limit + 1);
 				if (type(captured) != 'string' || fs.close(handle) != true)
@@ -130,10 +138,22 @@ function process_adapter(fs, random, paths) {
 			catch (error) {
 				failure = error?.code ?? error?.message;
 			}
-			if (handle != null)
-				try { fs.close(handle); } catch (close_error) {}
-			if (created != null)
-				try { fs.unlink(created); } catch (unlink_error) {}
+			if (handle != null) {
+				try {
+					if (fs.close(handle) != true)
+						failure = 'INTERNAL';
+				}
+				catch (close_error) { failure = 'INTERNAL'; }
+			}
+			if (created != null) {
+				try {
+					let owned = fs.lstat(created);
+					if (!same_identity(identity, owned) || fs.realpath(created) != created ||
+					    fs.unlink(created) != true)
+						failure = 'INTERNAL';
+				}
+				catch (unlink_error) { failure = 'INTERNAL'; }
+			}
 			if (failure != null)
 				fail(failure == 'INVALID_ARGUMENT' ? 'INVALID_ARGUMENT' : 'INTERNAL');
 			return result;
@@ -149,6 +169,7 @@ function fs_adapter() {
 		open: (path, mode, perm) => fs.open(path, mode, perm),
 		write: (handle, data) => handle.write(data),
 		read: (handle, amount) => handle.read(amount),
+		seek: (handle, offset, position) => handle.seek(offset, position),
 		flush: (handle) => {
 			let flushed = handle.flush();
 			// Pinned OpenWrt 24.10 returns null on success and true on failure.
