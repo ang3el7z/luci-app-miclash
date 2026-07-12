@@ -2,14 +2,14 @@
 
 set -u
 
-LOCK_DIR="/tmp/miclash-service.lock"
+LOCK_DIR="${MICLASH_SERVICE_LOCK_DIR:-/tmp/miclash-service.lock}"
 LOCK_ACQUIRED=0
-STATUS_DIR="/tmp/miclash-service"
-STATUS_FILE="/tmp/miclash-service/status"
-STATUS_OUT="/tmp/miclash-service/stdout"
-STATUS_ERR="/tmp/miclash-service/stderr"
-MANUAL_OPERATION_FILE="/tmp/miclash-service/manual-operation"
-CLASH_INIT="/etc/init.d/clash"
+STATUS_DIR="${MICLASH_SERVICE_STATUS_DIR:-/tmp/miclash-service}"
+STATUS_FILE="$STATUS_DIR/status"
+STATUS_OUT="$STATUS_DIR/stdout"
+STATUS_ERR="$STATUS_DIR/stderr"
+MANUAL_OPERATION_FILE="$STATUS_DIR/manual-operation"
+CLASH_INIT="${MICLASH_CLASH_INIT:-/etc/init.d/clash}"
 CLASH_RULES="/opt/clash/bin/clash-rules"
 CLASH_BIN="/opt/clash/bin/clash"
 CONFIG_FILE="/opt/clash/config.yaml"
@@ -126,7 +126,6 @@ fail() {
 }
 
 busy() {
-	write_status failed busy "ERROR: $*"
 	echo "ERROR: $*" >&2
 	exit 75
 }
@@ -159,14 +158,20 @@ acquire_lock() {
 		busy "another MiClash service operation is already running (pid $old_pid)"
 	fi
 
-	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	stale_lock="$LOCK_DIR.stale.$$"
+	if ! mv "$LOCK_DIR" "$stale_lock" 2>/dev/null; then
+		busy "another MiClash service operation changed the lock while it was being checked"
+	fi
+	rm -rf "$stale_lock" 2>/dev/null || true
 	if mkdir "$LOCK_DIR" 2>/dev/null; then
 		LOCK_ACQUIRED=1
 		printf '%s\n' "$$" > "$LOCK_DIR/pid"
 		return 0
 	fi
 
-	fail "failed to acquire service operation lock"
+	old_pid=""
+	[ -f "$LOCK_DIR/pid" ] && old_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+	busy "another MiClash service operation acquired the lock${old_pid:+ (pid $old_pid)}"
 }
 
 run_job() {

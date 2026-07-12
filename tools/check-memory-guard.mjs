@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,6 +27,53 @@ assert.notEqual(guard(['decreased', 100000, 95000]).status, 0);
 assert.equal(guard(['median', 10, 40, 20, 60, 30, 50]).stdout.trim(), '35');
 assert.notEqual(guard(['anomaly', 0, 90000]).status, 0);
 
+const servicePath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service';
+
+const lockHarness = mkdtempSync(path.join(os.tmpdir(), 'miclash-service-lock-'));
+try {
+	const lockDir = path.join(lockHarness, 'lock');
+	const statusDir = path.join(lockHarness, 'status');
+	const fakeInit = path.join(lockHarness, 'clash-init');
+	mkdirSync(lockDir);
+	mkdirSync(statusDir);
+	writeFileSync(path.join(statusDir, 'status'), 'state=running\nphase=restart\n');
+	writeFileSync(fakeInit, '#!/bin/sh\n[ "$1" = stop ] && sleep 0.2\nexit 0\n');
+	chmodSync(fakeInit, 0o755);
+	const env = {
+		MICLASH_SERVICE_LOCK_DIR: lockDir,
+		MICLASH_SERVICE_STATUS_DIR: statusDir,
+		MICLASH_CLASH_INIT: fakeInit
+	};
+	const liveHarness = path.join(lockHarness, 'live.sh');
+	writeFileSync(liveHarness, '#!/bin/sh\nprintf "%s\\n" "$$" > "$1/pid"\n"$2" stop\n');
+	chmodSync(liveHarness, 0o755);
+	const liveBusy = spawnSync(sh, [liveHarness, lockDir, servicePath], {
+		encoding: 'utf8', env: { ...process.env, ...env }
+	});
+	assert.equal(liveBusy.status, 75, liveBusy.stderr);
+	assert.equal(readFileSync(path.join(statusDir, 'status'), 'utf8'), 'state=running\nphase=restart\n',
+		'busy contender must not overwrite status owned by the lock holder');
+
+	const contenderScript = path.join(lockHarness, 'contend.sh');
+	writeFileSync(contenderScript,
+		'#!/bin/sh\n"$1" stop >"$2" 2>"$3" & a=$!\n"$1" stop >"$4" 2>"$5" & b=$!\nwait "$a"; ra=$?\nwait "$b"; rb=$?\nprintf "%s %s\\n" "$ra" "$rb"\n');
+	chmodSync(contenderScript, 0o755);
+	for (let attempt = 0; attempt < 5; attempt += 1) {
+		mkdirSync(lockDir, { recursive: true });
+		writeFileSync(path.join(lockDir, 'pid'), '99999999');
+		const race = spawnSync(sh, [contenderScript, servicePath,
+			path.join(lockHarness, 'a.out'), path.join(lockHarness, 'a.err'),
+			path.join(lockHarness, 'b.out'), path.join(lockHarness, 'b.err')], {
+			encoding: 'utf8', env: { ...process.env, ...env }
+		});
+		assert.equal(race.status, 0, race.stderr);
+		assert.match(race.stdout.trim(), /^(0 75|75 0)$/,
+			`exactly one stale-lock contender must run; got ${race.stdout.trim()}`);
+	}
+} finally {
+	rmSync(lockHarness, { recursive: true, force: true });
+}
+
 const fakeProc = mkdtempSync(path.join(os.tmpdir(), 'miclash-memory-guard-'));
 try {
 	mkdirSync(path.join(fakeProc, 'pressure'));
@@ -45,7 +92,6 @@ try {
 }
 
 const source = readFileSync(guardPath, 'utf8');
-const servicePath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service';
 const service = readFileSync(servicePath, 'utf8');
 const initPath = 'luci-app-miclash/rootfs/etc/init.d/miclash-memory-guard';
 const makefile = readFileSync('luci-app-miclash/Makefile', 'utf8');
@@ -105,14 +151,16 @@ assert.match(source, /run_monitor\(\)[\s\S]*load_runtime_state/);
 assert.match(service, /guard-core-restart[\s\S]*restart_mihomo_api[\s\S]*wait_ready/);
 assert.match(service, /guard-reload[\s\S]*hot_reload_config[\s\S]*wait_ready/);
 assert.match(service, /busy\(\)[\s\S]*exit 75/);
+assert.doesNotMatch(service.match(/busy\(\) \{[\s\S]*?\n\}/)?.[0] || '', /write_status/);
 assert.match(service, /busy "another MiClash service operation is already running/);
+assert.match(service, /mv "\$LOCK_DIR" "\$stale_lock"/);
 assert.ok(!source.includes('if [ -d /tmp/miclash-service.lock ]'),
 	'guard must let miclash-service distinguish live and stale locks');
 assert.match(source, /ACTION_BUSY_EXIT=75/);
 assert.match(source, /\[ "\$code" -eq "\$ACTION_BUSY_EXIT" \][\s\S]*return "\$ACTION_BUSY_EXIT"/);
 assert.match(source, /defer_busy_recovery\(\)/);
 assert.match(service, /record_manual_operation\(\)/);
-assert.match(service, /MANUAL_OPERATION_FILE="\/tmp\/miclash-service\/manual-operation"/);
+assert.match(service, /MANUAL_OPERATION_FILE="\$STATUS_DIR\/manual-operation"/);
 assert.match(service, /record_manual_operation\(\)[\s\S]*MICLASH_MEMORY_GUARD_ACTION/);
 assert.match(source, /MICLASH_MEMORY_GUARD_ACTION=1 "\$SERVICE_BIN" "\$action"/);
 assert.match(service, /reload\)[\s\S]*hot_reload_config[\s\S]*wait_ready[\s\S]*record_manual_operation/);
