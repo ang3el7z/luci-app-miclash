@@ -1,0 +1,48 @@
+# MiClash intended iptables contract v1
+ipset create miclash_local4 hash:net family inet -exist
+ipset flush miclash_local4
+ipset add miclash_local4 0.0.0.0/8 -exist
+ipset add miclash_local4 10.0.0.0/8 -exist
+ipset add miclash_local4 100.64.0.0/10 -exist
+ipset add miclash_local4 127.0.0.0/8 -exist
+ipset add miclash_local4 169.254.0.0/16 -exist
+ipset add miclash_local4 172.16.0.0/12 -exist
+ipset add miclash_local4 192.0.2.0/24 -exist
+ipset add miclash_local4 192.88.99.0/24 -exist
+ipset add miclash_local4 192.168.0.0/16 -exist
+ipset add miclash_local4 198.51.100.0/24 -exist
+ipset add miclash_local4 203.0.113.0/24 -exist
+ipset add miclash_local4 224.0.0.0/4 -exist
+ipset add miclash_local4 240.0.0.0/4 -exist
+ipset add miclash_local4 255.255.255.255/32 -exist
+iptables -t mangle -N MICLASH_PROXY
+iptables -t mangle -N MICLASH_OUTPUT
+iptables -t mangle -A PREROUTING -i pppoe-wan -j RETURN
+iptables -t mangle -A PREROUTING -i wwan0 -j RETURN
+iptables -t mangle -A PREROUTING -j MICLASH_PROXY
+iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RETURN
+iptables -t mangle -A MICLASH_PROXY -d 1.1.1.1 -j RETURN
+iptables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
+iptables -t mangle -A MICLASH_PROXY -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
+iptables -t mangle -A MICLASH_OUTPUT -d 1.1.1.1 -j RETURN
+iptables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1
+iptables -t mangle -A MICLASH_OUTPUT -p udp -j MARK --set-mark 0x1
+ipset create miclash_local6 hash:net family inet6 -exist
+ipset flush miclash_local6
+ipset add miclash_local6 ::/128 -exist
+ipset add miclash_local6 ::1/128 -exist
+ipset add miclash_local6 fc00::/7 -exist
+ipset add miclash_local6 fe80::/10 -exist
+ipset add miclash_local6 ff00::/8 -exist
+ip6tables -t mangle -N MICLASH_PROXY
+ip6tables -t mangle -N MICLASH_OUTPUT
+ip6tables -t mangle -A PREROUTING -i pppoe-wan -j RETURN
+ip6tables -t mangle -A PREROUTING -i wwan0 -j RETURN
+ip6tables -t mangle -A PREROUTING -j MICLASH_PROXY
+ip6tables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local6 dst -j RETURN
+ip6tables -t mangle -A MICLASH_PROXY -d 2606:4700:4700::1111 -j RETURN
+ip6tables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip ::1 --on-port 7894 --tproxy-mark 0x1
+ip6tables -t mangle -A MICLASH_PROXY -p udp -j TPROXY --on-ip ::1 --on-port 7894 --tproxy-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -d 2606:4700:4700::1111 -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -p tcp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -p udp -j MARK --set-mark 0x1

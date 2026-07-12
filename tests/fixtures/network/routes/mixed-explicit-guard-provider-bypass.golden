@@ -1,0 +1,9 @@
+# MiClash intended routing contract v1
+ip route replace local default dev lo table 100
+ip rule add pref 1000 fwmark 0x1 table 100
+ip route replace default dev clash-tun table 101
+ip rule add pref 1001 fwmark 0x3 table 101
+ip -6 route replace local default dev lo table 100
+ip -6 rule add pref 1000 fwmark 0x1 table 100
+ip -6 route replace default dev clash-tun table 101
+ip -6 rule add pref 1001 fwmark 0x3 table 101

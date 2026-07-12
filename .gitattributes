@@ -12,6 +12,7 @@ Makefile text eol=lf
 *.po text eol=lf
 *.md text eol=lf
 *.uc text eol=lf
+*.golden text eol=lf
 
 luci-app-miclash/rootfs/etc/init.d/* text eol=lf
 luci-app-miclash/rootfs/etc/hotplug.d/**/* text eol=lf
