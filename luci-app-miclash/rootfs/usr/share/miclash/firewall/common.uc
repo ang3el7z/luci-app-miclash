@@ -18,8 +18,26 @@ function valid_ipv4(value) {
 };
 
 function valid_ipv6(value) {
-	return type(value) == 'string' && index(value, ':') >= 0 &&
-		!!match(value, /^[0-9A-Fa-f:]+$/) && !match(value, /::.*::/);
+	if (type(value) != 'string' || !length(value) || match(value, /[^0-9A-Fa-f:.]/) ||
+	    match(value, /::.*::/)) return false;
+	let compressed = index(value, '::') >= 0;
+	let halves = compressed ? split(value, '::') : [ value ];
+	if (length(halves) != (compressed ? 2 : 1)) return false;
+	let units = 0, all = [];
+	for (let half in halves) if (length(half)) for (let part in split(half, ':')) push(all, part);
+	for (let i = 0; i < length(all); i++) {
+		let part = all[i];
+		if (!length(part)) return false;
+		if (index(part, '.') >= 0) {
+			if (i != length(all) - 1 || !valid_ipv4(part)) return false;
+			units += 2;
+		}
+		else {
+			if (!match(part, /^[0-9A-Fa-f]{1,4}$/)) return false;
+			units++;
+		}
+	}
+	return compressed ? units < 8 : units == 8;
 };
 
 function valid_ip(value) { return valid_ipv4(value) || valid_ipv6(value); };
@@ -52,8 +70,10 @@ export function validate(desired) {
 	return desired;
 };
 
-export function generation(desired) {
-	return desired.generation ?? substr(sha256(sprintf('%J', desired)), 0, 12);
+export function generation(desired, canonical_policy) {
+	if (desired.generation != null) return desired.generation;
+	if (type(canonical_policy) != 'string') fail('INVALID_ARGUMENT');
+	return substr(sha256(canonical_policy), 0, 12);
 };
 
 export function quoted_set(values) {

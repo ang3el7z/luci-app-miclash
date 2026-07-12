@@ -1,5 +1,5 @@
 import { assert_equal, assert_throws, assert_true } from './testlib.uc';
-import { compile, observe, apply, cleanup } from 'miclash.firewall.nft';
+import { compile, observe, apply, cleanup, executable_projection } from 'miclash.firewall.nft';
 import { fs, entropy } from './fakes.uc';
 
 let filesystem = require('fs');
@@ -15,6 +15,13 @@ function compiler_projection(full_contract) {
 	return join('\n', lines);
 };
 
+function executable_semantics(contract) {
+	let lines = [];
+	for (let line in split(contract, '\n'))
+		if (match(line, /^add (element|rule) inet miclash /)) push(lines, line);
+	return join('\n', lines) + '\n';
+};
+
 for (let desired in scenarios) {
 	let compiled = compile(desired);
 	let golden = filesystem.readfile(root + '/nft/' + desired.expected.nft);
@@ -22,6 +29,9 @@ for (let desired in scenarios) {
 		desired.name + ': exact normalized compiler-owned projection of full nft golden');
 	assert_true(!!match(compiled.generation, /^[0-9a-f]{12}$/), desired.name + ': deterministic generation id');
 	assert_equal(compile(desired).batch, compiled.batch, desired.name + ': deterministic batch');
+	assert_equal(executable_projection(compiled.batch, compiled.generation),
+		executable_semantics(compiler_projection(golden)),
+		desired.name + ': executable transaction exactly preserves ordered golden semantics');
 	assert_true(index(compiled.batch, 'miclash_guard_bootstrap') < 0 &&
 		index(compiled.batch, 'miclash_guard_emergency') < 0 &&
 		index(compiled.batch, 'miclash_guard ') < 0,
@@ -42,11 +52,37 @@ assert_true(index(open.model.normalized, 'proxy ip daddr @proxy_servers4 return'
 for (let invalid in [
 	{ ...scenarios[0], lan: [ 'br-lan\"; delete table inet miclash_guard_bootstrap_v1' ] },
 	{ ...scenarios[0], server_ips: [ '999.1.1.1' ] },
+	{ ...scenarios[0], server_ips: [ ':' ] },
+	{ ...scenarios[0], server_ips: [ '1:2' ] },
+	{ ...scenarios[0], server_ips: [ '2001:db8::1::2' ] },
 	{ ...scenarios[0], fakeip_cidrs: [ '10.0.0.0/99' ] },
+	{ ...scenarios[0], fakeip_cidrs: [ ':/64' ] },
+	{ ...scenarios[0], fakeip_cidrs: [ '2001:db8::/129' ] },
 	{ ...scenarios[0], set_names: { local4: 'user-controlled-set' } },
 	{ ...scenarios[0], generation: 'bad-name' }
 ])
 	assert_throws(() => compile(invalid), 'INVALID_ARGUMENT', 'invalid nft input rejected');
+for (let valid6 in [ '::', '::1', '2001:db8::1', '2001:db8:0:1:2:3:4:5', '::ffff:192.0.2.1' ])
+	assert_true(compile({ ...scenarios[0], server_ips: [ valid6 ] }) != null,
+		'strict IPv6 parser accepts valid boundary ' + valid6);
+for (let valid_cidr6 in [ '::/0', '2001:db8::1/128' ])
+	assert_true(compile({ ...scenarios[0], fakeip_cidrs: [ valid_cidr6 ] }) != null,
+		'strict IPv6 CIDR parser accepts prefix boundary ' + valid_cidr6);
+
+let semantic = compile(scenarios[0]).generation;
+assert_equal(compile({ ...scenarios[0], previous_generation: 'aaaaaaaaaaaa',
+	metadata: { z: 1, a: 2 }, observed_at: 1234 }).generation, semantic,
+	'operational and metadata fields do not churn generation');
+let reordered = {
+	ip_families: scenarios[0].ip_families, device_policies: scenarios[0].device_policies,
+	fakeip_cidrs: scenarios[0].fakeip_cidrs, server_ips: scenarios[0].server_ips,
+	quic: scenarios[0].quic, guard: scenarios[0].guard, wan: scenarios[0].wan,
+	lan: scenarios[0].lan, interface_mode: scenarios[0].interface_mode,
+	proxy_mode: scenarios[0].proxy_mode
+};
+assert_equal(compile(reordered).generation, semantic, 'serialization key order does not churn generation');
+assert_true(compile({ ...scenarios[0], quic: !scenarios[0].quic }).generation != semantic,
+	'meaningful semantic policy change creates a new generation');
 
 function runtime_with(replies) {
 	let p = { calls: [], replies: replies ?? {} };
@@ -62,28 +98,67 @@ function runtime_with(replies) {
 let observation = observe(runtime_with({
 	'nft:-j list table inet miclash': { code: 0, stdout: sprintf('%J', {
 		nftables: [ { table: { family: 'inet', name: 'miclash', comment: 'miclash:schema=1;generation=abc123abc123' } } ]
-	}) }
+	}) },
+	'nft:list table inet miclash': { code: 1 }
 }));
-assert_equal(observation.generation, 'abc123abc123', 'structured observation identifies active generation');
+assert_equal(observation.generation, null, 'stale table comment cannot identify active generation');
 let anchor_observation = observe(runtime_with({
 	'nft:-j list table inet miclash': { code: 0, stdout: sprintf('%J', { nftables: [
-		{ chain: { family: 'inet', table: 'miclash', name: 'prerouting' } },
+		{ chain: { family: 'inet', table: 'miclash', name: 'prerouting', type: 'filter',
+			hook: 'prerouting', prio: -150, policy: 'accept' } },
 		{ rule: { family: 'inet', table: 'miclash', chain: 'prerouting',
 			expr: [ { jump: { target: 'prerouting_g_def456def456' } } ] } }
 	] }) }
 }));
 assert_equal(anchor_observation.generation, 'def456def456',
 	'structured anchor observation identifies switched generation without stale table comments');
+let unrelated = observe(runtime_with({
+	'nft:-j list table inet miclash': { code: 0, stdout: sprintf('%J', { nftables: [
+		{ chain: { family: 'inet', table: 'miclash', name: 'prerouting', type: 'filter',
+			hook: 'prerouting', prio: -150, policy: 'accept' } },
+		{ rule: { family: 'inet', table: 'miclash', chain: 'unrelated',
+			expr: [ { jump: { target: 'prerouting_g_bad123bad123' } } ] } }
+	] }) },
+	'nft:list table inet miclash': { code: 0, stdout:
+		'chain unrelated {\n jump prerouting_g_bad123bad123\n}\n' }
+}));
+assert_equal(unrelated.generation, null, 'unrelated JSON or text jump cannot identify active generation');
+let text_observation = observe(runtime_with({
+	'nft:-j list table inet miclash': { code: 1 },
+	'nft:list table inet miclash': { code: 0, stdout:
+		'table inet miclash {\n chain prerouting {\n  type filter hook prerouting priority mangle; policy accept;\n  jump prerouting_g_feed12feed12\n }\n}\n' }
+}));
+assert_equal(text_observation.generation, 'feed12feed12',
+	'text fallback requires the exact stable base-chain block and its sole generation jump');
 let capture_runtime = runtime_with({
 	'nft:-j list table inet miclash': { code: 0 },
 });
+let capture_once = false;
 capture_runtime.fs.popen = (command, mode) => ({
-	read: () => sprintf('%J', { nftables: [ { rule: { family: 'inet', table: 'miclash',
-		chain: 'prerouting', expr: [ { jump: { target: 'prerouting_g_cab123cab123' } } ] } } ] }),
+	read: () => capture_once++ ? '' : sprintf('%J', { nftables: [ { rule: { family: 'inet', table: 'miclash',
+		chain: 'prerouting', expr: [ { jump: { target: 'prerouting_g_cab123cab123' } } ] } },
+		{ chain: { family: 'inet', table: 'miclash', name: 'prerouting', type: 'filter',
+			hook: 'prerouting', prio: -150, policy: 'accept' } } ] }),
 	close: () => 0
 });
 assert_equal(observe(capture_runtime).generation, 'cab123cab123',
 	'production observation captures nft output when process adapter returns status only');
+let oversized = runtime_with({ 'nft:-j list table inet miclash': { code: 0 } });
+let oversized_reads = 0;
+oversized.fs.popen = () => ({
+	read: () => oversized_reads++ < 5000 ? 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' : '',
+	close: () => 0
+});
+assert_throws(() => observe(oversized), 'INTERNAL', 'oversized nft capture fails explicitly');
+let read_error = runtime_with({ 'nft:-j list table inet miclash': { code: 0 } });
+read_error.fs.popen = () => ({ read: () => null, close: () => 0 });
+assert_throws(() => observe(read_error), 'INTERNAL', 'nft capture read error fails explicitly');
+let close_error = runtime_with({ 'nft:-j list table inet miclash': { code: 0 } });
+close_error.fs.popen = () => ({ read: () => '', close: () => 1 });
+assert_throws(() => observe(close_error), 'INTERNAL', 'nft capture close error fails explicitly');
+let close_throw = runtime_with({ 'nft:-j list table inet miclash': { code: 0 } });
+close_throw.fs.popen = () => ({ read: () => '', close: () => die('close failed') });
+assert_throws(() => observe(close_throw), 'INTERNAL', 'nft capture close exception fails explicitly');
 
 let compiled = compile(scenarios[0]);
 for (let fail_at in [ 'open', 'nft', 'observe' ]) {
@@ -109,18 +184,40 @@ assert_true(symlink_rt.fs.exists(symlink_path), 'foreign symlink remains outside
 
 let ok = runtime_with({});
 let path = '/tmp/miclash/nft-' + compiled.generation + '-0000000000000001.batch';
+function active_reply(id) {
+	return { code: 0, stdout: sprintf('%J', { nftables: [
+		{ chain: { family: 'inet', table: 'miclash', name: 'prerouting', type: 'filter',
+			hook: 'prerouting', prio: -150, policy: 'accept' } },
+		{ rule: { family: 'inet', table: 'miclash', chain: 'prerouting',
+			expr: [ { jump: { target: 'prerouting_g_' + id } } ] } }
+	] }) };
+};
 ok.process.replies['nft:-f ' + path] = { code: 0 };
-ok.process.replies['nft:-j list table inet miclash'] = { code: 0, stdout: sprintf('%J', {
-	nftables: [ { table: { family: 'inet', name: 'miclash', comment:
-		'miclash:schema=1;generation=' + compiled.generation } } ]
-}) };
+ok.process.replies['nft:-j list table inet miclash'] = active_reply(compiled.generation);
+let cleanup_lstat = 0;
+ok.fs.on_lstat = (candidate) => { if (candidate == path) cleanup_lstat++; };
 assert_equal(apply(ok, compiled).generation, compiled.generation, 'apply verifies the active generation');
 assert_equal(ok.fs.calls.open[0].perm, 0o600, 'batch is created mode 0600');
 assert_true(!exists(ok.fs.files, path), 'successful apply removes its batch');
+assert_true(cleanup_lstat > 0, 'successful apply verifies temp absence after unlink');
+
+for (let unlink_mode in [ 'false', 'throw' ]) {
+	let stuck = runtime_with({});
+	stuck.process.replies['nft:-f ' + path] = { code: 0 };
+	stuck.process.replies['nft:-j list table inet miclash'] = active_reply(compiled.generation);
+	stuck.fs.unlink = (candidate) => {
+		if (unlink_mode == 'throw') die('unlink failed');
+		return null;
+	};
+	assert_throws(() => apply(stuck, compiled), 'INTERNAL',
+		'apply cannot succeed when owned temp cleanup returns ' + unlink_mode);
+	assert_true(stuck.fs.exists(path), 'failed cleanup remains visible and prevents success');
+}
 
 let clean = runtime_with({
 	'nft:delete table inet miclash': { code: 0 },
-	'nft:-j list table inet miclash': { code: 1 }
+	'nft:-j list table inet miclash': { code: 1 },
+	'nft:list table inet miclash': { code: 1 }
 });
 assert_true(cleanup(clean, { preserve_guard: true }).clean, 'cleanup removes only main owned table');
 assert_equal(sprintf('%J', clean.process.calls[0].args), sprintf('%J', [ 'delete', 'table', 'inet', 'miclash' ]), 'cleanup scope is exact');

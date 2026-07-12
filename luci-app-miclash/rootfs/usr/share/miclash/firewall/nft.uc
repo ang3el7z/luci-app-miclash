@@ -126,25 +126,73 @@ function transactional(model, id, previous) {
 	return join('\n', l) + '\n';
 };
 
+export function executable_projection(batch, id) {
+	if (type(batch) != 'string' || !match(id, /^[0-9a-f]{12}$/)) fail('INVALID_ARGUMENT');
+	let suffix = '_g_' + id, projected = [];
+	for (let line in split(batch, '\n')) {
+		let fields = split(line, ' '), include = false;
+		if (length(fields) >= 6 && fields[0] == 'add' && fields[1] == 'element' &&
+		    fields[2] == 'inet' && fields[3] == 'miclash')
+			include = substr(fields[4], -length(suffix)) == suffix;
+		else if (length(fields) >= 6 && fields[0] == 'add' && fields[1] == 'rule' &&
+		         fields[2] == 'inet' && fields[3] == 'miclash')
+			include = substr(fields[4], -length(suffix)) == suffix;
+		if (include) push(projected, replace(line, suffix, ''));
+	}
+	return join('\n', projected) + '\n';
+};
+
 export function compile(desired) {
 	validate(desired);
-	let id = generation(desired), model = normalized(desired);
+	let model = normalized(desired), id = generation(desired, model);
 	return { generation: id, model: { schema_version: 1, normalized: model }, batch: transactional(model, id, desired.previous_generation) };
 };
 
-function parse_generation(text) {
-	let found = match(text ?? '', /miclash:schema=1;generation=([0-9a-f]{12})/);
-	return found ? found[1] : null;
-};
-
 function captured(runtime, command) {
+	const MAX_CAPTURE = 262144;
 	let popen = runtime.fs?.popen ?? require('fs').popen;
 	if (type(popen) != 'function') return null;
 	let pipe = popen(command + ' 2>/dev/null', 'r');
 	if (pipe == null) return null;
-	let output = pipe.read('all');
-	let closed = pipe.close();
-	return (closed == 0 || closed == true) && type(output) == 'string' ? output : null;
+	let output = '', capture_failed = false;
+	while (true) {
+		let chunk;
+		try { chunk = pipe.read(4096); } catch (error) { capture_failed = true; break; }
+		if (type(chunk) != 'string') { capture_failed = true; break; }
+		if (!length(chunk)) break;
+		if (length(output) + length(chunk) > MAX_CAPTURE) { capture_failed = true; break; }
+		output += chunk;
+	}
+	let closed = null;
+	try { closed = pipe.close(); } catch (error) { capture_failed = true; }
+	if (capture_failed || (closed !== 0 && closed !== true)) fail('INTERNAL');
+	return output;
+};
+
+function json_anchor_generation(document) {
+	let chains = [], rules = [];
+	for (let item in document.nftables ?? []) {
+		if (item.chain?.family == 'inet' && item.chain?.table == 'miclash' && item.chain?.name == 'prerouting')
+			push(chains, item.chain);
+		if (item.rule?.family == 'inet' && item.rule?.table == 'miclash' && item.rule?.chain == 'prerouting')
+			push(rules, item.rule);
+	}
+	if (length(chains) != 1 || chains[0].type != 'filter' || chains[0].hook != 'prerouting' ||
+	    chains[0].prio != -150 || chains[0].policy != 'accept' || length(rules) != 1 ||
+	    length(rules[0].expr ?? []) != 1)
+		return null;
+	let found = match(rules[0].expr[0].jump?.target ?? '', /^prerouting_g_([0-9a-f]{12})$/);
+	return found ? found[1] : null;
+};
+
+function text_anchor_generation(text) {
+	let found = match(text ?? '', /chain prerouting \{([^}]*)\}/);
+	if (!found || !match(found[1], /type filter hook prerouting priority (mangle|-150); policy accept;/))
+		return null;
+	let jumps = match(found[1], /jump prerouting_g_([0-9a-f]{12})/g);
+	if (!jumps || length(jumps) != 1) return null;
+	let target = match(jumps[0], /jump prerouting_g_([0-9a-f]{12})/);
+	return target ? target[1] : null;
 };
 
 export function observe(runtime) {
@@ -154,23 +202,14 @@ export function observe(runtime) {
 	if (result.code == 0 && type(result.stdout) == 'string') {
 		try {
 			let document = json(result.stdout);
-			for (let item in document.nftables ?? []) if (item.rule?.family == 'inet' &&
-			    item.rule?.table == 'miclash' && item.rule?.chain == 'prerouting')
-				for (let expression in item.rule.expr ?? []) {
-					let found = match(expression.jump?.target ?? '', /^prerouting_g_([0-9a-f]{12})$/);
-					if (found) return { installed: true, generation: found[1], source: 'json-anchor' };
-				}
-			for (let item in document.nftables ?? []) if (item.table?.family == 'inet' && item.table?.name == 'miclash') {
-				let id = parse_generation(item.table.comment);
-				if (id) return { installed: true, generation: id, source: 'json' };
-			}
+			let id = json_anchor_generation(document);
+			if (id) return { installed: true, generation: id, source: 'json-anchor' };
 		} catch (error) {}
 	}
 	let fallback = runtime.process.run({ command: 'nft', args: [ 'list', 'table', 'inet', 'miclash' ] });
 	if (fallback.code == 0 && fallback.stdout == null)
 		fallback.stdout = captured(runtime, 'nft list table inet miclash');
-	let anchor = fallback.code == 0 ? match(fallback.stdout ?? '', /jump prerouting_g_([0-9a-f]{12})/) : null;
-	let id = anchor ? anchor[1] : (fallback.code == 0 ? parse_generation(fallback.stdout) : null);
+	let id = fallback.code == 0 ? text_anchor_generation(fallback.stdout) : null;
 	return { installed: id != null, generation: id, source: 'text' };
 };
 
@@ -195,7 +234,11 @@ export function apply(runtime, compiled) {
 	}
 	catch (error) { failure = error?.code ?? error?.message ?? 'INTERNAL'; }
 	if (handle != null) try { runtime.fs.close(handle); } catch (error) {}
-	try { runtime.fs.unlink(path); } catch (error) {}
+	let cleanup_failed = false;
+	try { runtime.fs.unlink(path); } catch (error) { cleanup_failed = true; }
+	try { if (runtime.fs.lstat(path) != null) cleanup_failed = true; }
+	catch (error) { cleanup_failed = true; }
+	if (cleanup_failed) failure = 'INTERNAL';
 	if (failure != null) fail(failure);
 	return state;
 };
