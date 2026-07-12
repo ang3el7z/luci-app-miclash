@@ -187,12 +187,20 @@ function json_anchor_generation(document) {
 
 function text_anchor_generation(text) {
 	let found = match(text ?? '', /chain prerouting \{([^}]*)\}/);
-	if (!found || !match(found[1], /type filter hook prerouting priority (mangle|-150); policy accept;/))
+	if (!found) return null;
+	let declaration = 0, generation = null;
+	for (let raw in split(found[1], '\n')) {
+		let line = trim(raw);
+		if (!length(line)) continue;
+		if (match(line, /^type filter hook prerouting priority (mangle|-150); policy accept;$/)) {
+			declaration++;
+			continue;
+		}
+		let target = match(line, /^jump prerouting_g_([0-9a-f]{12})$/);
+		if (target && generation == null) { generation = target[1]; continue; }
 		return null;
-	let jumps = match(found[1], /jump prerouting_g_([0-9a-f]{12})/g);
-	if (!jumps || length(jumps) != 1) return null;
-	let target = match(jumps[0], /jump prerouting_g_([0-9a-f]{12})/);
-	return target ? target[1] : null;
+	}
+	return declaration == 1 ? generation : null;
 };
 
 export function observe(runtime) {

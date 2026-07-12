@@ -6,7 +6,7 @@ export const LOCAL6 = '::/128, ::1/128, fc00::/7, fe80::/10, ff00::/8';
 
 function valid_interface(value) {
 	return type(value) == 'string' && length(value) > 0 && length(value) <= 15 &&
-		!!match(value, /^[A-Za-z0-9_.:-]+$/);
+		!!match(value, /^[A-Za-z0-9_.-]+$/);
 };
 
 function valid_ipv4(value) {
@@ -23,6 +23,7 @@ function valid_ipv6(value) {
 	let compressed = index(value, '::') >= 0;
 	let halves = compressed ? split(value, '::') : [ value ];
 	if (length(halves) != (compressed ? 2 : 1)) return false;
+	if (compressed && index(halves[0], '.') >= 0) return false;
 	let units = 0, all = [];
 	for (let half in halves) if (length(half)) for (let part in split(half, ':')) push(all, part);
 	for (let i = 0; i < length(all); i++) {

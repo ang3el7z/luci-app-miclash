@@ -32,6 +32,12 @@ for (let desired in scenarios) {
 	assert_equal(executable_projection(compiled.batch, compiled.generation),
 		executable_semantics(compiler_projection(golden)),
 		desired.name + ': executable transaction exactly preserves ordered golden semantics');
+	let switched = compile({ ...desired, generation: '111111111111',
+		previous_generation: '000000000000' });
+	let batch_golden = filesystem.readfile(root + '/nft-batch/' + desired.expected.nft);
+	assert_true(batch_golden != null, desired.name + ': missing complete executable batch golden');
+	assert_equal(switched.batch, batch_golden,
+		desired.name + ': exact full batch topology including old-generation deletion');
 	assert_true(index(compiled.batch, 'miclash_guard_bootstrap') < 0 &&
 		index(compiled.batch, 'miclash_guard_emergency') < 0 &&
 		index(compiled.batch, 'miclash_guard ') < 0,
@@ -55,9 +61,16 @@ for (let invalid in [
 	{ ...scenarios[0], server_ips: [ ':' ] },
 	{ ...scenarios[0], server_ips: [ '1:2' ] },
 	{ ...scenarios[0], server_ips: [ '2001:db8::1::2' ] },
+	{ ...scenarios[0], server_ips: [ '192.0.2.1::' ] },
+	{ ...scenarios[0], server_ips: [ 'ffff:192.0.2.1::' ] },
 	{ ...scenarios[0], fakeip_cidrs: [ '10.0.0.0/99' ] },
 	{ ...scenarios[0], fakeip_cidrs: [ ':/64' ] },
+	{ ...scenarios[0], fakeip_cidrs: [ '192.0.2.1::/64' ] },
 	{ ...scenarios[0], fakeip_cidrs: [ '2001:db8::/129' ] },
+	{ ...scenarios[0], lan: [ ':' ] },
+	{ ...scenarios[0], lan: [ 'bad/name' ] },
+	{ ...scenarios[0], lan: [ 'bad name' ] },
+	{ ...scenarios[0], lan: [ 'abcdefghijklmnop' ] },
 	{ ...scenarios[0], set_names: { local4: 'user-controlled-set' } },
 	{ ...scenarios[0], generation: 'bad-name' }
 ])
@@ -130,6 +143,18 @@ let text_observation = observe(runtime_with({
 }));
 assert_equal(text_observation.generation, 'feed12feed12',
 	'text fallback requires the exact stable base-chain block and its sole generation jump');
+for (let ambiguous_text in [
+	'table inet miclash {\n chain prerouting {\n  type filter hook prerouting priority mangle; policy accept;\n  jump prerouting_g_aaaaaaaaaaaa_extra\n }\n}\n',
+	'table inet miclash {\n chain prerouting {\n  type filter hook prerouting priority mangle; policy accept;\n  jump prerouting_g_aaaaaaaaaaaa\n  accept\n }\n}\n',
+	'table inet miclash {\n chain prerouting {\n  type filter hook prerouting priority mangle; policy accept;\n  jump prerouting_g_aaaaaaaaaaaa\n  jump prerouting_g_bbbbbbbbbbbb\n }\n}\n'
+]) {
+	let ambiguous = observe(runtime_with({
+		'nft:-j list table inet miclash': { code: 1 },
+		'nft:list table inet miclash': { code: 0, stdout: ambiguous_text }
+	}));
+	assert_equal(ambiguous.generation, null,
+		'text stable anchor rejects prefix targets and every extra rule');
+}
 let capture_runtime = runtime_with({
 	'nft:-j list table inet miclash': { code: 0 },
 });
@@ -170,6 +195,26 @@ for (let fail_at in [ 'open', 'nft', 'observe' ]) {
 		'failure before/inside/after nft -f is surfaced');
 	for (let path in rt.fs.files)
 		assert_true(!match(path, /\/nft-.*\.batch$/), 'owned temp is always removed');
+}
+
+// Characterization: production already retried handle close during final cleanup.
+for (let close_mode in [ 'return', 'throw' ]) {
+	let close_rt = runtime_with({}), close_calls = 0;
+	let original_close = close_rt.fs.close;
+	close_rt.fs.close = (handle) => {
+		close_calls++;
+		if (close_calls == 1) {
+			if (close_mode == 'throw') die('batch close failed');
+			return null;
+		}
+		return original_close(handle);
+	};
+	assert_throws(() => apply(close_rt, compiled), 'INTERNAL',
+		'batch-file close ' + close_mode + ' failure cannot report success');
+	assert_true(close_calls >= 2, 'final cleanup retries batch-file close after ' + close_mode + ' failure');
+	for (let candidate in close_rt.fs.files)
+		assert_true(!match(candidate, /\/nft-.*\.batch$/),
+			'batch-file close failure cleanup verifies owned temp absence');
 }
 
 let symlink_rt = runtime_with({});
