@@ -44,6 +44,17 @@ export function clock(start) {
 	return fake;
 };
 
+export function entropy() {
+	let counter = 0;
+	let fake = { calls: [] };
+	fake.hex = (bytes) => {
+		push(fake.calls, bytes);
+		counter++;
+		return sprintf('%016x', counter);
+	};
+	return fake;
+};
+
 export function fs(initial) {
 	let files = initial ?? {};
 	let directories = { '/': true };

@@ -100,6 +100,31 @@ function digest_adapter() {
 	};
 };
 
+function random_adapter() {
+	return {
+		hex: (bytes) => {
+			if (type(bytes) != 'int' || bytes < 1 || bytes > 32)
+				fail('INVALID_ARGUMENT');
+			let handle = require('fs').open('/dev/urandom', 'r');
+			if (handle == null)
+				fail('INTERNAL');
+			let data;
+			try { data = handle.read(bytes); }
+			catch (error) {
+				try { handle.close(); } catch (close_error) {}
+				fail('INTERNAL');
+			}
+			if (handle.close() != true || type(data) != 'string' || length(data) != bytes)
+				fail('INTERNAL');
+			let digest = digest_sha256(data);
+			if (type(digest) != 'string' || length(digest) != 64 ||
+			    !match(digest, /^[0-9a-f]+$/))
+				fail('INTERNAL');
+			return substr(digest, 0, bytes * 2);
+		}
+	};
+};
+
 function ubus_adapter() {
 	return { connect: () => require('ubus').connect() };
 };
@@ -121,6 +146,7 @@ export function create(overrides) {
 	let runtime = {
 		fs: fs_adapter(),
 		digest: digest_adapter(),
+		random: random_adapter(),
 		clock: clock_adapter(),
 		process: { run: process_run },
 		ubus: ubus_adapter(),

@@ -1,4 +1,4 @@
-import { assert_equal, assert_throws, assert_true } from './testlib.uc';
+import { assert_equal, assert_match, assert_throws, assert_true } from './testlib.uc';
 import * as runtime from 'miclash.runtime';
 import * as fakes from './fakes.uc';
 
@@ -24,6 +24,9 @@ assert_throws(() => fake_process.run({ command: 'echo', args: [], shell: true })
 
 let production = runtime.create();
 assert_true(type(production.clock.set_timeout) == 'function');
+assert_true(type(production.random.hex) == 'function');
+let random_hex = production.random.hex(8);
+assert_match(random_hex, /^[0-9a-f]{16}$/);
 assert_equal(production.fs.flush({ flush: () => null, error: () => null }), true);
 assert_equal(production.fs.flush({ flush: () => true, error: () => null }), false);
 assert_equal(production.fs.flush({ flush: () => null, error: () => 'stale error' }), true);
