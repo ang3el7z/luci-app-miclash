@@ -18,7 +18,7 @@
       {
         "id": "guard-empty-wan-detection",
         "legacy_observation": "An empty WAN detection result must not be interpreted as permission to forward.",
-        "intended_semantics": "When Guard is ON and no WAN is known, drop all non-local IPv4 and IPv6 forwarding after local, established, DHCP, DNAT, and clash-tun exceptions.",
+        "intended_semantics": "When Guard is ON, drop all non-local forwarding for every active address family after local, DHCP, DNAT, and clash-tun exceptions, regardless of WAN discovery or connection state.",
         "scenarios": [
           "tproxy-explicit-empty-detection-guard",
           "tun-exclude-empty-detection-guard"
@@ -178,12 +178,33 @@
       "fakeip_cidrs": [],
       "device_policies": [
         {
-          "source": "192.168.1.40",
-          "action": "direct"
+          "id": "quarantined-camera",
+          "mac": "02:00:00:00:00:40",
+          "action": "block",
+          "schedule": null
         },
         {
-          "source": "fd00::40",
-          "action": "proxy"
+          "id": "work-laptop",
+          "mac": "02:00:00:00:00:41",
+          "action": "direct",
+          "schedule": {
+            "days": [ "mon", "tue", "wed", "thu", "fri" ],
+            "start": "08:00",
+            "end": "18:00",
+            "timezone": "router"
+          }
+        },
+        {
+          "id": "media-player",
+          "mac": "02:00:00:00:00:42",
+          "action": "proxy",
+          "schedule": null
+        },
+        {
+          "id": "default-phone",
+          "mac": "02:00:00:00:00:43",
+          "action": "inherit",
+          "schedule": null
         }
       ],
       "ip_families": [
@@ -191,7 +212,7 @@
         "ipv6"
       ],
       "existing_clash_tun": false,
-      "rationale": "Dual-stack MIXED split with ordered per-device direct and proxy policy decisions.",
+      "rationale": "Dual-stack MIXED split with MAC-stable device identity, block precedence, all four actions, and a scheduled direct policy resolved at the fixture snapshot.",
       "expected": {
         "nft": "mixed-explicit-guard-devices-dualstack.golden",
         "iptables": "mixed-explicit-guard-devices-dualstack.golden",
@@ -345,19 +366,28 @@
       "fakeip_cidrs": [],
       "device_policies": [
         {
-          "source": "192.168.1.50",
-          "action": "direct"
+          "id": "blocked-console",
+          "mac": "02:00:00:00:00:50",
+          "action": "block",
+          "schedule": {
+            "days": [ "sat", "sun" ],
+            "start": "00:00",
+            "end": "23:59",
+            "timezone": "router"
+          }
         },
         {
-          "source": "192.168.1.51",
-          "action": "proxy"
+          "id": "proxied-tablet",
+          "mac": "02:00:00:00:00:51",
+          "action": "proxy",
+          "schedule": null
         }
       ],
       "ip_families": [
         "ipv4"
       ],
       "existing_clash_tun": false,
-      "rationale": "Device policy ordering is evaluated before generic TPROXY marking without weakening Guard.",
+      "rationale": "Scheduled MAC policies are resolved before compilation; block precedes proxy marking without weakening Guard.",
       "expected": {
         "nft": "tproxy-exclude-device-policies.golden",
         "iptables": "tproxy-exclude-device-policies.golden",

@@ -19,10 +19,13 @@ ipset add miclash_local4 203.0.113.0/24 -exist
 ipset add miclash_local4 224.0.0.0/4 -exist
 ipset add miclash_local4 240.0.0.0/4 -exist
 ipset add miclash_local4 255.255.255.255/32 -exist
+iptables -t mangle -N MICLASH_PREROUTING
 iptables -t mangle -N MICLASH_PROXY
 iptables -t mangle -N MICLASH_OUTPUT
-iptables -t mangle -A PREROUTING -i eth1 -j RETURN
-iptables -t mangle -A PREROUTING -j MICLASH_PROXY
+iptables -t mangle -A PREROUTING -j MICLASH_PREROUTING
+iptables -t mangle -A OUTPUT -j MICLASH_OUTPUT
+iptables -t mangle -A MICLASH_PREROUTING -i eth1 -j RETURN
+iptables -t mangle -A MICLASH_PREROUTING -j MICLASH_PROXY
 iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RETURN
 iptables -t mangle -A MICLASH_PROXY -m set --match-set clash_fakeip_whitelist dst -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -m set --match-set clash_fakeip_whitelist dst -p udp -j MARK --set-mark 0x3

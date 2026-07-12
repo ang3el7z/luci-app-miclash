@@ -8,16 +8,18 @@ add chain inet miclash prerouting { type filter hook prerouting priority mangle;
 add chain inet miclash proxy
 add chain inet miclash output { type route hook output priority mangle; policy accept; }
 add set inet miclash proxy_servers6 { type ipv6_addr; }
-add element inet miclash proxy_servers6 { "2620:fe::fe" }
+add element inet miclash proxy_servers6 { 2620:fe::fe }
 add rule inet miclash prerouting iifname { "wan6" } return
 add rule inet miclash prerouting jump proxy
 add rule inet miclash proxy ip daddr @local4 return
 add rule inet miclash proxy ip6 daddr @local6 return
 add rule inet miclash proxy ip6 daddr @proxy_servers6 return
-add rule inet miclash proxy udp dport 443 reject
-add rule inet miclash proxy meta l4proto { tcp, udp } meta mark set 0x1
+add rule inet miclash proxy meta nfproto ipv6 udp dport 443 reject
+add rule inet miclash proxy meta nfproto ipv6 meta l4proto { tcp, udp } meta mark set 0x1
 add rule inet miclash output ip6 daddr @proxy_servers6 return
-add rule inet miclash output meta l4proto { tcp, udp } meta mark set 0x1
-add rule inet fw4 input iifname "clash-tun" accept comment "miclash-fwd"
-add rule inet fw4 forward iifname "clash-tun" accept comment "miclash-fwd"
-add rule inet fw4 forward oifname "clash-tun" accept comment "miclash-fwd"
+add rule inet miclash output meta nfproto ipv6 meta l4proto { tcp, udp } meta mark set 0x1
+add chain inet miclash tun_input { type filter hook input priority filter; policy accept; }
+add rule inet miclash tun_input iifname "clash-tun" accept comment "miclash-fwd"
+add chain inet miclash tun_forward { type filter hook forward priority filter; policy accept; }
+add rule inet miclash tun_forward iifname "clash-tun" accept comment "miclash-fwd"
+add rule inet miclash tun_forward oifname "clash-tun" accept comment "miclash-fwd"

@@ -9,6 +9,61 @@ fail() {
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 legacy_rules="$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules"
+
+normalize_stream() {
+	sed -e 's/pid=[0-9][0-9]*/pid=<PID>/g' \
+		-e 's/[[:space:]][[:space:]]*/ /g' \
+		-e 's/[[:space:]]$//'
+}
+
+normalize_nft() {
+	input=$1 output=$2
+	[ -f "$input" ] || { : > "$output"; return; }
+	normalize_stream < "$input" | awk '
+		/^nft (add|insert|replace) / { sub(/^nft /, ""); if ($0 != "" && !seen[$0]++) print; next }
+		/^nft-batch / { sub(/^nft-batch /, ""); if ($0 != "" && !seen[$0]++) print }
+	' > "$output"
+}
+
+normalize_iptables() {
+	input=$1 output=$2
+	[ -f "$input" ] || { : > "$output"; return; }
+	normalize_stream < "$input" | awk '
+		/^(iptables|ip6tables) -t .* -(N|A|I) / { if (!seen[$0]++) print; next }
+		/^ipset (create|add|flush) / { if (!seen[$0]++) print }
+	' > "$output"
+}
+
+normalize_routes() {
+	input=$1 output=$2
+	[ -f "$input" ] || { : > "$output"; return; }
+	normalize_stream < "$input" | awk '
+		/^ip (-6 )?route replace / { if (!seen[$0]++) print; next }
+		/^ip (-6 )?rule add / { if (!seen[$0]++) print }
+	' > "$output"
+}
+
+# Pure normalization entry point used by the contract test. It cannot target
+# tracked canonical fixtures and performs no namespace or network operation.
+if [ "${1:-}" = --normalize ]; then
+	[ "$#" -eq 4 ] || fail 'usage: --normalize nft|iptables|routes INPUT OUTPUT'
+	kind=$2 input=$3 output=$4
+	case "$input:$output" in /*:/*) ;; *) fail 'normalization paths must be absolute' ;; esac
+	[ -f "$input" ] || fail 'normalization input must be a regular file'
+	[ ! -e "$output" ] && [ ! -L "$output" ] || fail 'normalization output must not already exist'
+	output_parent=${output%/*}
+	[ -d "$output_parent" ] && [ ! -L "$output_parent" ] || fail 'normalization output parent is unsafe'
+	output_parent=$(CDPATH= cd -- "$output_parent" && pwd -P) || fail 'cannot resolve normalization output parent'
+	case "$output_parent/" in "$repo_root/tests/fixtures/network/"*) fail 'refusing canonical fixture output' ;; esac
+	case "$kind" in
+		nft) normalize_nft "$input" "$output" ;;
+		iptables) normalize_iptables "$input" "$output" ;;
+		routes) normalize_routes "$input" "$output" ;;
+		*) fail 'unknown normalization kind' ;;
+	esac
+	exit 0
+fi
+
 requested_root=${MICLASH_CAPTURE_ROOT:-}
 
 [ -n "$requested_root" ] || fail 'MICLASH_CAPTURE_ROOT is required'
@@ -33,6 +88,8 @@ case "$repo_root/" in
 esac
 
 command -v stat >/dev/null 2>&1 || fail 'stat is required for ownership checks'
+command -v findmnt >/dev/null 2>&1 || fail 'findmnt is required for nested-mount checks'
+command -v readlink >/dev/null 2>&1 || fail 'readlink is required for namespace checks'
 owner=$(stat -c '%u' "$root" 2>/dev/null || fail 'cannot inspect capture root owner')
 [ "$owner" = "$(id -u)" ] || fail 'capture root must be owned by the invoking user'
 mode=$(stat -c '%a' "$root" 2>/dev/null || fail 'cannot inspect capture root permissions')
@@ -45,8 +102,30 @@ esac
 	fail 'capture root lacks .miclash-capture-disposable safety marker'
 [ -x "$root/bin/sh" ] || fail 'capture root needs its own executable /bin/sh'
 [ -f "$legacy_rules" ] || fail 'legacy clash-rules source is missing'
-command -v chroot >/dev/null 2>&1 || fail 'true isolation is unavailable: chroot is required'
-[ "$(id -u)" -eq 0 ] || fail 'true isolation is unavailable: chroot requires uid 0'
+command -v chroot >/dev/null 2>&1 || fail 'chroot is required inside the namespace boundary'
+command -v unshare >/dev/null 2>&1 || fail 'isolated mount and network namespaces are required'
+command -v mount >/dev/null 2>&1 || fail 'mount is required to privatize the isolated namespace'
+[ "$(id -u)" -eq 0 ] || fail 'isolated namespaces and chroot require uid 0'
+
+# The disposable root must be its own mount and contain no bind/sub-mounts.
+# A cloned mount namespace still references the same mounted filesystems, so
+# merely making propagation private would not make writes to a nested host bind
+# mount safe.
+root_mounts=$(findmnt -R -n -o TARGET --target "$root" 2>/dev/null || true)
+[ "$root_mounts" = "$root" ] || \
+	fail 'capture root must be a dedicated mount with no nested mounts'
+
+parent_net_ns=$(readlink /proc/self/ns/net 2>/dev/null || true)
+parent_mnt_ns=$(readlink /proc/self/ns/mnt 2>/dev/null || true)
+[ -n "$parent_net_ns" ] && [ -n "$parent_mnt_ns" ] || fail 'cannot inspect parent namespaces'
+if ! unshare --mount --net --pid --fork /bin/sh -c '
+	mount --make-rprivate / || exit 1
+	[ "$(readlink /proc/self/ns/net)" != "$1" ] || exit 1
+	[ "$(readlink /proc/self/ns/mnt)" != "$2" ] || exit 1
+' namespace-probe "$parent_net_ns" "$parent_mnt_ns"
+then
+	fail 'verifiable isolated mount+network namespaces are unavailable'
+fi
 
 tmp_base=${TMPDIR:-/tmp}
 case "$tmp_base" in /*) ;; *) fail 'TMPDIR must be absolute' ;; esac
@@ -87,6 +166,21 @@ esac
 	for arg in "$@"; do printf '\t%s' "$arg"; done
 	printf '\n'
 } >> "$record"
+
+# Preserve batch content, not only the `nft -f` wrapper invocation. Both stdin
+# and file-backed batches occur in legacy paths.
+if [ "$cmd" = nft ] && [ "${1:-}" = -f ]; then
+	batch=${2:-}
+	if [ "$batch" = - ]; then
+		while IFS= read -r line || [ -n "$line" ]; do
+			printf 'nft-batch\t%s\n' "$line" >> "$record"
+		done
+	elif [ -n "$batch" ] && [ -f "$batch" ]; then
+		while IFS= read -r line || [ -n "$line" ]; do
+			printf 'nft-batch\t%s\n' "$line" >> "$record"
+		done < "$batch"
+	fi
+fi
 
 case "$cmd:$*" in
 	'nft:list tables'*) printf '%s\n' 'table inet fw4' ;;
@@ -153,11 +247,11 @@ write_scenario_settings() {
 		tproxy-exclude-open-dualstack-multiwan) interface_mode=exclude lan=br-lan wan=pppoe-wan,wwan0 capture_wan4=pppoe-wan capture_wan6=wwan0 server_lines='1.1.1.1 2606:4700:4700::1111' ;;
 		tun-explicit-guard-fakeip-ipv4) proxy_mode=tun guard=true ;;
 		tun-exclude-open-ipv6-existing) proxy_mode=tun interface_mode=exclude wan=wan6 quic=true capture_wan4= capture_wan6=wan6 existing=true server_lines='2620:fe::fe' ;;
-		mixed-explicit-guard-devices-dualstack) proxy_mode=mixed guard=true quic=true lan=br-lan,wlan0 auto_wan=true capture_wan6=wan6 ;;
+		mixed-explicit-guard-devices-dualstack) proxy_mode=mixed guard=true quic=true lan=br-lan,wlan0 auto_wan=true capture_wan6=eth1 ;;
 		mixed-exclude-open-quic-multiwan) proxy_mode=mixed interface_mode=exclude quic=true wan=eth1,wwan0 ;;
 		tproxy-explicit-empty-detection-guard) guard=true lan= wan= capture_wan4= ;;
 		tun-exclude-empty-detection-guard) proxy_mode=tun interface_mode=exclude guard=true lan= wan= capture_wan4= ;;
-		mixed-explicit-guard-provider-bypass) proxy_mode=mixed guard=true auto_wan=true capture_wan6=wan6 existing=true server_lines='9.9.9.9 2620:fe::9' ;;
+		mixed-explicit-guard-provider-bypass) proxy_mode=mixed guard=true auto_wan=true capture_wan6=eth1 existing=true server_lines='9.9.9.9 2620:fe::9' ;;
 		mixed-exclude-fakeip-whitelist) proxy_mode=mixed interface_mode=exclude ;;
 		tproxy-exclude-device-policies) interface_mode=exclude guard=true quic=true ;;
 		tun-explicit-existing-clash-tun) proxy_mode=tun guard=true quic=true lan=br-guest auto_wan=true existing=true server_lines='149.112.112.112' ;;
@@ -192,17 +286,6 @@ write_scenario_settings() {
 	esac
 }
 
-normalize() {
-	input=$1 output=$2
-	if [ -f "$input" ]; then
-		sed -e 's/pid=[0-9][0-9]*/pid=<PID>/g' \
-			-e 's/[[:space:]][[:space:]]*/ /g' \
-			-e 's/[[:space:]]$//' "$input" > "$output"
-	else
-		: > "$output"
-	fi
-}
-
 run_backend() {
 	name=$1 backend=$2
 	rm -f "$work_host/records/nft.raw" "$work_host/records/iptables.raw" "$work_host/records/routes.raw"
@@ -212,7 +295,9 @@ run_backend() {
 		iptables) capture_bin="$work_chroot/bin-iptables" ;;
 		*) fail "unknown backend: $backend" ;;
 	esac
-	if ! chroot "$root" /bin/sh -c \
+	if ! unshare --mount --net --pid --fork /bin/sh -c \
+		'mount --make-rprivate / || exit 1; exec "$@"' isolated \
+		chroot "$root" /bin/sh -c \
 		'PATH="$1:$2"; export PATH; MICLASH_RECORD_DIR="$3"; MICLASH_CAPTURE_WAN4="$4"; MICLASH_CAPTURE_WAN6="$5"; MICLASH_CAPTURE_TUN_EXISTS="$6"; export MICLASH_RECORD_DIR MICLASH_CAPTURE_WAN4 MICLASH_CAPTURE_WAN6 MICLASH_CAPTURE_TUN_EXISTS; exec /bin/sh "$7" start' \
 		capture "$capture_bin" "$work_chroot/bin-common" "$work_chroot/records" \
 		"$capture_wan4" "$capture_wan6" "$existing" "$work_chroot/clash-rules"
@@ -225,10 +310,10 @@ printf '%s\n' "$scenario_names" | while IFS= read -r name; do
 	[ -n "$name" ] || continue
 	mkdir -p "$candidate_root/$name"
 	run_backend "$name" nft
-	normalize "$work_host/records/nft.raw" "$candidate_root/$name/nft.candidate"
-	normalize "$work_host/records/routes.raw" "$candidate_root/$name/routes.candidate"
+	normalize_nft "$work_host/records/nft.raw" "$candidate_root/$name/nft.candidate"
+	normalize_routes "$work_host/records/routes.raw" "$candidate_root/$name/routes.candidate"
 	run_backend "$name" iptables
-	normalize "$work_host/records/iptables.raw" "$candidate_root/$name/iptables.candidate"
+	normalize_iptables "$work_host/records/iptables.raw" "$candidate_root/$name/iptables.candidate"
 done
 
 printf '%s\n' "Candidate captures written to: $candidate_root"

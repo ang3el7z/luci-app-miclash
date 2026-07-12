@@ -13,7 +13,6 @@ add element inet miclash_guard local4 { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 12
 add set inet miclash_guard local6 { type ipv6_addr; flags interval; }
 add element inet miclash_guard local6 { ::/128, ::1/128, fc00::/7, fe80::/10, ff00::/8 }
 add chain inet miclash_guard forward { type filter hook forward priority 1; policy accept; }
-add rule inet miclash_guard forward ct state established,related accept
 add rule inet miclash_guard forward iifname "clash-tun" accept
 add rule inet miclash_guard forward oifname "clash-tun" accept
 add rule inet miclash_guard forward ct status dnat accept
@@ -21,15 +20,15 @@ add rule inet miclash_guard forward udp sport 67 udp dport 68 accept
 add rule inet miclash_guard forward udp sport 68 udp dport 67 accept
 add rule inet miclash_guard forward ip daddr @local4 accept
 add rule inet miclash_guard forward ip6 daddr @local6 accept
-add rule inet miclash_guard forward oifname "eth1" drop comment "miclash-guard"
+add rule inet miclash_guard forward meta nfproto ipv4 drop comment "miclash-guard"
 add rule inet miclash prerouting iifname { "eth1" } return
 add rule inet miclash prerouting jump proxy
-add rule inet miclash proxy ip saddr 192.168.1.50 return
-add rule inet miclash proxy ip saddr 192.168.1.51 meta l4proto tcp tproxy to :7894 meta mark set 0x1
-add rule inet miclash proxy ip saddr 192.168.1.51 meta l4proto udp tproxy to :7894 meta mark set 0x1
+add rule inet miclash proxy meta nfproto ipv4 ether saddr "02:00:00:00:00:50" drop comment "device-policy:block:blocked-console"
+add rule inet miclash proxy meta nfproto ipv4 ether saddr "02:00:00:00:00:51" meta l4proto tcp tproxy to :7894 meta mark set 0x1
+add rule inet miclash proxy meta nfproto ipv4 ether saddr "02:00:00:00:00:51" meta l4proto udp tproxy to :7894 meta mark set 0x1
 add rule inet miclash proxy ip daddr @local4 return
 add rule inet miclash proxy ip6 daddr @local6 return
-add rule inet miclash proxy udp dport 443 reject
-add rule inet miclash proxy meta l4proto tcp tproxy to :7894 meta mark set 0x1
-add rule inet miclash proxy meta l4proto udp tproxy to :7894 meta mark set 0x1
-add rule inet miclash output meta l4proto { tcp, udp } meta mark set 0x1
+add rule inet miclash proxy meta nfproto ipv4 udp dport 443 reject
+add rule inet miclash proxy meta nfproto ipv4 meta l4proto tcp tproxy to :7894 meta mark set 0x1
+add rule inet miclash proxy meta nfproto ipv4 meta l4proto udp tproxy to :7894 meta mark set 0x1
+add rule inet miclash output meta nfproto ipv4 meta l4proto { tcp, udp } meta mark set 0x1
