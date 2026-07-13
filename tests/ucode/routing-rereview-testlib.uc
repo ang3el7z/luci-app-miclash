@@ -1,6 +1,7 @@
 import * as fakes from './fakes.uc';
 
 export const MANIFEST_PATH = '/var/run/miclash/routing-ownership.json';
+const TEST_BOOT = '12345678-1234-1234-1234-123456789abc';
 const CAPTURE_PREFIX = '/usr/bin/timeout -s KILL 2 ';
 
 export function canonical_route(item) {
@@ -57,8 +58,13 @@ export function empty_outputs() {
 };
 
 export function runtime(outputs) {
-	let calls = [], captures = [], filesystem = fakes.fs();
+	let calls = [], captures = [], filesystem = fakes.fs({
+		'/proc/sys/kernel/random/boot_id': TEST_BOOT + '\n',
+		'/proc/9001/stat': '9001 (routing test) S ' +
+			join(' ', [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 700 ]) + '\n'
+	});
 	for (let path in [ '/var', '/var/run', '/var/run/miclash' ]) filesystem.mkdir(path);
+	filesystem.set_mode('/var/run/miclash', 0o700);
 	filesystem.popen = (command, mode) => {
 		push(captures, command);
 		let logical = substr(command, 0, length(CAPTURE_PREFIX)) == CAPTURE_PREFIX
@@ -71,6 +77,8 @@ export function runtime(outputs) {
 		fs: filesystem,
 		digest: fakes.digest(filesystem),
 		clock: fakes.clock(1000),
+		random: fakes.entropy(),
+		mutation_lock_self: { boot: TEST_BOOT, pid: 9001, start: 700 },
 		paths: { run: '/var/run/miclash' },
 		captures
 	};

@@ -5,12 +5,28 @@ import os from 'node:os';
 import path from 'node:path';
 
 const guardPath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-memory-guard';
+const servicePath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service';
 const sh = process.platform === 'win32'
 	? 'C:/Program Files/Git/bin/sh.exe'
 	: '/bin/sh';
+const mutationHarness = mkdtempSync(path.join(os.tmpdir(), 'miclash-mutation-stub-'));
+const mutationHelper = path.join(mutationHarness, 'mutation-lock-helper');
+writeFileSync(mutationHelper, '#!/bin/sh\nmiclash_mutation_lock_enter() { return 0; }\nmiclash_mutation_lock_leave() { return 0; }\n');
+chmodSync(mutationHelper, 0o755);
+const shellMutationHelper = mutationHelper.replace(/\\/g, '/');
+function isolatedCopy(sourcePath, name) {
+	const destination = path.join(mutationHarness, name);
+	writeFileSync(destination, readFileSync(sourcePath, 'utf8')
+		.replaceAll('/usr/share/miclash/mutation-lock.sh', shellMutationHelper));
+	chmodSync(destination, 0o755);
+	return destination;
+}
+const guardExecutable = isolatedCopy(guardPath, 'miclash-memory-guard');
+const serviceExecutable = isolatedCopy(servicePath, 'miclash-service');
+process.on('exit', () => rmSync(mutationHarness, { recursive: true, force: true }));
 
 function guard(args, env = {}) {
-	return spawnSync(sh, [guardPath, ...args.map(String)], {
+	return spawnSync(sh, [guardExecutable, ...args.map(String)], {
 		encoding: 'utf8',
 		env: { ...process.env, ...env }
 	});
@@ -26,8 +42,6 @@ assert.equal(guard(['decreased', 100000, 80000]).status, 0);
 assert.notEqual(guard(['decreased', 100000, 95000]).status, 0);
 assert.equal(guard(['median', 10, 40, 20, 60, 30, 50]).stdout.trim(), '35');
 assert.notEqual(guard(['anomaly', 0, 90000]).status, 0);
-
-const servicePath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-service';
 
 const lockHarness = mkdtempSync(path.join(os.tmpdir(), 'miclash-service-lock-'));
 try {
@@ -47,7 +61,7 @@ try {
 	const liveHarness = path.join(lockHarness, 'live.sh');
 	writeFileSync(liveHarness, '#!/bin/sh\nprintf "%s\\n" "$$" > "$1/pid"\n"$2" stop\n');
 	chmodSync(liveHarness, 0o755);
-	const liveBusy = spawnSync(sh, [liveHarness, lockDir, servicePath], {
+	const liveBusy = spawnSync(sh, [liveHarness, lockDir, serviceExecutable], {
 		encoding: 'utf8', env: { ...process.env, ...env }
 	});
 	assert.equal(liveBusy.status, 75, liveBusy.stderr);
@@ -55,7 +69,7 @@ try {
 		'busy contender must not overwrite status owned by the lock holder');
 
 	rmSync(path.join(lockDir, 'pid'));
-	const pidlessBusy = spawnSync(sh, [servicePath, 'stop'], {
+	const pidlessBusy = spawnSync(sh, [serviceExecutable, 'stop'], {
 		encoding: 'utf8', env: { ...process.env, ...env }
 	});
 	assert.equal(pidlessBusy.status, 75, pidlessBusy.stderr);
@@ -68,7 +82,7 @@ try {
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		mkdirSync(lockDir, { recursive: true });
 		writeFileSync(path.join(lockDir, 'pid'), '99999999');
-		const race = spawnSync(sh, [contenderScript, servicePath,
+		const race = spawnSync(sh, [contenderScript, serviceExecutable,
 			path.join(lockHarness, 'a.out'), path.join(lockHarness, 'a.err'),
 			path.join(lockHarness, 'b.out'), path.join(lockHarness, 'b.err')], {
 			encoding: 'utf8', env: { ...process.env, ...env }

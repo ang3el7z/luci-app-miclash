@@ -12,6 +12,11 @@ case "$ACTION" in
     add)
 		[ ! -e /var/run/miclash/package-removal ] || exit 0
         [ "$INTERFACE" = "clash-tun" ] || exit 0
+		[ -r /usr/share/miclash/mutation-lock.sh ] || exit 1
+		. /usr/share/miclash/mutation-lock.sh || exit 1
+		miclash_mutation_lock_enter normal 30000 || exit $?
+		trap 'miclash_mutation_lock_leave >/dev/null 2>&1 || true' EXIT
+		trap 'exit 1' HUP INT TERM
         /opt/clash/bin/clash-rules tun_route_setup
         /opt/clash/bin/clash-rules repair_policy
         ;;

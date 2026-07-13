@@ -23,6 +23,7 @@ function new_runtime() {
 	};
 	runtime.clock = {
 		now: () => time() * 1000,
+		sleep: (milliseconds) => true,
 		set_timeout: (milliseconds, callback) => ({ cancel: () => true })
 	};
 	runtime.observers.routing = {

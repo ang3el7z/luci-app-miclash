@@ -1,0 +1,269 @@
+#!/bin/sh
+
+set -eu
+
+repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+if [ "${MICLASH_PACKAGE_CLEANUP_NS:-}" != 1 ]; then
+	exec unshare --mount --fork env MICLASH_PACKAGE_CLEANUP_NS=1 sh "$0"
+fi
+
+mount --make-rprivate /
+for path in /var/run/miclash /usr/share/miclash /opt/clash /etc /var/etc; do
+	mkdir -p "$path"
+done
+mount -t tmpfs -o mode=0700,size=2m miclash-cleanup-run /var/run/miclash
+mount -t tmpfs -o mode=0755,size=2m miclash-cleanup-share /usr/share/miclash
+mount -t tmpfs -o mode=0755,size=2m miclash-cleanup-opt /opt/clash
+mount -t tmpfs -o mode=0755,size=2m miclash-cleanup-etc /etc
+mount -t tmpfs -o mode=0755,size=1m miclash-cleanup-var-etc /var/etc
+mkdir -p /opt/clash/bin /etc/init.d
+chmod 0700 /var/run/miclash
+
+fixture="$(mktemp -d)"
+trap 'rm -rf "$fixture"' EXIT INT TERM
+mkdir -p "$fixture/bin" "$fixture/nftbin" "$fixture/iptbin" "$fixture/state"
+export MICLASH_CLEANUP_STATE="$fixture/state"
+
+cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh" \
+	/usr/share/miclash/mutation-lock.sh
+cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" \
+	/opt/clash/bin/clash-rules
+cp "$repo_root/luci-app-miclash/rootfs/etc/init.d/clash" /etc/init.d/clash
+chmod 0600 /usr/share/miclash/mutation-lock.sh
+chmod 0700 /opt/clash/bin/clash-rules /etc/init.d/clash
+
+cat > "$fixture/bin/logger" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat > "$fixture/bin/sysctl" <<'EOF'
+#!/bin/sh
+[ ! -f "$MICLASH_CLEANUP_STATE/fail-sysctl" ]
+EOF
+cat > "$fixture/bin/uci" <<'EOF'
+#!/bin/sh
+state="$MICLASH_CLEANUP_STATE"
+while [ "${1:-}" = -q ]; do shift; done
+command="${1:-}"; shift || true
+case "$command:${1:-}" in
+	show:firewall)
+		[ ! -f "$state/fail-firewall-inventory" ] || exit 1
+		[ ! -f "$state/firewall-section" ] || echo "firewall.miclash='include'"
+		[ ! -f "$state/fail-firewall-verify" ] || [ -f "$state/firewall-section" ] || exit 1
+		;;
+	delete:firewall.miclash)
+		[ ! -f "$state/fail-firewall-delete" ] || exit 1
+		rm -f "$state/firewall-section"
+		;;
+	commit:firewall)
+		[ ! -f "$state/fail-firewall-commit" ]
+		;;
+	show:dhcp)
+		[ ! -f "$state/fail-dhcp-inventory" ] || exit 1
+		if [ -f "$state/dns-mutated" ] && [ -f "$state/fail-dhcp-verify" ]; then exit 1; fi
+		[ ! -f "$state/dns-server" ] || echo "dhcp.@dnsmasq[0].server='$(cat "$state/dns-server")'"
+		[ ! -f "$state/dns-cache" ] || echo "dhcp.@dnsmasq[0].cachesize='$(cat "$state/dns-cache")'"
+		[ ! -f "$state/dns-noresolv" ] || echo "dhcp.@dnsmasq[0].noresolv='$(cat "$state/dns-noresolv")'"
+		;;
+	get:dhcp.@dnsmasq\[0\].server) cat "$state/dns-server" ;;
+	get:dhcp.@dnsmasq\[0\].cachesize) cat "$state/dns-cache" ;;
+	get:dhcp.@dnsmasq\[0\].noresolv) cat "$state/dns-noresolv" ;;
+	del_list:*)
+		[ ! -f "$state/fail-dhcp-delete" ] || exit 1
+		rm -f "$state/dns-server"
+		: > "$state/dns-mutated"
+		;;
+	set:*)
+		[ ! -f "$state/fail-dhcp-set" ] || exit 1
+		case "$1" in
+			dhcp.@dnsmasq\[0\].cachesize=*) printf '%s' "${1#*=}" > "$state/dns-cache" ;;
+			dhcp.@dnsmasq\[0\].noresolv=*) printf '%s' "${1#*=}" > "$state/dns-noresolv" ;;
+		esac
+		: > "$state/dns-mutated"
+		;;
+	delete:dhcp.@dnsmasq\[0\].cachesize)
+		[ ! -f "$state/fail-dhcp-delete" ] || exit 1
+		rm -f "$state/dns-cache"
+		: > "$state/dns-mutated"
+		;;
+	delete:dhcp.@dnsmasq\[0\].noresolv)
+		[ ! -f "$state/fail-dhcp-delete" ] || exit 1
+		rm -f "$state/dns-noresolv"
+		: > "$state/dns-mutated"
+		;;
+	commit:dhcp)
+		[ ! -f "$state/fail-dhcp-commit" ]
+		;;
+	*) exit 1 ;;
+esac
+EOF
+cat > "$fixture/nftbin/nft" <<'EOF'
+#!/bin/sh
+state="$MICLASH_CLEANUP_STATE"
+case "$*" in
+	'list ruleset')
+		[ ! -f "$state/fail-nft-inventory" ] || exit 1
+		if [ -f "$state/nft-deleted" ] && [ -f "$state/fail-nft-verify" ]; then exit 1; fi
+		cat "$state/nft-rules" 2>/dev/null || true
+		;;
+	'list table inet fw4') exit 1 ;;
+	'delete table inet clash')
+		[ ! -f "$state/fail-nft-delete" ] || exit 1
+		: > "$state/nft-rules"
+		: > "$state/nft-deleted"
+		;;
+	*) exit 1 ;;
+esac
+EOF
+cat > "$fixture/iptbin/iptables-save" <<'EOF'
+#!/bin/sh
+state="$MICLASH_CLEANUP_STATE"
+[ ! -f "$state/fail-iptables-inventory" ] || exit 1
+if [ -f "$state/iptables-deleted" ] && [ -f "$state/fail-iptables-verify" ]; then exit 1; fi
+cat "$state/iptables-rules" 2>/dev/null || true
+EOF
+cat > "$fixture/iptbin/iptables" <<'EOF'
+#!/bin/sh
+state="$MICLASH_CLEANUP_STATE"
+[ ! -f "$state/fail-iptables-delete" ] || exit 1
+case "$*" in
+	*' -D '*)
+		[ -s "$state/iptables-rules" ] || exit 1
+		: > "$state/iptables-rules"; : > "$state/iptables-deleted" ;;
+	*) : > "$state/iptables-rules"; : > "$state/iptables-deleted" ;;
+esac
+exit 0
+EOF
+cat > /etc/init.d/dnsmasq <<'EOF'
+#!/bin/sh
+[ "${1:-}" = restart ] || exit 1
+[ ! -f "$MICLASH_CLEANUP_STATE/fail-dnsmasq" ]
+EOF
+cat > /etc/rc.common <<'EOF'
+script="$1"
+shift
+. "$script"
+action="${1:-}"
+[ -n "$action" ] || exit 2
+shift
+"$action" "$@"
+EOF
+chmod 0700 "$fixture/bin/logger" "$fixture/bin/sysctl" "$fixture/bin/uci" \
+	"$fixture/nftbin/nft" "$fixture/iptbin/iptables" "$fixture/iptbin/iptables-save" \
+	/etc/init.d/dnsmasq /etc/rc.common
+
+mkdir /var/run/miclash/package-removal
+chmod 0700 /var/run/miclash/package-removal
+: > /var/run/miclash/routing-ownership.json
+: > /var/run/miclash/guard-active
+
+. /usr/share/miclash/mutation-lock.sh
+run_package_entrypoint() {
+	miclash_mutation_lock_enter package 1000 || return 1
+	MICLASH_MUTATION_LOCK_PACKAGE=1
+	export MICLASH_MUTATION_LOCK_PACKAGE
+	"$@"
+	result=$?
+	miclash_mutation_lock_leave || return 1
+	return "$result"
+}
+
+reset_firewall() {
+	rm -f "$fixture/state"/*
+	: > "$fixture/state/firewall-section"
+	printf 'table inet clash { }\n' > "$fixture/state/nft-rules"
+	: > /var/etc/miclash.include
+}
+
+PATH="$fixture/nftbin:$fixture/bin:/usr/bin:/bin"
+export PATH
+for failure in fail-nft-inventory fail-nft-delete fail-nft-verify \
+	fail-firewall-inventory fail-firewall-delete fail-firewall-commit fail-firewall-verify; do
+	reset_firewall
+	: > "$fixture/state/$failure"
+	if run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup >/dev/null 2>&1; then
+		echo "package cleanup unexpectedly ignored $failure" >&2
+		exit 1
+	fi
+	[ -f /var/run/miclash/routing-ownership.json ]
+	[ -f /var/run/miclash/guard-active ]
+	rm -f "$fixture/state/$failure"
+	run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup
+done
+
+PATH="$fixture/iptbin:$fixture/bin:/usr/bin:/bin"
+export PATH
+for failure in fail-iptables-inventory fail-iptables-delete fail-iptables-verify; do
+	rm -f "$fixture/state"/* /var/etc/miclash.include
+	printf '%s\n' '-N CLASH' '-A PREROUTING -j CLASH' > "$fixture/state/iptables-rules"
+	: > "$fixture/state/$failure"
+	if run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup >/dev/null 2>&1; then
+		echo "package cleanup unexpectedly ignored $failure" >&2
+		exit 1
+	fi
+	[ -f /var/run/miclash/routing-ownership.json ]
+	[ -f /var/run/miclash/guard-active ]
+	rm -f "$fixture/state/$failure"
+	run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup >/dev/null 2>&1
+done
+
+PATH="$fixture/nftbin:$fixture/bin:/usr/bin:/bin"
+export PATH
+reset_dns() {
+	rm -f "$fixture/state"/* /opt/clash/.dns_backup /var/etc/miclash.include
+	: > "$fixture/state/nft-rules"
+	printf '127.0.0.1#7874\n' > "$fixture/state/dns-server"
+	printf '0' > "$fixture/state/dns-cache"
+	printf '1' > "$fixture/state/dns-noresolv"
+	printf 'CACHESIZE=150\nNORESOLV=0\n' > /opt/clash/.dns_backup
+}
+
+reset_dns
+printf 'broken\n' > /opt/clash/.dns_backup
+if run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1; then
+	echo 'init package cleanup accepted malformed DNS backup' >&2
+	exit 1
+fi
+[ -f /opt/clash/.dns_backup ]
+
+for failure in fail-dhcp-inventory fail-dhcp-delete fail-dhcp-set fail-dhcp-commit \
+	fail-dhcp-verify fail-dnsmasq; do
+	reset_dns
+	: > "$fixture/state/$failure"
+	if run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1; then
+		echo "init package cleanup unexpectedly ignored $failure" >&2
+		exit 1
+	fi
+	[ -f /opt/clash/.dns_backup ]
+	[ -f /var/run/miclash/routing-ownership.json ]
+	[ -f /var/run/miclash/guard-active ]
+	rm -f "$fixture/state/$failure"
+	run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1
+	[ ! -e /opt/clash/.dns_backup ]
+done
+
+reset_dns
+printf 'CACHESIZE=150\nNORESOLV=0\n' > "$fixture/state/held-backup"
+mount --bind "$fixture/state/held-backup" /opt/clash/.dns_backup
+if run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1; then
+	echo 'init package cleanup ignored DNS backup unlink failure' >&2
+	exit 1
+fi
+[ -e /opt/clash/.dns_backup ]
+[ -f /var/run/miclash/routing-ownership.json ]
+[ -f /var/run/miclash/guard-active ]
+umount /opt/clash/.dns_backup
+printf 'CACHESIZE=150\nNORESOLV=0\n' > /opt/clash/.dns_backup
+run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1
+[ ! -e /opt/clash/.dns_backup ]
+
+reset_dns
+rm -f /opt/clash/.dns_backup
+if run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1; then
+	echo 'init package cleanup accepted active owned DNS state without backup' >&2
+	exit 1
+fi
+[ -f /var/run/miclash/routing-ownership.json ]
+[ -f /var/run/miclash/guard-active ]
+
+printf 'production package cleanup failure/retry gate passed\n'

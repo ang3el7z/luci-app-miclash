@@ -1,5 +1,6 @@
 import { fail } from 'miclash.errors';
 import * as storage from 'miclash.storage';
+import { assert_held, with_lock } from 'miclash.mutation_lock';
 
 // Reserved by /etc/iproute2/rt_protos.d/miclash.conf. The tag is only a
 // collision detector: exact ownership still requires the durable manifest.
@@ -825,7 +826,10 @@ function arm_tun_monitor(runtime, monitor) {
 			state.pending = null;
 			if (type(next) != 'bool' || next == monitor.present) return;
 			state.in_flight = true;
-			try { observer.reconcile(next); }
+			try {
+				with_lock(runtime, { barrier: 'normal', wait_ms: 0 },
+					() => observer.reconcile(next));
+			}
 			catch (error) {
 				state.in_flight = false;
 				disarm_tun_monitor(runtime);
@@ -1062,6 +1066,7 @@ function execute_action(runtime, kind, mode, item) {
 		op.target.kind == 'unicast' && op.target.device == 'clash-tun' &&
 		before.interfaces?.['clash-tun'] === false && !contains_entry(op.pre, op.target);
 	assert_package_mutation_allowed(runtime, runtime.package_removal_cleanup === true);
+	assert_held(runtime, runtime.mutation_lock_lease);
 	let result = verified_absent_delete ? { code: 0, verified_absent: true } :
 		runtime.process.run({ command: 'ip', args });
 	let after = observe(runtime);
@@ -1119,7 +1124,7 @@ function resume_transition(runtime, observed) {
 	return observe(runtime);
 };
 
-export function apply(runtime, changes) {
+function apply_locked(runtime, changes) {
 	assert_package_mutation_allowed(runtime, false);
 	validate_plan(runtime, changes);
 	disarm_tun_monitor(runtime);
@@ -1145,12 +1150,27 @@ export function apply(runtime, changes) {
 		length(expected.add_rules) + length(expected.remove_routes) > 0 };
 };
 
-export function cleanup(runtime, current) {
+export function apply(runtime, changes) {
+	assert_package_mutation_allowed(runtime, false);
+	return with_lock(runtime, { barrier: 'normal', wait_ms: 0 },
+		() => apply_locked(runtime, changes));
+};
+
+function cleanup_locked(runtime, current) {
 	assert_package_mutation_allowed(runtime, runtime?.package_removal_cleanup === true);
 	disarm_tun_monitor(runtime);
 	let fresh = observe(runtime);
 	if (observation_ambiguous(fresh)) fail('INTERNAL');
-	if (fresh.ownership?.status == 'absent') return { clean: true };
+	if (fresh.ownership?.status == 'absent') {
+		if (runtime.package_removal_cleanup !== true) return { clean: true };
+		if (length(fresh.routes) || length(fresh.rules)) fail('INTERNAL');
+		persist_manifest(runtime, committed_document([], []), null);
+		fresh = observe(runtime);
+		if (observation_ambiguous(fresh) || !fresh.ownership?.trusted ||
+		    length(fresh.ownership.committed.routes) ||
+		    length(fresh.ownership.committed.rules) ||
+		    fresh.ownership.transition != null) fail('INTERNAL');
+	}
 	if (!fresh.ownership?.trusted) fail('INTERNAL');
 	fresh = resume_transition(runtime, fresh);
 	if (observation_ambiguous(fresh) || !fresh.ownership.trusted) fail('INTERNAL');
@@ -1168,4 +1188,11 @@ export function cleanup(runtime, current) {
 	}
 	else if (runtime.fs.unlink(MANIFEST_PATH) != true) fail('INTERNAL');
 	return { clean: true };
+};
+
+export function cleanup(runtime, current) {
+	let package_mode = runtime?.package_removal_cleanup === true;
+	assert_package_mutation_allowed(runtime, package_mode);
+	return with_lock(runtime, { barrier: package_mode ? 'package' : 'normal', wait_ms: 0 },
+		() => cleanup_locked(runtime, current));
 };

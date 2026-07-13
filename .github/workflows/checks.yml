@@ -45,7 +45,10 @@ jobs:
             xargs -0 -r -n1 msgfmt --check --output-file=/dev/null
 
       - name: Check test runner shell syntax
-        run: sh -n tools/run-ucode-tests.sh tools/check-routing-netns.sh tools/check-package-removal.sh
+        run: >-
+          sh -n tools/run-ucode-tests.sh tools/check-routing-netns.sh
+          tools/check-mutation-lock.sh tools/check-package-cleanup.sh
+          tools/check-package-removal.sh tools/check-package-release.sh
 
   ucode-tests:
     name: Host ucode tests
@@ -115,6 +118,18 @@ jobs:
       - name: Run package removal process and failure-preservation gate
         shell: bash
         run: sudo tools/check-package-removal.sh
+
+      - name: Run shared mutation lock process gate
+        shell: bash
+        run: sudo tools/check-mutation-lock.sh
+
+      - name: Run production package cleanup failure/retry gate
+        shell: bash
+        run: sudo tools/check-package-cleanup.sh
+
+      - name: Run retryable package release gate
+        shell: bash
+        run: sudo tools/check-package-release.sh
 
   package-build:
     name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }})

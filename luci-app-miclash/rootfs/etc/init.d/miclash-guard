@@ -3,9 +3,24 @@
 START=12
 STOP=88
 
-start() {
+[ -r /usr/share/miclash/mutation-lock.sh ] || return 1
+. /usr/share/miclash/mutation-lock.sh || return 1
+
+miclash_guard_locked() {
+	mode=normal
+	[ "${MICLASH_MUTATION_LOCK_PACKAGE:-0}" != 1 ] || mode=package
+	miclash_mutation_lock_enter "$mode" 30000 || return $?
+	"$@"
+	result=$?
+	miclash_mutation_lock_leave || return 1
+	return "$result"
+}
+
+start_locked() {
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc install
 }
+
+start() { miclash_guard_locked start_locked; }
 
 reload() {
 	start
@@ -16,6 +31,8 @@ stop() {
 	return 0
 }
 
-remove() {
+remove_locked() {
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc remove
 }
+
+remove() { miclash_guard_locked remove_locked; }

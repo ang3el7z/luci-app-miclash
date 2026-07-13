@@ -47,6 +47,15 @@ if ip -4 rule show 2>/dev/null | grep -Eq ' (proto|protocol) (242|miclash)( |$)'
 fi
 rm -f /var/run/miclash/routing-ownership.json
 
+# A never-started/legacy installation may have no manifest. With the package
+# barrier held and the real kernel freshly empty, the fixed cleanup entrypoint
+# must create trusted empty proof for the remaining prerm stages.
+"$UCODE_BIN" "$@" "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/routing-cleanup.uc"
+[ -s /var/run/miclash/routing-ownership.json ]
+[ -z "$(ip -4 route show table 100 2>/dev/null)" ]
+[ -z "$(ip -4 route show table 101 2>/dev/null)" ]
+rm -f /var/run/miclash/routing-ownership.json
+
 producer_dir="$(mktemp -d)"
 trap 'rm -rf "$producer_dir"' EXIT INT TERM
 cat > "$producer_dir/ip" <<'PRODUCER'

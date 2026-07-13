@@ -80,6 +80,14 @@ function runShell(source, body, options = {}) {
 		writeFileSync(curlLog, '');
 		writeFileSync(installerLog, '');
 		writeFileSync(curlAttempts, '0');
+		const mutationHelper = join(dir, 'mutation-lock-helper');
+		const shellMutationHelper = shellPath(mutationHelper);
+		writeExecutable(mutationHelper, `#!/bin/sh
+MICLASH_MUTATION_LOCK_DEPTH=0
+miclash_mutation_lock_enter() { return 0; }
+miclash_mutation_lock_leave() { return 0; }
+`);
+		const isolatedSource = source.replaceAll('/usr/share/miclash/mutation-lock.sh', shellMutationHelper);
 
 		const releaseJson = options.releaseJson || `{
 	"tag_name": "v1.2.3",
@@ -179,7 +187,7 @@ exit 0
 
 		const script = `PATH="${shellBin}:/usr/bin:/bin"
 export PATH
-${source}
+${isolatedSource}
 TEST_STATUS_FILE="${shellStatusFile}"
 ${body}
 `;

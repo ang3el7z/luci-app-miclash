@@ -20,11 +20,27 @@ POLL_INTERVAL_SEC=1
 CURRENT_ACTION=""
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 PACKAGE_REMOVAL_BARRIER="/var/run/miclash/package-removal"
+MUTATION_LOCK_HELD=0
+MUTATION_LOCK_HELPER="/usr/share/miclash/mutation-lock.sh"
+[ -r "$MUTATION_LOCK_HELPER" ] || { echo 'MiClash mutation lock unavailable' >&2; exit 1; }
+. "$MUTATION_LOCK_HELPER" || exit 1
+
+miclash_writer_lock_enter() {
+	miclash_mutation_lock_enter normal 30000 || return $?
+	MUTATION_LOCK_HELD=1
+}
+
+miclash_writer_lock_leave() {
+	[ "$MUTATION_LOCK_HELD" = 1 ] || return 0
+	miclash_mutation_lock_leave || return 1
+	MUTATION_LOCK_HELD=0
+}
 
 cleanup() {
 	if [ "$LOCK_ACQUIRED" = "1" ]; then
 		rm -rf "$LOCK_DIR" 2>/dev/null || true
 	fi
+	miclash_writer_lock_leave >/dev/null 2>&1 || true
 }
 
 trap cleanup EXIT INT TERM
@@ -375,7 +391,7 @@ wait_stopped() {
 	fail "Clash service did not stop within ${STOP_TIMEOUT_SEC}s"
 }
 
-run_service_action() {
+run_service_action_locked() {
 	CURRENT_ACTION="$1"
 	acquire_lock
 
@@ -433,6 +449,14 @@ run_service_action() {
 			fail "usage: $0 start|stop|restart|reload|wait-ready|health|guard-reload|guard-core-restart | job start|stop|restart|reload | state | status | clear-status"
 			;;
 	esac
+}
+
+run_service_action() {
+	miclash_writer_lock_enter || return $?
+	run_service_action_locked "$@"
+	result=$?
+	miclash_writer_lock_leave || return 1
+	return "$result"
 }
 
 case "${1:-}" in

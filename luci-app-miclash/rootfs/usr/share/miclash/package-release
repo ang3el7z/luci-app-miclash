@@ -1,0 +1,39 @@
+#!/bin/sh
+
+set -u
+
+RELEASE_DIR="${1:-}"
+BARRIER=/var/run/miclash/package-removal
+HOLD="$RELEASE_DIR/barrier-complete.hold"
+
+[ "$RELEASE_DIR" = /var/run/miclash/package-removal-release ] || exit 1
+[ ! -L "$RELEASE_DIR" ] && [ -d "$RELEASE_DIR" ] || exit 1
+[ "$(stat -c '%u:%a' "$RELEASE_DIR" 2>/dev/null)" = 0:700 ] || exit 1
+canonical="$(readlink -f "$RELEASE_DIR" 2>/dev/null)" || exit 1
+case "$canonical" in
+	/var/run/miclash/package-removal-release|/run/miclash/package-removal-release|/tmp/run/miclash/package-removal-release) ;;
+	*) exit 1 ;;
+esac
+[ ! -L "$RELEASE_DIR/complete" ] && [ -f "$RELEASE_DIR/complete" ] || exit 1
+[ "$(stat -c '%u:%a' "$RELEASE_DIR/complete" 2>/dev/null)" = 0:600 ] || exit 1
+[ "$(cat "$RELEASE_DIR/complete" 2>/dev/null)" = complete ] || exit 1
+
+[ -e "$BARRIER" ] || { [ ! -L "$BARRIER" ] || exit 1; exit 0; }
+[ ! -L "$BARRIER" ] && [ -d "$BARRIER" ] || exit 1
+[ "$(stat -c '%u:%a' "$BARRIER" 2>/dev/null)" = 0:700 ] || exit 1
+[ ! -e "$HOLD" ] && [ ! -L "$HOLD" ] || exit 1
+[ ! -L "$BARRIER/complete" ] && [ -f "$BARRIER/complete" ] || exit 1
+[ "$(stat -c '%u:%a' "$BARRIER/complete" 2>/dev/null)" = 0:600 ] || exit 1
+[ "$(cat "$BARRIER/complete" 2>/dev/null)" = complete ] || exit 1
+
+set -- "$BARRIER"/*
+[ "$#" -eq 1 ] && [ "$1" = "$BARRIER/complete" ] || exit 1
+mv "$BARRIER/complete" "$HOLD" || exit 1
+if ! rmdir "$BARRIER"; then
+	mv "$HOLD" "$BARRIER/complete" 2>/dev/null || true
+	exit 1
+fi
+[ ! -e "$BARRIER" ] || exit 1
+rm -f "$HOLD" || exit 1
+[ ! -e "$HOLD" ] || exit 1
+exit 0

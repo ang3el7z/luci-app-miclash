@@ -35,8 +35,15 @@ msg "WAN up (iface=$INTERFACE dev=$DEVICE), scheduling provider update"
 
 # Wait for the connection to stabilise and DNS to become available.
 # PPPoE and similar links may take a few seconds after route appearance.
-sleep 10
+sleep "${MICLASH_HOTPLUG_SETTLE_SEC:-10}"
 [ ! -e /var/run/miclash/package-removal ] || exit 0
+
+MUTATION_LOCK_HELPER="/usr/share/miclash/mutation-lock.sh"
+[ -r "$MUTATION_LOCK_HELPER" ] || exit 1
+. "$MUTATION_LOCK_HELPER" || exit 1
+miclash_mutation_lock_enter normal 30000 || exit $?
+trap 'miclash_mutation_lock_leave >/dev/null 2>&1 || true' EXIT
+trap 'exit 1' HUP INT TERM
 
 # ---------------------------------------------------------------------------
 # Configuration — read from clash config file, no hardcoded values

@@ -112,7 +112,9 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json $(1)/usr/share/rpcd/acl.d/
 	$(INSTALL_DIR) $(1)/usr/share/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/*.uc $(1)/usr/share/miclash/
+	$(INSTALL_DATA) ./rootfs/usr/share/miclash/mutation-lock.sh $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-remove $(1)/usr/share/miclash/
+	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-release $(1)/usr/share/miclash/
 	$(INSTALL_DIR) $(1)/usr/libexec/miclash
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/validate-config.uc $(1)/usr/libexec/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/mihomo-https.uc $(1)/usr/libexec/miclash/
@@ -256,8 +258,12 @@ define Package/$(PKG_NAME)/postrm
 		upgrade|update) ;;
 		*)
 			BARRIER="/var/run/miclash/package-removal"
+			RELEASE_DIR="/var/run/miclash/package-removal-release"
 			if [ "$$(stat -c '%u:%a' "$$BARRIER" 2>/dev/null)" = '0:700' ] && \
 				[ "$$(stat -c '%u:%a' "$$BARRIER/complete" 2>/dev/null)" = '0:600' ] && \
+				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR" 2>/dev/null)" = '0:700' ] && \
+				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR/complete" 2>/dev/null)" = '0:600' ] && \
+				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR/helper" 2>/dev/null)" = '0:700' ] && \
 				[ ! -e /var/run/miclash/routing-ownership.json ] && \
 				[ ! -e /opt/clash/bin/clash-rules ] && \
 				[ ! -e /opt/clash/bin/miclash-update ] && \
@@ -267,14 +273,26 @@ define Package/$(PKG_NAME)/postrm
 				[ ! -e /etc/init.d/clash ] && \
 				[ ! -e /etc/init.d/miclash-autoupdate ] && \
 				[ ! -e /etc/init.d/miclash-memory-guard ] && \
+				[ ! -e /etc/init.d/miclash-guard ] && \
 				[ ! -e /etc/hotplug.d/iface/40-clash ] && \
 				[ ! -e /etc/hotplug.d/net/99-clash-tun ] && \
 				[ ! -e /usr/share/miclash/routing.uc ] && \
 				[ ! -e /usr/share/miclash/routing-cleanup.uc ] && \
-				[ ! -e /usr/share/miclash/package-remove ]; then
+				[ ! -e /usr/share/miclash/package-remove ] && \
+				[ ! -e /usr/share/miclash/package-release ]; then
+				"$$RELEASE_DIR/helper" "$$RELEASE_DIR" || {
+					echo "MiClash package removal barrier remains active; retry postrm" >&2
+					exit 1
+				}
+				[ ! -e "$$BARRIER" ] || exit 1
 				rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json
-				rm -f "$$BARRIER/complete"
-				rmdir "$$BARRIER" 2>/dev/null || true
+				rm -f "$$RELEASE_DIR/pending" "$$RELEASE_DIR/complete" \
+					"$$RELEASE_DIR/barrier-complete.hold" || exit 1
+				rm -f "$$RELEASE_DIR/helper" || exit 1
+				rmdir "$$RELEASE_DIR" || exit 1
+			else
+				echo "MiClash package removal release proof is incomplete" >&2
+				exit 1
 			fi
 			;;
 	esac

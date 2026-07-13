@@ -5,7 +5,7 @@ set -eu
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 if [ "${MICLASH_PACKAGE_REMOVAL_NS:-}" != 1 ]; then
-	exec unshare --mount --pid --fork env MICLASH_PACKAGE_REMOVAL_NS=1 sh "$0"
+	exec unshare --mount --pid --fork --mount-proc env MICLASH_PACKAGE_REMOVAL_NS=1 sh "$0"
 fi
 
 mount --make-rprivate /
@@ -95,11 +95,18 @@ cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/package-remove" \
 	/usr/share/miclash/package-remove
 cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/routing-cleanup.uc" \
 	/usr/share/miclash/routing-cleanup.uc
+cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh" \
+	/usr/share/miclash/mutation-lock.sh
+cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/package-release" \
+	/usr/share/miclash/package-release
 chmod 0700 /usr/share/miclash/package-remove
+chmod 0600 /usr/share/miclash/mutation-lock.sh
+chmod 0700 /usr/share/miclash/package-release
 
 reset_state() {
 	umount /var/run/miclash/routing-ownership.json 2>/dev/null || true
 	rm -rf /var/run/miclash/package-removal
+	rm -rf /var/run/miclash/package-removal-release
 	: > /var/run/miclash/routing-ownership.json
 	: > /var/run/miclash/guard-active
 	: > "$log"
@@ -181,5 +188,228 @@ fi
 [ -L /var/run/miclash/package-removal ]
 [ -f /var/run/miclash/routing-ownership.json ]
 [ -f /var/run/miclash/guard-active ]
+
+# A real service worker that passed its pre-barrier check must retain the
+# shared lease until its synchronous init mutation finishes. Package prerm
+# establishes the barrier but may not begin quiescence until that lease exits.
+cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/miclash-service" \
+	/opt/clash/bin/miclash-service
+chmod 0700 /opt/clash/bin/miclash-service
+cat > "$fixture/bin/delayed-init" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+	stop)
+		echo 'delayed-service mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
+		: > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
+		while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
+		echo 'delayed-service mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
+		;;
+esac
+exit 0
+EOF
+chmod 0700 "$fixture/bin/delayed-init"
+
+wait_for_file() {
+	path="$1"
+	i=0
+	while [ ! -e "$path" ] && [ "$i" -lt 250 ]; do sleep 0.02; i=$((i + 1)); done
+	[ -e "$path" ]
+}
+
+reset_state
+rm -f "$log.writer-entered" "$log.writer-release"
+MICLASH_CLASH_INIT="$fixture/bin/delayed-init" \
+	MICLASH_SERVICE_LOCK_DIR="$fixture/service-lock" \
+	MICLASH_SERVICE_STATUS_DIR="$fixture/service-status" \
+	/opt/clash/bin/miclash-service stop >/dev/null 2>&1 &
+writer_pid=$!
+wait_for_file "$log.writer-entered"
+/usr/share/miclash/package-remove >/dev/null 2>&1 &
+remove_pid=$!
+wait_for_file /var/run/miclash/package-removal
+sleep 0.2
+! grep -q '^miclashd stop$' "$log"
+: > "$log.writer-release"
+wait "$writer_pid"
+wait "$remove_pid"
+[ "$(line_of 'delayed-service mutation-exit')" -lt "$(line_of 'miclashd stop')" ]
+[ ! -e /var/run/miclash/mutation.lock ]
+[ ! -e /var/run/miclash/mutation.lock.takeover ]
+
+# The updater worker acquires inside the background/actual command, before its
+# first download-side mutation. The job launcher itself is intentionally not
+# the lease owner.
+cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/miclash-update" \
+	/opt/clash/bin/miclash-update
+chmod 0700 /opt/clash/bin/miclash-update
+cat > "$fixture/bin/curl" <<'EOF'
+#!/bin/sh
+[ "${1:-}" != --version ] || { echo 'curl test'; exit 0; }
+target=""
+previous=""
+for argument in "$@"; do
+	[ "$previous" != -o ] || target="$argument"
+	previous="$argument"
+done
+echo 'delayed-update mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
+: > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
+while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
+echo 'delayed-update mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
+[ -n "$target" ] || exit 1
+printf '#!/bin/sh\nexit 0\n' > "$target"
+EOF
+chmod 0700 "$fixture/bin/curl"
+reset_state
+rm -f "$log.writer-entered" "$log.writer-release"
+/opt/clash/bin/miclash-update app --target-tag test --mode update >/dev/null 2>&1 &
+writer_pid=$!
+wait_for_file "$log.writer-entered"
+/usr/share/miclash/package-remove >/dev/null 2>&1 &
+remove_pid=$!
+wait_for_file /var/run/miclash/package-removal
+sleep 0.2
+! grep -q '^miclashd stop$' "$log"
+: > "$log.writer-release"
+wait "$writer_pid"
+wait "$remove_pid"
+[ "$(line_of 'delayed-update mutation-exit')" -lt "$(line_of 'miclashd stop')" ]
+
+# Both shipped hotplug entrypoints acquire before invoking their synchronous
+# mutation child. The child is delayed here to expose the pre-barrier window.
+cat > /opt/clash/bin/clash-rules <<'EOF'
+#!/bin/sh
+echo 'delayed-tun-hotplug mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
+: > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
+while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
+echo 'delayed-tun-hotplug mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
+exit 0
+EOF
+chmod 0700 /opt/clash/bin/clash-rules
+reset_state
+rm -f "$log.writer-entered" "$log.writer-release"
+ACTION=add INTERFACE=clash-tun \
+	sh "$repo_root/luci-app-miclash/rootfs/etc/hotplug.d/net/99-clash-tun" >/dev/null 2>&1 &
+writer_pid=$!
+wait_for_file "$log.writer-entered"
+/usr/share/miclash/package-remove >/dev/null 2>&1 &
+remove_pid=$!
+wait_for_file /var/run/miclash/package-removal
+sleep 0.2
+! grep -q '^miclashd stop$' "$log"
+: > "$log.writer-release"
+wait "$writer_pid"
+wait "$remove_pid"
+[ "$(line_of 'delayed-tun-hotplug mutation-exit')" -lt "$(line_of 'miclashd stop')" ]
+
+# Direct clash-rules owns the lease while its first real nft mutation is
+# delayed. This also proves a synchronous command shim cannot outlive release.
+cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" \
+	/opt/clash/bin/clash-rules
+chmod 0700 /opt/clash/bin/clash-rules
+cat > "$fixture/bin/nft" <<'EOF'
+#!/bin/sh
+echo 'delayed-clash-rules mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
+: > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
+while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
+echo 'delayed-clash-rules mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
+exit 0
+EOF
+chmod 0700 "$fixture/bin/nft"
+reset_state
+rm -f "$log.writer-entered" "$log.writer-release"
+/opt/clash/bin/clash-rules guard_stop >/dev/null 2>&1 &
+writer_pid=$!
+wait_for_file "$log.writer-entered"
+/usr/share/miclash/package-remove >/dev/null 2>&1 &
+remove_pid=$!
+wait_for_file /var/run/miclash/package-removal
+sleep 0.2
+! grep -q '^miclashd stop$' "$log"
+: > "$log.writer-release"
+wait "$writer_pid"
+wait "$remove_pid"
+[ "$(line_of 'delayed-clash-rules mutation-exit')" -lt "$(line_of 'miclashd stop')" ]
+[ ! -e /var/run/miclash/mutation.lock ]
+[ ! -e /var/run/miclash/mutation.lock.takeover ]
+
+cat > "$fixture/bin/pgrep" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat > "$fixture/bin/ip" <<'EOF'
+#!/bin/sh
+[ "${1:-}" != route ] || echo 'default via 192.0.2.1 dev eth0'
+exit 0
+EOF
+cat > "$fixture/bin/curl" <<'EOF'
+#!/bin/sh
+case " $* " in
+	*' -X PUT '*)
+		echo 'delayed-iface-hotplug mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
+		: > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
+		while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
+		echo 'delayed-iface-hotplug mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
+		;;
+	*) printf '%s\n' '{"providers":{"p":{"name":"p","type":"HTTP"}}}' ;;
+esac
+exit 0
+EOF
+cat > /opt/clash/bin/clash-rules <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod 0700 "$fixture/bin/pgrep" "$fixture/bin/ip" "$fixture/bin/curl" \
+	/opt/clash/bin/clash-rules
+last_line_of() { grep -n "^$1$" "$log" | tail -n 1 | cut -d: -f1; }
+reset_state
+rm -f "$log.writer-entered" "$log.writer-release"
+ACTION=ifup INTERFACE=wan DEVICE=eth0 MICLASH_HOTPLUG_SETTLE_SEC=0 \
+	sh "$repo_root/luci-app-miclash/rootfs/etc/hotplug.d/iface/40-clash" >/dev/null 2>&1 &
+writer_pid=$!
+wait_for_file "$log.writer-entered"
+/usr/share/miclash/package-remove >/dev/null 2>&1 &
+remove_pid=$!
+wait_for_file /var/run/miclash/package-removal
+sleep 0.2
+! grep -q '^miclashd stop$' "$log"
+: > "$log.writer-release"
+wait "$writer_pid"
+wait "$remove_pid"
+[ "$(last_line_of 'delayed-iface-hotplug mutation-exit')" -lt "$(line_of 'miclashd stop')" ]
+[ ! -e /var/run/miclash/mutation.lock ]
+[ ! -e /var/run/miclash/mutation.lock.takeover ]
+
+# The Guard init entrypoint is a production writer too: start/remove dispatch
+# guard-bootstrap.uc, which mutates the permanent firewall ownership rules.
+# Rewrite only the fixed ucode executable path in a test copy so the real init
+# wrapper can be exercised without writing into the host's /usr/bin.
+guard_test="$fixture/miclash-guard-test"
+sed "s#/usr/bin/ucode#$fixture/bin/delayed-guard-ucode#g" \
+	"$repo_root/luci-app-miclash/rootfs/etc/init.d/miclash-guard" > "$guard_test"
+cat > "$fixture/bin/delayed-guard-ucode" <<'EOF'
+#!/bin/sh
+echo 'delayed-guard-init mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
+: > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
+while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
+echo 'delayed-guard-init mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
+exit 0
+EOF
+chmod 0700 "$guard_test" "$fixture/bin/delayed-guard-ucode"
+reset_state
+rm -f "$log.writer-entered" "$log.writer-release"
+sh -c '. "$1"; start' sh "$guard_test" >/dev/null 2>&1 &
+writer_pid=$!
+wait_for_file "$log.writer-entered"
+/usr/share/miclash/package-remove >/dev/null 2>&1 &
+remove_pid=$!
+wait_for_file /var/run/miclash/package-removal
+sleep 0.2
+! grep -q '^miclashd stop$' "$log"
+: > "$log.writer-release"
+wait "$writer_pid"
+wait "$remove_pid"
+[ "$(last_line_of 'delayed-guard-init mutation-exit')" -lt "$(line_of 'miclashd stop')" ]
+[ ! -e /var/run/miclash/mutation.lock ]
+[ ! -e /var/run/miclash/mutation.lock.takeover ]
 
 printf 'package removal process and failure-preservation gate passed\n'

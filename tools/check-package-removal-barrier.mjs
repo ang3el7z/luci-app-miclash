@@ -23,6 +23,7 @@ const files = {
 	cleanup: source('luci-app-miclash/rootfs/usr/share/miclash/routing-cleanup.uc'),
 	rules: source('luci-app-miclash/rootfs/opt/clash/bin/clash-rules'),
 	clashInit: source('luci-app-miclash/rootfs/etc/init.d/clash'),
+	guardInit: source('luci-app-miclash/rootfs/etc/init.d/miclash-guard'),
 	dInit: source('luci-app-miclash/rootfs/etc/init.d/miclashd'),
 	autoInit: source('luci-app-miclash/rootfs/etc/init.d/miclash-autoupdate'),
 	netHotplug: source('luci-app-miclash/rootfs/etc/hotplug.d/net/99-clash-tun'),
@@ -33,9 +34,41 @@ const files = {
 	memoryGuard: source('luci-app-miclash/rootfs/opt/clash/bin/miclash-memory-guard')
 };
 const workflow = source('.github/workflows/checks.yml');
+const releaseHelper = source('luci-app-miclash/rootfs/usr/share/miclash/package-release');
+
+const sharedLockShell = '/usr/share/miclash/mutation-lock.sh';
+const shellWriters = {
+	remove: files.remove,
+	rules: files.rules,
+	clashInit: files.clashInit,
+	guardInit: files.guardInit,
+	netHotplug: files.netHotplug,
+	wanHotplug: files.wanHotplug,
+	update: files.update,
+	autoUpdate: files.autoUpdate,
+	service: files.service,
+	memoryGuard: files.memoryGuard
+};
+
+for (const [name, text] of Object.entries(shellWriters)) {
+	check(text.includes(sharedLockShell), `${name} must source the shared mutation lock helper`);
+	check(text.includes('miclash_mutation_lock_enter'), `${name} must acquire the shared mutation lock`);
+	check(text.includes('miclash_mutation_lock_leave'), `${name} must release the shared mutation lock`);
+	check(!text.includes('MICLASH_MUTATION_LOCK_HELPER:-'),
+		`${name} must not accept an environment override for sourced root code`);
+}
+
+check(files.routing.includes("from 'miclash.mutation_lock'"),
+	'routing must use the shared ucode mutation lock');
+check(files.routing.includes('with_lock(runtime') &&
+	files.routing.includes('assert_held(runtime, runtime.mutation_lock_lease)'),
+	'routing apply/cleanup and every kernel action must require an active shared lease');
+check(files.cleanup.includes("getenv('MICLASH_MUTATION_LOCK_TOKEN')"),
+	'package routing cleanup must join the inherited package lock owner');
 
 for (const [name, text] of Object.entries(files))
-	check(text.includes(barrier), `${name} must enforce the fixed package-removal barrier`);
+	if (name !== 'guardInit')
+		check(text.includes(barrier), `${name} must enforce the fixed package-removal barrier`);
 
 check(files.cleanup.includes('package_removal_cleanup = true'),
 	'only the fixed routing cleanup entrypoint must carry the internal bypass capability');
@@ -47,6 +80,19 @@ check(ordinaryPrerm.includes('/usr/share/miclash/package-remove'),
 	'ordinary prerm must invoke the packaged removal protocol while all files exist');
 check(!ordinaryPrerm.includes('routing-cleanup.uc'),
 	'prerm must not bypass process quiescence by calling routing cleanup directly');
+
+const removeMain = files.remove.lastIndexOf('establish_barrier ||');
+const lockMain = files.remove.lastIndexOf('miclash_mutation_lock_enter package');
+const quiesceMain = files.remove.lastIndexOf('quiesce_update_triggers ||');
+check(removeMain >= 0 && lockMain > removeMain && quiesceMain > lockMain,
+	'package removal must establish the barrier, acquire the shared lock, then quiesce writers');
+check(files.remove.includes("trap 'release_mutation_lock") &&
+	files.remove.includes('miclash_mutation_lock_leave'),
+	'package removal must hold the shared lock through every cleanup exit');
+check(files.remove.includes('prepare_release_state') && files.remove.includes('commit_release_state'),
+	'prerm must prepare and commit a runtime release proof before package files disappear');
+check(releaseHelper.includes('barrier-complete.hold') && releaseHelper.includes('rmdir "$BARRIER"'),
+	'runtime release helper must retain recoverable proof around the barrier rmdir');
 
 for (const token of [ 'establish_barrier', 'quiesce_update_triggers', 'delete_clash_and_wait',
 	'run_routing_cleanup', 'run_preserve_cleanup', 'remove_guard_owner' ])
@@ -85,6 +131,10 @@ for (const mutator of [ '/opt/clash/bin/clash-rules', '/opt/clash/bin/miclash-up
 check(postrm.indexOf('rm -f /etc/miclash/guard-bootstrap.json') >
 	postrm.indexOf("stat -c '%u:%a' \"$$BARRIER/complete\""),
 	'postrm must preserve Guard ownership state unless valid completion is proven');
+check(postrm.includes('RELEASE_DIR="/var/run/miclash/package-removal-release"') &&
+	postrm.includes('"$$RELEASE_DIR/helper" "$$RELEASE_DIR"') &&
+	postrm.includes('rmdir "$$RELEASE_DIR"'),
+	'postrm must invoke the retained helper and remove release state only after success');
 
 check(files.clashInit.includes('remove_firewall_rules true') &&
 	files.clashInit.includes('package_removal_active'),

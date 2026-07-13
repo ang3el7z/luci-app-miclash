@@ -4,6 +4,7 @@ import * as fakes from './fakes.uc';
 
 const MANIFEST_PATH = '/var/run/miclash/routing-ownership.json';
 const CAPTURE_PREFIX = '/usr/bin/timeout -s KILL 2 ';
+const TEST_BOOT = '12345678-1234-1234-1234-123456789abc';
 
 let host_fs = require('fs');
 assert_equal(host_fs.readfile('luci-app-miclash/rootfs/etc/iproute2/rt_protos.d/miclash.conf'),
@@ -27,8 +28,13 @@ function pipe(value, status) {
 	};
 };
 function runtime(outputs) {
-	let calls = [], captures = [], filesystem = fakes.fs(), responses = outputs ?? {};
+	let calls = [], captures = [], filesystem = fakes.fs({
+		'/proc/sys/kernel/random/boot_id': TEST_BOOT + '\n',
+		'/proc/9002/stat': '9002 (routing test) S ' +
+			join(' ', [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 701 ]) + '\n'
+	}), responses = outputs ?? {};
 	for (let path in [ '/var', '/var/run', '/var/run/miclash' ]) filesystem.mkdir(path);
+	filesystem.set_mode('/var/run/miclash', 0o700);
 	filesystem.popen = (command, mode) => {
 		push(captures, command);
 		let logical = substr(command, 0, length(CAPTURE_PREFIX)) == CAPTURE_PREFIX
@@ -79,6 +85,8 @@ function runtime(outputs) {
 		fs: filesystem,
 		digest: fakes.digest(filesystem),
 		clock: fakes.clock(1000),
+		random: fakes.entropy(),
+		mutation_lock_self: { boot: TEST_BOOT, pid: 9002, start: 701 },
 		paths: { run: '/var/run/miclash' },
 		captures
 	};

@@ -19,6 +19,21 @@ MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/rel
 MICLASH_INSTALLER_RAW_BASE="https://raw.githubusercontent.com/ang3el7z/luci-app-miclash"
 MIHOMO_RELEASE_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases"
+MUTATION_LOCK_HELD=0
+MUTATION_LOCK_HELPER="/usr/share/miclash/mutation-lock.sh"
+[ -r "$MUTATION_LOCK_HELPER" ] || { echo 'MiClash mutation lock unavailable' >&2; exit 1; }
+. "$MUTATION_LOCK_HELPER" || exit 1
+
+miclash_writer_lock_enter() {
+	miclash_mutation_lock_enter normal 30000 || return $?
+	MUTATION_LOCK_HELD=1
+}
+
+miclash_writer_lock_leave() {
+	[ "$MUTATION_LOCK_HELD" = 1 ] || return 0
+	miclash_mutation_lock_leave || return 1
+	MUTATION_LOCK_HELD=0
+}
 
 cleanup() {
 	for file in $TMP_FILES; do
@@ -27,6 +42,7 @@ cleanup() {
 	if [ "$LOCK_ACQUIRED" = "1" ]; then
 		rm -rf "$LOCK_DIR" 2>/dev/null || true
 	fi
+	miclash_writer_lock_leave >/dev/null 2>&1 || true
 }
 
 trap cleanup EXIT INT TERM
@@ -428,11 +444,13 @@ case "${1:-}" in
 		;;
 	app)
 		shift
+		miclash_writer_lock_enter || exit $?
 		acquire_lock
 		install_app "$@"
 		;;
 	kernel)
 		shift
+		miclash_writer_lock_enter || exit $?
 		acquire_lock
 		install_kernel "$@"
 		;;

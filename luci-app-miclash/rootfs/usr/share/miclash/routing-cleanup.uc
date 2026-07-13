@@ -11,6 +11,7 @@ try {
 		die('MiClash routing cleanup refused: package-removal barrier missing\n');
 	runtime.package_removal_cleanup = true;
 	runtime.package_removal_preserve_manifest = true;
+	runtime.mutation_lock_token = getenv('MICLASH_MUTATION_LOCK_TOKEN');
 	cleanup(runtime);
 }
 catch (error) {

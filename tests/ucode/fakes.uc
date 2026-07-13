@@ -53,7 +53,8 @@ export function entropy() {
 	fake.hex = (bytes) => {
 		push(fake.calls, bytes);
 		counter++;
-		return sprintf('%016x', counter);
+		let value = sprintf('%064x', counter);
+		return substr(value, length(value) - bytes * 2);
 	};
 	return fake;
 };
@@ -65,6 +66,7 @@ export function fs(initial) {
 	let owners = {};
 	let devices = {};
 	let inodes = {};
+	let mtimes = {};
 	let links = {};
 	let symlinks = {};
 	let next_inode = 100;
@@ -78,6 +80,8 @@ export function fs(initial) {
 		fail_unlink_once: false,
 		ignore_chmod: false,
 		on_lstat: null,
+		on_mkdir: null,
+		on_rename: null,
 		write_results: [],
 		calls: {
 			open: [], write: [], flush: [], close: [], chmod: [], rename: [], unlink: [],
@@ -85,7 +89,15 @@ export function fs(initial) {
 		},
 		writefile: (path, data) => files[path] = data,
 		exists: (path) => exists(files, path) || exists(symlinks, path),
-		mkdir: (path) => directories[path] = true
+		mkdir: null
+	};
+	fake.mkdir = (path) => {
+		if (exists(files, path) || exists(directories, path) || exists(symlinks, path)) return null;
+		directories[path] = true;
+		inodes[path] = next_inode++;
+		mtimes[path] = 0;
+		if (type(fake.on_mkdir) == 'function') fake.on_mkdir(path);
+		return true;
 	};
 	fake.readfile = (path) => {
 		push(fake.calls.readfile, path);
@@ -138,6 +150,7 @@ export function fs(initial) {
 			uid: owners[path] ?? owners[resolved] ?? 0,
 			mode: modes[path] ?? modes[resolved] ??
 				(exists(files, resolved) ? 0o600 : 0o755),
+			mtime: mtimes[path] ?? mtimes[resolved] ?? 0,
 			dev: { major: 0, minor: device }
 		};
 	};
@@ -243,12 +256,30 @@ export function fs(initial) {
 			return null;
 		delete directories[path];
 		delete inodes[path];
+		delete mtimes[path];
+		delete modes[path];
 		return true;
 	};
 	fake.rename = (from, to) => {
 		push(fake.calls.rename, { from, to });
 		if (fake.fail_on == 'rename')
 			return null;
+		if (exists(directories, from)) {
+			if (exists(files, to) || exists(directories, to) || exists(symlinks, to)) return null;
+			let mappings = [ directories, files, modes, owners, devices, inodes, links, mtimes ];
+			for (let values in mappings) {
+				let moved = {};
+				for (let path, value in values)
+					if (path == from || substr(path, 0, length(from) + 1) == from + '/')
+						moved[to + substr(path, length(from))] = value;
+				for (let path in values)
+					if (path == from || substr(path, 0, length(from) + 1) == from + '/')
+						delete values[path];
+				for (let path, value in moved) values[path] = value;
+			}
+			if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
+			return true;
+		}
 		let actual_from = resolve(from);
 		let actual_to = resolve(to);
 		files[actual_to] = files[actual_from];
@@ -257,6 +288,7 @@ export function fs(initial) {
 		delete files[actual_from];
 		delete modes[actual_from];
 		delete inodes[actual_from];
+		if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
 		return true;
 	};
 	fake.stat = (path) => info(path, true);
@@ -288,6 +320,7 @@ export function fs(initial) {
 	fake.set_nlink = (path, count) => links[path] = count;
 	fake.set_uid = (path, uid) => owners[path] = uid;
 	fake.set_mode = (path, mode) => modes[path] = mode;
+	fake.set_mtime = (path, mtime) => mtimes[path] = mtime;
 	fake.bump_inode = (path) => inodes[resolve(path)] = next_inode++;
 	fake.set_symlink = (path, target) => {
 		delete files[path];

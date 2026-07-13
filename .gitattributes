@@ -18,4 +18,6 @@ luci-app-miclash/rootfs/etc/init.d/* text eol=lf
 luci-app-miclash/rootfs/etc/hotplug.d/**/* text eol=lf
 luci-app-miclash/rootfs/opt/clash/bin/* text eol=lf
 luci-app-miclash/rootfs/usr/sbin/* text eol=lf
+luci-app-miclash/rootfs/usr/share/miclash/*.sh text eol=lf
+luci-app-miclash/rootfs/usr/share/miclash/package-* text eol=lf
 install-miclash.sh text eol=lf
