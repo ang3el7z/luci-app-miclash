@@ -293,9 +293,7 @@ define Package/$(PKG_NAME)/postrm
 					fi
 					rmdir "$$RELEASE_CLEANUP" || return 1
 				fi
-				valid_release_proof "$$RELEASE_DONE" || return 1
-				rm -f "$$RELEASE_DONE" || return 1
-				[ ! -e "$$RELEASE_DONE" ] && [ ! -L "$$RELEASE_DONE" ]
+				valid_release_proof "$$RELEASE_DONE"
 			}
 
 			if [ -e "$$RELEASE_CLEANUP" ] || [ -L "$$RELEASE_CLEANUP" ] || \
@@ -367,12 +365,25 @@ define Package/$(PKG_NAME)/postrm
 	# hard reinstall intentionally starts over without it.
 	case "$$1" in
 		upgrade|update)
-			[ "$$HARD_REINSTALL" = "1" ] && rm -f /opt/clash/bin/clash
+			if [ "$$HARD_REINSTALL" = "1" ]; then
+				rm -f /opt/clash/bin/clash || exit 1
+			fi
 			;;
 		*)
 			if [ "$$HARD_REINSTALL" = "1" ] || ! is_pkg_installed; then
-				rm -f /opt/clash/bin/clash
+				rm -f /opt/clash/bin/clash || exit 1
 			fi
+			;;
+	esac
+
+	# This is the terminal fallible operation for ordinary removal. Every prior
+	# cleanup, including optional core removal, runs while the final proof is
+	# retained. A failed unlink leaves the proof for the next actual postrm.
+	case "$$1" in
+		upgrade|update) ;;
+		*)
+			valid_release_proof "$$RELEASE_DONE" || exit 1
+			rm -f "$$RELEASE_DONE" || exit 1
 			;;
 	esac
 }

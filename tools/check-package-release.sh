@@ -392,6 +392,24 @@ if case_enabled postrm-nft-only-retry; then
 	/bin/mv "$fixture/bin/iptables-restore.off" "$fixture/bin/iptables-restore"
 fi
 
+if case_enabled postrm-core-retry; then
+	prepare
+	mkdir -p /opt/clash/bin
+	printf 'core\n' > /opt/clash/bin/clash
+	mount --bind /opt/clash/bin/clash /opt/clash/bin/clash
+	if run_postrm; then
+		echo 'actual postrm ignored a failed final core unlink' >&2
+		exit 1
+	fi
+	[ -f "$RELEASE.done" ] || {
+		echo 'actual postrm consumed the final retry proof before core removal' >&2
+		exit 1
+	}
+	umount /opt/clash/bin/clash
+	run_postrm
+	[ ! -e "$RELEASE.done" ] && [ ! -e "$RELEASE" ] && [ ! -e "$BARRIER" ]
+fi
+
 for failure in fail-nft-inventory fail-nft-delete fail-nft-partial fail-nft-verify \
 	fail-iptables-inventory fail-iptables-apply fail-iptables-verify; do
 	prepare

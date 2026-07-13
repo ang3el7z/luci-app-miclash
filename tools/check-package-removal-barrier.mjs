@@ -168,6 +168,13 @@ check(releaseHelper.includes('finalize_guard') &&
 check(postrm.indexOf('"$$RELEASE_DIR/helper" "$$RELEASE_DIR"') >
 	postrm.indexOf('[ ! -e /etc/init.d/miclash-guard ]'),
 	'postrm may finalize Guard only after proving its packaged mutator is absent');
+const finalProofConsume = postrm.lastIndexOf('rm -f "$$RELEASE_DONE"');
+check(finalProofConsume > postrm.lastIndexOf('rm -f /opt/clash/bin/clash') &&
+	finalProofConsume >= 0,
+	'postrm must retain its final retry proof through optional manual-core removal');
+const finalTail = postrm.slice(finalProofConsume + 'rm -f "$$RELEASE_DONE"'.length);
+check(/^\s*\|\| exit 1\s*\n\s*;;\s*\n\s*esac\s*\n\s*}\s*$/.test(finalTail),
+	'postrm must contain only control closure after final proof consumption');
 
 check(files.clashInit.includes('remove_firewall_rules true') &&
 	files.clashInit.includes('package_removal_active'),
