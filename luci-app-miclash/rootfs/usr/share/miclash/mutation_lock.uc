@@ -297,6 +297,20 @@ export function assert_held(runtime, lease) {
 	busy();
 };
 
+function release_lease(runtime, lease) {
+	assert_held(runtime, lease);
+	if (lease.kind == 'participant') {
+		if (runtime.fs.unlink(lease.path) != true) fail('INTERNAL');
+		return true;
+	}
+	let names = participant_names(runtime, LOCK);
+	if (names == null || length(names)) busy();
+	if (runtime.fs.rmdir(LOCK + '/' + PARTICIPANTS) != true ||
+	    runtime.fs.unlink(LOCK + '/' + OWNER) != true || runtime.fs.rmdir(LOCK) != true)
+		fail('INTERNAL');
+	return true;
+};
+
 export function acquire(runtime, options) {
 	secure_root(runtime);
 	let mode = options?.barrier ?? 'normal';
@@ -329,7 +343,7 @@ export function acquire(runtime, options) {
 		}
 		if (lease != null) {
 			if (!barrier_allowed(runtime, mode)) {
-				try { release(runtime, lease); } catch (error) {}
+				release_lease(runtime, lease);
 				busy();
 			}
 			return lease;
@@ -340,17 +354,7 @@ export function acquire(runtime, options) {
 };
 
 export function release(runtime, lease) {
-	assert_held(runtime, lease);
-	if (lease.kind == 'participant') {
-		if (runtime.fs.unlink(lease.path) != true) fail('INTERNAL');
-		return true;
-	}
-	let names = participant_names(runtime, LOCK);
-	if (names == null || length(names)) busy();
-	if (runtime.fs.rmdir(LOCK + '/' + PARTICIPANTS) != true ||
-	    runtime.fs.unlink(LOCK + '/' + OWNER) != true || runtime.fs.rmdir(LOCK) != true)
-		fail('INTERNAL');
-	return true;
+	return release_lease(runtime, lease);
 };
 
 export function with_lock(runtime, options, callback) {

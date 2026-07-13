@@ -93,20 +93,6 @@ run_preserve_cleanup() {
 	/etc/init.d/clash package_cleanup >/dev/null 2>&1
 }
 
-remove_guard_owner() {
-	[ -x /etc/init.d/miclash-guard ] || return 1
-	/etc/init.d/miclash-guard remove >/dev/null 2>&1 || return 1
-	/etc/init.d/miclash-guard disable >/dev/null 2>&1 || return 1
-}
-
-restore_guard_owner() {
-	[ -x /etc/init.d/miclash-guard ] || return 1
-	/etc/init.d/miclash-guard enable >/dev/null 2>&1 || return 1
-	# start runs guard-bootstrap install, whose success includes structural
-	# verification of the fail-closed Guard table.
-	/etc/init.d/miclash-guard start >/dev/null 2>&1
-}
-
 prepare_completion_marker() {
 	rm -f "$BARRIER/complete.pending" "$BARRIER/complete" || return 1
 	printf 'complete\n' > "$BARRIER/complete.pending" || return 1
@@ -154,30 +140,22 @@ delete_clash_and_wait || { refuse 'Clash procd instance did not quiesce'; exit 1
 run_routing_cleanup || { refuse 'exact routing cleanup failed'; exit 1; }
 run_preserve_cleanup || { refuse 'firewall/DNS cleanup failed'; exit 1; }
 prepare_completion_marker || { refuse 'cannot prepare completion marker'; exit 1; }
-if ! remove_guard_owner; then
-	rm -f "$BARRIER/complete.pending" "$BARRIER/complete" 2>/dev/null || true
-	restore_guard_owner >/dev/null 2>&1 || true
-	refuse 'Guard owner cleanup failed'
-	exit 1
-fi
 if ! mv "$BARRIER/complete.pending" "$BARRIER/complete"; then
-	restore_guard_owner >/dev/null 2>&1 || true
 	refuse 'cannot commit completion marker'
 	exit 1
 fi
 if ! commit_release_state; then
 	rm -f "$BARRIER/complete" "$RELEASE_DIR/complete" 2>/dev/null || true
-	restore_guard_owner >/dev/null 2>&1 || true
 	refuse 'cannot commit retryable release state'
 	exit 1
 fi
-# Manifest unlink is the final successful operation. There is no fallible work
-# after it; if it fails, invalidate completion and reinstall+verify Guard.
+# Manifest unlink is the final prerm operation. The primary Guard remains
+# installed and verified throughout; the copied postrm helper is its sole
+# finalization authority after package mutator absence has been proved.
 if rm -f "$MANIFEST"; then
 	exit 0
 fi
 rm -f "$BARRIER/complete" 2>/dev/null || true
 rm -f "$RELEASE_DIR/complete" 2>/dev/null || true
-restore_guard_owner >/dev/null 2>&1 || true
 refuse 'cannot finalize ownership manifest removal'
 exit 1

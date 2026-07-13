@@ -23,6 +23,79 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Deterministically inject the package barrier after physical publication but
+# before the second barrier check. Both a fresh owner and an inherited
+# participant must roll back completely while returning BUSY.
+set +e
+(
+	. "$helper"
+	barrier_checks=0
+	miclash_mutation_lock_barrier_allowed() {
+		injected_mode="$1"
+		barrier_checks=$((barrier_checks + 1))
+		if [ "$barrier_checks" -eq 2 ]; then
+			mkdir /var/run/miclash/package-removal
+			chmod 0700 /var/run/miclash/package-removal
+		fi
+		active=0
+		[ ! -e /var/run/miclash/package-removal ] || active=1
+		case "$injected_mode:$active" in normal:0|package:1) return 0 ;; *) return 1 ;; esac
+	}
+	miclash_mutation_lock_enter normal 0
+	code=$?
+	[ "$code" -eq 75 ] &&
+		[ ! -e /var/run/miclash/mutation.lock ] &&
+		[ ! -e /var/run/miclash/mutation.lock.takeover ] || exit 1
+)
+owner_postcheck_result=$?
+set -e
+rm -rf /var/run/miclash/mutation.lock /var/run/miclash/mutation.lock.takeover
+rm -rf /var/run/miclash/package-removal
+
+set +e
+(
+	. "$helper"
+	miclash_mutation_lock_enter normal 0 || exit 1
+	parent_owner_token="$MICLASH_MUTATION_LOCK_TOKEN"
+	(
+		. "$helper"
+		barrier_checks=0
+		miclash_mutation_lock_barrier_allowed() {
+			injected_mode="$1"
+			barrier_checks=$((barrier_checks + 1))
+			if [ "$barrier_checks" -eq 2 ]; then
+				mkdir /var/run/miclash/package-removal
+				chmod 0700 /var/run/miclash/package-removal
+			fi
+			active=0
+			[ ! -e /var/run/miclash/package-removal ] || active=1
+			case "$injected_mode:$active" in normal:0|package:1) return 0 ;; *) return 1 ;; esac
+		}
+		miclash_mutation_lock_enter normal 0
+		code=$?
+		[ "$code" -eq 75 ] &&
+			[ -z "$(find /var/run/miclash/mutation.lock/participants -type f 2>/dev/null)" ] &&
+			[ ! -e /var/run/miclash/mutation.lock.takeover ] || exit 1
+	)
+	child_result=$?
+	miclash_mutation_lock_assert_held || exit 1
+	[ "$MICLASH_MUTATION_LOCK_KIND" = owner ] || exit 1
+	[ "$MICLASH_MUTATION_LOCK_TOKEN" = "$parent_owner_token" ] || exit 1
+	rm -f /var/run/miclash/mutation.lock/participants/* 2>/dev/null || true
+	rm -rf /var/run/miclash/package-removal
+	miclash_mutation_lock_leave || exit 1
+	[ "$child_result" -eq 0 ]
+)
+participant_postcheck_result=$?
+set -e
+if [ "$owner_postcheck_result" -ne 0 ]; then
+	echo 'post-acquire barrier rollback leaked a physical owner' >&2
+fi
+if [ "$participant_postcheck_result" -ne 0 ]; then
+	echo 'post-acquire barrier rollback leaked an inherited participant' >&2
+fi
+[ "$owner_postcheck_result" -eq 0 ] && [ "$participant_postcheck_result" -eq 0 ] || exit 1
+
 # Caller-controlled package mode is join-only. A retained barrier plus
 # MICLASH_MUTATION_LOCK_PACKAGE=1 must never authorize a fresh package owner.
 mkdir /var/run/miclash/package-removal

@@ -324,11 +324,13 @@ miclash_mutation_lock_enter_internal() {
 			acquired=0
 		fi
 		if [ "$acquired" = 1 ]; then
+			# Publish logical ownership before the post-acquire barrier check so
+			# exact release can roll back the physical owner/participant.
+			MICLASH_MUTATION_LOCK_DEPTH=1
 			if ! miclash_mutation_lock_barrier_allowed "$mode"; then
-				miclash_mutation_lock_leave >/dev/null 2>&1 || true
+				miclash_mutation_lock_leave >/dev/null 2>&1 || return 1
 				return 75
 			fi
-			MICLASH_MUTATION_LOCK_DEPTH=1
 			[ "$mode" != package ] || { MICLASH_MUTATION_LOCK_PACKAGE=1; export MICLASH_MUTATION_LOCK_PACKAGE; }
 			return 0
 		fi

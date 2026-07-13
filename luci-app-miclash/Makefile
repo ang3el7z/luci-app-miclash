@@ -259,8 +259,66 @@ define Package/$(PKG_NAME)/postrm
 		*)
 			BARRIER="/var/run/miclash/package-removal"
 			RELEASE_DIR="/var/run/miclash/package-removal-release"
-			if [ "$$(stat -c '%u:%a' "$$BARRIER" 2>/dev/null)" = '0:700' ] && \
-				[ "$$(stat -c '%u:%a' "$$BARRIER/complete" 2>/dev/null)" = '0:600' ] && \
+			RELEASE_CLEANUP="$$RELEASE_DIR.cleanup"
+			RELEASE_DONE="$$RELEASE_DIR.done"
+
+			valid_release_proof() {
+				[ ! -L "$$1" ] && [ -f "$$1" ] && \
+					[ "$$(stat -c '%u:%a' "$$1" 2>/dev/null)" = '0:600' ] && \
+					[ "$$(cat "$$1" 2>/dev/null)" = complete ]
+			}
+
+			finish_release_cleanup() {
+				if [ -e "$$RELEASE_CLEANUP" ] || [ -L "$$RELEASE_CLEANUP" ]; then
+					[ ! -L "$$RELEASE_CLEANUP" ] && [ -d "$$RELEASE_CLEANUP" ] && \
+						[ "$$(stat -c '%u:%a' "$$RELEASE_CLEANUP" 2>/dev/null)" = '0:700' ] || return 1
+					if [ -e "$$RELEASE_DONE" ] || [ -L "$$RELEASE_DONE" ]; then
+						valid_release_proof "$$RELEASE_DONE" || return 1
+						[ ! -e "$$RELEASE_CLEANUP/complete" ] && [ ! -L "$$RELEASE_CLEANUP/complete" ] || return 1
+					else
+						valid_release_proof "$$RELEASE_CLEANUP/complete" || return 1
+					fi
+					for item in "$$RELEASE_CLEANUP"/*; do
+						[ -e "$$item" ] || [ -L "$$item" ] || continue
+						case "$$item" in
+							"$$RELEASE_CLEANUP/complete"|"$$RELEASE_CLEANUP/helper"|\
+							"$$RELEASE_CLEANUP/pending"|"$$RELEASE_CLEANUP/barrier-complete.hold") ;;
+							*) return 1 ;;
+						esac
+					done
+					rm -f "$$RELEASE_CLEANUP/pending" "$$RELEASE_CLEANUP/helper" \
+						"$$RELEASE_CLEANUP/barrier-complete.hold" || return 1
+					if [ ! -e "$$RELEASE_DONE" ] && [ ! -L "$$RELEASE_DONE" ]; then
+						mv "$$RELEASE_CLEANUP/complete" "$$RELEASE_DONE" || return 1
+					fi
+					rmdir "$$RELEASE_CLEANUP" || return 1
+				fi
+				valid_release_proof "$$RELEASE_DONE" || return 1
+				rm -f "$$RELEASE_DONE" || return 1
+				[ ! -e "$$RELEASE_DONE" ] && [ ! -L "$$RELEASE_DONE" ]
+			}
+
+			if [ -e "$$RELEASE_CLEANUP" ] || [ -L "$$RELEASE_CLEANUP" ] || \
+			   [ -e "$$RELEASE_DONE" ] || [ -L "$$RELEASE_DONE" ]; then
+				finish_release_cleanup || {
+					echo "MiClash package removal local cleanup remains retryable" >&2
+					exit 1
+				}
+			else
+				BARRIER_PROOF_OK=0
+				if [ "$$(stat -c '%u:%a' "$$BARRIER" 2>/dev/null)" = '0:700' ]; then
+					if valid_release_proof "$$BARRIER/complete" && \
+					   [ ! -e "$$RELEASE_DIR/barrier-complete.hold" ] && [ ! -L "$$RELEASE_DIR/barrier-complete.hold" ]; then
+						BARRIER_PROOF_OK=1
+					elif [ ! -e "$$BARRIER/complete" ] && [ ! -L "$$BARRIER/complete" ] && \
+					     valid_release_proof "$$RELEASE_DIR/barrier-complete.hold"; then
+						BARRIER_PROOF_OK=1
+					fi
+				elif [ ! -e "$$BARRIER" ] && [ ! -L "$$BARRIER" ] && \
+				     valid_release_proof "$$RELEASE_DIR/barrier-complete.hold"; then
+					BARRIER_PROOF_OK=1
+				fi
+				if [ "$$BARRIER_PROOF_OK" = 1 ] && \
 				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR" 2>/dev/null)" = '0:700' ] && \
 				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR/complete" 2>/dev/null)" = '0:600' ] && \
 				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR/helper" 2>/dev/null)" = '0:700' ] && \
@@ -278,21 +336,29 @@ define Package/$(PKG_NAME)/postrm
 				[ ! -e /etc/hotplug.d/net/99-clash-tun ] && \
 				[ ! -e /usr/share/miclash/routing.uc ] && \
 				[ ! -e /usr/share/miclash/routing-cleanup.uc ] && \
+				[ ! -e /usr/share/miclash/guard.uc ] && \
+				[ ! -e /usr/share/miclash/guard-bootstrap.uc ] && \
 				[ ! -e /usr/share/miclash/package-remove ] && \
 				[ ! -e /usr/share/miclash/package-release ]; then
-				"$$RELEASE_DIR/helper" "$$RELEASE_DIR" || {
-					echo "MiClash package removal barrier remains active; retry postrm" >&2
+					"$$RELEASE_DIR/helper" "$$RELEASE_DIR" || {
+						echo "MiClash package removal barrier remains active; retry postrm" >&2
+						exit 1
+					}
+					[ ! -e "$$BARRIER" ] && [ ! -L "$$BARRIER" ] || exit 1
+					rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json || exit 1
+					[ ! -e "$$RELEASE_CLEANUP" ] && [ ! -L "$$RELEASE_CLEANUP" ] || exit 1
+					mv "$$RELEASE_DIR" "$$RELEASE_CLEANUP" || {
+						echo "MiClash package removal release authority remains retryable" >&2
+						exit 1
+					}
+					finish_release_cleanup || {
+						echo "MiClash package removal local cleanup remains retryable" >&2
+						exit 1
+					}
+				else
+					echo "MiClash package removal release proof is incomplete" >&2
 					exit 1
-				}
-				[ ! -e "$$BARRIER" ] || exit 1
-				rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json
-				rm -f "$$RELEASE_DIR/pending" "$$RELEASE_DIR/complete" \
-					"$$RELEASE_DIR/barrier-complete.hold" || exit 1
-				rm -f "$$RELEASE_DIR/helper" || exit 1
-				rmdir "$$RELEASE_DIR" || exit 1
-			else
-				echo "MiClash package removal release proof is incomplete" >&2
-				exit 1
+				fi
 			fi
 			;;
 	esac

@@ -112,16 +112,20 @@ check(releaseHelper.includes('barrier-complete.hold') && releaseHelper.includes(
 	'runtime release helper must retain recoverable proof around the barrier rmdir');
 
 for (const token of [ 'establish_barrier', 'quiesce_update_triggers', 'delete_clash_and_wait',
-	'run_routing_cleanup', 'run_preserve_cleanup', 'remove_guard_owner' ])
+	'run_routing_cleanup', 'run_preserve_cleanup' ])
 	check(files.remove.includes(token), `package removal protocol is missing ${token}`);
+check(!files.remove.includes('/etc/init.d/miclash-guard remove') &&
+	!files.remove.includes('remove_guard_owner') &&
+	!files.remove.includes('restore_guard_owner'),
+	'prerm must keep the primary Guard active and require no restoration branch');
 check(files.remove.includes('[ ! -L "$BARRIER" ]'),
 	'barrier establishment must explicitly reject a symlink before ownership/mode changes');
 
 const order = [ 'establish_barrier', 'quiesce_update_triggers', 'delete_clash_and_wait',
-	'run_routing_cleanup', 'run_preserve_cleanup', 'remove_guard_owner' ]
+	'run_routing_cleanup', 'run_preserve_cleanup' ]
 	.map(token => files.remove.lastIndexOf(token));
 check(order.every((value, index) => value >= 0 && (index === 0 || value > order[index - 1])),
-	'package removal main path must establish, quiesce, delete/wait, route-clean, preserve-clean, then remove Guard');
+	'package removal main path must establish, quiesce, delete/wait, route-clean, then preserve-clean');
 check(!/trap[^\n]*package-removal|rm -rf[^\n]*package-removal/.test(files.remove),
 	'prerm helper must never remove the barrier on success or failure');
 check(files.remove.includes('/etc/init.d/clash package_cleanup') &&
@@ -134,24 +138,36 @@ check(release > postrm.indexOf('/etc/hotplug.d/net/99-clash-tun') &&
 	release > postrm.indexOf('/opt/clash/bin/clash-rules'),
 	'postrm may release the barrier only after routing mutator files and hooks are gone');
 check(postrm.includes("stat -c '%u:%a' \"$$BARRIER\"") &&
-	postrm.includes("stat -c '%u:%a' \"$$BARRIER/complete\""),
-	'postrm must validate the root-owned barrier and completion marker before release');
+	postrm.includes('valid_release_proof "$$BARRIER/complete"') &&
+	postrm.includes('valid_release_proof "$$RELEASE_DIR/barrier-complete.hold"') &&
+	postrm.includes('BARRIER_PROOF_OK=1'),
+	'postrm must validate original, retained-HOLD, and absent-barrier proof states');
 for (const mutator of [ '/opt/clash/bin/clash-rules', '/opt/clash/bin/miclash-update',
 	'/opt/clash/bin/miclash-service', '/opt/clash/bin/miclash-autoupdate',
 	'/opt/clash/bin/miclash-memory-guard', '/etc/init.d/clash',
 	'/etc/init.d/miclash-autoupdate', '/etc/init.d/miclash-memory-guard',
 	'/etc/hotplug.d/iface/40-clash', '/etc/hotplug.d/net/99-clash-tun',
 	'/usr/share/miclash/routing.uc', '/usr/share/miclash/routing-cleanup.uc',
+	'/usr/share/miclash/guard.uc', '/usr/share/miclash/guard-bootstrap.uc',
 	'/usr/share/miclash/package-remove' ])
 	check(postrm.includes(`[ ! -e ${mutator} ]`),
 		`postrm completion release must prove mutator removal: ${mutator}`);
 check(postrm.indexOf('rm -f /etc/miclash/guard-bootstrap.json') >
-	postrm.indexOf("stat -c '%u:%a' \"$$BARRIER/complete\""),
+	postrm.indexOf('valid_release_proof "$$BARRIER/complete"'),
 	'postrm must preserve Guard ownership state unless valid completion is proven');
 check(postrm.includes('RELEASE_DIR="/var/run/miclash/package-removal-release"') &&
 	postrm.includes('"$$RELEASE_DIR/helper" "$$RELEASE_DIR"') &&
-	postrm.includes('rmdir "$$RELEASE_DIR"'),
-	'postrm must invoke the retained helper and remove release state only after success');
+	postrm.includes('mv "$$RELEASE_DIR" "$$RELEASE_CLEANUP"') &&
+	postrm.includes('mv "$$RELEASE_CLEANUP/complete" "$$RELEASE_DONE"') &&
+	postrm.includes('rmdir "$$RELEASE_CLEANUP"'),
+	'postrm must retain an inside or outside retry proof through final local cleanup');
+check(releaseHelper.includes('finalize_guard') &&
+	releaseHelper.indexOf('finalize_guard') < releaseHelper.indexOf('mv "$BARRIER/complete"') &&
+	releaseHelper.indexOf('verify_guard_absent') < releaseHelper.indexOf('rmdir "$BARRIER"'),
+	'copied helper must finalize and verify Guard before releasing the barrier');
+check(postrm.indexOf('"$$RELEASE_DIR/helper" "$$RELEASE_DIR"') >
+	postrm.indexOf('[ ! -e /etc/init.d/miclash-guard ]'),
+	'postrm may finalize Guard only after proving its packaged mutator is absent');
 
 check(files.clashInit.includes('remove_firewall_rules true') &&
 	files.clashInit.includes('package_removal_active'),

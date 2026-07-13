@@ -70,6 +70,11 @@ case "${1:-}" in
 		[ ! -f /var/run/miclash/routing-ownership.json ]
 		[ -f /var/run/miclash/guard-active ]
 		[ ! -f "${MICLASH_PACKAGE_TEST_LOG}.fail-preserve" ] || exit 1
+		if [ -f "${MICLASH_PACKAGE_TEST_LOG}.fail-unlink" ]; then
+			: > "${MICLASH_PACKAGE_TEST_LOG}.held-manifest"
+			mount --bind "${MICLASH_PACKAGE_TEST_LOG}.held-manifest" \
+				/var/run/miclash/routing-ownership.json
+		fi
 		;;
 esac
 EOF
@@ -80,11 +85,6 @@ case "${1:-}" in
 	remove)
 		rm -f /var/run/miclash/guard-active
 		[ ! -f "${MICLASH_PACKAGE_TEST_LOG}.fail-guard" ] || exit 1
-		if [ -f "${MICLASH_PACKAGE_TEST_LOG}.fail-unlink" ]; then
-			: > "${MICLASH_PACKAGE_TEST_LOG}.held-manifest"
-			mount --bind "${MICLASH_PACKAGE_TEST_LOG}.held-manifest" \
-				/var/run/miclash/routing-ownership.json
-		fi
 		;;
 	start) : > /var/run/miclash/guard-active ;;
 esac
@@ -120,14 +120,17 @@ reset_state
 [ -d /var/run/miclash/package-removal ]
 [ "$(stat -c '%u:%a' /var/run/miclash/package-removal)" = '0:700' ]
 [ ! -e /var/run/miclash/routing-ownership.json ]
-[ ! -e /var/run/miclash/guard-active ]
+if [ ! -f /var/run/miclash/guard-active ] ||
+	grep -Eq '^miclash-guard (remove|start)$' "$log"; then
+	echo 'successful prerm removed the primary Guard before package finalization' >&2
+	exit 1
+fi
 ! grep -q '/opt/clash/bin/clash-rules update' /etc/crontabs/root
 
 line_of() { grep -n -m1 "^$1$" "$log" | cut -d: -f1; }
 [ "$(line_of 'miclashd stop')" -lt "$(line_of 'clash delete')" ]
 [ "$(line_of 'clash delete')" -lt "$(line_of 'routing-cleanup')" ]
 [ "$(line_of 'routing-cleanup')" -lt "$(line_of 'clash package_cleanup')" ]
-[ "$(line_of 'clash package_cleanup')" -lt "$(line_of 'miclash-guard remove')" ]
 [ "$(cat "$log.probes")" -eq 0 ]
 
 # Stale legacy PID-only worker locks are not identity proof. Package removal
@@ -173,7 +176,7 @@ fi
 [ -f /var/run/miclash/routing-ownership.json ]
 [ -f /var/run/miclash/guard-active ]
 ! grep -q '^clash package_cleanup$' "$log"
-! grep -q '^miclash-guard remove$' "$log"
+! grep -Eq '^miclash-guard (remove|start)$' "$log"
 
 reset_state
 : > "$log.fail-preserve"
@@ -184,18 +187,7 @@ fi
 [ -d /var/run/miclash/package-removal ]
 [ -f /var/run/miclash/routing-ownership.json ]
 [ -f /var/run/miclash/guard-active ]
-! grep -q '^miclash-guard remove$' "$log"
-
-reset_state
-: > "$log.fail-guard"
-if /usr/share/miclash/package-remove; then
-	echo 'package removal unexpectedly succeeded after partial Guard removal' >&2
-	exit 1
-fi
-[ -d /var/run/miclash/package-removal ]
-[ -f /var/run/miclash/routing-ownership.json ]
-[ -f /var/run/miclash/guard-active ]
-grep -q '^miclash-guard start$' "$log"
+! grep -Eq '^miclash-guard (remove|start)$' "$log"
 
 reset_state
 : > "$log.fail-unlink"
@@ -207,7 +199,7 @@ fi
 [ -f /var/run/miclash/routing-ownership.json ]
 [ -f /var/run/miclash/guard-active ]
 [ ! -e /var/run/miclash/package-removal/complete ]
-grep -q '^miclash-guard start$' "$log"
+! grep -Eq '^miclash-guard (remove|start)$' "$log"
 
 reset_state
 rm -rf /var/run/miclash/package-removal
@@ -221,6 +213,7 @@ fi
 [ -L /var/run/miclash/package-removal ]
 [ -f /var/run/miclash/routing-ownership.json ]
 [ -f /var/run/miclash/guard-active ]
+! grep -Eq '^miclash-guard (remove|start)$' "$log"
 
 # A real service worker that passed its pre-barrier check must retain the
 # shared lease until its synchronous init mutation finishes. Package prerm

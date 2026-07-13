@@ -44,6 +44,45 @@ assert_true(first.fs.lstat(LOCK) != null, 'wrong-token release cannot remove the
 assert_equal(release(first, lease), true, 'the exact owner releases its lock');
 assert_equal(first.fs.lstat(LOCK), null, 'exact release removes the lock directory');
 
+let owner_race = environment(105, 550);
+let owner_barrier_checks = 0;
+owner_race.fs.on_lstat = (path) => {
+	if (path != BARRIER || ++owner_barrier_checks != 2) return;
+	owner_race.fs.mkdir(BARRIER);
+	owner_race.fs.set_mode(BARRIER, 0o700);
+};
+assert_throws(() => acquire(owner_race, { barrier: 'normal', wait_ms: 0 }), 'BUSY');
+owner_race.fs.on_lstat = null;
+assert_equal(owner_race.fs.lstat(LOCK), null,
+	'post-acquire barrier rollback removes the newly published ucode owner: ' +
+	sprintf('%J', owner_race.fs.calls));
+assert_equal(owner_race.fs.lstat(TAKEOVER), null,
+	'post-acquire owner rollback leaves no takeover sentinel');
+
+let participant_fs = fakes.fs({
+	'/proc/sys/kernel/random/boot_id': BOOT + '\n',
+	'/proc/106/stat': proc_stat(106, 560),
+	'/proc/107/stat': proc_stat(107, 570)
+});
+let participant_owner = environment(106, 560, participant_fs);
+let participant_owner_lease = acquire(participant_owner, { barrier: 'normal', wait_ms: 0 });
+let participant_race = environment(107, 570, participant_fs);
+participant_race.mutation_lock_token = participant_owner_lease.token;
+let participant_barrier_checks = 0;
+participant_fs.on_lstat = (path) => {
+	if (path != BARRIER || ++participant_barrier_checks != 2) return;
+	participant_fs.mkdir(BARRIER);
+	participant_fs.set_mode(BARRIER, 0o700);
+};
+assert_throws(() => acquire(participant_race, { barrier: 'normal', wait_ms: 0 }), 'BUSY');
+participant_fs.on_lstat = null;
+assert_equal(length(participant_fs.calls.unlink), 1,
+	'post-acquire participant rollback removes only its newly published record');
+assert_equal(assert_held(participant_owner, participant_owner_lease), true,
+	'post-acquire participant rollback preserves the exact parent owner');
+participant_fs.rmdir(BARRIER);
+release(participant_owner, participant_owner_lease);
+
 let blocked = environment(111, 600);
 blocked.fs.mkdir(BARRIER);
 blocked.fs.set_mode(BARRIER, 0o700);
