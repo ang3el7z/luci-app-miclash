@@ -349,31 +349,89 @@ export function digest(fs) {
 };
 
 export function uci(initial) {
-	let values = initial ?? {};
-	let fake = {
-		values,
+	function clone(value) {
+		return value == null ? value : json(sprintf('%J', value));
+	};
+	let committed = clone(initial ?? {}), fake = {
+		values: committed,
 		set_calls: 0,
 		commit_calls: 0,
+		cursor_calls: 0,
 		fail_set_at: null,
-		fail_commit: false
+		fail_commit: false,
+		pending_changes: {},
+		calls: []
 	};
-	fake.get = (config, section, option) => values[config]?.[section]?.[option];
-	fake.set = (config, section, option, value) => {
-		fake.set_calls++;
-		if (fake.fail_set_at == fake.set_calls)
+
+	function make_cursor() {
+		let values = clone(committed), dirty = {};
+		let cursor = {};
+		cursor.get = (config, section, option) => clone(values[config]?.[section]?.[option]);
+		cursor.get_first = (config, section_type) => {
+			for (let name, section in values[config] ?? {})
+				if (section?.['.type'] == section_type)
+					return name;
 			return null;
-		values[config] ??= {};
-		values[config][section] ??= {};
-		values[config][section][option] = value;
-		return true;
+		};
+		cursor.get_all = (config, section) => {
+			if (section == null) return clone(values[config]);
+			let value = clone(values[config]?.[section]);
+			if (value != null) value['.name'] ??= section;
+			return value;
+		};
+		cursor.set = (config, section, option, value) => {
+			fake.set_calls++;
+			push(fake.calls, { operation: 'set', config, section, option, value: clone(value) });
+			if (fake.fail_set_at == fake.set_calls) return null;
+			values[config] ??= {};
+			values[config][section] ??= {};
+			values[config][section][option] = clone(value);
+			dirty[config] = true;
+			return true;
+		};
+		cursor.delete = (config, section, option) => {
+			push(fake.calls, { operation: 'delete', config, section, option });
+			if (values[config]?.[section] == null || !exists(values[config][section], option))
+				return false;
+			delete values[config][section][option];
+			dirty[config] = true;
+			return true;
+		};
+		cursor.changes = (config) => {
+			if (fake.pending_changes[config] != null) return clone(fake.pending_changes[config]);
+			return dirty[config] ? { pending: true } : {};
+		};
+		cursor.revert = (config) => {
+			push(fake.calls, { operation: 'revert', config });
+			values[config] = clone(committed[config]);
+			delete dirty[config];
+			return true;
+		};
+		cursor.commit = (config) => {
+			fake.commit_calls++;
+			push(fake.calls, { operation: 'commit', config });
+			if (fake.fail_commit) return null;
+			committed[config] = clone(values[config]);
+			fake.values = committed;
+			delete dirty[config];
+			return true;
+		};
+		return cursor;
 	};
-	fake.delete = (config, section, option) => delete values[config]?.[section]?.[option];
-	fake.commit = (config) => {
-		fake.commit_calls++;
-		if (fake.fail_commit)
-			return null;
-		return true;
+
+	fake.cursor = () => {
+		fake.cursor_calls++;
+		return make_cursor();
 	};
+	let default_cursor = make_cursor();
+	fake.get = (config, section, option) => default_cursor.get(config, section, option);
+	fake.get_first = (config, section_type) => default_cursor.get_first(config, section_type);
+	fake.get_all = (config, section) => default_cursor.get_all(config, section);
+	fake.set = (config, section, option, value) => default_cursor.set(config, section, option, value);
+	fake.delete = (config, section, option) => default_cursor.delete(config, section, option);
+	fake.changes = (config) => default_cursor.changes(config);
+	fake.revert = (config) => default_cursor.revert(config);
+	fake.commit = (config) => default_cursor.commit(config);
 	return fake;
 };
 

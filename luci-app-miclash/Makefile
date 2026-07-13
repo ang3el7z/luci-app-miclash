@@ -112,6 +112,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json $(1)/usr/share/rpcd/acl.d/
 	$(INSTALL_DIR) $(1)/usr/share/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/*.uc $(1)/usr/share/miclash/
+	$(INSTALL_DIR) $(1)/etc/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/mutation-lock.sh $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-remove $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-release $(1)/usr/share/miclash/
@@ -239,7 +240,6 @@ define Package/$(PKG_NAME)/postrm
 
 	rm -rf /opt/clash/ui
 	rm -f /opt/clash/ruleset
-	rm -f /opt/clash/.dns_backup
 	rm -rf /tmp/clash
 	rm -rf /tmp/miclash-autoupdate
 	rm -rf /tmp/miclash-memory-guard
@@ -268,6 +268,15 @@ define Package/$(PKG_NAME)/postrm
 					[ "$$(cat "$$1" 2>/dev/null)" = complete ]
 			}
 
+			valid_dns_release_proof() {
+				[ ! -L "$$1" ] && [ -f "$$1" ] && \
+					[ "$$(stat -c '%u:%a' "$$1" 2>/dev/null)" = '0:600' ] && \
+					grep -Eq '"version"[[:space:]]*:[[:space:]]*1' "$$1" && \
+					grep -Eq '"owner"[[:space:]]*:[[:space:]]*"miclash"' "$$1" && \
+					grep -Eq '"state"[[:space:]]*:[[:space:]]*"clean"' "$$1" && \
+					grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' "$$1"
+			}
+
 			finish_release_cleanup() {
 				if [ -e "$$RELEASE_CLEANUP" ] || [ -L "$$RELEASE_CLEANUP" ]; then
 					[ ! -L "$$RELEASE_CLEANUP" ] && [ -d "$$RELEASE_CLEANUP" ] && \
@@ -277,17 +286,20 @@ define Package/$(PKG_NAME)/postrm
 						[ ! -e "$$RELEASE_CLEANUP/complete" ] && [ ! -L "$$RELEASE_CLEANUP/complete" ] || return 1
 					else
 						valid_release_proof "$$RELEASE_CLEANUP/complete" || return 1
+						valid_dns_release_proof "$$RELEASE_CLEANUP/dns-ownership.json" || return 1
 					fi
 					for item in "$$RELEASE_CLEANUP"/*; do
 						[ -e "$$item" ] || [ -L "$$item" ] || continue
 						case "$$item" in
 							"$$RELEASE_CLEANUP/complete"|"$$RELEASE_CLEANUP/helper"|\
-							"$$RELEASE_CLEANUP/pending"|"$$RELEASE_CLEANUP/barrier-complete.hold") ;;
+							"$$RELEASE_CLEANUP/pending"|"$$RELEASE_CLEANUP/barrier-complete.hold"|\
+							"$$RELEASE_CLEANUP/dns-ownership.json") ;;
 							*) return 1 ;;
 						esac
 					done
 					rm -f "$$RELEASE_CLEANUP/pending" "$$RELEASE_CLEANUP/helper" \
-						"$$RELEASE_CLEANUP/barrier-complete.hold" || return 1
+						"$$RELEASE_CLEANUP/barrier-complete.hold" \
+						"$$RELEASE_CLEANUP/dns-ownership.json" || return 1
 					if [ ! -e "$$RELEASE_DONE" ] && [ ! -L "$$RELEASE_DONE" ]; then
 						mv "$$RELEASE_CLEANUP/complete" "$$RELEASE_DONE" || return 1
 					fi
@@ -320,7 +332,10 @@ define Package/$(PKG_NAME)/postrm
 				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR" 2>/dev/null)" = '0:700' ] && \
 				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR/complete" 2>/dev/null)" = '0:600' ] && \
 				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR/helper" 2>/dev/null)" = '0:700' ] && \
+				valid_dns_release_proof "$$RELEASE_DIR/dns-ownership.json" && \
 				[ ! -e /var/run/miclash/routing-ownership.json ] && \
+				[ ! -e /etc/miclash/dns-ownership.json ] && \
+				[ ! -e /opt/clash/.dns_backup ] && \
 				[ ! -e /opt/clash/bin/clash-rules ] && \
 				[ ! -e /opt/clash/bin/miclash-update ] && \
 				[ ! -e /opt/clash/bin/miclash-service ] && \
@@ -334,6 +349,9 @@ define Package/$(PKG_NAME)/postrm
 				[ ! -e /etc/hotplug.d/net/99-clash-tun ] && \
 				[ ! -e /usr/share/miclash/routing.uc ] && \
 				[ ! -e /usr/share/miclash/routing-cleanup.uc ] && \
+				[ ! -e /usr/share/miclash/dns.uc ] && \
+				[ ! -e /usr/share/miclash/dns-control.uc ] && \
+				[ ! -e /usr/share/miclash/dns-cleanup.uc ] && \
 				[ ! -e /usr/share/miclash/guard.uc ] && \
 				[ ! -e /usr/share/miclash/guard-bootstrap.uc ] && \
 				[ ! -e /usr/share/miclash/package-remove ] && \

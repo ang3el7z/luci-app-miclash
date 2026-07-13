@@ -46,7 +46,7 @@ jobs:
 
       - name: Check test runner shell syntax
         run: >-
-          sh -n tools/run-ucode-tests.sh tools/check-routing-netns.sh
+          sh -n tools/run-ucode-tests.sh tools/check-dns-lifecycle.sh tools/check-routing-netns.sh
           tools/check-mutation-lock.sh tools/check-package-cleanup.sh
           tools/check-package-removal.sh tools/check-package-release.sh
 
@@ -114,6 +114,14 @@ jobs:
             UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
             LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
             tools/check-routing-netns.sh
+
+      - name: Run transactional DNS lifecycle gate
+        shell: bash
+        run: |
+          sudo env \
+            UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
+            tools/check-dns-lifecycle.sh
 
       - name: Run package removal process and failure-preservation gate
         shell: bash

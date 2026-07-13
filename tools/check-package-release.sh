@@ -167,7 +167,8 @@ guard_present() {
 
 proof_retained() {
 	{ [ -f "$BARRIER/complete" ] || [ -f "$RELEASE/barrier-complete.hold" ]; } &&
-		[ -f "$RELEASE/complete" ] && [ -x "$RELEASE/helper" ]
+		[ -f "$RELEASE/complete" ] && [ -x "$RELEASE/helper" ] &&
+		[ -f "$RELEASE/dns-ownership.json" ]
 }
 
 prepare() {
@@ -176,8 +177,9 @@ prepare() {
 	chmod 0700 "$BARRIER" "$RELEASE"
 	printf 'complete\n' > "$BARRIER/complete"
 	printf 'complete\n' > "$RELEASE/complete"
+	printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"clean","transition":null}' > "$RELEASE/dns-ownership.json"
 	cp "$helper" "$RELEASE/helper"
-	chmod 0600 "$BARRIER/complete" "$RELEASE/complete"
+	chmod 0600 "$BARRIER/complete" "$RELEASE/complete" "$RELEASE/dns-ownership.json"
 	chmod 0700 "$RELEASE/helper"
 	seed_guard
 }
@@ -185,6 +187,14 @@ prepare() {
 run_postrm() {
 	"$fixture/postrm" remove
 }
+
+prepare
+rm -f "$RELEASE/dns-ownership.json"
+if run_postrm; then
+	echo 'actual postrm accepted release authority without a DNS clean proof' >&2
+	exit 1
+fi
+guard_present
 
 prepare
 : > "$BARRIER/unexpected"

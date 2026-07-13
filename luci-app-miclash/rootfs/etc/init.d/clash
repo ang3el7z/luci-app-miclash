@@ -11,7 +11,7 @@ RULESET_TMPFS="/tmp/clash/ruleset"
 RULESET_LINK="${CLASH_DIR}/ruleset"
 PROXY_PROVIDERS_TMPFS="/tmp/clash/proxy_providers"
 PROXY_PROVIDERS_LINK="${CLASH_DIR}/proxy_providers"
-DNS_BACKUP_FILE="/opt/clash/.dns_backup"
+DNS_CONTROL="/usr/share/miclash/dns-control.uc"
 CONFIG_UPGRADE_BACKUP="${CLASH_DIR}/.config.yaml.upgrade.bak"
 SETTINGS_FILE="${CLASH_DIR}/settings"
 USE_TMPFS_RULES="true"
@@ -184,137 +184,9 @@ setup_clash_directories() {
 	return 0
 }
 
-# Function to configure DNS
-setup_dns() {
-	local dns_server="127.0.0.1#7874"
-
-	# Check if the server is already added
-	local existing_server
-	existing_server=$(uci get dhcp.@dnsmasq[0].server 2>/dev/null | grep "$dns_server")
-
-	# Save original cachesize and noresolv values so restore_dns can put them back
-	# exactly as they were, rather than simply deleting them (which would lose any
-	# value the admin had explicitly configured before Clash was started).
-	if [ ! -f "$DNS_BACKUP_FILE" ]; then
-		mkdir -p "$(dirname "$DNS_BACKUP_FILE")" 2>/dev/null
-		if [ -n "$existing_server" ]; then
-			printf 'CACHESIZE=\nNORESOLV=\n' > "$DNS_BACKUP_FILE"
-			msg "Detected stale DNS state from prior unclean shutdown; using safe defaults for restore"
-		else
-			local orig_cachesize orig_noresolv
-			orig_cachesize=$(uci get dhcp.@dnsmasq[0].cachesize 2>/dev/null)
-			orig_noresolv=$(uci get dhcp.@dnsmasq[0].noresolv 2>/dev/null)
-			printf 'CACHESIZE=%s\nNORESOLV=%s\n' "$orig_cachesize" "$orig_noresolv" > "$DNS_BACKUP_FILE"
-		fi
-	fi
-
-	if [ -z "$existing_server" ]; then
-		uci add_list dhcp.@dnsmasq[0].server="$dns_server" || {
-			msg "ERROR: Failed to add DNS server"
-			return 1
-		}
-	fi
-
-	uci set dhcp.@dnsmasq[0].cachesize='0' || {
-		msg "ERROR: Failed to set cachesize"
-		return 1
-	}
-
-	uci set dhcp.@dnsmasq[0].noresolv='1' || {
-		msg "ERROR: Failed to set noresolv"
-		return 1
-	}
-
-	if ! uci commit dhcp; then
-		msg "ERROR: Failed to commit DNS changes"
-		return 1
-	fi
-
-	msg "DNS settings configured"
-	return 0
-}
-
-# Function to restore DNS settings
-restore_dns() {
-	local dns_server="127.0.0.1#7874"
-	local inventory servers="" cache_present=0 noresolv_present=0
-	local current_cache="" current_noresolv="" orig_cachesize="" orig_noresolv=""
-	inventory=$(uci -q show dhcp 2>/dev/null) || return 1
-	if printf '%s\n' "$inventory" | grep -q '^dhcp\.@dnsmasq\[0\]\.server='; then
-		servers=$(uci -q get 'dhcp.@dnsmasq[0].server' 2>/dev/null) || return 1
-	fi
-	if printf '%s\n' "$inventory" | grep -q '^dhcp\.@dnsmasq\[0\]\.cachesize='; then
-		cache_present=1
-		current_cache=$(uci -q get 'dhcp.@dnsmasq[0].cachesize' 2>/dev/null) || return 1
-	fi
-	if printf '%s\n' "$inventory" | grep -q '^dhcp\.@dnsmasq\[0\]\.noresolv='; then
-		noresolv_present=1
-		current_noresolv=$(uci -q get 'dhcp.@dnsmasq[0].noresolv' 2>/dev/null) || return 1
-	fi
-
-	if [ ! -e "$DNS_BACKUP_FILE" ] && [ ! -L "$DNS_BACKUP_FILE" ]; then
-		for server in $servers; do [ "$server" != "$dns_server" ] || return 1; done
-		if { [ "$cache_present" = 1 ] && [ "$current_cache" = 0 ]; } ||
-		   { [ "$noresolv_present" = 1 ] && [ "$current_noresolv" = 1 ]; }; then
-			return 1
-		fi
-		return 0
-	fi
-
-	[ ! -L "$DNS_BACKUP_FILE" ] && [ -f "$DNS_BACKUP_FILE" ] || return 1
-	[ "$(wc -l < "$DNS_BACKUP_FILE" 2>/dev/null)" -eq 2 ] || return 1
-	[ "$(grep -c '^CACHESIZE=' "$DNS_BACKUP_FILE" 2>/dev/null)" -eq 1 ] || return 1
-	[ "$(grep -c '^NORESOLV=' "$DNS_BACKUP_FILE" 2>/dev/null)" -eq 1 ] || return 1
-	orig_cachesize=$(sed -n 's/^CACHESIZE=//p' "$DNS_BACKUP_FILE")
-	orig_noresolv=$(sed -n 's/^NORESOLV=//p' "$DNS_BACKUP_FILE")
-	case "$orig_cachesize" in ''|*[!0-9]*) [ -z "$orig_cachesize" ] || return 1 ;; esac
-	case "$orig_noresolv" in ''|0|1) ;; *) return 1 ;; esac
-
-	for server in $servers; do
-		[ "$server" != "$dns_server" ] ||
-			uci -q del_list "dhcp.@dnsmasq[0].server=$dns_server" || return 1
-	done
-	if [ -n "$orig_cachesize" ]; then
-		uci -q set "dhcp.@dnsmasq[0].cachesize=$orig_cachesize" || return 1
-	elif [ "$cache_present" = 1 ]; then
-		uci -q delete 'dhcp.@dnsmasq[0].cachesize' || return 1
-	fi
-	if [ -n "$orig_noresolv" ]; then
-		uci -q set "dhcp.@dnsmasq[0].noresolv=$orig_noresolv" || return 1
-	elif [ "$noresolv_present" = 1 ]; then
-		uci -q delete 'dhcp.@dnsmasq[0].noresolv' || return 1
-	fi
-	uci -q commit dhcp || return 1
-	verify_dns_restored "$dns_server" "$orig_cachesize" "$orig_noresolv" || return 1
-	restart_dnsmasq || return 1
-	verify_dns_restored "$dns_server" "$orig_cachesize" "$orig_noresolv" || return 1
-	rm -f "$DNS_BACKUP_FILE" || return 1
-	[ ! -e "$DNS_BACKUP_FILE" ] || return 1
-	msg "DNS settings restored"
-	return 0
-}
-
-verify_dns_restored() {
-	local dns_server="$1" expected_cache="$2" expected_noresolv="$3"
-	local inventory servers="" actual=""
-	inventory=$(uci -q show dhcp 2>/dev/null) || return 1
-	if printf '%s\n' "$inventory" | grep -q '^dhcp\.@dnsmasq\[0\]\.server='; then
-		servers=$(uci -q get 'dhcp.@dnsmasq[0].server' 2>/dev/null) || return 1
-	fi
-	for server in $servers; do [ "$server" != "$dns_server" ] || return 1; done
-	if [ -n "$expected_cache" ]; then
-		actual=$(uci -q get 'dhcp.@dnsmasq[0].cachesize' 2>/dev/null) || return 1
-		[ "$actual" = "$expected_cache" ] || return 1
-	else
-		! printf '%s\n' "$inventory" | grep -q '^dhcp\.@dnsmasq\[0\]\.cachesize=' || return 1
-	fi
-	if [ -n "$expected_noresolv" ]; then
-		actual=$(uci -q get 'dhcp.@dnsmasq[0].noresolv' 2>/dev/null) || return 1
-		[ "$actual" = "$expected_noresolv" ] || return 1
-	else
-		! printf '%s\n' "$inventory" | grep -q '^dhcp\.@dnsmasq\[0\]\.noresolv=' || return 1
-	fi
-	return 0
+dns_control() {
+	[ -f "$DNS_CONTROL" ] && command -v ucode >/dev/null 2>&1 || return 1
+	ucode -L '/usr/share/*.uc' "$DNS_CONTROL" "$1" >/dev/null 2>&1
 }
 
 # Function to apply firewall rules
@@ -356,17 +228,6 @@ refresh_guard_rules() {
 		else
 			msg "WARNING: Failed to refresh client forwarding guard"
 		fi
-	fi
-}
-
-# Function to restart dnsmasq
-restart_dnsmasq() {
-	if /etc/init.d/dnsmasq restart >/dev/null 2>&1; then
-		msg "dnsmasq restarted successfully"
-		return 0
-	else
-		msg "ERROR: Failed to restart dnsmasq"
-		return 1
 	fi
 }
 
@@ -414,18 +275,8 @@ start_service_locked() {
 	}
 
 	# Set up DNS — on failure, roll back the firewall rules we just applied.
-	setup_dns || {
+	dns_control apply || {
 		msg "ERROR: Failed to configure DNS, rolling back firewall rules"
-		remove_firewall_rules
-		return 1
-	}
-
-	# Restart dnsmasq to apply the new DNS settings — on failure, restore DNS
-	# config and roll back firewall rules so the system is left consistent.
-	restart_dnsmasq || {
-		msg "ERROR: Failed to restart dnsmasq, rolling back DNS and firewall rules"
-		restore_dns
-		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 		remove_firewall_rules
 		return 1
 	}
@@ -454,7 +305,7 @@ stop_service_locked() {
 	[ "$preserve" = true ] || refresh_guard_rules || return 1
 
 	# Restore DNS settings
-	restore_dns || return 1
+	dns_control cleanup || return 1
 
 	msg "Clash service stopped"
 }
@@ -480,7 +331,6 @@ delete_locked() {
 package_cleanup_locked() {
 	package_removal_active || return 1
 	remove_firewall_rules true || return 1
-	restore_dns || return 1
 	return 0
 }
 

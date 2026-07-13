@@ -12,6 +12,8 @@ LOCK_HELPER="/usr/share/miclash/mutation-lock.sh"
 
 BARRIER="/var/run/miclash/package-removal"
 MANIFEST="/var/run/miclash/routing-ownership.json"
+DNS_MANIFEST="/etc/miclash/dns-ownership.json"
+DNS_LEGACY="/opt/clash/.dns_backup"
 RELEASE_SOURCE="/usr/share/miclash/package-release"
 RELEASE_DIR="/var/run/miclash/package-removal-release"
 CRON_FILE="/etc/crontabs/root"
@@ -88,6 +90,14 @@ run_routing_cleanup() {
 	[ -f "$MANIFEST" ]
 }
 
+run_dns_cleanup() {
+	command -v ucode >/dev/null 2>&1 || return 1
+	[ -f /usr/share/miclash/dns-cleanup.uc ] || return 1
+	ucode -L '/usr/share/*.uc' /usr/share/miclash/dns-cleanup.uc >/dev/null 2>&1 || return 1
+	[ ! -e "$DNS_LEGACY" ] && [ ! -L "$DNS_LEGACY" ] || return 1
+	[ -f "$DNS_MANIFEST" ] || [ -f "$RELEASE_DIR/dns-ownership.json" ]
+}
+
 run_preserve_cleanup() {
 	[ -x /etc/init.d/clash ] || return 1
 	/etc/init.d/clash package_cleanup >/dev/null 2>&1
@@ -122,6 +132,24 @@ prepare_release_state() {
 	return 0
 }
 
+protect_dns_proof() {
+	if [ -e "$DNS_MANIFEST" ] || [ -L "$DNS_MANIFEST" ]; then
+		[ ! -L "$DNS_MANIFEST" ] && [ -f "$DNS_MANIFEST" ] || return 1
+		[ "$(stat -c '%u:%a' "$DNS_MANIFEST" 2>/dev/null)" = 0:600 ] || return 1
+		[ ! -e "$RELEASE_DIR/dns-ownership.json" ] && \
+			[ ! -L "$RELEASE_DIR/dns-ownership.json" ] || return 1
+		mv "$DNS_MANIFEST" "$RELEASE_DIR/dns-ownership.json" || return 1
+	fi
+	[ ! -L "$RELEASE_DIR/dns-ownership.json" ] && \
+		[ -f "$RELEASE_DIR/dns-ownership.json" ] && \
+		[ "$(stat -c '%u:%a' "$RELEASE_DIR/dns-ownership.json" 2>/dev/null)" = 0:600 ] || return 1
+	grep -Eq '"owner"[[:space:]]*:[[:space:]]*"miclash"' "$RELEASE_DIR/dns-ownership.json" || return 1
+	grep -Eq '"state"[[:space:]]*:[[:space:]]*"clean"' "$RELEASE_DIR/dns-ownership.json" || return 1
+	grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' "$RELEASE_DIR/dns-ownership.json" || return 1
+	[ ! -e "$DNS_MANIFEST" ] && [ ! -L "$DNS_MANIFEST" ] && \
+		[ ! -e "$DNS_LEGACY" ] && [ ! -L "$DNS_LEGACY" ]
+}
+
 commit_release_state() {
 	printf 'complete\n' > "$RELEASE_DIR/complete.pending" || return 1
 	chown 0:0 "$RELEASE_DIR/complete.pending" 2>/dev/null || return 1
@@ -138,7 +166,9 @@ MUTATION_LOCK_HELD=1
 quiesce_update_triggers || { refuse 'cannot quiesce update and daemon writers'; exit 1; }
 delete_clash_and_wait || { refuse 'Clash procd instance did not quiesce'; exit 1; }
 run_routing_cleanup || { refuse 'exact routing cleanup failed'; exit 1; }
-run_preserve_cleanup || { refuse 'firewall/DNS cleanup failed'; exit 1; }
+run_dns_cleanup || { refuse 'exact DNS cleanup failed'; exit 1; }
+run_preserve_cleanup || { refuse 'firewall cleanup failed'; exit 1; }
+protect_dns_proof || { refuse 'cannot protect DNS clean proof'; exit 1; }
 prepare_completion_marker || { refuse 'cannot prepare completion marker'; exit 1; }
 if ! mv "$BARRIER/complete.pending" "$BARRIER/complete"; then
 	refuse 'cannot commit completion marker'

@@ -9,7 +9,7 @@ if [ "${MICLASH_PACKAGE_REMOVAL_NS:-}" != 1 ]; then
 fi
 
 mount --make-rprivate /
-for path in /var/run/miclash /usr/share/miclash /opt/clash/bin /etc/init.d /etc/crontabs; do
+for path in /var/run/miclash /usr/share/miclash /opt/clash/bin /etc/miclash /etc/init.d /etc/crontabs; do
 	mkdir -p "$path"
 	mount -t tmpfs -o mode=0755,size=1m miclash-package-test "$path"
 done
@@ -43,11 +43,24 @@ exit 1
 EOF
 cat > "$fixture/bin/ucode" <<'EOF'
 #!/bin/sh
-echo routing-cleanup >> "$MICLASH_PACKAGE_TEST_LOG"
 [ -d /var/run/miclash/package-removal ]
-[ -f /var/run/miclash/routing-ownership.json ]
 [ -f /var/run/miclash/guard-active ]
-[ ! -f "${MICLASH_PACKAGE_TEST_LOG}.fail-routing" ] || exit 1
+case "$*" in
+	*routing-cleanup.uc*)
+		echo routing-cleanup >> "$MICLASH_PACKAGE_TEST_LOG"
+		[ -f /var/run/miclash/routing-ownership.json ]
+		[ ! -f "${MICLASH_PACKAGE_TEST_LOG}.fail-routing" ] || exit 1
+		;;
+	*dns-cleanup.uc*)
+		echo dns-cleanup >> "$MICLASH_PACKAGE_TEST_LOG"
+		[ -f /etc/miclash/dns-ownership.json ]
+		[ ! -f "${MICLASH_PACKAGE_TEST_LOG}.fail-dns" ] || exit 1
+		printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"clean","transition":null}' > /etc/miclash/dns-ownership.json
+		chmod 0600 /etc/miclash/dns-ownership.json
+		rm -f /opt/clash/.dns_backup
+		;;
+	*) exit 1 ;;
+esac
 EOF
 chmod 0700 "$fixture/bin/logger" "$fixture/bin/ubus" "$fixture/bin/ucode"
 
@@ -68,6 +81,8 @@ case "${1:-}" in
 	package_cleanup)
 		[ -d /var/run/miclash/package-removal ]
 		[ ! -f /var/run/miclash/routing-ownership.json ]
+		[ ! -e /etc/miclash/dns-ownership.json ]
+		[ -f /var/run/miclash/package-removal-release/dns-ownership.json ]
 		[ -f /var/run/miclash/guard-active ]
 		[ ! -f "${MICLASH_PACKAGE_TEST_LOG}.fail-preserve" ] || exit 1
 		if [ -f "${MICLASH_PACKAGE_TEST_LOG}.fail-unlink" ]; then
@@ -95,6 +110,8 @@ cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/package-remove" \
 	/usr/share/miclash/package-remove
 cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/routing-cleanup.uc" \
 	/usr/share/miclash/routing-cleanup.uc
+cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/dns-cleanup.uc" \
+	/usr/share/miclash/dns-cleanup.uc
 cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh" \
 	/usr/share/miclash/mutation-lock.sh
 cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/package-release" \
@@ -108,9 +125,12 @@ reset_state() {
 	rm -rf /var/run/miclash/package-removal
 	rm -rf /var/run/miclash/package-removal-release
 	: > /var/run/miclash/routing-ownership.json
+	printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"active","transition":null}' > /etc/miclash/dns-ownership.json
+	chmod 0600 /etc/miclash/dns-ownership.json
+	rm -f /opt/clash/.dns_backup
 	: > /var/run/miclash/guard-active
 	: > "$log"
-	rm -f "$log.fail-routing" "$log.fail-preserve" "$log.fail-guard" \
+	rm -f "$log.fail-routing" "$log.fail-dns" "$log.fail-preserve" "$log.fail-guard" \
 		"$log.fail-unlink" "$log.held-manifest" "$log.probes"
 	printf '%s\n' '*/30 * * * * /opt/clash/bin/clash-rules update >/dev/null 2>&1' > /etc/crontabs/root
 }
@@ -120,6 +140,8 @@ reset_state
 [ -d /var/run/miclash/package-removal ]
 [ "$(stat -c '%u:%a' /var/run/miclash/package-removal)" = '0:700' ]
 [ ! -e /var/run/miclash/routing-ownership.json ]
+[ ! -e /etc/miclash/dns-ownership.json ]
+[ -f /var/run/miclash/package-removal-release/dns-ownership.json ]
 if [ ! -f /var/run/miclash/guard-active ] ||
 	grep -Eq '^miclash-guard (remove|start)$' "$log"; then
 	echo 'successful prerm removed the primary Guard before package finalization' >&2
@@ -130,7 +152,8 @@ fi
 line_of() { grep -n -m1 "^$1$" "$log" | cut -d: -f1; }
 [ "$(line_of 'miclashd stop')" -lt "$(line_of 'clash delete')" ]
 [ "$(line_of 'clash delete')" -lt "$(line_of 'routing-cleanup')" ]
-[ "$(line_of 'routing-cleanup')" -lt "$(line_of 'clash package_cleanup')" ]
+[ "$(line_of 'routing-cleanup')" -lt "$(line_of 'dns-cleanup')" ]
+[ "$(line_of 'dns-cleanup')" -lt "$(line_of 'clash package_cleanup')" ]
 [ "$(cat "$log.probes")" -eq 0 ]
 
 # Stale legacy PID-only worker locks are not identity proof. Package removal
@@ -174,6 +197,19 @@ if /usr/share/miclash/package-remove; then
 fi
 [ -d /var/run/miclash/package-removal ]
 [ -f /var/run/miclash/routing-ownership.json ]
+[ -f /var/run/miclash/guard-active ]
+! grep -q '^clash package_cleanup$' "$log"
+! grep -Eq '^miclash-guard (remove|start)$' "$log"
+
+reset_state
+: > "$log.fail-dns"
+if /usr/share/miclash/package-remove; then
+	echo 'package removal unexpectedly succeeded after DNS cleanup failure' >&2
+	exit 1
+fi
+[ -d /var/run/miclash/package-removal ]
+[ -f /var/run/miclash/routing-ownership.json ]
+[ -f /etc/miclash/dns-ownership.json ]
 [ -f /var/run/miclash/guard-active ]
 ! grep -q '^clash package_cleanup$' "$log"
 ! grep -Eq '^miclash-guard (remove|start)$' "$log"

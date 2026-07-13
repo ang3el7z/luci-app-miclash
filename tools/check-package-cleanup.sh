@@ -230,63 +230,11 @@ for failure in fail-iptables-inventory fail-iptables-delete fail-iptables-verify
 	run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup >/dev/null 2>&1
 done
 
-PATH="$fixture/nftbin:$fixture/bin:/usr/bin:/bin"
-export PATH
-reset_dns() {
-	rm -f "$fixture/state"/* /opt/clash/.dns_backup /var/etc/miclash.include
-	: > "$fixture/state/nft-rules"
-	printf '127.0.0.1#7874\n' > "$fixture/state/dns-server"
-	printf '0' > "$fixture/state/dns-cache"
-	printf '1' > "$fixture/state/dns-noresolv"
-	printf 'CACHESIZE=150\nNORESOLV=0\n' > /opt/clash/.dns_backup
-}
-
-reset_dns
-printf 'broken\n' > /opt/clash/.dns_backup
-if run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1; then
-	echo 'init package cleanup accepted malformed DNS backup' >&2
-	exit 1
-fi
-[ -f /opt/clash/.dns_backup ]
-
-for failure in fail-dhcp-inventory fail-dhcp-delete fail-dhcp-set fail-dhcp-commit \
-	fail-dhcp-verify fail-dnsmasq; do
-	reset_dns
-	: > "$fixture/state/$failure"
-	if run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1; then
-		echo "init package cleanup unexpectedly ignored $failure" >&2
-		exit 1
-	fi
-	[ -f /opt/clash/.dns_backup ]
-	[ -f /var/run/miclash/routing-ownership.json ]
-	[ -f /var/run/miclash/guard-active ]
-	rm -f "$fixture/state/$failure"
-	run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1
-	[ ! -e /opt/clash/.dns_backup ]
-done
-
-reset_dns
-printf 'CACHESIZE=150\nNORESOLV=0\n' > "$fixture/state/held-backup"
-mount --bind "$fixture/state/held-backup" /opt/clash/.dns_backup
-if run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1; then
-	echo 'init package cleanup ignored DNS backup unlink failure' >&2
-	exit 1
-fi
-[ -e /opt/clash/.dns_backup ]
-[ -f /var/run/miclash/routing-ownership.json ]
-[ -f /var/run/miclash/guard-active ]
-umount /opt/clash/.dns_backup
-printf 'CACHESIZE=150\nNORESOLV=0\n' > /opt/clash/.dns_backup
-run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1
-[ ! -e /opt/clash/.dns_backup ]
-
-reset_dns
-rm -f /opt/clash/.dns_backup
-if run_package_entrypoint /etc/init.d/clash package_cleanup >/dev/null 2>&1; then
-	echo 'init package cleanup accepted active owned DNS state without backup' >&2
-	exit 1
-fi
-[ -f /var/run/miclash/routing-ownership.json ]
-[ -f /var/run/miclash/guard-active ]
+# DNS is no longer a shell/init cleanup responsibility.  The package owner
+# invokes the fixed ucode cleanup entrypoint under the same package lease;
+# check-package-removal.sh exercises its failure and proof ordering.
+grep -Fq '/usr/share/miclash/dns-cleanup.uc' \
+	"$repo_root/luci-app-miclash/rootfs/usr/share/miclash/package-remove"
+! grep -Eq 'restore_dns|setup_dns|verify_dns_restored|uci .*dhcp' /etc/init.d/clash
 
 printf 'production package cleanup failure/retry gate passed\n'
