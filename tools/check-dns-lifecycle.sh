@@ -11,7 +11,7 @@ remove="$repo_root/luci-app-miclash/rootfs/usr/share/miclash/package-remove"
 makefile="$repo_root/luci-app-miclash/Makefile"
 
 if [ "${MICLASH_DNS_GATE_NS:-}" != 1 ]; then
-	exec unshare --mount --fork env MICLASH_DNS_GATE_NS=1 \
+	exec unshare --mount --pid --fork --mount-proc env MICLASH_DNS_GATE_NS=1 \
 		UCODE_BIN="${UCODE_BIN:-}" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" sh "$0"
 fi
 
@@ -130,8 +130,8 @@ reset_state() {
 assert_guard() { [ -f /var/run/miclash/guard-active ]; }
 assert_no_guard() { [ ! -e /var/run/miclash/guard-active ]; }
 assert_before() {
-	first="$(grep -n -m1 -F "$1" "$MICLASH_DNS_GATE_LOG" | cut -d: -f1)"
-	second="$(grep -n -m1 -F "$2" "$MICLASH_DNS_GATE_LOG" | cut -d: -f1)"
+	first="$(grep -n -m1 -F "$1" "$MICLASH_DNS_GATE_LOG" 2>/dev/null | cut -d: -f1 || true)"
+	second="$(grep -n -m1 -F "$2" "$MICLASH_DNS_GATE_LOG" 2>/dev/null | cut -d: -f1 || true)"
 	[ -n "$first" ] && [ -n "$second" ] && [ "$first" -lt "$second" ] || {
 		echo "lifecycle order violation: $1 must precede $2" >&2
 		cat "$MICLASH_DNS_GATE_LOG" >&2
@@ -151,6 +151,34 @@ grep -Eq '"server"[[:space:]]*:[[:space:]]*\[[[:space:]]*"1.1.1.1"[[:space:]]*\]
 grep -Eq '"cachesize"[[:space:]]*:[[:space:]]*"1000"' "$MICLASH_DNS_GATE_STATE"
 [ ! -e /etc/miclash/dns-ownership.json ]
 assert_guard
+
+reset_state
+run_control apply
+printf '%s\n' '{"dhcp":{"main":{".type":"dnsmasq","server":["1.1.1.1","127.0.0.1#7874"],"cachesize":"77","noresolv":"1"}}}' \
+	> "$MICLASH_DNS_GATE_STATE"
+if run_control apply >/dev/null 2>&1; then
+	echo 'fixed DNS adapter accepted committed-active scalar drift' >&2; exit 1
+fi
+grep -Eq '"cachesize"[[:space:]]*:[[:space:]]*"77"' "$MICLASH_DNS_GATE_STATE"
+[ -f /etc/miclash/dns-ownership.json ]
+
+reset_state
+run_control apply
+: > "$MICLASH_DNS_GATE_FAIL-pending"
+if run_control apply >/dev/null 2>&1; then
+	echo 'fixed DNS adapter accepted committed-active pending UCI deltas' >&2; exit 1
+fi
+[ -f /etc/miclash/dns-ownership.json ]
+
+reset_state
+run_control apply
+printf '%s\n' '{"dhcp":{"other":{".type":"dnsmasq","server":["1.1.1.1","127.0.0.1#7874"],"cachesize":"0","noresolv":"1"}}}' \
+	> "$MICLASH_DNS_GATE_STATE"
+if run_control apply >/dev/null 2>&1; then
+	echo 'fixed DNS adapter accepted committed-active section replacement' >&2; exit 1
+fi
+grep -Fq '"other"' "$MICLASH_DNS_GATE_STATE"
+[ -f /etc/miclash/dns-ownership.json ]
 
 reset_state
 : > "$MICLASH_DNS_GATE_FAIL-restart"
@@ -237,6 +265,8 @@ assert_guard
 cp "$repo_root"/luci-app-miclash/rootfs/usr/share/miclash/*.uc /usr/share/miclash/
 cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh" /usr/share/miclash/
 mkdir -p /opt/clash/bin
+cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" "$fixture/clash-rules.actual"
+chmod 0700 "$fixture/clash-rules.actual"
 cat > "$fixture/ucode" <<'EOF'
 #!/bin/sh
 exec "$UCODE_BIN" -L "$MICLASH_DNS_GATE_MODULE_DIR/*.so" \
@@ -250,6 +280,82 @@ EOF
 chmod 0700 "$fixture/logger"
 PATH="$fixture:$PATH"
 export PATH
+
+export MICLASH_DNS_GATE_NFT_STATE="$fixture/nft-guard-active"
+export MICLASH_DNS_GATE_NFT_LOG="$fixture/nft.log"
+cat > "$fixture/nft" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$MICLASH_DNS_GATE_NFT_LOG"
+case "$*" in
+	'list ruleset')
+		[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-inventory" ] || exit 1
+		[ ! -e "$MICLASH_DNS_GATE_NFT_STATE" ] ||
+			echo 'table inet miclash_guard { chain forward { meta nfproto ipv4 drop comment "miclash-guard"; } }'
+		;;
+	'list table inet miclash_guard')
+		[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] && echo 'table inet miclash_guard' || exit 1
+		;;
+	'list chain inet miclash_guard forward')
+		[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] || exit 1
+		echo 'chain forward { meta nfproto ipv4 drop comment "miclash-guard"; }'
+		;;
+	'delete table inet miclash_guard')
+		rm -f "$MICLASH_DNS_GATE_NFT_STATE"
+		[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-remove" ]
+		;;
+	'add table inet miclash_guard')
+		: > "$MICLASH_DNS_GATE_NFT_STATE"
+		;;
+	add\ *) ;;
+	*) exit 1 ;;
+esac
+EOF
+chmod 0700 "$fixture/nft"
+
+run_actual_rules() {
+	rm -rf /var/run/miclash/mutation.lock /var/run/miclash/mutation.lock.takeover
+	"$fixture/clash-rules.actual" "$@" > "$fixture/rules.out" 2>&1
+}
+printf '%s\n' 'INTERNET_ONLY_MICLASH=true' > /opt/clash/settings
+rm -rf /var/run/miclash/package-removal
+: > "$MICLASH_DNS_GATE_NFT_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+if ! run_actual_rules guard_finalize; then
+	echo 'shipped clash-rules lacks successful enabled Guard finalization' >&2
+	cat "$fixture/rules.out" >&2
+	exit 1
+fi
+[ -e "$MICLASH_DNS_GATE_NFT_STATE" ]
+if grep -Eq '^(add|delete) ' "$MICLASH_DNS_GATE_NFT_LOG"; then
+	echo 'enabled Guard finalization mutated proven Guard state' >&2; exit 1
+fi
+
+printf '%s\n' 'INTERNET_ONLY_MICLASH=false' > /opt/clash/settings
+: > "$MICLASH_DNS_GATE_NFT_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-guard-remove"
+if run_actual_rules guard_finalize; then
+	echo 'shipped clash-rules ignored Guard removal failure' >&2; exit 1
+fi
+[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] || {
+	echo 'shipped clash-rules returned from finalization failure without proven Guard' >&2; exit 1
+}
+grep -Fq 'delete table inet miclash_guard' "$MICLASH_DNS_GATE_NFT_LOG"
+grep -Fq 'list chain inet miclash_guard forward' "$MICLASH_DNS_GATE_NFT_LOG"
+rm -f "$MICLASH_DNS_GATE_FAIL-guard-remove"
+
+: > "$MICLASH_DNS_GATE_NFT_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-guard-inventory"
+if run_actual_rules guard_finalize; then
+	echo 'shipped clash-rules accepted disabled Guard state without a readable backend inventory' >&2
+	exit 1
+fi
+[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] || {
+	echo 'Guard inventory failure did not restore fail-closed protection' >&2; exit 1
+}
+grep -Fq 'list chain inet miclash_guard forward' "$MICLASH_DNS_GATE_NFT_LOG"
+rm -f "$MICLASH_DNS_GATE_FAIL-guard-inventory"
 
 cat > /opt/clash/bin/clash <<'EOF'
 #!/bin/sh
@@ -283,6 +389,25 @@ case "$command" in
 			rm -f /var/run/miclash/guard-active
 		else
 			: > /var/run/miclash/guard-active
+		fi
+		;;
+	guard_finalize)
+		log guard-finalize
+		require_guard
+		if [ -e "$MICLASH_DNS_GATE_FAIL-guard-finalize-enabled" ]; then
+			log guard-verify
+			exit 1
+		fi
+		if [ -e "$MICLASH_DNS_GATE_FAIL-guard-desired-off" ]; then
+			rm -f /var/run/miclash/guard-active
+			if [ -e "$MICLASH_DNS_GATE_FAIL-guard-remove" ]; then
+				: > /var/run/miclash/guard-active
+				log guard-restore
+				log guard-verify
+				exit 1
+			fi
+		else
+			log guard-verify
 		fi
 		;;
 	start)
@@ -330,12 +455,20 @@ fi
 [ ! -e /etc/miclash/dns-ownership.json ]
 
 reset_init_state
-: > "$MICLASH_DNS_GATE_FAIL-guard-desired-off"
 run_init_start || { cat "$MICLASH_DNS_GATE_LOG.ucode" >&2; exit 1; }
-assert_no_guard
+assert_guard
 assert_before guard-start rules-start:true
 assert_before rules-start:true dnsmasq-restart
-assert_before dnsmasq-running guard-refresh
+assert_before procd-close guard-finalize
+if grep -Fq guard-refresh "$MICLASH_DNS_GATE_LOG"; then
+	echo 'shipped init used destructive Guard refresh after procd registration' >&2; exit 1
+fi
+
+reset_init_state
+: > "$MICLASH_DNS_GATE_FAIL-guard-desired-off"
+run_init_start
+assert_no_guard
+assert_before procd-close guard-finalize
 
 reset_init_state
 : > "$MICLASH_DNS_GATE_FAIL-restart"
@@ -348,12 +481,23 @@ assert_before guard-start rules-start:true
 assert_before dnsmasq-restart rules-stop:false:true:
 
 reset_init_state
-: > "$MICLASH_DNS_GATE_FAIL-guard-refresh-final"
+: > "$MICLASH_DNS_GATE_FAIL-guard-finalize-enabled"
 if run_init_start >/dev/null 2>&1; then
-	echo 'shipped init ignored final Guard refresh failure' >&2; exit 1
+	echo 'shipped init ignored enabled Guard finalization failure' >&2; exit 1
 fi
 assert_guard
 [ -e /var/run/miclash/firewall-active ]
+assert_before procd-close guard-finalize
+
+reset_init_state
+: > "$MICLASH_DNS_GATE_FAIL-guard-desired-off"
+: > "$MICLASH_DNS_GATE_FAIL-guard-remove"
+if run_init_start >/dev/null 2>&1; then
+	echo 'shipped init ignored disabled Guard removal failure' >&2; exit 1
+fi
+assert_guard
+grep -Fq guard-restore "$MICLASH_DNS_GATE_LOG"
+assert_before procd-close guard-finalize
 
 reset_init_state
 run_init_start
@@ -364,7 +508,7 @@ assert_no_guard
 [ ! -e /var/run/miclash/firewall-active ]
 assert_before guard-start rules-stop:false:true:
 assert_before rules-stop:false:true: dnsmasq-restart
-assert_before dnsmasq-running guard-refresh
+assert_before dnsmasq-running guard-finalize
 
 reset_init_state
 run_init_start

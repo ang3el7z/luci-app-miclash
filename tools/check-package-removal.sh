@@ -20,6 +20,8 @@ trap 'rm -rf "$fixture"' EXIT INT TERM
 mkdir -p "$fixture/bin"
 log="$fixture/log"
 export MICLASH_PACKAGE_TEST_LOG="$log"
+export MICLASH_PACKAGE_SHIPPED_INIT="$fixture/clash.init"
+export MICLASH_PACKAGE_RULES_SHIM="$fixture/clash-rules-stateful"
 export PATH="$fixture/bin:/usr/bin:/bin"
 
 cat > "$fixture/bin/logger" <<'EOF'
@@ -28,6 +30,13 @@ exit 0
 EOF
 cat > "$fixture/bin/ubus" <<'EOF'
 #!/bin/sh
+if [ "${1:-}" = call ] && [ "${3:-}" = delete ]; then
+	[ -f /var/run/miclash/package-guard-proven ] || {
+		echo cleanup-before-package-guard:ubus-delete >> "$MICLASH_PACKAGE_TEST_LOG"
+		exit 96
+	}
+	exit 0
+fi
 if [ "${1:-}" = call ] && [ "${3:-}" = list ]; then
 	probes_file="${MICLASH_PACKAGE_TEST_LOG}.probes"
 	probes="$(cat "$probes_file" 2>/dev/null || echo 0)"
@@ -45,6 +54,10 @@ cat > "$fixture/bin/ucode" <<'EOF'
 #!/bin/sh
 [ -d /var/run/miclash/package-removal ]
 [ -f /var/run/miclash/guard-active ]
+[ -f /var/run/miclash/package-guard-proven ] || {
+	echo "cleanup-before-package-guard:ucode:$*" >> "$MICLASH_PACKAGE_TEST_LOG"
+	exit 96
+}
 case "$*" in
 	*routing-cleanup.uc*)
 		echo routing-cleanup >> "$MICLASH_PACKAGE_TEST_LOG"
@@ -72,29 +85,84 @@ for service in miclashd miclash-autoupdate miclash-memory-guard cron; do
 	cat > "/etc/init.d/$service" <<'EOF'
 #!/bin/sh
 echo "$(basename "$0") ${1:-}" >> "$MICLASH_PACKAGE_TEST_LOG"
+[ "${1:-}" != stop ] && [ "${1:-}" != restart ] ||
+	[ -f /var/run/miclash/package-guard-proven ] || {
+		echo "cleanup-before-package-guard:$(basename "$0")-${1:-}" >> "$MICLASH_PACKAGE_TEST_LOG"
+	exit 96
+}
 exit 0
 EOF
 	chmod 0700 "/etc/init.d/$service"
 done
 
+cp "$repo_root/luci-app-miclash/rootfs/etc/init.d/clash" "$MICLASH_PACKAGE_SHIPPED_INIT"
 cat > /etc/init.d/clash <<'EOF'
 #!/bin/sh
-echo "clash ${1:-}" >> "$MICLASH_PACKAGE_TEST_LOG"
-case "${1:-}" in
-	delete) echo 3 > "${MICLASH_PACKAGE_TEST_LOG}.probes" ;;
+command="${1:-}"
+. "$MICLASH_PACKAGE_SHIPPED_INIT" || exit 1
+echo "clash $command" >> "$MICLASH_PACKAGE_TEST_LOG"
+case "$command" in
+	delete)
+		echo 0 > "${MICLASH_PACKAGE_TEST_LOG}.probes"
+		delete
+		;;
+	package_cleanup) package_cleanup ;;
+	*) exit 1 ;;
+esac
+EOF
+
+cat > "$MICLASH_PACKAGE_RULES_SHIM" <<'EOF'
+#!/bin/sh
+. /usr/share/miclash/mutation-lock.sh || exit 1
+command="${1:-}"
+trusted_package_authority() {
+	barrier=/var/run/miclash/package-removal
+	[ ! -L "$barrier" ] && [ -d "$barrier" ] &&
+		[ "$(stat -c '%u:%a' "$barrier" 2>/dev/null)" = 0:700 ] || return 1
+	canonical="$(readlink -f "$barrier" 2>/dev/null)" || return 1
+	case "$canonical" in
+		/var/run/miclash/package-removal|/run/miclash/package-removal|/tmp/run/miclash/package-removal) ;;
+		*) return 1 ;;
+	esac
+	[ "${MICLASH_MUTATION_LOCK_PACKAGE:-0}" = 1 ] &&
+		[ -n "${MICLASH_MUTATION_LOCK_TOKEN:-}" ] || return 1
+	miclash_mutation_lock_enter package 0 || return 1
+	miclash_mutation_lock_assert_held || return 1
+}
+leave_authority() { miclash_mutation_lock_leave >/dev/null 2>&1 || true; }
+case "$command" in
+	package_guard_start)
+		trusted_package_authority || exit 97
+		echo package-guard-start >> "$MICLASH_PACKAGE_TEST_LOG"
+		: > /var/run/miclash/guard-active
+		: > /var/run/miclash/package-guard-proven
+		leave_authority
+		;;
+	package_guard_verify)
+		trusted_package_authority || exit 97
+		[ -f /var/run/miclash/guard-active ] &&
+			[ -f /var/run/miclash/package-guard-proven ] || exit 98
+		echo package-guard-verify >> "$MICLASH_PACKAGE_TEST_LOG"
+		leave_authority
+		;;
 	package_cleanup)
-		[ -d /var/run/miclash/package-removal ]
-		[ ! -f /var/run/miclash/routing-ownership.json ]
-		[ ! -e /etc/miclash/dns-ownership.json ]
-		[ -f /var/run/miclash/package-removal-release/dns-ownership.json ]
-		[ -f /var/run/miclash/guard-active ]
+		trusted_package_authority || exit 97
+		[ -f /var/run/miclash/guard-active ] &&
+			[ -f /var/run/miclash/package-guard-proven ] || exit 98
+		echo rules-package-cleanup >> "$MICLASH_PACKAGE_TEST_LOG"
 		[ ! -f "${MICLASH_PACKAGE_TEST_LOG}.fail-preserve" ] || exit 1
 		if [ -f "${MICLASH_PACKAGE_TEST_LOG}.fail-unlink" ]; then
 			: > "${MICLASH_PACKAGE_TEST_LOG}.held-manifest"
 			mount --bind "${MICLASH_PACKAGE_TEST_LOG}.held-manifest" \
 				/var/run/miclash/routing-ownership.json
 		fi
+		leave_authority
 		;;
+	guard_start)
+		echo rejected-ordinary-guard-start >> "$MICLASH_PACKAGE_TEST_LOG"
+		exit 99
+		;;
+	*) exit 1 ;;
 esac
 EOF
 cat > /etc/init.d/miclash-guard <<'EOF'
@@ -108,7 +176,8 @@ case "${1:-}" in
 	start) : > /var/run/miclash/guard-active ;;
 esac
 EOF
-chmod 0700 /etc/init.d/clash /etc/init.d/miclash-guard
+chmod 0700 /etc/init.d/clash /etc/init.d/miclash-guard "$MICLASH_PACKAGE_SHIPPED_INIT" \
+	"$MICLASH_PACKAGE_RULES_SHIM"
 
 cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/package-remove" \
 	/usr/share/miclash/package-remove
@@ -128,16 +197,30 @@ reset_state() {
 	umount /var/run/miclash/routing-ownership.json 2>/dev/null || true
 	rm -rf /var/run/miclash/package-removal
 	rm -rf /var/run/miclash/package-removal-release
+	rm -f /var/run/miclash/package-guard-proven
 	: > /var/run/miclash/routing-ownership.json
 	printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"active","transition":null,"clean":null}' > /etc/miclash/dns-ownership.json
 	chmod 0600 /etc/miclash/dns-ownership.json
 	rm -f /opt/clash/.dns_backup
 	: > /var/run/miclash/guard-active
+	cp "$MICLASH_PACKAGE_RULES_SHIM" /opt/clash/bin/clash-rules
+	chmod 0700 /opt/clash/bin/clash-rules
 	: > "$log"
 	rm -f "$log.fail-routing" "$log.fail-dns" "$log.fail-dns-export" "$log.fail-preserve" "$log.fail-guard" \
 		"$log.fail-unlink" "$log.held-manifest" "$log.probes"
 	printf '%s\n' '*/30 * * * * /opt/clash/bin/clash-rules update >/dev/null 2>&1' > /etc/crontabs/root
 }
+
+reset_state
+mkdir /var/run/miclash/package-removal
+chmod 0700 /var/run/miclash/package-removal
+if MICLASH_MUTATION_LOCK_PACKAGE=1 /opt/clash/bin/clash-rules package_guard_start >/dev/null 2>&1; then
+	echo 'package Guard entrypoint accepted an environment flag without a live inherited lease' >&2
+	exit 1
+fi
+[ ! -e /var/run/miclash/package-guard-proven ]
+[ -e /var/run/miclash/guard-active ]
+rm -rf /var/run/miclash/package-removal
 
 reset_state
 /usr/share/miclash/package-remove
@@ -155,9 +238,12 @@ fi
 
 line_of() { grep -n -m1 "^$1$" "$log" | cut -d: -f1; }
 [ "$(line_of 'miclashd stop')" -lt "$(line_of 'clash delete')" ]
+[ "$(line_of 'package-guard-start')" -lt "$(line_of 'cron restart')" ]
 [ "$(line_of 'clash delete')" -lt "$(line_of 'routing-cleanup')" ]
 [ "$(line_of 'routing-cleanup')" -lt "$(line_of 'dns-cleanup')" ]
 [ "$(line_of 'dns-cleanup')" -lt "$(line_of 'clash package_cleanup')" ]
+[ "$(line_of 'package-guard-verify')" -lt "$(line_of 'rules-package-cleanup')" ]
+! grep -q '^cleanup-before-package-guard:' "$log"
 [ "$(cat "$log.probes")" -eq 0 ]
 
 # Stale legacy PID-only worker locks are not identity proof. Package removal
@@ -353,16 +439,22 @@ wait "$remove_pid"
 
 # Both shipped hotplug entrypoints acquire before invoking their synchronous
 # mutation child. The child is delayed here to expose the pre-barrier window.
-cat > /opt/clash/bin/clash-rules <<'EOF'
+cat > "$fixture/delayed-tun-rules" <<'EOF'
 #!/bin/sh
+case "${1:-}" in
+	package_guard_start|package_guard_verify|package_cleanup)
+		exec "$MICLASH_PACKAGE_RULES_SHIM" "$@"
+		;;
+esac
 echo 'delayed-tun-hotplug mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
 : > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
 while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
 echo 'delayed-tun-hotplug mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
 exit 0
 EOF
-chmod 0700 /opt/clash/bin/clash-rules
 reset_state
+cp "$fixture/delayed-tun-rules" /opt/clash/bin/clash-rules
+chmod 0700 /opt/clash/bin/clash-rules
 rm -f "$log.writer-entered" "$log.writer-release"
 ACTION=add INTERFACE=clash-tun \
 	sh "$repo_root/luci-app-miclash/rootfs/etc/hotplug.d/net/99-clash-tun" >/dev/null 2>&1 &
@@ -380,19 +472,41 @@ wait "$remove_pid"
 
 # Direct clash-rules owns the lease while its first real nft mutation is
 # delayed. This also proves a synchronous command shim cannot outlive release.
-cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" \
-	/opt/clash/bin/clash-rules
-chmod 0700 /opt/clash/bin/clash-rules
 cat > "$fixture/bin/nft" <<'EOF'
 #!/bin/sh
-echo 'delayed-clash-rules mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
-: > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
-while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
-echo 'delayed-clash-rules mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
-exit 0
+if [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-entered" ]; then
+	echo 'delayed-clash-rules mutation-enter' >> "$MICLASH_PACKAGE_TEST_LOG"
+	: > "${MICLASH_PACKAGE_TEST_LOG}.writer-entered"
+	while [ ! -f "${MICLASH_PACKAGE_TEST_LOG}.writer-release" ]; do sleep 0.02; done
+	echo 'delayed-clash-rules mutation-exit' >> "$MICLASH_PACKAGE_TEST_LOG"
+fi
+state="${MICLASH_PACKAGE_TEST_LOG}.nft-guard"
+case "$*" in
+	'list table inet miclash_guard') [ -f "$state" ] && echo 'table inet miclash_guard' || exit 1 ;;
+	'list chain inet miclash_guard forward')
+		[ -f "$state" ] || exit 1
+		echo 'chain forward { meta nfproto ipv4 drop comment "miclash-guard"; }'
+		if [ "${MICLASH_MUTATION_LOCK_PACKAGE:-}" = 1 ]; then
+			: > /var/run/miclash/package-guard-proven
+			# This scenario's production command has now established and proven
+			# Guard. Hand subsequent package-cleanup calls back to the stateful
+			# rules shim used by the package-removal integration fixture.
+			cp "$MICLASH_PACKAGE_RULES_SHIM" /opt/clash/bin/clash-rules
+			chmod 0700 /opt/clash/bin/clash-rules
+		fi
+		;;
+	'delete table inet miclash_guard') rm -f "$state" ;;
+	'add table inet miclash_guard') : > "$state" ;;
+	add\ *) ;;
+	*) exit 0 ;;
+esac
 EOF
 chmod 0700 "$fixture/bin/nft"
 reset_state
+cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" \
+	/opt/clash/bin/clash-rules
+chmod 0700 /opt/clash/bin/clash-rules
+: > "$log.nft-guard"
 rm -f "$log.writer-entered" "$log.writer-release"
 /opt/clash/bin/clash-rules guard_stop >/dev/null 2>&1 &
 writer_pid=$!
@@ -404,7 +518,11 @@ sleep 0.2
 ! grep -q '^miclashd stop$' "$log"
 : > "$log.writer-release"
 wait "$writer_pid"
-wait "$remove_pid"
+wait "$remove_pid" || {
+	echo 'package removal failed after delayed direct clash-rules writer' >&2
+	cat "$log" >&2
+	exit 1
+}
 [ "$(line_of 'delayed-clash-rules mutation-exit')" -lt "$(line_of 'miclashd stop')" ]
 [ ! -e /var/run/miclash/mutation.lock ]
 [ ! -e /var/run/miclash/mutation.lock.takeover ]
@@ -431,14 +549,20 @@ case " $* " in
 esac
 exit 0
 EOF
-cat > /opt/clash/bin/clash-rules <<'EOF'
+cat > "$fixture/iface-rules" <<'EOF'
 #!/bin/sh
-exit 0
+case "${1:-}" in
+	package_guard_start|package_guard_verify|package_cleanup)
+		exec "$MICLASH_PACKAGE_RULES_SHIM" "$@"
+		;;
+	*) exit 0 ;;
+esac
 EOF
-chmod 0700 "$fixture/bin/pgrep" "$fixture/bin/ip" "$fixture/bin/curl" \
-	/opt/clash/bin/clash-rules
+chmod 0700 "$fixture/bin/pgrep" "$fixture/bin/ip" "$fixture/bin/curl" "$fixture/iface-rules"
 last_line_of() { grep -n "^$1$" "$log" | tail -n 1 | cut -d: -f1; }
 reset_state
+cp "$fixture/iface-rules" /opt/clash/bin/clash-rules
+chmod 0700 /opt/clash/bin/clash-rules
 rm -f "$log.writer-entered" "$log.writer-release"
 ACTION=ifup INTERFACE=wan DEVICE=eth0 MICLASH_HOTPLUG_SETTLE_SEC=0 \
 	sh "$repo_root/luci-app-miclash/rootfs/etc/hotplug.d/iface/40-clash" >/dev/null 2>&1 &

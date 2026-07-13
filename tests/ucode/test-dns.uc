@@ -116,6 +116,53 @@ assert_true(length(active.fs.calls.rename) >= 2 && first_set >= 0,
 let no_op = apply(active, desired(observe(active)));
 assert_true(!no_op.changed, 'reconciling an already active owner is a no-op');
 
+function committed_active() {
+	let value = runtime();
+	apply(value, desired(observe(value)));
+	return value;
+};
+let committed_drift = committed_active();
+committed_drift.uci_fake.values.dhcp.main.cachesize = '77';
+assert_throws(() => recover(committed_drift, 'active'), 'CORRUPT_STATE',
+	'committed active recovery refuses scalar drift');
+let committed_pending = committed_active();
+committed_pending.uci_fake.pending_changes.dhcp = { external: true };
+assert_throws(() => recover(committed_pending, 'active'), 'CORRUPT_STATE',
+	'committed active recovery refuses pending UCI deltas');
+let committed_section = committed_active();
+committed_section.uci_fake.values.dhcp.other = committed_section.uci_fake.values.dhcp.main;
+delete committed_section.uci_fake.values.dhcp.main;
+assert_throws(() => recover(committed_section, 'active'), 'CORRUPT_STATE',
+	'committed active recovery refuses dnsmasq section replacement');
+
+function preexisting_active() {
+	let value = runtime({ uci: { dhcp: {
+		main: { '.type': 'dnsmasq', server: [ TARGET, '9.9.9.9' ], cachesize: '1000' }
+	} } });
+	apply(value, desired(observe(value)));
+	return value;
+};
+let missing_preexisting = preexisting_active();
+missing_preexisting.uci_fake.values.dhcp.main.server = [ '9.9.9.9' ];
+assert_true(length(observe(missing_preexisting).conflicts) > 0,
+	'missing preexisting target is external ownership drift');
+assert_throws(() => desired(observe(missing_preexisting)), 'INVALID_ARGUMENT',
+	'planning never re-adds a missing foreign target occurrence');
+assert_throws(() => recover(missing_preexisting, 'active'), 'CORRUPT_STATE',
+	'recovery never re-adds a missing foreign target occurrence');
+assert_equal(encoded(missing_preexisting.uci_fake.values.dhcp.main.server), encoded([ '9.9.9.9' ]),
+	'refused recovery leaves the foreign server list unchanged');
+let reordered_preexisting = preexisting_active();
+reordered_preexisting.uci_fake.values.dhcp.main.server = [ '9.9.9.9', TARGET ];
+assert_true(length(observe(reordered_preexisting).conflicts) > 0,
+	'reordered preexisting target authority is external ownership drift');
+assert_throws(() => recover(reordered_preexisting, 'active'), 'CORRUPT_STATE',
+	'recovery refuses reordered preexisting target authority');
+let inserted_preexisting = preexisting_active();
+inserted_preexisting.uci_fake.values.dhcp.main.server = [ '8.8.8.8', TARGET, '9.9.9.9' ];
+assert_equal(recover(inserted_preexisting, 'active').state, 'active',
+	'ordered preexisting authority permits inserted foreign non-target servers');
+
 let stale = runtime();
 let stale_plan = desired(observe(stale));
 stale.uci_fake.values.dhcp.main.server = [ '8.8.8.8' ];
@@ -327,6 +374,8 @@ for (let partial in [
 	let partial_runtime = runtime({ uci: { dhcp: { main: { '.type': 'dnsmasq', ...partial } } } });
 	assert_throws(() => cleanup(partial_runtime), 'CORRUPT_STATE',
 		'manifest-absent partial MiClash DNS signature is ambiguous');
+	assert_throws(() => recover(partial_runtime, 'clean'), 'CORRUPT_STATE',
+		'manifest-absent clean recovery shares the partial-signature refusal');
 }
 
 let barrier_apply = runtime();

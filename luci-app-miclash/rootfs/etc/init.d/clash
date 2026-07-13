@@ -235,17 +235,27 @@ establish_guard_rules() {
 	return 1
 }
 
-refresh_guard_rules() {
+verify_package_guard_rules() {
+	package_removal_active || return 1
+	if [ -f "$CLASH_RULES" ] && "$CLASH_RULES" package_guard_verify; then
+		msg "Package-authorized client forwarding guard verified"
+		return 0
+	fi
+	msg "ERROR: Package-authorized client forwarding guard verification failed"
+	return 1
+}
+
+finalize_guard_rules() {
 	if [ -f "$CLASH_RULES" ]; then
-		if "$CLASH_RULES" guard_refresh; then
-			msg "Client forwarding guard refreshed"
+		if "$CLASH_RULES" guard_finalize; then
+			msg "Client forwarding guard finalized"
 			return 0
 		else
-			msg "ERROR: Failed to refresh client forwarding guard"
+			msg "ERROR: Failed to finalize client forwarding guard"
 			return 1
 		fi
 	fi
-	msg "ERROR: Clash rules script missing; cannot refresh client forwarding guard"
+	msg "ERROR: Clash rules script missing; cannot finalize client forwarding guard"
 	return 1
 }
 
@@ -309,7 +319,7 @@ start_service_locked() {
 	procd_set_param file "$CLASH_DIR/config.yaml"
 	procd_close_instance
 
-	refresh_guard_rules || return 1
+	finalize_guard_rules || return 1
 
 	msg "Clash service started successfully"
 }
@@ -318,7 +328,11 @@ stop_service_locked() {
 	msg "Stopping Clash service..."
 	local preserve=false
 	package_removal_active && preserve=true
-	establish_guard_rules || return 1
+	if [ "$preserve" = true ]; then
+		verify_package_guard_rules || return 1
+	else
+		establish_guard_rules || return 1
+	fi
 
 	# Keep Guard forced across firewall and DNS cleanup. Package removal owns its
 	# DNS transaction separately and intentionally leaves Guard in place.
@@ -330,7 +344,7 @@ stop_service_locked() {
 
 	# Restore DNS settings
 	dns_control cleanup || return 1
-	refresh_guard_rules || return 1
+	finalize_guard_rules || return 1
 
 	msg "Clash service stopped"
 }
@@ -355,7 +369,7 @@ delete_locked() {
 
 package_cleanup_locked() {
 	package_removal_active || return 1
-	establish_guard_rules || return 1
+	verify_package_guard_rules || return 1
 	remove_firewall_rules true true || return 1
 	return 0
 }

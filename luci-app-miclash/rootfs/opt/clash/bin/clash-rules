@@ -43,6 +43,24 @@ routing_mutation_allowed() {
 	return 0
 }
 
+trusted_package_barrier() {
+	local canonical
+	[ ! -L "$PACKAGE_REMOVAL_BARRIER" ] && [ -d "$PACKAGE_REMOVAL_BARRIER" ] || return 1
+	[ "$(stat -c '%u:%a' "$PACKAGE_REMOVAL_BARRIER" 2>/dev/null)" = 0:700 ] || return 1
+	canonical=$(readlink -f "$PACKAGE_REMOVAL_BARRIER" 2>/dev/null) || return 1
+	case "$canonical" in
+		/var/run/miclash/package-removal|/run/miclash/package-removal|/tmp/run/miclash/package-removal) ;;
+		*) return 1 ;;
+	esac
+}
+
+trusted_package_authority() {
+	trusted_package_barrier || return 1
+	[ "${MICLASH_MUTATION_LOCK_PACKAGE:-0}" = 1 ] &&
+		[ -n "${MICLASH_MUTATION_LOCK_TOKEN:-}" ] || return 1
+	miclash_mutation_lock_assert_held
+}
+
 # Directory to cache subscription IPs for performance
 readonly SUBSCRIPTION_CACHE_FILE="/tmp/clash/clash_subscription_ips.cache"
 # Lock file to prevent concurrent access to cache
@@ -1485,6 +1503,60 @@ remove_nft_guard_rules() {
     nft delete table inet "$GUARD_NFT_TABLE" 2>/dev/null
 }
 
+verify_nft_guard_rules() {
+	nft list table inet "$GUARD_NFT_TABLE" >/dev/null 2>&1 || return 1
+	nft list chain inet "$GUARD_NFT_TABLE" forward 2>/dev/null |
+		grep -q 'comment "miclash-guard"'
+}
+
+verify_iptables_guard_for_cmd() {
+	local cmd="$1"
+	command -v "$cmd" >/dev/null 2>&1 || return 0
+	$cmd -t filter -C FORWARD -j "$GUARD_FORWARD_CHAIN" >/dev/null 2>&1 &&
+		$cmd -t filter -S "$GUARD_FORWARD_CHAIN" 2>/dev/null | grep -q -- '-j DROP'
+}
+
+verify_guard_rules() {
+	if hash nft 2>/dev/null; then
+		verify_nft_guard_rules
+	elif hash iptables 2>/dev/null; then
+		verify_iptables_guard_for_cmd iptables || return 1
+		verify_iptables_guard_for_cmd ip6tables || return 1
+	else
+		return 1
+	fi
+}
+
+verify_guard_absent() {
+	local snapshot cmd save
+	if command -v nft >/dev/null 2>&1; then
+		snapshot=$(nft list ruleset 2>/dev/null) || return 1
+		if printf '%s\n' "$snapshot" |
+		   grep -Eq "^[[:space:]]*table[[:space:]]+inet[[:space:]]+$GUARD_NFT_TABLE([[:space:]]|\\{)"; then
+			return 1
+		fi
+	fi
+	for cmd in iptables ip6tables; do
+		command -v "$cmd" >/dev/null 2>&1 || continue
+		save="${cmd}-save"
+		command -v "$save" >/dev/null 2>&1 || return 1
+		snapshot=$($save -t filter 2>/dev/null) || return 1
+		printf '%s\n' "$snapshot" | grep -q "$GUARD_FORWARD_CHAIN" && return 1
+	done
+	return 0
+}
+
+remove_guard_rules_strict() {
+	local result=0
+	if command -v nft >/dev/null 2>&1 &&
+	   nft list table inet "$GUARD_NFT_TABLE" >/dev/null 2>&1; then
+		nft delete table inet "$GUARD_NFT_TABLE" >/dev/null 2>&1 || result=1
+	fi
+	remove_iptables_guard_rules
+	verify_guard_absent || result=1
+	return "$result"
+}
+
 apply_nft_guard_rules() {
     local wan_interfaces
     local local4_elements
@@ -1651,6 +1723,37 @@ refresh_guard_rules() {
     else
         remove_guard_rules
     fi
+}
+
+finalize_guard_rules() {
+	load_all_settings_once
+	if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+		# Enabled finalization is deliberately verification-only: the forced
+		# Guard remains intact across procd registration and is never rebuilt.
+		verify_guard_rules || {
+			msg "ERROR: Enabled client forwarding guard could not be proven"
+			return 1
+		}
+		msg "Client forwarding guard finalization verified enabled state"
+		return 0
+	fi
+
+	if remove_guard_rules_strict && verify_guard_absent; then
+		msg "Client forwarding guard finalization verified disabled state"
+		return 0
+	fi
+
+	# A failed disabled-policy removal may have partially deleted Guard. Never
+	# return from that failure until fail-closed protection has been restored and
+	# freshly observed. If the old Guard survived, verification is non-mutating.
+	if ! verify_guard_rules; then
+		apply_guard_rules && verify_guard_rules || {
+			msg "ERROR: Failed Guard removal could not be restored"
+			return 1
+		}
+	fi
+	msg "ERROR: Guard removal failed; fail-closed Guard restored and verified"
+	return 1
 }
 
 # For nftables - apply interface exclusion rules in mangle chain
@@ -3522,7 +3625,7 @@ stop() {
 }
 
 case "$1" in
-	package_cleanup|validate_policy|validate_forward|health) ;;
+	package_guard_start|package_guard_verify|package_cleanup|validate_policy|validate_forward|health) ;;
 	*) routing_mutation_allowed || exit 1 ;;
 esac
 
@@ -3555,7 +3658,7 @@ case "$1" in
         ;;
     guard_start)
         load_all_settings_once
-        apply_guard_rules
+		apply_guard_rules && verify_guard_rules
         ;;
     guard_stop)
         remove_guard_rules
@@ -3568,6 +3671,16 @@ case "$1" in
             remove_guard_rules
         fi
         ;;
+	guard_finalize)
+		finalize_guard_rules
+		;;
+	package_guard_start)
+		trusted_package_authority && load_all_settings_once &&
+			apply_guard_rules && verify_guard_rules
+		;;
+	package_guard_verify)
+		trusted_package_authority && verify_guard_rules
+		;;
 	full_cleanup)
 		stop
 		remove_guard_rules
@@ -3576,7 +3689,7 @@ case "$1" in
 		# Package prerm has already performed manifest-aware exact cleanup. Do
 		# not invoke the legacy whole-table routing teardown after reservations
 		# and the routing module begin disappearing.
-		stop true true true
+		trusted_package_authority && verify_guard_rules && stop true true true
 		;;
     tun_route_setup)
         tun_route_setup
@@ -3633,7 +3746,7 @@ case "$1" in
         exit $?
         ;;
     *)
-		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
+		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|guard_finalize|package_guard_start|package_guard_verify|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
         exit 1
         ;;
 esac

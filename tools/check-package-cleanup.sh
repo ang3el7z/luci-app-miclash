@@ -23,6 +23,7 @@ fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT INT TERM
 mkdir -p "$fixture/bin" "$fixture/nftbin" "$fixture/iptbin" "$fixture/state"
 export MICLASH_CLEANUP_STATE="$fixture/state"
+ln -s /usr/bin/mawk "$fixture/bin/awk"
 
 cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh" \
 	/usr/share/miclash/mutation-lock.sh
@@ -124,6 +125,16 @@ case "$*" in
 		cat "$state/nft-rules" 2>/dev/null || true
 		;;
 	'list table inet fw4') exit 1 ;;
+	'list table inet miclash_guard')
+		[ -f "$state/guard-active" ] && echo 'table inet miclash_guard' || exit 1
+		;;
+	'list chain inet miclash_guard forward')
+		[ -f "$state/guard-active" ] || exit 1
+		echo 'chain forward { meta nfproto ipv4 drop comment "miclash-guard"; }'
+		;;
+	'delete table inet miclash_guard') rm -f "$state/guard-active" ;;
+	'add table inet miclash_guard') : > "$state/guard-active" ;;
+	add\ *) ;;
 	'delete table inet clash')
 		[ ! -f "$state/fail-nft-delete" ] || exit 1
 		: > "$state/nft-rules"
@@ -142,8 +153,22 @@ EOF
 cat > "$fixture/iptbin/iptables" <<'EOF'
 #!/bin/sh
 state="$MICLASH_CLEANUP_STATE"
+printf '%s\n' "$*" >> "$state/iptables.log"
 [ ! -f "$state/fail-iptables-delete" ] || exit 1
 case "$*" in
+	*' -C FORWARD -j MICLASH_GUARD_FORWARD') [ -f "$state/guard-active" ] ;;
+	*' -S MICLASH_GUARD_FORWARD')
+		[ -f "$state/guard-active" ] || exit 1
+		echo '-A MICLASH_GUARD_FORWARD -j DROP'
+		;;
+	*' -D FORWARD -j MICLASH_GUARD_FORWARD')
+		[ -f "$state/guard-active" ] || exit 1
+		rm -f "$state/guard-active"
+		;;
+	*' -N MICLASH_GUARD_FORWARD'|*' -I FORWARD 1 -j MICLASH_GUARD_FORWARD'|*' -A MICLASH_GUARD_FORWARD '*)
+		: > "$state/guard-active"
+		;;
+	*' -F MICLASH_GUARD_FORWARD'|*' -X MICLASH_GUARD_FORWARD') ;;
 	*' -D '*)
 		[ -s "$state/iptables-rules" ] || exit 1
 		: > "$state/iptables-rules"; : > "$state/iptables-deleted" ;;
@@ -179,6 +204,12 @@ run_package_entrypoint() {
 	miclash_mutation_lock_enter_package_owner 1000 || return 1
 	MICLASH_MUTATION_LOCK_PACKAGE=1
 	export MICLASH_MUTATION_LOCK_PACKAGE
+	/opt/clash/bin/clash-rules package_guard_start || {
+		result=$?
+		[ ! -f "$fixture/state/iptables.log" ] || cat "$fixture/state/iptables.log" >&2
+		miclash_mutation_lock_leave >/dev/null 2>&1 || true
+		return "$result"
+	}
 	"$@"
 	result=$?
 	miclash_mutation_lock_leave || return 1
@@ -206,7 +237,11 @@ for failure in fail-nft-inventory fail-nft-delete fail-nft-verify \
 	[ -f /var/run/miclash/routing-ownership.json ]
 	[ -f /var/run/miclash/guard-active ]
 	rm -f "$fixture/state/$failure"
-	run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup
+	if ! run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup; then
+		echo "package cleanup retry failed after $failure" >&2
+		cat "$fixture/state/iptables.log" >&2
+		exit 1
+	fi
 	if [ -e "$fixture/state/firewall-committed-section" ] || \
 		[ -e "$fixture/state/firewall-delete-pending" ]; then
 		echo 'firewall retry accepted overlay-only absence without committing persistent state' >&2
@@ -227,7 +262,7 @@ for failure in fail-iptables-inventory fail-iptables-delete fail-iptables-verify
 	[ -f /var/run/miclash/routing-ownership.json ]
 	[ -f /var/run/miclash/guard-active ]
 	rm -f "$fixture/state/$failure"
-	run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup >/dev/null 2>&1
+	run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup
 done
 
 # DNS is no longer a shell/init cleanup responsibility.  The package owner

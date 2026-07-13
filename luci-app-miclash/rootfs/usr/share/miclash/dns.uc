@@ -25,21 +25,29 @@ function count(values, wanted) {
 	return result;
 };
 
-function owned_target_unambiguous(document, current) {
-	if (document.target_preexisting) return true;
-	if (count(current.server.value, TARGET) != 1) return false;
-	let target_index = -1;
-	for (let i = 0; i < length(current.server.value); i++)
-		if (current.server.value[i] == TARGET) target_index = i;
-	let offset = 0;
-	for (let original in document.original.server.value) {
+function ordered_subsequence(wanted, current, limit) {
+	let offset = 0, end = limit ?? length(current);
+	for (let value in wanted) {
 		let found = -1;
-		for (let i = offset; i < target_index; i++)
-			if (current.server.value[i] == original) { found = i; break; }
+		for (let i = offset; i < end; i++)
+			if (current[i] == value) { found = i; break; }
 		if (found < 0) return false;
 		offset = found + 1;
 	}
 	return true;
+};
+
+function owned_target_unambiguous(document, current) {
+	let original_targets = count(document.original.server.value, TARGET);
+	if (document.target_preexisting)
+		return original_targets > 0 && count(current.server.value, TARGET) == original_targets &&
+			ordered_subsequence(document.original.server.value, current.server.value);
+	if (original_targets > 0) return false;
+	if (count(current.server.value, TARGET) != 1) return false;
+	let target_index = -1;
+	for (let i = 0; i < length(current.server.value); i++)
+		if (current.server.value[i] == TARGET) target_index = i;
+	return ordered_subsequence(document.original.server.value, current.server.value, target_index);
 };
 
 function option(value, list) {
@@ -327,6 +335,25 @@ function prove_clean(runtime, document) {
 	return true;
 };
 
+function prove_active(runtime, document) {
+	if (document?.state != 'active' || document.transition != null) fail('CORRUPT_STATE');
+	let observed = observe(runtime);
+	if (length(observed.conflicts) || observed.section != document.section ||
+	    !same(observed.ownership.document, document))
+		fail('CORRUPT_STATE');
+	return true;
+};
+
+function prove_manifest_absent_clean(runtime) {
+	let observed = observe(runtime);
+	if (length(observed.conflicts) || observed.current == null ||
+	    count(observed.current.server.value, TARGET) > 0 ||
+	    (observed.current.cachesize.present && observed.current.cachesize.value == '0') ||
+	    (observed.current.noresolv.present && observed.current.noresolv.value == '1'))
+		fail('CORRUPT_STATE');
+	return true;
+};
+
 function finish_transition(runtime, document, intent) {
 	let observed = observe(runtime), transition = document.transition;
 	if (transition == null || transition.intent != intent ||
@@ -438,7 +465,10 @@ function recover_locked(runtime, intent) {
 	migrate_legacy(runtime);
 	let loaded = load_manifest(runtime);
 	if (loaded.status == 'absent') {
-		if (intent == 'clean') return { clean: true, changed: false, state: 'clean' };
+		if (intent == 'clean') {
+			prove_manifest_absent_clean(runtime);
+			return { clean: true, changed: false, state: 'clean' };
+		}
 		fail('NOT_FOUND');
 	}
 	if (!loaded.trusted) fail('CORRUPT_STATE');
@@ -446,6 +476,7 @@ function recover_locked(runtime, intent) {
 	if (document.transition == null) {
 		if (document.state != intent) fail('CORRUPT_STATE');
 		if (intent == 'clean') prove_clean(runtime, document);
+		else prove_active(runtime, document);
 		return intent == 'clean' ? { clean: true, changed: false, state: 'clean' } :
 			{ changed: false, state: 'active' };
 	}
@@ -467,12 +498,7 @@ function cleanup_locked(runtime) {
 	migrate_legacy(runtime);
 	let loaded = load_manifest(runtime);
 	if (loaded.status == 'absent') {
-		let observed = observe(runtime);
-		if (length(observed.conflicts) || observed.current == null ||
-		    count(observed.current.server.value, TARGET) > 0 ||
-		    (observed.current.cachesize.present && observed.current.cachesize.value == '0') ||
-		    (observed.current.noresolv.present && observed.current.noresolv.value == '1'))
-			fail('CORRUPT_STATE');
+		prove_manifest_absent_clean(runtime);
 		return { clean: true, changed: false };
 	}
 	if (!loaded.trusted) fail('CORRUPT_STATE');
