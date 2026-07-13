@@ -1,0 +1,146 @@
+#!/bin/sh
+
+set -u
+
+BARRIER="/var/run/miclash/package-removal"
+MANIFEST="/var/run/miclash/routing-ownership.json"
+CRON_FILE="/etc/crontabs/root"
+WAIT_ATTEMPTS=50
+
+refuse() {
+	echo "MiClash package removal refused: $*" >&2
+	return 1
+}
+
+establish_barrier() {
+	mkdir -p /var/run/miclash || return 1
+	chown 0:0 /var/run/miclash 2>/dev/null || return 1
+	chmod 0700 /var/run/miclash || return 1
+	if [ ! -e "$BARRIER" ]; then
+		mkdir "$BARRIER" 2>/dev/null || return 1
+	fi
+	[ ! -L "$BARRIER" ] || return 1
+	[ -d "$BARRIER" ] || return 1
+	chown 0:0 "$BARRIER" 2>/dev/null || return 1
+	chmod 0700 "$BARRIER" || return 1
+	[ "$(stat -c '%u:%a' "$BARRIER" 2>/dev/null)" = '0:700' ] || return 1
+	return 0
+}
+
+stop_disable() {
+	service="$1"
+	[ -x "/etc/init.d/$service" ] || return 0
+	"/etc/init.d/$service" stop >/dev/null 2>&1 || return 1
+	"/etc/init.d/$service" disable >/dev/null 2>&1 || return 1
+}
+
+terminate_lock_owner() {
+	lock="$1"
+	pid=""
+	[ -f "$lock/pid" ] && pid="$(cat "$lock/pid" 2>/dev/null || true)"
+	case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+	kill "$pid" 2>/dev/null || return 0
+	i=0
+	while kill -0 "$pid" 2>/dev/null && [ "$i" -lt "$WAIT_ATTEMPTS" ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+	if kill -0 "$pid" 2>/dev/null; then
+		kill -KILL "$pid" 2>/dev/null || true
+		i=0
+		while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 10 ]; do
+			sleep 0.1
+			i=$((i + 1))
+		done
+	fi
+	! kill -0 "$pid" 2>/dev/null
+}
+
+quiesce_update_triggers() {
+	if [ -f "$CRON_FILE" ]; then
+		sed -i '\|/opt/clash/bin/clash-rules update|d' "$CRON_FILE" || return 1
+		[ ! -x /etc/init.d/cron ] || /etc/init.d/cron restart >/dev/null 2>&1 || return 1
+	fi
+	stop_disable miclashd || return 1
+	stop_disable miclash-autoupdate || return 1
+	stop_disable miclash-memory-guard || return 1
+	terminate_lock_owner /tmp/miclash-update.lock || return 1
+	terminate_lock_owner /tmp/miclash-autoupdate.lock || return 1
+	return 0
+}
+
+delete_clash_and_wait() {
+	[ -x /etc/init.d/clash ] || return 1
+	command -v ubus >/dev/null 2>&1 || return 1
+	/etc/init.d/clash delete >/dev/null 2>&1 || return 1
+	i=0
+	while [ "$i" -lt "$WAIT_ATTEMPTS" ]; do
+		state="$(ubus call service list '{"name":"clash"}' 2>/dev/null)" || return 1
+		if ! printf '%s' "$state" | grep -q '"clash"'; then
+			return 0
+		fi
+		sleep 0.1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+run_routing_cleanup() {
+	command -v ucode >/dev/null 2>&1 || return 1
+	[ -f /usr/share/miclash/routing-cleanup.uc ] || return 1
+	ucode -L '/usr/share/*.uc' /usr/share/miclash/routing-cleanup.uc >/dev/null 2>&1 || return 1
+	[ -f "$MANIFEST" ]
+}
+
+run_preserve_cleanup() {
+	[ -x /etc/init.d/clash ] || return 1
+	/etc/init.d/clash package_cleanup >/dev/null 2>&1
+}
+
+remove_guard_owner() {
+	[ -x /etc/init.d/miclash-guard ] || return 1
+	/etc/init.d/miclash-guard remove >/dev/null 2>&1 || return 1
+	/etc/init.d/miclash-guard disable >/dev/null 2>&1 || return 1
+}
+
+restore_guard_owner() {
+	[ -x /etc/init.d/miclash-guard ] || return 1
+	/etc/init.d/miclash-guard enable >/dev/null 2>&1 || return 1
+	# start runs guard-bootstrap install, whose success includes structural
+	# verification of the fail-closed Guard table.
+	/etc/init.d/miclash-guard start >/dev/null 2>&1
+}
+
+prepare_completion_marker() {
+	rm -f "$BARRIER/complete.pending" "$BARRIER/complete" || return 1
+	printf 'complete\n' > "$BARRIER/complete.pending" || return 1
+	chown 0:0 "$BARRIER/complete.pending" 2>/dev/null || return 1
+	chmod 0600 "$BARRIER/complete.pending" || return 1
+}
+
+establish_barrier || { refuse 'cannot establish root-owned barrier'; exit 1; }
+quiesce_update_triggers || { refuse 'cannot quiesce update and daemon writers'; exit 1; }
+delete_clash_and_wait || { refuse 'Clash procd instance did not quiesce'; exit 1; }
+run_routing_cleanup || { refuse 'exact routing cleanup failed'; exit 1; }
+run_preserve_cleanup || { refuse 'firewall/DNS cleanup failed'; exit 1; }
+prepare_completion_marker || { refuse 'cannot prepare completion marker'; exit 1; }
+if ! remove_guard_owner; then
+	rm -f "$BARRIER/complete.pending" "$BARRIER/complete" 2>/dev/null || true
+	restore_guard_owner >/dev/null 2>&1 || true
+	refuse 'Guard owner cleanup failed'
+	exit 1
+fi
+if ! mv "$BARRIER/complete.pending" "$BARRIER/complete"; then
+	restore_guard_owner >/dev/null 2>&1 || true
+	refuse 'cannot commit completion marker'
+	exit 1
+fi
+# Manifest unlink is the final successful operation. There is no fallible work
+# after it; if it fails, invalidate completion and reinstall+verify Guard.
+if rm -f "$MANIFEST"; then
+	exit 0
+fi
+rm -f "$BARRIER/complete" 2>/dev/null || true
+restore_guard_owner >/dev/null 2>&1 || true
+refuse 'cannot finalize ownership manifest removal'
+exit 1

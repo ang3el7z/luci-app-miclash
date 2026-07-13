@@ -15,6 +15,11 @@ DNS_BACKUP_FILE="/opt/clash/.dns_backup"
 CONFIG_UPGRADE_BACKUP="${CLASH_DIR}/.config.yaml.upgrade.bak"
 SETTINGS_FILE="${CLASH_DIR}/settings"
 USE_TMPFS_RULES="true"
+PACKAGE_REMOVAL_BARRIER="/var/run/miclash/package-removal"
+
+package_removal_active() {
+	[ -e "$PACKAGE_REMOVAL_BARRIER" ] || [ -L "$PACKAGE_REMOVAL_BARRIER" ]
+}
 
 if [ -f "$SETTINGS_FILE" ]; then
 	tmpfs_val="$(grep -m1 '^USE_TMPFS_RULES=' "$SETTINGS_FILE" 2>/dev/null | cut -d'=' -f2)"
@@ -248,6 +253,7 @@ restore_dns() {
 
 # Function to apply firewall rules
 apply_firewall_rules() {
+	package_removal_active && return 1
 	if [ -f "$CLASH_RULES" ]; then
 		if "$CLASH_RULES" start; then
 			msg "Firewall rules applied"
@@ -264,8 +270,10 @@ apply_firewall_rules() {
 
 # Function to remove firewall rules
 remove_firewall_rules() {
+	local preserve="${1:-false}"
 	if [ -f "$CLASH_RULES" ]; then
-		if "$CLASH_RULES" stop; then
+		if { [ "$preserve" = true ] && "$CLASH_RULES" package_cleanup; } || \
+		   { [ "$preserve" != true ] && "$CLASH_RULES" stop; }; then
 			msg "Firewall rules removed"
 		else
 			msg "WARNING: Failed to remove firewall rules"
@@ -295,6 +303,10 @@ restart_dnsmasq() {
 }
 
 start_service() {
+	if package_removal_active; then
+		msg "Package removal barrier active; refusing Clash start"
+		return 1
+	fi
 	if [ -f /tmp/miclash-package-no-autostart-clash ]; then
 		rm -f /tmp/miclash-package-no-autostart-clash
 		/etc/init.d/clash disable >/dev/null 2>&1 || true
@@ -364,12 +376,14 @@ start_service() {
 
 stop_service() {
 	msg "Stopping Clash service..."
+	local preserve=false
+	package_removal_active && preserve=true
 
 	# Remove firewall rules
-	remove_firewall_rules
+	remove_firewall_rules "$preserve"
 
 	# Keep the client forwarding guard active only when enabled.
-	refresh_guard_rules
+	[ "$preserve" = true ] || refresh_guard_rules
 
 	# Restore DNS settings
 	restore_dns
@@ -383,6 +397,7 @@ stop_service() {
 }
 
 reload_service() {
+	package_removal_active && return 1
 	msg "Reloading Clash service..."
 
 	stop
@@ -394,11 +409,21 @@ reload_service() {
 # Called by package manager during removal (`/etc/init.d/clash delete`).
 # Make it idempotent: service may already be gone, so ignore "Not found".
 delete() {
-	ubus call service delete '{ "name": "clash" }' >/dev/null 2>&1 || true
+	ubus call service delete '{ "name": "clash" }' >/dev/null 2>&1 && return 0
+	ubus call service list '{ "name": "clash" }' 2>/dev/null | grep -q '"clash"' && return 1
+	return 0
+}
+
+package_cleanup() {
+	package_removal_active || return 1
+	remove_firewall_rules true || return 1
+	restore_dns
+	restart_dnsmasq || return 1
 	return 0
 }
 
 service_started() {
+	package_removal_active && return 0
 	# Called by procd every time the service process (re)starts, including respawns.
 	# The package-installed /etc/hotplug.d/net/99-clash-tun handles the normal
 	# case: when mihomo creates clash-tun, the kernel event fires the hotplug script

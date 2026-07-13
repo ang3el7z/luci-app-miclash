@@ -14,6 +14,7 @@
 
 # Only act on interface up events
 [ "$ACTION" = "ifup" ] || exit 0
+[ ! -e /var/run/miclash/package-removal ] || exit 0
 
 # Check that Clash is running
 pgrep -f '/opt/clash/bin/clash -d' > /dev/null 2>&1 || exit 0
@@ -35,6 +36,7 @@ msg "WAN up (iface=$INTERFACE dev=$DEVICE), scheduling provider update"
 # Wait for the connection to stabilise and DNS to become available.
 # PPPoE and similar links may take a few seconds after route appearance.
 sleep 10
+[ ! -e /var/run/miclash/package-removal ] || exit 0
 
 # ---------------------------------------------------------------------------
 # Configuration — read from clash config file, no hardcoded values
@@ -89,6 +91,7 @@ urlencode() {
 # ---------------------------------------------------------------------------
 api_put() {
     local path="$1"
+	[ ! -e /var/run/miclash/package-removal ] || return 1
     if [ -n "$secret" ]; then
         curl -sf -X PUT \
             -H "Authorization: Bearer ${secret}" \
@@ -243,6 +246,7 @@ update_rule_providers() {
 # ---------------------------------------------------------------------------
 update_proxy_providers
 update_rule_providers
+[ ! -e /var/run/miclash/package-removal ] || exit 0
 
 # Now that the WAN is up and DNS is reachable, (re)build the subscription IP
 # cache that startup intentionally skips when offline. This resolves the

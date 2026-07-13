@@ -35,15 +35,17 @@ IFS="$old_ifs"
 "$UCODE_BIN" "$@" "$repo_root/tests/ucode/routing-netns-gate.uc"
 
 # Exercise the actual prerm entrypoint while the module, reservation files and
-# manifest are all still available. It must remove exact owned tuples and only
-# then unlink the manifest.
+# manifest are all still available. It removes exact owned tuples but retains
+# an empty trusted manifest until later prerm steps have succeeded.
 "$UCODE_BIN" "$@" "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/routing-cleanup.uc"
-[ ! -e /var/run/miclash/routing-ownership.json ]
+[ -f /var/run/miclash/routing-ownership.json ]
+[ -d /var/run/miclash/package-removal ]
 [ -z "$(ip -4 route show table 100 proto 242 2>/dev/null)" ]
 if ip -4 rule show 2>/dev/null | grep -Eq ' (proto|protocol) (242|miclash)( |$)'; then
 	echo 'package routing cleanup left an owned IPv4 rule' >&2
 	exit 1
 fi
+rm -f /var/run/miclash/routing-ownership.json
 
 producer_dir="$(mktemp -d)"
 trap 'rm -rf "$producer_dir"' EXIT INT TERM

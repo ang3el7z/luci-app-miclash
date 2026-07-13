@@ -8,6 +8,19 @@
 
 CONFIG_FILE="/opt/clash/config.yaml"
 SETTINGS_FILE="/opt/clash/settings"
+readonly PACKAGE_REMOVAL_BARRIER="/var/run/miclash/package-removal"
+
+package_removal_active() {
+	[ -e "$PACKAGE_REMOVAL_BARRIER" ] || [ -L "$PACKAGE_REMOVAL_BARRIER" ]
+}
+
+routing_mutation_allowed() {
+	if package_removal_active; then
+		echo 'MiClash package removal is in progress' >&2
+		return 1
+	fi
+	return 0
+}
 
 # Directory to cache subscription IPs for performance
 readonly SUBSCRIPTION_CACHE_FILE="/tmp/clash/clash_subscription_ips.cache"
@@ -2620,6 +2633,7 @@ update_rules() {
 # disappear between respawns), so tun_route_setup is called directly.
 
 setup_routing_rules() {
+	routing_mutation_allowed || return 1
     # Keep setup idempotent and mode-safe across restarts/reloads.
     teardown_routing_rules
     case "$PROXY_MODE" in
@@ -2657,6 +2671,7 @@ setup_routing_rules() {
 # Cleans up all modes unconditionally (errors suppressed) so that stop()
 # works correctly even if PROXY_MODE changed since start.
 teardown_routing_rules() {
+	routing_mutation_allowed || return 1
     # Flush entire routing tables rather than removing individual routes.
     # This is more robust across mode switches
     # approach — any stale entries from previous configurations are cleared.
@@ -2924,6 +2939,7 @@ update_fakeip_whitelist_sets() {
 # Called by init.d service_started() after the TUN interface is confirmed UP.
 # This must run after setup_routing_rules() has already added the ip rules.
 tun_route_reset_rule() {
+	routing_mutation_allowed || return 1
     local mark="$1"
     local table="$2"
     local pref="$3"
@@ -2933,6 +2949,7 @@ tun_route_reset_rule() {
 }
 
 tun_route_ensure_policy_state() {
+	routing_mutation_allowed || return 1
     case "$PROXY_MODE" in
         "tun")
             tun_route_reset_rule "$MARK_TPROXY" "$TABLE_TPROXY" "$PREF_TPROXY"
@@ -2947,6 +2964,7 @@ tun_route_ensure_policy_state() {
 }
 
 tun_route_setup() {
+	routing_mutation_allowed || return 1
     load_all_settings_once
     case "$PROXY_MODE" in
         "tun")
@@ -3010,6 +3028,7 @@ validate_policy_routing_state() {
 }
 
 repair_policy_routing_state() {
+	routing_mutation_allowed || return 1
     load_all_settings_once
     case "$PROXY_MODE" in
         "tun"|"mixed")
@@ -3379,6 +3398,7 @@ UCI_EOF
 
 stop() {
 	local preserve_routing="${1:-false}"
+	local preserve_guard="${2:-false}"
 	msg "Stopping Clash rules script"
 
     load_all_settings_once
@@ -3392,7 +3412,9 @@ stop() {
     cleanup_iptables_runtime_rules
 	[ "$preserve_routing" = "true" ] || teardown_routing_rules
 
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+	if [ "$preserve_guard" = "true" ]; then
+		:
+	elif [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
         apply_guard_rules || warn "Failed to refresh client forwarding guard during stop"
     else
         remove_guard_rules
@@ -3407,6 +3429,11 @@ stop() {
 
     msg "Clash rules script stopped successfully (all routing rules cleaned up)"
 }
+
+case "$1" in
+	package_cleanup|validate_policy|validate_forward|health) ;;
+	*) routing_mutation_allowed || exit 1 ;;
+esac
 
 case "$1" in
     start)
@@ -3453,8 +3480,7 @@ case "$1" in
 		# Package prerm has already performed manifest-aware exact cleanup. Do
 		# not invoke the legacy whole-table routing teardown after reservations
 		# and the routing module begin disappearing.
-		stop true
-		remove_guard_rules
+		stop true true
 		;;
     tun_route_setup)
         tun_route_setup

@@ -338,8 +338,9 @@ assert_true(start_match != null && int(start_match[1]) < 21,
 assert_true(match(init, /guard-bootstrap\.uc install/), 'init must install bootstrap at start');
 assert_true(!match(init, /stop_service[\s\S]*guard-bootstrap\.uc (disable|remove)/),
 	'ordinary service stop must not remove Guard');
-assert_true(index(makefile, 'miclash-guard') >= 0 && index(makefile, 'guard-bootstrap.uc') >= 0,
-	'package must install and enable the Guard bootstrap');
+assert_true(index(makefile, 'miclash-guard') >= 0 && index(init, 'guard-bootstrap.uc') >= 0 &&
+	index(init, 'remove()') >= 0,
+	'package must install the Guard owner with explicit bootstrap install/remove actions');
 assert_true(index(makefile, '+nftables') >= 0,
 	'atomic dual-stack bootstrap requires nftables on every package backend');
 assert_true(index(bootstrap, "[ '-f', BATCH_PATH ]") >= 0 &&
@@ -357,7 +358,7 @@ assert_true(index(makefile, '/etc/init.d/miclash-guard start || exit 1') >= 0,
 assert_true(index(bootstrap, "ARGV[0] != 'disable'") >= 0 &&
 	index(bootstrap, "'explicit_disable'") >= 0,
 	'explicit Guard disable must have a distinct, deliberate bootstrap removal command');
-assert_true(index(makefile, 'guard-bootstrap.uc remove') >= 0,
-	'package removal must use its distinct bootstrap removal command');
+assert_true(index(init, 'guard-bootstrap.uc remove') >= 0,
+	'Guard owner removal must use its distinct bootstrap removal command');
 assert_true(!match(makefile, /INSTALL_BIN[^\n]*rootfs\/etc\/init\.d\/miclashd/),
 	'Task 2 must not ship the unfinished main daemon');

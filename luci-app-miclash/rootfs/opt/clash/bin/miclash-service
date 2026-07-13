@@ -19,6 +19,7 @@ STOP_TIMEOUT_SEC=60
 POLL_INTERVAL_SEC=1
 CURRENT_ACTION=""
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
+PACKAGE_REMOVAL_BARRIER="/var/run/miclash/package-removal"
 
 cleanup() {
 	if [ "$LOCK_ACQUIRED" = "1" ]; then
@@ -433,6 +434,15 @@ run_service_action() {
 			;;
 	esac
 }
+
+case "${1:-}" in
+	status|state|clear-status|health|wait-ready) ;;
+	*)
+		if [ -e "$PACKAGE_REMOVAL_BARRIER" ] || [ -L "$PACKAGE_REMOVAL_BARRIER" ]; then
+			fail "MiClash package removal is in progress"
+		fi
+		;;
+esac
 
 case "${1:-}" in
 	status)

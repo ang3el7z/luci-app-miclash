@@ -112,6 +112,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json $(1)/usr/share/rpcd/acl.d/
 	$(INSTALL_DIR) $(1)/usr/share/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/*.uc $(1)/usr/share/miclash/
+	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-remove $(1)/usr/share/miclash/
 	$(INSTALL_DIR) $(1)/usr/libexec/miclash
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/validate-config.uc $(1)/usr/libexec/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/mihomo-https.uc $(1)/usr/libexec/miclash/
@@ -199,19 +200,14 @@ define Package/$(PKG_NAME)/prerm
 	case "$$1" in
 		upgrade|update) ;;
 		*)
-			if [ ! -x /usr/bin/ucode ] || [ ! -f /usr/share/miclash/routing-cleanup.uc ]; then
-				echo "MiClash routing cleanup unavailable; preserving package and ownership manifest" >&2
+			BARRIER="/var/run/miclash/package-removal"
+			[ -x /usr/share/miclash/package-remove ] || {
+				echo "MiClash package removal protocol unavailable" >&2
 				exit 1
-			fi
-			/usr/bin/ucode -L '/usr/share/*.uc' \
-				/usr/share/miclash/routing-cleanup.uc >/dev/null 2>&1 || exit 1
-			[ -x /usr/bin/ucode ] && [ -f /usr/share/miclash/guard-bootstrap.uc ] && \
-				/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc remove >/dev/null 2>&1 || true
-			[ -x /etc/init.d/miclash-guard ] && /etc/init.d/miclash-guard disable >/dev/null 2>&1 || true
+			}
+			/usr/share/miclash/package-remove || exit 1
 			;;
 	esac
-	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard stop >/dev/null 2>&1 || true
-	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard disable >/dev/null 2>&1 || true
 }
 exit 0
 endef
@@ -239,19 +235,6 @@ define Package/$(PKG_NAME)/postrm
 		return 1
 	}
 
-	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules package_cleanup >/dev/null 2>&1 || true
-	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate stop >/dev/null 2>&1 || true
-	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate disable >/dev/null 2>&1 || true
-	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard stop >/dev/null 2>&1 || true
-	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard disable >/dev/null 2>&1 || true
-
-	# Clean up cron job for clash-rules update, if present
-	CRON_FILE="/etc/crontabs/root"
-	if [ -f "$$CRON_FILE" ]; then
-		sed -i '\|/opt/clash/bin/clash-rules update|d' "$$CRON_FILE" 2>/dev/null || true
-		/etc/init.d/cron restart >/dev/null 2>&1 || true
-	fi
-
 	rm -rf /opt/clash/ui
 	rm -f /opt/clash/ruleset
 	rm -f /opt/clash/.dns_backup
@@ -264,12 +247,36 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /opt/clash/.settings.upgrade.bak
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
+	rm -f /opt/clash/bin/clash-rules
+	rm -f /etc/init.d/clash
 	rm -f /etc/init.d/miclash-autoupdate
 	rm -f /etc/init.d/miclash-memory-guard
 	rm -f /etc/apk/protected_paths.d/miclash.list
 	case "$$1" in
 		upgrade|update) ;;
-		*) rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json ;;
+		*)
+			BARRIER="/var/run/miclash/package-removal"
+			if [ "$$(stat -c '%u:%a' "$$BARRIER" 2>/dev/null)" = '0:700' ] && \
+				[ "$$(stat -c '%u:%a' "$$BARRIER/complete" 2>/dev/null)" = '0:600' ] && \
+				[ ! -e /var/run/miclash/routing-ownership.json ] && \
+				[ ! -e /opt/clash/bin/clash-rules ] && \
+				[ ! -e /opt/clash/bin/miclash-update ] && \
+				[ ! -e /opt/clash/bin/miclash-service ] && \
+				[ ! -e /opt/clash/bin/miclash-autoupdate ] && \
+				[ ! -e /opt/clash/bin/miclash-memory-guard ] && \
+				[ ! -e /etc/init.d/clash ] && \
+				[ ! -e /etc/init.d/miclash-autoupdate ] && \
+				[ ! -e /etc/init.d/miclash-memory-guard ] && \
+				[ ! -e /etc/hotplug.d/iface/40-clash ] && \
+				[ ! -e /etc/hotplug.d/net/99-clash-tun ] && \
+				[ ! -e /usr/share/miclash/routing.uc ] && \
+				[ ! -e /usr/share/miclash/routing-cleanup.uc ] && \
+				[ ! -e /usr/share/miclash/package-remove ]; then
+				rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json
+				rm -f "$$BARRIER/complete"
+				rmdir "$$BARRIER" 2>/dev/null || true
+			fi
+			;;
 	esac
 
 	# Preserve the manually installed core on ordinary upgrades. An explicit

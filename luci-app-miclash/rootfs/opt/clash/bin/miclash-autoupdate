@@ -2,6 +2,8 @@
 
 set -u
 
+PACKAGE_REMOVAL_BARRIER="/var/run/miclash/package-removal"
+
 SETTINGS_FILE="/opt/clash/settings"
 SERVICE_BIN="/opt/clash/bin/miclash-service"
 SUBSCRIPTION_BIN="/opt/clash/bin/miclash-subscription"
@@ -133,6 +135,7 @@ acquire_lock() {
 }
 
 run_once() {
+	[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || return 75
 	auto_update_enabled || return 0
 	acquire_lock || return 0
 	mkdir -p "$STATE_DIR" 2>/dev/null || {
@@ -170,6 +173,7 @@ run_once() {
 run_loop() {
 	mkdir -p "$STATE_DIR" 2>/dev/null || true
 	while true; do
+		[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || return 0
 		if auto_update_enabled && is_due; then
 			run_once || true
 		fi

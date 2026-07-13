@@ -2,6 +2,8 @@
 
 set -u
 
+PACKAGE_REMOVAL_BARRIER="/var/run/miclash/package-removal"
+
 TMP_FILES=""
 LOCK_DIR="/tmp/miclash-update.lock"
 LOCK_ACQUIRED=0
@@ -399,6 +401,15 @@ install_kernel() {
 		echo "mihomo kernel installed"
 	fi
 }
+
+case "${1:-}" in
+	status|clear-status|release) ;;
+	*)
+		if [ -e "$PACKAGE_REMOVAL_BARRIER" ] || [ -L "$PACKAGE_REMOVAL_BARRIER" ]; then
+			fail "MiClash package removal is in progress"
+		fi
+		;;
+esac
 
 case "${1:-}" in
 	status)

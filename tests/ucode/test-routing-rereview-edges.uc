@@ -13,6 +13,16 @@ assert_equal(partial.routes[0].kind, 'local',
 	'a status-2 partial JSON document requires authoritative text fallback confirmation');
 assert_true(partial.routes[0].owned, 'text-confirmed committed route remains owned');
 
+for (let alias in [ 'miclash_tproxy', 'miclash_mixed' ]) {
+	let alias_outputs = empty_outputs();
+	alias_outputs['ip -j -4 rule show 2>/dev/null'] = 'not-json\n';
+	alias_outputs['ip -4 rule show 2>/dev/null'] =
+		'32765:\tfrom 192.0.2.0/24 lookup ' + alias + ' proto boot\n';
+	let aliased = observe(runtime(alias_outputs));
+	assert_true(aliased.rules[0]?.ambiguous,
+		'a malformed foreign text rule using reserved alias ' + alias + ' is relevant and ambiguous');
+}
+
 let cancel_outputs = empty_outputs();
 let cancelling = runtime(cancel_outputs), timer_cancelled = 0, drain_cancelled = 0;
 cancelling.routing_monitor_epoch = 7;
@@ -34,10 +44,11 @@ cancelling.routing_monitor?.callback();
 assert_equal(length(cancelling.process.calls), 0, 'stale callback remains inert after cancellation errors');
 
 let recipe = require('fs').readfile('luci-app-miclash/Makefile');
-assert_true(index(recipe, '/usr/share/miclash/routing-cleanup.uc') >= 0 &&
-	index(recipe, 'define Package/$(PKG_NAME)/prerm') < index(recipe, 'routing-cleanup.uc'),
-	'package prerm invokes ownership-aware cleanup while module and reservations still exist');
-assert_true(index(recipe, 'routing-cleanup.uc') < index(recipe, 'define Package/$(PKG_NAME)/postrm'),
-	'ownership cleanup occurs before postrm removes package files');
+let removal = require('fs').readfile('luci-app-miclash/rootfs/usr/share/miclash/package-remove');
+assert_true(index(recipe, '/usr/share/miclash/package-remove') >= 0 &&
+	index(removal, '/usr/share/miclash/routing-cleanup.uc') >= 0,
+	'package prerm invokes the quiescing ownership-aware cleanup protocol while modules exist');
+assert_true(index(recipe, 'package-remove') < index(recipe, 'define Package/$(PKG_NAME)/postrm'),
+	'ownership cleanup protocol occurs before postrm removes package files');
 assert_true(index(recipe, 'full_cleanup >/dev/null') < 0,
 	'package lifecycle never invokes legacy whole-table routing teardown');

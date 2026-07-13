@@ -45,7 +45,7 @@ jobs:
             xargs -0 -r -n1 msgfmt --check --output-file=/dev/null
 
       - name: Check test runner shell syntax
-        run: sh -n tools/run-ucode-tests.sh tools/check-routing-netns.sh
+        run: sh -n tools/run-ucode-tests.sh tools/check-routing-netns.sh tools/check-package-removal.sh
 
   ucode-tests:
     name: Host ucode tests
@@ -111,6 +111,10 @@ jobs:
             UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
             LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
             tools/check-routing-netns.sh
+
+      - name: Run package removal process and failure-preservation gate
+        shell: bash
+        run: sudo tools/check-package-removal.sh
 
   package-build:
     name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }})

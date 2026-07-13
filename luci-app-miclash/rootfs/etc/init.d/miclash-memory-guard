@@ -3,8 +3,10 @@
 START=22
 STOP=78
 USE_PROCD=1
+PACKAGE_REMOVAL_BARRIER="/var/run/miclash/package-removal"
 
 start_service() {
+	[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || return 1
 	grep -q '^ENABLE_MEMORY_GUARD=true$' /opt/clash/settings 2>/dev/null || return 0
 	procd_open_instance
 	procd_set_param command /opt/clash/bin/miclash-memory-guard run

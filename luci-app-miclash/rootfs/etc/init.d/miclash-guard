@@ -15,3 +15,7 @@ reload() {
 stop() {
 	return 0
 }
+
+remove() {
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc remove
+}

@@ -12,6 +12,7 @@ SUCCESS_COOLDOWN_SEC=21600
 FAILURE_COOLDOWN_SEC=86400
 REARM_NORMAL_SEC=1800
 ACTION_BUSY_EXIT=75
+PACKAGE_REMOVAL_BARRIER="/var/run/miclash/package-removal"
 
 SETTINGS_FILE="${MICLASH_SETTINGS_FILE:-/opt/clash/settings}"
 STATE_DIR="${MICLASH_MEMORY_GUARD_STATE_DIR:-/tmp/miclash-memory-guard}"
@@ -229,6 +230,7 @@ observe_pressure() {
 }
 
 handle_recovery_trigger() {
+	[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || return "$ACTION_BUSY_EXIT"
 	guard_log "recovery trigger: pid=$TRACKED_PID baseline_rss_kb=$BASELINE_RSS current_rss_kb=$CURRENT_RSS mem_available_kb=$MEM_AVAILABLE reserve_kb=$RESERVE psi_full_avg10=$PSI_FULL_AVG10"
 	recover_memory
 }
@@ -358,11 +360,13 @@ recover_memory() {
 }
 
 run_monitor() {
+	[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || return 0
 	mkdir -p "$STATE_DIR" 2>/dev/null || exit 1
 	load_runtime_state
 	LAST_MANUAL_OPERATION="$(read_manual_operation)"
 	guard_log "monitor started"
 	while setting_enabled; do
+		[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || return 0
 		pid="$(find_mihomo_pid)"
 		if [ -z "$pid" ] || [ ! -r "$PROC_ROOT/$pid/status" ]; then
 			PHASE="waiting_for_mihomo"
@@ -416,6 +420,7 @@ run_monitor() {
 }
 
 sync_guard_service() {
+	[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || return "$ACTION_BUSY_EXIT"
 	if setting_enabled; then
 		"$SERVICE_INIT" enable >/dev/null 2>&1 || return 1
 		"$SERVICE_INIT" running >/dev/null 2>&1 || "$SERVICE_INIT" start >/dev/null 2>&1 || return 1

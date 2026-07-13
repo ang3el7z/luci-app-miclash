@@ -177,3 +177,12 @@ let package_runtime = new_runtime();
 apply(package_runtime, diff(retry_wanted, observe(package_runtime)));
 assert_true(package_runtime.fs.lstat('/var/run/miclash/routing-ownership.json')?.type == 'file',
 	'package lifecycle gate starts with a live ownership manifest');
+assert_true(package_runtime.fs.mkdir('/var/run/miclash/package-removal') == true,
+	'real package lifecycle establishes its atomic removal barrier');
+assert_true(package_runtime.fs.chmod('/var/run/miclash/package-removal', 0o700) == true,
+	'real package removal barrier is root-only');
+let calls_before_barrier = length(package_runtime.process.calls);
+assert_throws(() => apply(package_runtime, diff(retry_wanted, observe(package_runtime))), 'BUSY');
+assert_throws(() => cleanup(package_runtime), 'BUSY');
+assert_equal(length(package_runtime.process.calls), calls_before_barrier,
+	'real apply and ordinary cleanup perform zero mutation behind the removal barrier');
