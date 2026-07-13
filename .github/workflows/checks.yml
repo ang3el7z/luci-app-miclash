@@ -45,7 +45,7 @@ jobs:
             xargs -0 -r -n1 msgfmt --check --output-file=/dev/null
 
       - name: Check test runner shell syntax
-        run: sh -n tools/run-ucode-tests.sh
+        run: sh -n tools/run-ucode-tests.sh tools/check-routing-netns.sh
 
   ucode-tests:
     name: Host ucode tests
@@ -59,7 +59,7 @@ jobs:
       - name: Install host build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -yq cmake build-essential libjson-c-dev libmd-dev pkg-config
+          sudo apt-get install -yq cmake build-essential libjson-c-dev libmd-dev pkg-config iproute2 util-linux
 
       - name: Restore host ucode build
         id: ucode-cache
@@ -103,6 +103,14 @@ jobs:
       - name: Run ucode tests
         shell: bash
         run: UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/run-ucode-tests.sh
+
+      - name: Run isolated routing lifecycle and producer deadline gates
+        shell: bash
+        run: |
+          sudo env \
+            UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
+            tools/check-routing-netns.sh
 
   package-build:
     name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }})

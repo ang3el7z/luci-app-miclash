@@ -10,7 +10,7 @@ PKG_MAINTAINER:=ang3el7z
 
 LUCI_TITLE:=LuCI Support for MiClash
 LUCI_DEPENDS:=+luci-base +zlib +libcurl +curl +coreutils-base64 +kmod-tun \
-	+nftables +ucode-mod-fs +ucode-mod-math +ucode-mod-digest +ucode-mod-socket
+	+nftables +coreutils-timeout +ucode-mod-fs +ucode-mod-math +ucode-mod-digest +ucode-mod-socket
 LUCI_PKGARCH:=all
 
 PKG_CONFIG_DEPENDS:= \
@@ -86,6 +86,10 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./rootfs/etc/hotplug.d/iface/40-clash $(1)/etc/hotplug.d/iface/
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
 	$(INSTALL_BIN) ./rootfs/etc/hotplug.d/net/99-clash-tun $(1)/etc/hotplug.d/net/
+	$(INSTALL_DIR) $(1)/etc/iproute2/rt_protos.d
+	$(INSTALL_DATA) ./rootfs/etc/iproute2/rt_protos.d/miclash.conf $(1)/etc/iproute2/rt_protos.d/
+	$(INSTALL_DIR) $(1)/etc/iproute2/rt_tables.d
+	$(INSTALL_DATA) ./rootfs/etc/iproute2/rt_tables.d/miclash.conf $(1)/etc/iproute2/rt_tables.d/
 
 	$(INSTALL_DIR) $(1)/opt/clash/bin
 	$(INSTALL_BIN) ./rootfs/opt/clash/bin/clash-rules $(1)/opt/clash/bin/
@@ -259,7 +263,8 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /etc/apk/protected_paths.d/miclash.list
 	case "$$1" in
 		upgrade|update) ;;
-		*) rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json ;;
+		*) rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json \
+			/var/run/miclash/routing-ownership.json ;;
 	esac
 
 	# Preserve the manually installed core on ordinary upgrades. An explicit
