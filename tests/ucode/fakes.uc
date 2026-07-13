@@ -81,7 +81,7 @@ export function fs(initial) {
 		write_results: [],
 		calls: {
 			open: [], write: [], flush: [], close: [], chmod: [], rename: [], unlink: [],
-			readfile: [], rmdir: []
+			read: [], readfile: [], fstat: [], rmdir: []
 		},
 		writefile: (path, data) => files[path] = data,
 		exists: (path) => exists(files, path) || exists(symlinks, path),
@@ -147,24 +147,29 @@ export function fs(initial) {
 			fake.collide_next_open = false;
 			return null;
 		}
-		if (fake.fail_on == 'open' || (index(mode, 'x') >= 0 && fake.exists(path)))
+		if (fake.fail_on == 'open' || (index(mode, 'x') >= 0 && fake.exists(path)) ||
+		    (substr(mode, 0, 1) == 'r' && !fake.exists(path)))
 			return null;
 
-		files[path] = '';
-		inodes[path] = next_inode++;
-		modes[path] = perm;
-		remember_directories(path);
-		push(created, path);
+		if (substr(mode, 0, 1) != 'r') {
+			files[path] = '';
+			inodes[path] = next_inode++;
+			modes[path] = perm;
+			remember_directories(path);
+			push(created, path);
+		}
 		push(fake.calls.open, { path, mode, perm });
 		let offset = 0;
 		let fd = next_fd++;
-		let handle = { path, closed: false, last_error: null };
+		let opened_path = resolve(path), opened_inode = info(resolve(path), true)?.inode;
+		let handle = { path, opened_path, opened_inode, closed: false, last_error: null };
 		handle.fileno = () => fd;
 		handle.read = (amount) => {
 			if (handle.closed)
 				return null;
-			let data = substr(files[path], offset, amount);
+			let data = substr(files[handle.opened_path], offset, amount);
 			offset += length(data);
+			push(fake.calls.read, { path, amount: length(data) });
 			return data;
 		};
 		handle.write = (data) => {
@@ -197,6 +202,12 @@ export function fs(initial) {
 			return fake.fail_on == 'close' ? null : true;
 		};
 		return handle;
+	};
+	fake.fstat = (handle) => {
+		push(fake.calls.fstat, handle.path);
+		let value = info(handle.opened_path, true);
+		if (value != null) value.inode = handle.opened_inode;
+		return value;
 	};
 	fake.write = (handle, data) => handle.write(data);
 	fake.flush = (handle) => {
@@ -276,6 +287,7 @@ export function fs(initial) {
 	fake.set_device = (path, device) => devices[path] = device;
 	fake.set_nlink = (path, count) => links[path] = count;
 	fake.set_uid = (path, uid) => owners[path] = uid;
+	fake.set_mode = (path, mode) => modes[path] = mode;
 	fake.bump_inode = (path) => inodes[resolve(path)] = next_inode++;
 	fake.set_symlink = (path, target) => {
 		delete files[path];

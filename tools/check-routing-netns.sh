@@ -12,6 +12,9 @@ fi
 mount --make-rprivate /
 mkdir -p /var/run/miclash
 mount -t tmpfs -o mode=0700,size=1m miclash-routing-state /var/run/miclash
+mkdir -p /tmp/run/miclash
+chmod 0755 /tmp/run
+chmod 0700 /tmp/run/miclash
 ip link set lo up
 UCODE_PATH="$repo_root/tests/ucode:$repo_root/luci-app-miclash/rootfs/usr/share"
 export UCODE_PATH
@@ -30,6 +33,17 @@ done
 IFS="$old_ifs"
 
 "$UCODE_BIN" "$@" "$repo_root/tests/ucode/routing-netns-gate.uc"
+
+# Exercise the actual prerm entrypoint while the module, reservation files and
+# manifest are all still available. It must remove exact owned tuples and only
+# then unlink the manifest.
+"$UCODE_BIN" "$@" "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/routing-cleanup.uc"
+[ ! -e /var/run/miclash/routing-ownership.json ]
+[ -z "$(ip -4 route show table 100 proto 242 2>/dev/null)" ]
+if ip -4 rule show 2>/dev/null | grep -Eq ' (proto|protocol) (242|miclash)( |$)'; then
+	echo 'package routing cleanup left an owned IPv4 rule' >&2
+	exit 1
+fi
 
 producer_dir="$(mktemp -d)"
 trap 'rm -rf "$producer_dir"' EXIT INT TERM

@@ -3378,7 +3378,8 @@ UCI_EOF
 }
 
 stop() {
-    msg "Stopping Clash rules script"
+	local preserve_routing="${1:-false}"
+	msg "Stopping Clash rules script"
 
     load_all_settings_once
 
@@ -3389,7 +3390,7 @@ stop() {
 
     cleanup_nft_runtime_rules
     cleanup_iptables_runtime_rules
-    teardown_routing_rules
+	[ "$preserve_routing" = "true" ] || teardown_routing_rules
 
     if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
         apply_guard_rules || warn "Failed to refresh client forwarding guard during stop"
@@ -3444,10 +3445,17 @@ case "$1" in
             remove_guard_rules
         fi
         ;;
-    full_cleanup)
-        stop
-        remove_guard_rules
-        ;;
+	full_cleanup)
+		stop
+		remove_guard_rules
+		;;
+	package_cleanup)
+		# Package prerm has already performed manifest-aware exact cleanup. Do
+		# not invoke the legacy whole-table routing teardown after reservations
+		# and the routing module begin disappearing.
+		stop true
+		remove_guard_rules
+		;;
     tun_route_setup)
         tun_route_setup
         ;;
@@ -3503,7 +3511,7 @@ case "$1" in
         exit $?
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
+		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
         exit 1
         ;;
 esac

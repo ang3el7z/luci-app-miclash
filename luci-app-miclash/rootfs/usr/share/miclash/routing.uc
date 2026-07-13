@@ -7,8 +7,9 @@ const OWNER_PROTOCOL = 242;
 const MANIFEST_PATH = '/var/run/miclash/routing-ownership.json';
 const MANIFEST_CANONICAL_PATH = '/tmp/run/miclash/routing-ownership.json';
 const MANIFEST_OWNER = 'miclash';
-const MANIFEST_VERSION = 1;
+const MANIFEST_VERSION = 2;
 const MAX_MANIFEST = 32768;
+const MAX_COMMITTED = 6;
 const MAX_CAPTURE = 65536;
 const CAPTURE_PREFIX = '/usr/bin/timeout -s KILL 2 ';
 const FAMILIES = { ipv4: '-4', ipv6: '-6' };
@@ -125,13 +126,19 @@ function contains_entry(values, wanted) {
 	return false;
 };
 
-function manifest_document(routes, rules) {
-	return { version: MANIFEST_VERSION, owner: MANIFEST_OWNER, protocol: OWNER_PROTOCOL,
-		routes: routes, rules: rules };
+function same_entries(left, right) {
+	if (length(left ?? []) != length(right ?? [])) return false;
+	for (let item in left ?? []) if (!contains_entry(right, item)) return false;
+	return true;
 };
 
-function validate_manifest_entries(values, kind) {
-	if (type(values) != 'array' || length(values) > 4) return null;
+function manifest_document(committed, transition) {
+	return { version: MANIFEST_VERSION, owner: MANIFEST_OWNER, protocol: OWNER_PROTOCOL,
+		committed, transition: transition ?? null };
+};
+
+function validate_manifest_entries(values, kind, maximum) {
+	if (type(values) != 'array' || length(values) > (maximum ?? 4)) return null;
 	let result = [], seen = {};
 	for (let item in values) {
 		let allowed = kind == 'route'
@@ -151,27 +158,151 @@ function validate_manifest_entries(values, kind) {
 	return result;
 };
 
-function load_manifest(runtime) {
-	let absent = { trusted: false, routes: [], rules: [] };
-	if (runtime?.paths?.run != '/var/run/miclash' || type(runtime?.fs?.readfile) != 'function') return absent;
-	let source = runtime.fs.readfile(MANIFEST_PATH);
-	if (source == null) return absent;
-	try {
-		if (type(source) != 'string' || !length(source) || length(source) > MAX_MANIFEST) return absent;
-		let stat = runtime.fs.lstat(MANIFEST_PATH);
-		let resolved = runtime.fs.realpath(MANIFEST_PATH);
-		if (stat?.type != 'file' || stat.nlink != 1 || stat.uid != 0 || (stat.mode & 0o022) != 0 ||
-		    (resolved != MANIFEST_PATH && resolved != MANIFEST_CANONICAL_PATH)) return absent;
-		let document = json(source);
-		if (!exact_fields(document, { version: true, owner: true, protocol: true, routes: true, rules: true }) ||
-		    document.version != MANIFEST_VERSION || document.owner != MANIFEST_OWNER ||
-		    document.protocol != OWNER_PROTOCOL) return absent;
-		let routes = validate_manifest_entries(document.routes, 'route');
-		let rules = validate_manifest_entries(document.rules, 'rule');
-		if (routes == null || rules == null) return absent;
-		return { trusted: true, routes, rules };
+function same_identity(left, right) {
+	return left != null && right != null && left.type == right.type && left.inode == right.inode &&
+		left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
+};
+
+function parent_chain(path) {
+	let parts = split(path, '/'), chain = [ '/' ], current = '';
+	for (let part in parts) {
+		if (!length(part)) continue;
+		current += '/' + part;
+		push(chain, current);
 	}
-	catch (error) { return absent; }
+	return chain;
+};
+
+function secure_manifest_parent(runtime) {
+	if (runtime?.paths?.run != '/var/run/miclash' || type(runtime?.fs) != 'object') return null;
+	let parent = runtime.fs.realpath(runtime.paths.run);
+	if (!has([ '/var/run/miclash', '/tmp/run/miclash', '/run/miclash' ], parent)) return null;
+	let chain = parent_chain(parent);
+	for (let path in chain) {
+		let stat = runtime.fs.stat(path);
+		if (stat?.type != 'directory' || stat.uid != 0) return null;
+		let writable = (stat.mode & 0o022) != 0;
+		if (writable && !(path == '/tmp' && (stat.mode & 0o1000) != 0)) return null;
+	}
+	let final = runtime.fs.stat(parent);
+	if (final?.type != 'directory' || (final.mode & 0o022) != 0) return null;
+	return parent;
+};
+
+function secure_manifest_read(runtime) {
+	let absent = { status: 'absent', source: null };
+	let parent = secure_manifest_parent(runtime);
+	if (parent == null || type(runtime.fs.open) != 'function' || type(runtime.fs.read) != 'function' ||
+	    type(runtime.fs.fstat) != 'function' || type(runtime.fs.close) != 'function')
+		return { status: 'invalid', source: null };
+	let leaf = runtime.fs.lstat(MANIFEST_PATH);
+	if (leaf == null) return absent;
+	if (leaf.type != 'file' || leaf.nlink != 1 || leaf.uid != 0 || (leaf.mode & 0o022) != 0 ||
+	    leaf.size <= 0 || leaf.size > MAX_MANIFEST ||
+	    runtime.fs.realpath(MANIFEST_PATH) != parent + '/routing-ownership.json')
+		return { status: 'invalid', source: null };
+	let handle = null, source = '';
+	let result = { status: 'invalid', source: null };
+	try {
+		handle = runtime.fs.open(MANIFEST_PATH, 're');
+		if (handle != null) {
+			let before = runtime.fs.fstat(handle), valid =
+				same_identity(leaf, before) && before.type == 'file' && before.nlink == 1 &&
+				before.uid == 0 && (before.mode & 0o022) == 0 && before.size == leaf.size;
+			while (valid && length(source) <= MAX_MANIFEST) {
+				let chunk = runtime.fs.read(handle, 4096);
+				if (type(chunk) != 'string') { valid = false; break; }
+				if (!length(chunk)) break;
+				source += chunk;
+			}
+			let after = runtime.fs.fstat(handle), verified = runtime.fs.lstat(MANIFEST_PATH);
+			valid = valid && length(source) == leaf.size && length(source) <= MAX_MANIFEST &&
+				same_identity(before, after) && before.size == after.size &&
+				same_identity(leaf, verified) && leaf.size == verified.size &&
+				secure_manifest_parent(runtime) == parent &&
+				runtime.fs.realpath(MANIFEST_PATH) == parent + '/routing-ownership.json';
+			if (valid) result = { status: 'read', source };
+		}
+	}
+	catch (error) {}
+	if (handle != null) try { runtime.fs.close(handle); } catch (error) { result = { status: 'invalid', source: null }; }
+	return result;
+};
+
+function committed_document(routes, rules) { return { routes, rules }; };
+
+function replace_slot(committed, kind, pre, post) {
+	let values = kind == 'route' ? committed.routes : committed.rules, result = [];
+	for (let item in values) if (!contains_entry(pre, item)) push(result, item);
+	for (let item in post) if (!contains_entry(result, item)) push(result, item);
+	return kind == 'route' ? committed_document(result, committed.rules) :
+		committed_document(committed.routes, result);
+};
+
+function validate_transition(value, committed) {
+	if (value == null) return null;
+	if (!exact_fields(value, { kind: true, action: true, target: true, retire: true, pre: true,
+	    post: true, next: true }) || !has([ 'route', 'rule' ], value.kind)) return false;
+	let kind = value.kind;
+	if ((kind == 'route' && !has([ 'replace', 'delete' ], value.action)) ||
+	    (kind == 'rule' && !has([ 'add', 'delete' ], value.action))) return false;
+	let target = kind == 'route' ? canonical_route(value.target) : canonical_rule(value.target);
+	let retire = validate_manifest_entries(value.retire, kind);
+	let pre = validate_manifest_entries(value.pre, kind), post = validate_manifest_entries(value.post, kind);
+	let next_routes = validate_manifest_entries(value.next?.routes, 'route', MAX_COMMITTED);
+	let next_rules = validate_manifest_entries(value.next?.rules, 'rule', MAX_COMMITTED);
+	if (target == null || retire == null || pre == null || post == null ||
+	    next_routes == null || next_rules == null || length(retire) > 1 ||
+	    length(pre) > (kind == 'route' ? 2 : 1) || length(post) > (kind == 'route' ? 2 : 1)) return false;
+	if (value.action == 'add' && (length(retire) || length(pre) || length(post) != 1)) return false;
+	if (value.action == 'replace' && !contains_entry(post, target)) return false;
+	if (value.action == 'delete' && (length(retire) != 1 || contains_entry(post, target))) return false;
+	if ((value.action == 'delete' && !contains_entry(retire, target)) ||
+	    (value.action != 'delete' && !contains_entry(post, target))) return false;
+	for (let item in [ ...retire, ...pre, ...post ]) {
+		if (kind == 'route' && (item.family != target.family || item.table != target.table)) return false;
+		if (kind == 'rule' && (item.family != target.family || item.priority != target.priority ||
+		    item.table != target.table)) return false;
+	}
+	for (let item in retire)
+		if (!contains_entry(kind == 'route' ? committed.routes : committed.rules, item)) return false;
+	for (let item in retire) if (!contains_entry(pre, item)) {
+		let verified_tun_absence = kind == 'route' && item.kind == 'unicast' &&
+			item.device == 'clash-tun';
+		if (!verified_tun_absence) return false;
+	}
+	let expected_post = [];
+	for (let item in pre) if (!contains_entry(retire, item)) push(expected_post, item);
+	if (value.action != 'delete' && !contains_entry(expected_post, target)) push(expected_post, target);
+	if (!same_entries(expected_post, post)) return false;
+	let expected = replace_slot(committed, kind, retire, post);
+	if (!same_entries(expected.routes, next_routes) || !same_entries(expected.rules, next_rules)) return false;
+	return { kind, action: value.action, target, retire, pre, post,
+		next: committed_document(next_routes, next_rules) };
+};
+
+function load_manifest(runtime) {
+	let empty = { trusted: false, status: 'absent', committed: committed_document([], []),
+		transition: null, routes: [], rules: [] };
+	let captured = secure_manifest_read(runtime);
+	if (captured.status == 'absent') return empty;
+	if (captured.status != 'read') return { ...empty, status: 'invalid' };
+	try {
+		let document = json(captured.source);
+		if (!exact_fields(document, { version: true, owner: true, protocol: true,
+		    committed: true, transition: true }) || document.version != MANIFEST_VERSION ||
+		    document.owner != MANIFEST_OWNER || document.protocol != OWNER_PROTOCOL ||
+		    !exact_fields(document.committed, { routes: true, rules: true }))
+			return { ...empty, status: 'invalid' };
+		let routes = validate_manifest_entries(document.committed.routes, 'route', MAX_COMMITTED);
+		let rules = validate_manifest_entries(document.committed.rules, 'rule', MAX_COMMITTED);
+		if (routes == null || rules == null) return { ...empty, status: 'invalid' };
+		let committed = committed_document(routes, rules);
+		let transition = validate_transition(document.transition, committed);
+		if (transition === false) return { ...empty, status: 'invalid' };
+		return { trusted: true, status: 'trusted', committed, transition, routes, rules };
+	}
+	catch (error) { return { ...empty, status: 'invalid' }; }
 };
 
 function canonical_list(values, kind) {
@@ -189,12 +320,6 @@ function union_entries(left, right) {
 	let result = [ ...(left ?? []) ];
 	for (let item in right ?? []) if (!contains_entry(result, item)) push(result, item);
 	return result;
-};
-
-function same_entries(left, right) {
-	if (length(left ?? []) != length(right ?? [])) return false;
-	for (let item in left ?? []) if (!contains_entry(right, item)) return false;
-	return true;
 };
 
 export function desired(settings, interfaces) {
@@ -243,7 +368,7 @@ function fixed_capture(runtime, command, allow_command_failure) {
 	let succeeded = closed === 0 || closed === true;
 	let route_output = trim(output);
 	let route_absence = index(command, ' route show ') >= 0 &&
-		(route_output == '[]' || (closed === 2 && (route_output == '' || route_output == '[')));
+		(route_output == '[]' || (index(command, 'ip -j ') != 0 && closed === 2 && route_output == ''));
 	let link_absence = (command == 'ip -j link show dev clash-tun' ||
 		command == 'ip link show dev clash-tun') && closed === 1 && !length(trim(output));
 	let expected_absence = route_absence || link_absence;
@@ -441,6 +566,34 @@ function authorize_ownership(values, kind, ownership) {
 	}
 };
 
+function transition_kernel_state(routes, rules, transition) {
+	if (transition == null) return null;
+	let source = transition.kind == 'route' ? routes : rules, actual = [];
+	for (let item in source) {
+		let relevant = transition.kind == 'route'
+			? item.family == transition.target.family && item.table == transition.target.table
+			: item.family == transition.target.family &&
+				(item.priority == transition.target.priority || item.table == transition.target.table);
+		if (!relevant) continue;
+		let canonical = transition.kind == 'route' ? canonical_route(item) : canonical_rule(item);
+		if (item.ambiguous || item.protocol != OWNER_PROTOCOL || canonical == null ||
+		    contains_entry(actual, canonical)) return 'mismatch';
+		push(actual, canonical);
+	}
+	if (same_entries(actual, transition.pre)) return 'pre';
+	if (same_entries(actual, transition.post)) return 'post';
+	return 'mismatch';
+};
+
+function committed_present(values, kind, wanted) {
+	for (let item in values) {
+		let canonical = kind == 'route' ? canonical_route(item) : canonical_rule(item);
+		if (!item.ambiguous && item.protocol == OWNER_PROTOCOL && canonical != null &&
+		    contains_entry([ canonical ], wanted)) return true;
+	}
+	return false;
+};
+
 export function observe(runtime) {
 	if (type(runtime) != 'object') fail('INVALID_ARGUMENT');
 	let rules = [], routes = [];
@@ -457,9 +610,35 @@ export function observe(runtime) {
 		(text) => { let document = json(text); if (type(document) != 'array') fail('INVALID_ARGUMENT'); return document; },
 		(text) => length(trim(text)) ? [ true ] : []);
 	let ownership = load_manifest(runtime);
+	let link_present = length(links) > 0;
+	ownership.verified_absent = { routes: [], rules: [] };
+	let transition_state = ownership.trusted
+		? transition_kernel_state(routes, rules, ownership.transition) : null;
+	ownership.transition_state = transition_state;
 	authorize_ownership(routes, 'route', ownership);
 	authorize_ownership(rules, 'rule', ownership);
-	return { routes, rules, interfaces: { 'clash-tun': length(links) > 0 }, ownership };
+	if (ownership.status == 'invalid')
+		push(routes, { family: 'ipv4', table: 100, ambiguous: true, owned: false,
+			reason: 'invalid-manifest' });
+	if (ownership.trusted) {
+		for (let item in ownership.committed.routes) if (!committed_present(routes, 'route', item)) {
+			if (!link_present && item.kind == 'unicast' && item.device == 'clash-tun')
+				push(ownership.verified_absent.routes, item);
+			else
+				push(routes, { family: item.family, table: item.table, ambiguous: true,
+					owned: false, reason: 'missing-committed-route' });
+		}
+		for (let item in ownership.committed.rules)
+			if (!committed_present(rules, 'rule', item))
+				push(rules, { family: item.family, table: item.table, priority: item.priority,
+					ambiguous: true, owned: false, reason: 'missing-committed-rule' });
+		if (ownership.transition != null && transition_state != 'pre')
+			push(ownership.transition.kind == 'route' ? routes : rules,
+				{ family: ownership.transition.target.family,
+					table: ownership.transition.target.table,
+					ambiguous: true, owned: false, reason: 'uncommitted-transition-' + transition_state });
+	}
+	return { routes, rules, interfaces: { 'clash-tun': link_present }, ownership };
 };
 
 function same_route(a, b) {
@@ -472,15 +651,22 @@ function same_rule(a, b) {
 		a.mask == b.mask && a.table == b.table;
 };
 
+function actions_contain(values, wanted, kind) {
+	for (let item in values)
+		if (contains_entry([ kind == 'route' ? canonical_route(item) : canonical_rule(item) ], wanted))
+			return true;
+	return false;
+};
+
 export function diff(wanted, observed) {
 	if (type(wanted?.routes) != 'array' || type(wanted?.rules) != 'array' ||
 	    type(observed?.routes) != 'array' || type(observed?.rules) != 'array') fail('INVALID_ARGUMENT');
 	let after_routes = canonical_list(wanted.routes, 'route');
 	let after_rules = canonical_list(wanted.rules, 'rule');
 	let before_routes = observed.ownership?.trusted === true
-		? validate_manifest_entries(observed.ownership.routes, 'route') : [];
+		? validate_manifest_entries(observed.ownership.committed?.routes, 'route', MAX_COMMITTED) : [];
 	let before_rules = observed.ownership?.trusted === true
-		? validate_manifest_entries(observed.ownership.rules, 'rule') : [];
+		? validate_manifest_entries(observed.ownership.committed?.rules, 'rule', MAX_COMMITTED) : [];
 	if (before_routes == null || before_rules == null) fail('INVALID_ARGUMENT');
 	let result = { remove_rules: [], remove_routes: [], add_routes: [], add_rules: [], conflicts: [],
 		monitor: { enabled: wanted.tun_mode === true, present: wanted.tun_present === true },
@@ -530,7 +716,22 @@ export function diff(wanted, observed) {
 		for (let item in wanted.routes) {
 			keep = keep || same_route(item, existing);
 		}
-		if (!keep) push(result.remove_routes, route_action(existing));
+		let replaced = false;
+		for (let item in result.add_routes)
+			replaced = replaced || item.family == existing.family && item.table == 100 && existing.table == 100;
+		if (!keep && !replaced) push(result.remove_routes, route_action(existing));
+	}
+	for (let item in before_rules) {
+		let keep = contains_entry(after_rules, item);
+		if (!keep && !actions_contain(result.remove_rules, item, 'rule'))
+			push(result.remove_rules, rule_action(item));
+	}
+	for (let item in before_routes) {
+		let keep = contains_entry(after_routes, item), replaced = false;
+		for (let added in result.add_routes)
+			replaced = replaced || added.family == item.family && added.table == 100 && item.table == 100;
+		if (!keep && !replaced && !actions_contain(result.remove_routes, item, 'route'))
+			push(result.remove_routes, route_action(item));
 	}
 	return result;
 };
@@ -558,13 +759,16 @@ function disarm_tun_monitor(runtime) {
 	runtime.routing_monitor_epoch = (runtime.routing_monitor_epoch ?? 0) + 1;
 	if (state == null) return;
 	state.active = false;
-	if (type(state.subscription) == 'function') state.subscription();
-	else if (type(state.subscription?.remove) == 'function') state.subscription.remove();
-	else if (type(state.subscription?.unsubscribe) == 'function') state.subscription.unsubscribe();
-	else if (type(state.subscription?.cancel) == 'function') state.subscription.cancel();
-	if (type(state.timer?.cancel) == 'function') state.timer.cancel();
-	if (type(state.drain?.cancel) == 'function') state.drain.cancel();
 	runtime.routing_monitor = null;
+	try {
+		if (type(state.subscription) == 'function') state.subscription();
+		else if (type(state.subscription?.remove) == 'function') state.subscription.remove();
+		else if (type(state.subscription?.unsubscribe) == 'function') state.subscription.unsubscribe();
+		else if (type(state.subscription?.cancel) == 'function') state.subscription.cancel();
+	}
+	catch (error) {}
+	try { if (type(state.timer?.cancel) == 'function') state.timer.cancel(); } catch (error) {}
+	try { if (type(state.drain?.cancel) == 'function') state.drain.cancel(); } catch (error) {}
 };
 
 function arm_tun_monitor(runtime, monitor) {
@@ -656,13 +860,6 @@ function validate_action_list(values, kind, seen) {
 	}
 };
 
-function actions_contain(values, wanted, kind) {
-	for (let item in values)
-		if (contains_entry([ kind == 'route' ? canonical_route(item) : canonical_rule(item) ], wanted))
-			return true;
-	return false;
-};
-
 function validate_plan(runtime, changes) {
 	if (!exact_fields(changes, { conflicts: true, add_routes: true, remove_routes: true,
 	    add_rules: true, remove_rules: true, monitor: true, ownership: true }) ||
@@ -676,9 +873,10 @@ function validate_plan(runtime, changes) {
 	    !exact_fields(changes.ownership.after, { routes: true, rules: true }))
 		fail('INVALID_ARGUMENT');
 	for (let conflict in changes.conflicts) if (type(conflict) != 'object') fail('INVALID_ARGUMENT');
-	for (let phase in [ changes.ownership.before, changes.ownership.after ])
-		if (validate_manifest_entries(phase.routes, 'route') == null ||
-		    validate_manifest_entries(phase.rules, 'rule') == null) fail('INVALID_ARGUMENT');
+	if (validate_manifest_entries(changes.ownership.before.routes, 'route', MAX_COMMITTED) == null ||
+	    validate_manifest_entries(changes.ownership.before.rules, 'rule', MAX_COMMITTED) == null ||
+	    validate_manifest_entries(changes.ownership.after.routes, 'route') == null ||
+	    validate_manifest_entries(changes.ownership.after.rules, 'rule') == null) fail('INVALID_ARGUMENT');
 	let add_routes_seen = {}, remove_routes_seen = {}, add_rules_seen = {}, remove_rules_seen = {};
 	validate_action_list(changes.add_routes, 'route', add_routes_seen);
 	validate_action_list(changes.remove_routes, 'route', remove_routes_seen);
@@ -703,6 +901,15 @@ function validate_plan(runtime, changes) {
 		for (let item in changes.ownership.after.rules)
 			if (!contains_entry(changes.ownership.before.rules, item) &&
 			    !actions_contain(changes.add_rules, item, 'rule')) fail('INVALID_ARGUMENT');
+		for (let item in changes.ownership.before.routes) if (!contains_entry(changes.ownership.after.routes, item)) {
+			let replaced = false;
+			for (let added in changes.add_routes)
+				replaced = replaced || added.family == item.family && added.table == 100 && item.table == 100;
+			if (!replaced && !actions_contain(changes.remove_routes, item, 'route')) fail('INVALID_ARGUMENT');
+		}
+		for (let item in changes.ownership.before.rules)
+			if (!contains_entry(changes.ownership.after.rules, item) &&
+			    !actions_contain(changes.remove_rules, item, 'rule')) fail('INVALID_ARGUMENT');
 	}
 	if (changes.monitor.enabled) {
 		let observer = runtime.observers?.routing;
@@ -712,65 +919,216 @@ function validate_plan(runtime, changes) {
 	}
 };
 
-function persist_manifest(runtime, routes, rules) {
-	storage.write_json(runtime, MANIFEST_PATH, manifest_document(routes, rules), 0o600);
+function persist_manifest(runtime, committed, transition) {
+	let routes = validate_manifest_entries(committed?.routes, 'route', MAX_COMMITTED);
+	let rules = validate_manifest_entries(committed?.rules, 'rule', MAX_COMMITTED);
+	if (routes == null || rules == null) fail('INVALID_ARGUMENT');
+	let normalized = committed_document(routes, rules);
+	let op = validate_transition(transition, normalized);
+	if (op === false) fail('INVALID_ARGUMENT');
+	storage.write_json(runtime, MANIFEST_PATH, manifest_document(normalized, op), 0o600);
+};
+
+function observation_ambiguous(observed) {
+	for (let item in [ ...observed.routes, ...observed.rules ]) if (item.ambiguous) return true;
+	return false;
+};
+
+function operation_slot_item(committed, kind, target) {
+	let values = kind == 'route' ? committed.routes : committed.rules, found = [];
+	for (let item in values) {
+		let same = kind == 'route'
+			? item.family == target.family && item.table == target.table
+			: item.family == target.family && item.priority == target.priority && item.table == target.table;
+		if (same) push(found, item);
+	}
+	if (length(found) > 1) fail('INTERNAL');
+	return found;
+};
+
+function kernel_slot(observed, kind, target) {
+	let values = kind == 'route' ? observed.routes : observed.rules, result = [];
+	for (let item in values) {
+		let relevant = kind == 'route'
+			? item.family == target.family && item.table == target.table
+			: item.family == target.family && item.priority == target.priority && item.table == target.table;
+		if (!relevant || item.ambiguous) continue;
+		let canonical = kind == 'route' ? canonical_route(item) : canonical_rule(item);
+		if (item.protocol == OWNER_PROTOCOL && canonical != null) push(result, canonical);
+	}
+	if (length(result) > (kind == 'route' ? 2 : 1)) fail('INTERNAL');
+	return result;
+};
+
+function make_operation(observed, committed, kind, mode, item) {
+	let target = kind == 'route' ? canonical_route(item) : canonical_rule(item);
+	if (target == null) fail('INVALID_ARGUMENT');
+	let retire, pre = kernel_slot(observed, kind, target), post, action;
+	if (mode == 'add') {
+		let committed_slot = operation_slot_item(committed, kind, target);
+		retire = kind == 'route' && target.table == 100 ? committed_slot : [];
+		post = [];
+		for (let existing in pre) if (!contains_entry(retire, existing)) push(post, existing);
+		if (!contains_entry(post, target)) push(post, target);
+		action = kind == 'route' ? 'replace' : 'add';
+		if (kind == 'rule' && (length(retire) || length(pre))) fail('INTERNAL');
+	}
+	else {
+		retire = [ target ]; post = []; action = 'delete';
+		for (let existing in pre) if (!contains_entry(retire, existing)) push(post, existing);
+		if (!contains_entry(kind == 'route' ? committed.routes : committed.rules, target)) fail('INTERNAL');
+	}
+	let next = replace_slot(committed, kind, retire, post);
+	let op = { kind, action, target, retire, pre, post, next };
+	if (validate_transition(op, committed) === false) fail('INTERNAL');
+	return op;
+};
+
+function same_operation(left, right) {
+	return left != null && right != null && entry_key(left) == entry_key(right);
+};
+
+function post_observation_safe(observed, op) {
+	let verified_absence = op.kind == 'route' && op.action == 'delete' &&
+		op.target.kind == 'unicast' && op.target.device == 'clash-tun' &&
+		observed.interfaces?.['clash-tun'] === false && same_entries(op.pre, op.post) &&
+		observed.ownership?.transition_state == 'pre';
+	if (!observed.ownership?.trusted ||
+	    (observed.ownership.transition_state != 'post' && !verified_absence) ||
+	    !same_operation(observed.ownership.transition, op)) return false;
+	for (let item in [ ...observed.routes, ...observed.rules ]) {
+		if (!item.ambiguous) continue;
+		let relevant = op.kind == 'route'
+			? item.family == op.target.family && item.table == op.target.table
+			: item.family == op.target.family &&
+				(item.priority == op.target.priority || item.table == op.target.table);
+		if (!relevant) return false;
+	}
+	return true;
+};
+
+function committed_of(observed) {
+	if (observed.ownership?.trusted)
+		return observed.ownership.committed;
+	if (observed.ownership?.status == 'absent') return committed_document([], []);
+	fail('INTERNAL');
+};
+
+function execute_action(runtime, kind, mode, item) {
+	let before = observe(runtime);
+	if (observation_ambiguous(before)) fail('INTERNAL');
+	let committed = committed_of(before);
+	let op = make_operation(before, committed, kind, mode, item);
+	if (before.ownership.transition != null) {
+		if (before.ownership.transition_state != 'pre' ||
+		    !same_operation(before.ownership.transition, op)) fail('INTERNAL');
+	}
+	else persist_manifest(runtime, committed, op);
+	let args = kind == 'route'
+		? route_args(mode == 'add' ? 'replace' : 'del', item)
+		: rule_args(mode == 'add' ? 'add' : 'del', item);
+	let verified_absent_delete = op.kind == 'route' && op.action == 'delete' &&
+		op.target.kind == 'unicast' && op.target.device == 'clash-tun' &&
+		before.interfaces?.['clash-tun'] === false && !contains_entry(op.pre, op.target);
+	let result = verified_absent_delete ? { code: 0, verified_absent: true } :
+		runtime.process.run({ command: 'ip', args });
+	let after = observe(runtime);
+	if (!post_observation_safe(after, op)) fail('INTERNAL');
+	persist_manifest(runtime, op.next, null);
+	let verified = observe(runtime);
+	if (observation_ambiguous(verified) || !verified.ownership.trusted ||
+	    verified.ownership.transition != null ||
+	    !same_entries(verified.ownership.committed.routes, op.next.routes) ||
+	    !same_entries(verified.ownership.committed.rules, op.next.rules)) fail('INTERNAL');
+	return result?.code == 0;
+};
+
+function reconstructed_wanted(changes) {
+	let routes = [], rules = [];
+	for (let item in changes.ownership.after.routes) push(routes, route_action(item));
+	for (let item in changes.ownership.after.rules) push(rules, rule_action(item));
+	return { routes, rules, tun_mode: changes.monitor.enabled, tun_present: changes.monitor.present };
+};
+
+function canonical_actions(values, kind) {
+	let result = [];
+	for (let item in values)
+		push(result, kind == 'route' ? canonical_route(item) : canonical_rule(item));
+	return result;
+};
+
+function exact_plan(left, right) {
+	return length(left.conflicts) == length(right.conflicts) && !length(left.conflicts) &&
+		left.monitor.enabled == right.monitor.enabled && left.monitor.present == right.monitor.present &&
+		same_entries(canonical_actions(left.add_routes, 'route'), canonical_actions(right.add_routes, 'route')) &&
+		same_entries(canonical_actions(left.remove_routes, 'route'), canonical_actions(right.remove_routes, 'route')) &&
+		same_entries(canonical_actions(left.add_rules, 'rule'), canonical_actions(right.add_rules, 'rule')) &&
+		same_entries(canonical_actions(left.remove_rules, 'rule'), canonical_actions(right.remove_rules, 'rule')) &&
+		same_entries(left.ownership.before.routes, right.ownership.before.routes) &&
+		same_entries(left.ownership.before.rules, right.ownership.before.rules) &&
+		same_entries(left.ownership.after.routes, right.ownership.after.routes) &&
+		same_entries(left.ownership.after.rules, right.ownership.after.rules);
+};
+
+function complete_fresh_plan(runtime, changes) {
+	let fresh = observe(runtime);
+	let expected = diff(reconstructed_wanted(changes), fresh);
+	if (length(expected.conflicts)) fail('INTERNAL');
+	if (!exact_plan(expected, changes)) fail('INVALID_ARGUMENT');
+	return expected;
+};
+
+function resume_transition(runtime, observed) {
+	let op = observed.ownership?.transition;
+	if (op == null) return observed;
+	if (observed.ownership.transition_state != 'pre' || observation_ambiguous(observed)) fail('INTERNAL');
+	let item = op.kind == 'route' ? route_action(op.target) : rule_action(op.target);
+	execute_action(runtime, op.kind, op.action == 'delete' ? 'delete' : 'add', item);
+	return observe(runtime);
 };
 
 export function apply(runtime, changes) {
 	validate_plan(runtime, changes);
 	disarm_tun_monitor(runtime);
 	if (length(changes.conflicts)) fail('INTERNAL');
-	let current_ownership = load_manifest(runtime);
-	let current_routes = current_ownership.trusted ? current_ownership.routes : [];
-	let current_rules = current_ownership.trusted ? current_ownership.rules : [];
-	if (!same_entries(current_routes, changes.ownership.before.routes) ||
-	    !same_entries(current_rules, changes.ownership.before.rules)) fail('INVALID_ARGUMENT');
-	let journal_routes = union_entries(changes.ownership.before.routes, changes.ownership.after.routes);
-	let journal_rules = union_entries(changes.ownership.before.rules, changes.ownership.after.rules);
-	persist_manifest(runtime, journal_routes, journal_rules);
+	let expected = complete_fresh_plan(runtime, changes);
 	try {
-		for (let item in changes.add_routes) run(runtime, route_args('replace', item));
-		for (let item in changes.add_rules) run(runtime, rule_args('add', item));
-		for (let item in changes.remove_rules) run(runtime, rule_args('del', item));
-		for (let item in changes.remove_routes) run(runtime, route_args('del', item));
-		persist_manifest(runtime, changes.ownership.after.routes, changes.ownership.after.rules);
-		arm_tun_monitor(runtime, changes.monitor);
+		for (let item in expected.add_routes) execute_action(runtime, 'route', 'add', item);
+		for (let item in expected.add_rules) execute_action(runtime, 'rule', 'add', item);
+		for (let item in expected.remove_rules) execute_action(runtime, 'rule', 'delete', item);
+		for (let item in expected.remove_routes) execute_action(runtime, 'route', 'delete', item);
+		let final = observe(runtime), after = expected.ownership.after;
+		if (observation_ambiguous(final) || !final.ownership.trusted ||
+		    final.ownership.transition != null ||
+		    !same_entries(final.ownership.committed.routes, after.routes) ||
+		    !same_entries(final.ownership.committed.rules, after.rules)) fail('INTERNAL');
+		arm_tun_monitor(runtime, expected.monitor);
 	}
 	catch (error) {
 		disarm_tun_monitor(runtime);
 		fail(error?.code ?? error?.message ?? 'INTERNAL');
 	}
-	return { changed: length(changes.add_routes) + length(changes.remove_rules) +
-		length(changes.add_rules) + length(changes.remove_routes) > 0 };
+	return { changed: length(expected.add_routes) + length(expected.remove_rules) +
+		length(expected.add_rules) + length(expected.remove_routes) > 0 };
 };
 
 export function cleanup(runtime, current) {
-	current ??= observe(runtime);
-	if (type(current?.rules) != 'array' || type(current?.routes) != 'array') fail('INVALID_ARGUMENT');
 	disarm_tun_monitor(runtime);
-	for (let item in [ ...current.rules, ...current.routes ]) if (item.ambiguous) fail('INTERNAL');
-	let ownership = load_manifest(runtime);
-	let remove_rules = [], remove_routes = [];
-	for (let item in current.rules) if (item.owned) {
-		let action = rule_action(item), canonical = canonical_rule(item);
-		if (!ownership.trusted || action == null || !contains_entry(ownership.rules, canonical))
-			fail('INVALID_ARGUMENT');
-		validate_rule_entry(action, false);
-		push(remove_rules, action);
-	}
-	for (let item in current.routes) if (item.owned) {
-		let action = route_action(item), canonical = canonical_route(item);
-		if (!ownership.trusted || action == null || !contains_entry(ownership.routes, canonical))
-			fail('INVALID_ARGUMENT');
-		validate_route_entry(action, false);
-		push(remove_routes, action);
-	}
-	if (!ownership.trusted) return { clean: true };
-	// Re-persist exact deletion intent before the first rule is removed. On a
-	// partial failure the old tuples remain authorized for a safe retry.
-	persist_manifest(runtime, ownership.routes, ownership.rules);
-	for (let item in remove_rules) run(runtime, rule_args('del', item));
-	for (let item in remove_routes) run(runtime, route_args('del', item));
-	persist_manifest(runtime, [], []);
+	let fresh = observe(runtime);
+	if (observation_ambiguous(fresh)) fail('INTERNAL');
+	if (fresh.ownership?.status == 'absent') return { clean: true };
+	if (!fresh.ownership?.trusted) fail('INTERNAL');
+	fresh = resume_transition(runtime, fresh);
+	if (observation_ambiguous(fresh) || !fresh.ownership.trusted) fail('INTERNAL');
+	let empty = { routes: [], rules: [], tun_mode: false, tun_present: false };
+	let plan = diff(empty, fresh);
+	if (length(plan.conflicts) || length(plan.add_routes) || length(plan.add_rules)) fail('INTERNAL');
+	for (let item in plan.remove_rules) execute_action(runtime, 'rule', 'delete', item);
+	for (let item in plan.remove_routes) execute_action(runtime, 'route', 'delete', item);
+	let verified = observe(runtime);
+	if (observation_ambiguous(verified) || !verified.ownership.trusted ||
+	    length(verified.ownership.committed.routes) || length(verified.ownership.committed.rules) ||
+	    verified.ownership.transition != null) fail('INTERNAL');
+	if (runtime.fs.unlink(MANIFEST_PATH) != true) fail('INTERNAL');
 	return { clean: true };
 };

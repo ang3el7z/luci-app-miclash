@@ -199,6 +199,12 @@ define Package/$(PKG_NAME)/prerm
 	case "$$1" in
 		upgrade|update) ;;
 		*)
+			if [ ! -x /usr/bin/ucode ] || [ ! -f /usr/share/miclash/routing-cleanup.uc ]; then
+				echo "MiClash routing cleanup unavailable; preserving package and ownership manifest" >&2
+				exit 1
+			fi
+			/usr/bin/ucode -L '/usr/share/*.uc' \
+				/usr/share/miclash/routing-cleanup.uc >/dev/null 2>&1 || exit 1
 			[ -x /usr/bin/ucode ] && [ -f /usr/share/miclash/guard-bootstrap.uc ] && \
 				/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc remove >/dev/null 2>&1 || true
 			[ -x /etc/init.d/miclash-guard ] && /etc/init.d/miclash-guard disable >/dev/null 2>&1 || true
@@ -233,7 +239,7 @@ define Package/$(PKG_NAME)/postrm
 		return 1
 	}
 
-	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || true
+	[ -x /opt/clash/bin/clash-rules ] && /opt/clash/bin/clash-rules package_cleanup >/dev/null 2>&1 || true
 	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate stop >/dev/null 2>&1 || true
 	[ -x /etc/init.d/miclash-autoupdate ] && /etc/init.d/miclash-autoupdate disable >/dev/null 2>&1 || true
 	[ -x /etc/init.d/miclash-memory-guard ] && /etc/init.d/miclash-memory-guard stop >/dev/null 2>&1 || true
@@ -263,8 +269,7 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /etc/apk/protected_paths.d/miclash.list
 	case "$$1" in
 		upgrade|update) ;;
-		*) rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json \
-			/var/run/miclash/routing-ownership.json ;;
+		*) rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json ;;
 	esac
 
 	# Preserve the manually installed core on ordinary upgrades. An explicit

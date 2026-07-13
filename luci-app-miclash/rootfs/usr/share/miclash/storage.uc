@@ -50,7 +50,8 @@ function canonical_root(root) {
 
 function trusted_root_path(root, resolved) {
 	return resolved == root ||
-		(root == '/var/run/miclash' && resolved == canonical_root(root));
+		(root == '/var/run/miclash' &&
+			(resolved == canonical_root(root) || resolved == '/run/miclash'));
 };
 
 function allowed_root(path) {

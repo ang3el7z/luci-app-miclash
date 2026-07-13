@@ -11,9 +11,9 @@ function raw(command) {
 
 function new_runtime() {
 	let runtime = production.create();
-	// Ubuntu resolves /var/run through /run; OpenWrt 24.10 resolves the same
-	// packaged runtime path through /tmp/run. Preserve real identities while
-	// presenting the target's canonical pathname to storage validation.
+	// The production target resolves /var/run/miclash to /tmp/run/miclash.
+	// Ubuntu resolves it to /run/miclash, so present the target canonical name
+	// while retaining the real handle/stat identities for this host gate.
 	let host_realpath = runtime.fs.realpath;
 	runtime.fs.realpath = (path) => {
 		let resolved = host_realpath(path);
@@ -49,8 +49,24 @@ assert_equal(length(installed_diff.conflicts), 0,
 assert_equal(length(installed_diff.add_routes), 0, 'real routes reconcile idempotently');
 assert_equal(length(installed_diff.add_rules), 0, 'real rules reconcile idempotently');
 
+assert_equal(system([ 'ip', 'link', 'add', 'clash-tun', 'type', 'dummy' ]), 0,
+	'isolated namespace can create clash-tun for real table100 transition');
+assert_equal(system([ 'ip', 'link', 'set', 'clash-tun', 'up' ]), 0,
+	'isolated namespace can raise clash-tun for real table100 transition');
+let tun_up = desired({ proxy_mode: 'tun', ip_families: [ 'ipv4', 'ipv6' ] }, { 'clash-tun': true });
+apply(runtime, diff(tun_up, observe(runtime)));
+assert_true(index(raw('ip -j -4 route show table 100').output, 'clash-tun') >= 0,
+	'real table100 local-to-TUN replace leaves only the clash-tun route');
+assert_equal(system([ 'ip', 'link', 'delete', 'clash-tun' ]), 0,
+	'isolated namespace can remove clash-tun after real table100 up transition');
+let tun_down = desired({ proxy_mode: 'tun', ip_families: [ 'ipv4', 'ipv6' ] }, { 'clash-tun': false });
+apply(runtime, diff(tun_down, observe(runtime)));
+assert_true(index(raw('ip -j -4 route show table 100').output, '"type":"local"') >= 0,
+	'real table100 TUN-to-local replace succeeds without a stale old-route delete');
+
 let mixed_down = desired({ proxy_mode: 'mixed', ip_families: [ 'ipv4', 'ipv6' ] }, { 'clash-tun': false });
-apply(runtime, diff(mixed_down, observe(runtime)));
+let mixed_down_plan = diff(mixed_down, observe(runtime));
+apply(runtime, mixed_down_plan);
 assert_equal(length(diff(mixed_down, observe(runtime)).add_routes), 0,
 	'real MIXED tables install with unreachable UDP fallback');
 
@@ -93,8 +109,8 @@ for (let item in [ ...after_restart.routes, ...after_restart.rules ])
 cleanup(restarted);
 assert_true(restarted.routing_monitor == null, 'cleanup invalidates the live watcher epoch');
 
-// Fail after the first successful kernel mutation. The transition journal
-// authorizes exactly that partial state so a fresh runtime can retry safely.
+// Fail after the first completed operation. Committed advances only for that
+// proved route; the second exact rule operation remains retryable at pre-state.
 let failing = new_runtime(), real_run = failing.process.run, run_count = 0;
 failing.process.run = (request) => {
 	run_count++;
@@ -105,11 +121,40 @@ let retry_wanted = desired({ proxy_mode: 'tproxy', ip_families: [ 'ipv4' ] }, {}
 assert_throws(() => apply(failing, diff(retry_wanted, observe(failing))), 'INTERNAL');
 let retry_runtime = new_runtime(), partial = observe(retry_runtime);
 assert_true(partial.ownership.trusted && partial.routes[0].owned,
-	'partial success remains exactly owned after failure and restart');
+	'only the proved first operation is committed after failure and restart');
+assert_equal(partial.ownership.transition_state, 'pre',
+	'the failed second operation restarts only at its exact retryable pre-state');
 apply(retry_runtime, diff(retry_wanted, partial));
 assert_equal(length(diff(retry_wanted, observe(retry_runtime)).add_rules), 0,
 	'failure/restart retry completes the missing policy rule');
 cleanup(retry_runtime);
+
+// A producer may report success without changing the kernel. The persisted
+// operation remains at pre; if an external actor later creates the pending
+// target, that uncommitted post-state is a collision and authorizes nothing.
+let zero = new_runtime();
+zero.process.run = (request) => ({ code: 0, stdout: null, stderr: null });
+assert_throws(() => apply(zero, diff(retry_wanted, observe(zero))), 'INTERNAL');
+let zero_restart = new_runtime(), zero_pre = observe(zero_restart);
+assert_equal(zero_pre.ownership.transition_state, 'pre',
+	'reported success with zero kernel effect remains a retryable pre-state');
+assert_equal(system([ 'ip', '-4', 'route', 'replace', 'local', 'default', 'dev', 'lo',
+	'table', '100', 'proto', '242' ]), 0, 'test can create the pending target externally');
+let zero_collision_runtime = new_runtime(), zero_collision = observe(zero_collision_runtime);
+assert_equal(zero_collision.ownership.transition_state, 'post',
+	'external creation of a pending target is recognized as uncommitted post-state');
+assert_true(zero_collision.routes[0].ambiguous && !zero_collision.routes[0].owned,
+	'uncommitted post-state never authorizes the pending target');
+let zero_calls = length(zero_collision_runtime.process.calls);
+assert_throws(() => apply(zero_collision_runtime, diff(retry_wanted, zero_collision)), 'INTERNAL');
+assert_throws(() => cleanup(zero_collision_runtime), 'INTERNAL');
+assert_equal(length(zero_collision_runtime.process.calls), zero_calls,
+	'uncommitted post collision causes zero network mutation');
+assert_equal(system([ 'ip', '-4', 'route', 'del', 'local', 'default', 'dev', 'lo',
+	'table', '100', 'proto', '242' ]), 0, 'gate removes the external pending-target collision');
+let zero_retry = new_runtime();
+apply(zero_retry, diff(retry_wanted, observe(zero_retry)));
+cleanup(zero_retry);
 
 // Collision semantics: a canonical proto-242 tuple created without manifest
 // intent is ambiguous, and both apply and cleanup perform zero mutation.
@@ -126,6 +171,9 @@ assert_true(length(trim(raw('ip -4 route show table 100 proto 242').output)) > 0
 assert_equal(system([ 'ip', '-4', 'route', 'del', 'local', 'default', 'dev', 'lo',
 	'table', '100', 'proto', '242' ]), 0, 'gate removes its foreign collision explicitly');
 
-let final_state = observe(new_runtime());
-for (let item in [ ...final_state.routes, ...final_state.rules ])
-	assert_true(!item.owned, 'real cleanup leaves no MiClash-owned entry');
+// Leave one exact live state for the shell gate to remove through the same
+// routing-cleanup.uc entrypoint that package prerm invokes.
+let package_runtime = new_runtime();
+apply(package_runtime, diff(retry_wanted, observe(package_runtime)));
+assert_true(package_runtime.fs.lstat('/var/run/miclash/routing-ownership.json')?.type == 'file',
+	'package lifecycle gate starts with a live ownership manifest');

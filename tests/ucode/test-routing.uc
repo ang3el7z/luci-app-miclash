@@ -27,22 +27,81 @@ function pipe(value, status) {
 	};
 };
 function runtime(outputs) {
-	let calls = [], captures = [], filesystem = fakes.fs();
-	filesystem.mkdir('/var/run/miclash');
+	let calls = [], captures = [], filesystem = fakes.fs(), responses = outputs ?? {};
+	for (let path in [ '/var', '/var/run', '/var/run/miclash' ]) filesystem.mkdir(path);
 	filesystem.popen = (command, mode) => {
 		push(captures, command);
 		let logical = substr(command, 0, length(CAPTURE_PREFIX)) == CAPTURE_PREFIX
 			? substr(command, length(CAPTURE_PREFIX)) : command;
-		let reply = outputs?.[logical] ?? outputs?.[command] ?? '[]\n';
+		let reply = responses[logical] ?? responses[command] ?? '[]\n';
 		return type(reply) == 'object' ? pipe(reply.output ?? '', reply.status ?? 0) : pipe(reply);
 	};
+	function argument(args, name) {
+		for (let i = 0; i < length(args) - 1; i++) if (args[i] == name) return args[i + 1];
+		return null;
+	};
+	function mutate(request) {
+		let args = request.args ?? [], flag = args[0];
+		if (flag != '-4' && flag != '-6') return;
+		if (args[1] == 'route') {
+			let table = argument(args, 'table');
+			let key = 'ip -j ' + flag + ' route show table ' + table + ' 2>/dev/null';
+			if (args[2] == 'del') { responses[key] = '[]\n'; return; }
+			let kind = args[3] == 'local' ? 'local' : args[3] == 'unreachable' ? 'unreachable' : 'unicast';
+			let value = { type: kind, dst: 'default', table: int(table), protocol: 242 };
+			if (kind == 'local') value.dev = argument(args, 'dev');
+			else if (kind == 'unreachable') value.metric = int(argument(args, 'metric'));
+			else value.dev = argument(args, 'dev');
+			responses[key] = sprintf('[%J]\n', value);
+		}
+		else if (args[1] == 'rule') {
+			let key = 'ip -j ' + flag + ' rule show 2>/dev/null';
+			let existing = [];
+			try { existing = json(type(responses[key]) == 'string' ? responses[key] : '[]'); }
+			catch (error) {}
+			if (args[2] == 'del') {
+				let retained = [], priority = int(argument(args, 'pref')),
+					table = int(argument(args, 'table'));
+				for (let rule in existing)
+					if (rule.priority != priority || rule.table != table) push(retained, rule);
+				responses[key] = sprintf('%J\n', retained);
+				return;
+			}
+			let mark_mask = split(argument(args, 'fwmark'), '/');
+			push(existing, { priority: int(argument(args, 'pref')),
+				src: 'all', fwmark: mark_mask[0], fwmask: mark_mask[1],
+				table: int(argument(args, 'table')), protocol: 242 });
+			responses[key] = sprintf('%J\n', existing);
+		}
+	};
 	let value = {
-		process: { calls, run: (request) => { push(calls, request); return { code: 0, stdout: 'untrusted' }; } },
+		process: { calls, run: (request) => { push(calls, request); mutate(request); return { code: 0, stdout: 'untrusted' }; } },
 		fs: filesystem,
 		digest: fakes.digest(filesystem),
 		clock: fakes.clock(1000),
 		paths: { run: '/var/run/miclash' },
 		captures
+	};
+	value.seed_kernel = (routes, rules) => {
+		for (let item in routes ?? []) {
+			let flag = item.family == 'ipv4' ? '-4' : '-6';
+			let encoded = { type: item.kind, dst: 'default', table: item.table, protocol: 242 };
+			if (item.kind == 'unreachable') encoded.metric = item.metric;
+			else encoded.dev = item.device;
+			responses['ip -j ' + flag + ' route show table ' + item.table + ' 2>/dev/null'] =
+				sprintf('[%J]\n', encoded);
+		}
+		for (let item in rules ?? []) {
+			let flag = item.family == 'ipv4' ? '-4' : '-6';
+			let key = 'ip -j ' + flag + ' rule show 2>/dev/null', existing = [];
+			try { existing = json(type(responses[key]) == 'string' ? responses[key] : '[]'); }
+			catch (error) {}
+			push(existing, {
+				priority: item.priority, src: 'all', fwmark: item.mark, fwmask: item.mask,
+				table: item.table, protocol: 242
+			});
+			responses[key] = sprintf('%J\n', existing);
+		}
 	};
 	return value;
 };
@@ -65,10 +124,13 @@ function canonical_rule(item) {
 	return { family: item.family, priority: item.priority, mark: item.mark,
 		mask: item.mask, table: item.table };
 };
-function manifest(routes, rules) {
+function manifest(routes, rules, transition) {
 	return sprintf('%J\n', {
-		version: 1, owner: 'miclash', protocol: 242,
-		routes: map(routes ?? [], canonical_route), rules: map(rules ?? [], canonical_rule)
+		version: 2, owner: 'miclash', protocol: 242,
+		committed: {
+			routes: map(routes ?? [], canonical_route), rules: map(rules ?? [], canonical_rule)
+		},
+		transition: transition ?? null
 	});
 };
 function state(routes, rules) {
@@ -79,7 +141,8 @@ function state(routes, rules) {
 		routes: routes ?? [], rules: rules ?? [], interfaces: { 'clash-tun': false },
 		ownership: {
 			trusted: true,
-			routes: owned_routes, rules: owned_rules
+			committed: { routes: owned_routes, rules: owned_rules },
+			transition: null
 		}
 	};
 };
@@ -90,6 +153,7 @@ function persistent_runtime(outputs, contents) {
 };
 function seed_manifest(value, routes, rules) {
 	value.fs.writefile(MANIFEST_PATH, manifest(routes, rules));
+	value.seed_kernel(routes, rules);
 	return value;
 };
 
@@ -199,7 +263,7 @@ let mismatched_before_runtime = persistent_runtime(null, {
 	[MANIFEST_PATH]: manifest(tun_down.routes, tun_down.rules)
 });
 let prior_manifest = mismatched_before_runtime.fs.readfile(MANIFEST_PATH);
-assert_throws(() => apply(mismatched_before_runtime, base_external_plan), 'INVALID_ARGUMENT');
+assert_throws(() => apply(mismatched_before_runtime, base_external_plan), 'INTERNAL');
 assert_equal(length(mismatched_before_runtime.process.calls), 0,
 	'an external plan cannot mutate when its before-set mismatches durable ownership');
 assert_equal(mismatched_before_runtime.fs.readfile(MANIFEST_PATH), prior_manifest,
@@ -215,8 +279,8 @@ assert_true(length(diff(tproxy, shadowed_conflict).conflicts) == 2,
 	'an exact foreign satisfier cannot hide another reserved conflict');
 
 let repair = diff(tun_up, state([ { ...tun_down.routes[0], owned: true } ], tun_down.rules));
-assert_equal(length(repair.remove_routes), 1,
-	'a same-table route type transition retains exact old-route deletion after replacement');
+assert_equal(length(repair.remove_routes), 0,
+	'a same-table route type transition is one verified replace without a stale old-route delete');
 let repaired = with_monitor(seed_manifest(runtime(), [ tun_down.routes[0] ], tun_down.rules), true);
 apply(repaired, repair);
 assert_equal(repaired.process.calls[0].args[1], 'route', 'route table is prepared before policy rules');
@@ -363,9 +427,12 @@ assert_true(manifested.ownership.trusted && manifested.routes[0].owned && manife
 let openwrt_manifest_runtime = persistent_runtime(json_outputs, {
 	[MANIFEST_PATH]: manifest(tproxy.routes, tproxy.rules)
 });
+for (let path in [ '/tmp', '/tmp/run', '/tmp/run/miclash' ]) openwrt_manifest_runtime.fs.mkdir(path);
+openwrt_manifest_runtime.fs.set_mode('/tmp', 0o1777);
 let fake_realpath = openwrt_manifest_runtime.fs.realpath;
 openwrt_manifest_runtime.fs.realpath = (path) => {
 	let resolved = fake_realpath(path);
+	if (resolved == '/var/run/miclash') return '/tmp/run/miclash';
 	return resolved == MANIFEST_PATH ? '/tmp/run/miclash/routing-ownership.json' : resolved;
 };
 assert_true(observe(openwrt_manifest_runtime).ownership.trusted,
@@ -383,35 +450,37 @@ let empty_outputs = { ...json_outputs,
 	'ip -j -4 rule show 2>/dev/null': '[]\n',
 	'ip -j -4 route show table 100 2>/dev/null': '[]\n'
 };
-let persistence_runtime = persistent_runtime(empty_outputs);
+let persistence_runtime = persistent_runtime({ ...empty_outputs });
+let persistence_run = persistence_runtime.process.run;
 persistence_runtime.process.run = (request) => {
 	assert_true(type(persistence_runtime.fs.readfile(MANIFEST_PATH)) == 'string',
 		'atomic ownership intent exists before the first kernel mutation');
-	push(persistence_runtime.process.calls, request);
-	return { code: 0 };
+	return persistence_run(request);
 };
 apply(persistence_runtime, diff(tproxy, observe(persistence_runtime)));
 assert_equal(persistence_runtime.fs.readfile(MANIFEST_PATH), manifest(tproxy.routes, tproxy.rules),
 	'success collapses the persistent transition journal to the exact final ownership tuples');
 
-let partial_runtime = persistent_runtime(empty_outputs);
+let partial_runtime = persistent_runtime({ ...empty_outputs });
 partial_runtime.process.run = (request) => {
 	push(partial_runtime.process.calls, request);
 	return { code: 1 };
 };
 assert_throws(() => apply(partial_runtime, diff(tproxy, observe(partial_runtime))), 'INTERNAL');
-assert_equal(partial_runtime.fs.readfile(MANIFEST_PATH), manifest(tproxy.routes, tproxy.rules),
-	'a failed first mutation leaves exact durable intent for safe restart recovery');
-let route_only_outputs = { ...empty_outputs,
-	'ip -j -4 route show table 100 2>/dev/null':
-		'[{"type":"local","dst":"default","dev":"lo","table":100,"protocol":242}]\n'
-};
-let restart_runtime = persistent_runtime(route_only_outputs, {
+let partial_doc = json(partial_runtime.fs.readfile(MANIFEST_PATH));
+assert_equal(encoded(partial_doc.committed), encoded({ routes: [], rules: [] }),
+	'a failed pre-state command never advances committed ownership');
+assert_true(partial_doc.transition.action == 'replace' && !length(partial_doc.transition.pre),
+	'a failed first mutation retains one exact retryable pre-state operation');
+let restart_runtime = persistent_runtime({ ...empty_outputs }, {
 	[MANIFEST_PATH]: partial_runtime.fs.readfile(MANIFEST_PATH)
 });
 let restarted = observe(restart_runtime);
-assert_true(restarted.routes[0].owned && !restarted.routes[0].ambiguous,
-	'a daemon restart can recover a partial mutation only through the durable exact manifest');
+assert_equal(restarted.ownership.transition_state, 'pre',
+	'a daemon restart may retry only the exact persisted pre-state operation');
+apply(restart_runtime, diff(tproxy, restarted));
+assert_true(observe(restart_runtime).routes[0].owned,
+	'a verified pre-state retry advances committed only after post-state proof');
 assert_true(index(encoded(observed_runtime.process.calls), 'untrusted') < 0,
 	'observation never relies on runtime.process.run stdout');
 assert_equal(encoded(observed_runtime.captures),
@@ -604,9 +673,9 @@ let foreign_runtime = runtime();
 cleanup(foreign_runtime, foreign_state);
 assert_equal(length(foreign_runtime.process.calls), 0, 'cleanup never removes foreign lookalikes');
 let forged_cleanup_runtime = runtime();
-assert_throws(() => cleanup(forged_cleanup_runtime, owned_state), 'INVALID_ARGUMENT');
+cleanup(forged_cleanup_runtime, owned_state);
 assert_equal(length(forged_cleanup_runtime.process.calls), 0,
-	'caller-supplied owned flags cannot authorize cleanup without the verified manifest');
+	'caller-supplied owned flags are ignored and cannot authorize cleanup without the verified manifest');
 
 let oversized = runtime();
 let too_large = '';

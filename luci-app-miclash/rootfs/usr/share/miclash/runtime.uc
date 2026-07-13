@@ -74,6 +74,8 @@ function fs_adapter() {
 		readfile: (path) => fs.readfile(path),
 		writefile: (path, data) => fs.writefile(path, data),
 		open: (path, mode, perm) => fs.open(path, mode, perm),
+		read: (handle, amount) => handle.read(amount),
+		fstat: (handle) => fs.stat('/proc/self/fd/' + handle.fileno()),
 		write: (handle, data) => handle.write(data),
 		flush: (handle) => {
 			let flushed = handle.flush();
