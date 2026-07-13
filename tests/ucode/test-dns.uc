@@ -18,7 +18,8 @@ function snapshot(server, cachesize, noresolv) {
 function document(original, preexisting, state, transition) {
 	return sprintf('%J\n', {
 		version: 1, owner: 'miclash', section: 'main', original,
-		target_preexisting: preexisting, state, transition: transition ?? null
+		target_preexisting: preexisting, state, transition: transition ?? null,
+		clean: state == 'clean' ? original : null
 	});
 };
 function runtime(options) {
@@ -168,6 +169,9 @@ assert_true(package_result.clean && package_cleanup.fs.lstat(MANIFEST)?.type == 
 	'package cleanup retains a clean proof');
 assert_equal(json(package_cleanup.fs.files[MANIFEST]).state, 'clean',
 	'package proof is an exact clean tombstone');
+package_cleanup.uci_fake.values.dhcp.main.cachesize = '77';
+assert_throws(() => cleanup(package_cleanup), 'CORRUPT_STATE',
+	'stale package clean proof is refused after UCI drift');
 
 let ambiguous = runtime({ uci: { dhcp: {
 	main: { '.type': 'dnsmasq', server: [ TARGET ], cachesize: '0', noresolv: '1' }
@@ -263,6 +267,67 @@ assert_equal(json(retry_cleanup_unlink.fs.files[MANIFEST]).state, 'clean',
 	'clean tombstone survives unlink failure');
 assert_true(cleanup(retry_cleanup_unlink).clean && retry_cleanup_unlink.fs.lstat(MANIFEST) == null,
 	'ordinary cleanup retries the terminal tombstone unlink idempotently');
+
+let duplicate_target = runtime();
+apply(duplicate_target, desired(observe(duplicate_target)));
+push(duplicate_target.uci_fake.values.dhcp.main.server, TARGET);
+assert_throws(() => cleanup(duplicate_target), 'CORRUPT_STATE',
+	'cleanup refuses duplicate target occurrences when MiClash added exactly one');
+let moved_target = runtime({ uci: { dhcp: {
+	main: { '.type': 'dnsmasq', server: [ '1.1.1.1', '9.9.9.9' ], cachesize: '1000' }
+} } });
+apply(moved_target, desired(observe(moved_target)));
+moved_target.uci_fake.values.dhcp.main.server = [ TARGET, '1.1.1.1', '9.9.9.9' ];
+assert_throws(() => cleanup(moved_target), 'CORRUPT_STATE',
+	'cleanup refuses target reordering that loses the appended ownership position');
+let foreign_server = runtime();
+apply(foreign_server, desired(observe(foreign_server)));
+push(foreign_server.uci_fake.values.dhcp.main.server, '9.9.9.9');
+assert_true(cleanup(foreign_server).clean, 'cleanup accepts an appended foreign non-target server');
+assert_equal(encoded(foreign_server.uci_fake.cursor().get_all('dhcp', 'main').server),
+	encoded([ '1.1.1.1', '9.9.9.9' ]), 'cleanup preserves foreign non-target servers');
+
+let ambiguous_legacy = runtime({ uci: { dhcp: {
+	main: { '.type': 'dnsmasq', server: [ TARGET ], cachesize: '0', noresolv: '1' }
+} } });
+ambiguous_legacy.fs.mkdir('/opt'); ambiguous_legacy.fs.mkdir('/opt/clash');
+ambiguous_legacy.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=\nNORESOLV=\n');
+assert_throws(() => recover(ambiguous_legacy, 'active'), 'CORRUPT_STATE',
+	'blank legacy scalars cannot prove whether the target preexisted');
+assert_true(ambiguous_legacy.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
+	'ambiguous legacy input is retained');
+
+let cursor_race = runtime();
+cursor_race.uci_fake.on_cursor = (calls) => {
+	if (calls == 4) cursor_race.uci_fake.values.dhcp.main.cachesize = '77';
+};
+assert_throws(() => apply(cursor_race, desired(observe(cursor_race))), 'CORRUPT_STATE',
+	'the committing cursor refuses an external commit after the previous observation');
+assert_equal(cursor_race.uci_fake.values.dhcp.main.cachesize, '77',
+	'same-cursor freshness refusal preserves the external value');
+
+function assert_crafted_plan_refused(mutator, message) {
+	let value = runtime(), plan = desired(observe(value));
+	mutator(plan);
+	assert_throws(() => apply(value, plan), 'INVALID_ARGUMENT', message);
+	assert_true(value.fs.lstat(MANIFEST) == null, message + ' before journaling');
+};
+assert_crafted_plan_refused((plan) => plan.after.cachesize.value = '55',
+	'crafted apply after snapshot is refused');
+assert_crafted_plan_refused((plan) => plan.original.cachesize.value = '55',
+	'crafted original ownership snapshot is refused');
+assert_crafted_plan_refused((plan) => plan.target_preexisting = true,
+	'crafted target ownership flag is refused');
+
+for (let partial in [
+	{ server: [ TARGET ], cachesize: '1000' },
+	{ server: [ '1.1.1.1' ], cachesize: '0' },
+	{ server: [ '1.1.1.1' ], cachesize: '1000', noresolv: '1' }
+]) {
+	let partial_runtime = runtime({ uci: { dhcp: { main: { '.type': 'dnsmasq', ...partial } } } });
+	assert_throws(() => cleanup(partial_runtime), 'CORRUPT_STATE',
+		'manifest-absent partial MiClash DNS signature is ambiguous');
+}
 
 let barrier_apply = runtime();
 barrier_apply.fs.mkdir('/var/run/miclash/package-removal');

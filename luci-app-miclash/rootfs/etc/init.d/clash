@@ -193,7 +193,7 @@ dns_control() {
 apply_firewall_rules() {
 	package_removal_active && return 1
 	if [ -f "$CLASH_RULES" ]; then
-		if "$CLASH_RULES" start; then
+		if "$CLASH_RULES" start true; then
 			msg "Firewall rules applied"
 			return 0
 		else
@@ -208,10 +208,11 @@ apply_firewall_rules() {
 
 # Function to remove firewall rules
 remove_firewall_rules() {
-	local preserve="${1:-false}"
+	local package_mode="${1:-false}"
+	local preserve_guard="${2:-false}"
 	if [ -f "$CLASH_RULES" ]; then
-		if { [ "$preserve" = true ] && "$CLASH_RULES" package_cleanup; } || \
-		   { [ "$preserve" != true ] && "$CLASH_RULES" stop; }; then
+		if { [ "$package_mode" = true ] && "$CLASH_RULES" package_cleanup; } || \
+		   { [ "$package_mode" != true ] && "$CLASH_RULES" stop false "$preserve_guard"; }; then
 			msg "Firewall rules removed"
 		else
 			msg "ERROR: Failed to remove firewall rules"
@@ -221,14 +222,31 @@ remove_firewall_rules() {
 	return 0
 }
 
+establish_guard_rules() {
+	if [ -f "$CLASH_RULES" ]; then
+		if "$CLASH_RULES" guard_start; then
+			msg "Client forwarding guard established"
+			return 0
+		fi
+		msg "ERROR: Failed to establish client forwarding guard"
+		return 1
+	fi
+	msg "ERROR: Clash rules script missing; cannot establish client forwarding guard"
+	return 1
+}
+
 refresh_guard_rules() {
 	if [ -f "$CLASH_RULES" ]; then
 		if "$CLASH_RULES" guard_refresh; then
 			msg "Client forwarding guard refreshed"
+			return 0
 		else
-			msg "WARNING: Failed to refresh client forwarding guard"
+			msg "ERROR: Failed to refresh client forwarding guard"
+			return 1
 		fi
 	fi
+	msg "ERROR: Clash rules script missing; cannot refresh client forwarding guard"
+	return 1
 }
 
 start_service_locked() {
@@ -244,8 +262,9 @@ start_service_locked() {
 
 	msg "Starting Clash service..."
 
-	# Apply or remove the fail-closed guard before any expensive startup work.
-	refresh_guard_rules
+	# Force fail-closed Guard before any firewall or DNS transition. Its final
+	# enabled/disabled policy is reconciled only after the service is complete.
+	establish_guard_rules || return 1
 	restore_upgrade_config_backup || return 1
 
 	# Check the required files
@@ -277,7 +296,7 @@ start_service_locked() {
 	# Set up DNS — on failure, roll back the firewall rules we just applied.
 	dns_control apply || {
 		msg "ERROR: Failed to configure DNS, rolling back firewall rules"
-		remove_firewall_rules
+		remove_firewall_rules false true
 		return 1
 	}
 
@@ -290,6 +309,8 @@ start_service_locked() {
 	procd_set_param file "$CLASH_DIR/config.yaml"
 	procd_close_instance
 
+	refresh_guard_rules || return 1
+
 	msg "Clash service started successfully"
 }
 
@@ -297,15 +318,19 @@ stop_service_locked() {
 	msg "Stopping Clash service..."
 	local preserve=false
 	package_removal_active && preserve=true
+	establish_guard_rules || return 1
 
-	# Remove firewall rules
-	remove_firewall_rules "$preserve" || return 1
-
-	# Keep the client forwarding guard active only when enabled.
-	[ "$preserve" = true ] || refresh_guard_rules || return 1
+	# Keep Guard forced across firewall and DNS cleanup. Package removal owns its
+	# DNS transaction separately and intentionally leaves Guard in place.
+	remove_firewall_rules "$preserve" true || return 1
+	if [ "$preserve" = true ]; then
+		msg "Clash service stopped for package removal with Guard preserved"
+		return 0
+	fi
 
 	# Restore DNS settings
 	dns_control cleanup || return 1
+	refresh_guard_rules || return 1
 
 	msg "Clash service stopped"
 }
@@ -330,7 +355,8 @@ delete_locked() {
 
 package_cleanup_locked() {
 	package_removal_active || return 1
-	remove_firewall_rules true || return 1
+	establish_guard_rules || return 1
+	remove_firewall_rules true true || return 1
 	return 0
 }
 

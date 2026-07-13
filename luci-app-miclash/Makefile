@@ -274,7 +274,8 @@ define Package/$(PKG_NAME)/postrm
 					grep -Eq '"version"[[:space:]]*:[[:space:]]*1' "$$1" && \
 					grep -Eq '"owner"[[:space:]]*:[[:space:]]*"miclash"' "$$1" && \
 					grep -Eq '"state"[[:space:]]*:[[:space:]]*"clean"' "$$1" && \
-					grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' "$$1"
+					grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' "$$1" && \
+					grep -Eq '"clean"[[:space:]]*:[[:space:]]*\{' "$$1"
 			}
 
 			finish_release_cleanup() {
@@ -297,12 +298,14 @@ define Package/$(PKG_NAME)/postrm
 							*) return 1 ;;
 						esac
 					done
+					if [ ! -e "$$RELEASE_DONE" ] && [ ! -L "$$RELEASE_DONE" ]; then
+						# Commit the durable terminal proof before any fallible local
+						# debris deletion. A retry can then finish from RELEASE_DONE.
+						mv "$$RELEASE_CLEANUP/complete" "$$RELEASE_DONE" || return 1
+					fi
 					rm -f "$$RELEASE_CLEANUP/pending" "$$RELEASE_CLEANUP/helper" \
 						"$$RELEASE_CLEANUP/barrier-complete.hold" \
 						"$$RELEASE_CLEANUP/dns-ownership.json" || return 1
-					if [ ! -e "$$RELEASE_DONE" ] && [ ! -L "$$RELEASE_DONE" ]; then
-						mv "$$RELEASE_CLEANUP/complete" "$$RELEASE_DONE" || return 1
-					fi
 					rmdir "$$RELEASE_CLEANUP" || return 1
 				fi
 				valid_release_proof "$$RELEASE_DONE"

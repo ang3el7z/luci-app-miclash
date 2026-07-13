@@ -133,6 +133,10 @@ prepare_release_state() {
 }
 
 protect_dns_proof() {
+	# Firewall cleanup runs after the first DNS cleanup and may take arbitrary
+	# time. Re-enter the transactional owner under the same package lease so the
+	# exact clean snapshot is freshly verified immediately before export.
+	run_dns_cleanup || return 1
 	if [ -e "$DNS_MANIFEST" ] || [ -L "$DNS_MANIFEST" ]; then
 		[ ! -L "$DNS_MANIFEST" ] && [ -f "$DNS_MANIFEST" ] || return 1
 		[ "$(stat -c '%u:%a' "$DNS_MANIFEST" 2>/dev/null)" = 0:600 ] || return 1
@@ -146,6 +150,7 @@ protect_dns_proof() {
 	grep -Eq '"owner"[[:space:]]*:[[:space:]]*"miclash"' "$RELEASE_DIR/dns-ownership.json" || return 1
 	grep -Eq '"state"[[:space:]]*:[[:space:]]*"clean"' "$RELEASE_DIR/dns-ownership.json" || return 1
 	grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' "$RELEASE_DIR/dns-ownership.json" || return 1
+	grep -Eq '"clean"[[:space:]]*:[[:space:]]*\{' "$RELEASE_DIR/dns-ownership.json" || return 1
 	[ ! -e "$DNS_MANIFEST" ] && [ ! -L "$DNS_MANIFEST" ] && \
 		[ ! -e "$DNS_LEGACY" ] && [ ! -L "$DNS_LEGACY" ]
 }

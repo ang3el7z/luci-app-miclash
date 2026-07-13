@@ -55,7 +55,11 @@ case "$*" in
 		echo dns-cleanup >> "$MICLASH_PACKAGE_TEST_LOG"
 		[ -f /etc/miclash/dns-ownership.json ]
 		[ ! -f "${MICLASH_PACKAGE_TEST_LOG}.fail-dns" ] || exit 1
-		printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"clean","transition":null}' > /etc/miclash/dns-ownership.json
+		if [ -f "${MICLASH_PACKAGE_TEST_LOG}.fail-dns-export" ] &&
+		   [ "$(grep -c '^dns-cleanup$' "$MICLASH_PACKAGE_TEST_LOG")" -gt 1 ]; then
+			exit 1
+		fi
+		printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"clean","transition":null,"clean":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}}}' > /etc/miclash/dns-ownership.json
 		chmod 0600 /etc/miclash/dns-ownership.json
 		rm -f /opt/clash/.dns_backup
 		;;
@@ -125,12 +129,12 @@ reset_state() {
 	rm -rf /var/run/miclash/package-removal
 	rm -rf /var/run/miclash/package-removal-release
 	: > /var/run/miclash/routing-ownership.json
-	printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"active","transition":null}' > /etc/miclash/dns-ownership.json
+	printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"active","transition":null,"clean":null}' > /etc/miclash/dns-ownership.json
 	chmod 0600 /etc/miclash/dns-ownership.json
 	rm -f /opt/clash/.dns_backup
 	: > /var/run/miclash/guard-active
 	: > "$log"
-	rm -f "$log.fail-routing" "$log.fail-dns" "$log.fail-preserve" "$log.fail-guard" \
+	rm -f "$log.fail-routing" "$log.fail-dns" "$log.fail-dns-export" "$log.fail-preserve" "$log.fail-guard" \
 		"$log.fail-unlink" "$log.held-manifest" "$log.probes"
 	printf '%s\n' '*/30 * * * * /opt/clash/bin/clash-rules update >/dev/null 2>&1' > /etc/crontabs/root
 }
@@ -224,6 +228,17 @@ fi
 [ -f /var/run/miclash/routing-ownership.json ]
 [ -f /var/run/miclash/guard-active ]
 ! grep -Eq '^miclash-guard (remove|start)$' "$log"
+
+reset_state
+: > "$log.fail-dns-export"
+if /usr/share/miclash/package-remove; then
+	echo 'package removal exported a DNS proof without a fresh final verification' >&2
+	exit 1
+fi
+[ -f /etc/miclash/dns-ownership.json ]
+[ ! -e /var/run/miclash/package-removal-release/dns-ownership.json ]
+[ "$(grep -c '^dns-cleanup$' "$log")" -eq 2 ]
+[ -f /var/run/miclash/guard-active ]
 
 reset_state
 : > "$log.fail-unlink"

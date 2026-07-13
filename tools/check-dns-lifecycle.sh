@@ -48,7 +48,7 @@ grep -Fq '[ ! -e /opt/clash/.dns_backup ]' "$makefile"
 }
 
 mount --make-rprivate /
-for path in /etc/miclash /opt/clash /var/run/miclash /etc/init.d; do
+for path in /etc/miclash /opt/clash /var/run/miclash /etc/init.d /usr/share/miclash; do
 	mkdir -p "$path"
 	mount -t tmpfs -o mode=0755,size=2m miclash-dns-gate "$path"
 done
@@ -58,6 +58,8 @@ fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT INT TERM
 export MICLASH_DNS_GATE_STATE="$fixture/uci.json"
 export MICLASH_DNS_GATE_FAIL="$fixture/fail"
+export MICLASH_DNS_GATE_LOG="$fixture/lifecycle.log"
+export MICLASH_DNS_GATE_FIXTURE="$fixture"
 
 cat > "$fixture/uci.uc" <<'EOF'
 let fs = require('fs');
@@ -97,6 +99,8 @@ EOF
 
 cat > /etc/init.d/dnsmasq <<'EOF'
 #!/bin/sh
+printf '%s\n' "dnsmasq-${1:-}" >> "$MICLASH_DNS_GATE_LOG"
+[ -e /var/run/miclash/guard-active ] || exit 91
 case "${1:-}" in
 	restart) [ ! -e "$MICLASH_DNS_GATE_FAIL-restart" ] ;;
 	running) [ ! -e "$MICLASH_DNS_GATE_FAIL-running" ] ;;
@@ -106,6 +110,7 @@ EOF
 chmod 0700 /etc/init.d/dnsmasq
 
 module_dir="$(dirname -- "$UCODE_BIN")"
+export MICLASH_DNS_GATE_MODULE_DIR="$module_dir"
 run_control() {
 	"$UCODE_BIN" -L "$module_dir/*.so" -L "$fixture" \
 		-L "$repo_root/luci-app-miclash/rootfs/usr/share" "$control" "$1"
@@ -123,6 +128,16 @@ reset_state() {
 	: > /var/run/miclash/guard-active
 }
 assert_guard() { [ -f /var/run/miclash/guard-active ]; }
+assert_no_guard() { [ ! -e /var/run/miclash/guard-active ]; }
+assert_before() {
+	first="$(grep -n -m1 -F "$1" "$MICLASH_DNS_GATE_LOG" | cut -d: -f1)"
+	second="$(grep -n -m1 -F "$2" "$MICLASH_DNS_GATE_LOG" | cut -d: -f1)"
+	[ -n "$first" ] && [ -n "$second" ] && [ "$first" -lt "$second" ] || {
+		echo "lifecycle order violation: $1 must precede $2" >&2
+		cat "$MICLASH_DNS_GATE_LOG" >&2
+		exit 1
+	}
+}
 
 reset_state
 run_control apply
@@ -216,6 +231,150 @@ miclash_mutation_lock_leave
 grep -Eq '"state"[[:space:]]*:[[:space:]]*"clean"' /etc/miclash/dns-ownership.json
 grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' /etc/miclash/dns-ownership.json
 assert_guard
+
+# Execute the shipped init service entrypoints against stateful firewall, DNS,
+# procd and core shims. The shims reject any transition attempted without Guard.
+cp "$repo_root"/luci-app-miclash/rootfs/usr/share/miclash/*.uc /usr/share/miclash/
+cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh" /usr/share/miclash/
+mkdir -p /opt/clash/bin
+cat > "$fixture/ucode" <<'EOF'
+#!/bin/sh
+exec "$UCODE_BIN" -L "$MICLASH_DNS_GATE_MODULE_DIR/*.so" \
+	-L "$MICLASH_DNS_GATE_FIXTURE/*.uc" "$@" >> "$MICLASH_DNS_GATE_LOG.ucode" 2>&1
+EOF
+chmod 0700 "$fixture/ucode"
+cat > "$fixture/logger" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod 0700 "$fixture/logger"
+PATH="$fixture:$PATH"
+export PATH
+
+cat > /opt/clash/bin/clash <<'EOF'
+#!/bin/sh
+[ ! -e "$MICLASH_DNS_GATE_FAIL-core" ]
+EOF
+chmod 0700 /opt/clash/bin/clash
+cat > /opt/clash/bin/clash-rules <<'EOF'
+#!/bin/sh
+command="${1:-}"
+shift || true
+log() { printf '%s\n' "$1" >> "$MICLASH_DNS_GATE_LOG"; }
+require_guard() {
+	[ -e /var/run/miclash/guard-active ] || {
+		log "guard-missing-$command"
+		exit 91
+	}
+}
+case "$command" in
+	guard_start)
+		log guard-start
+		[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-start" ] || exit 1
+		: > /var/run/miclash/guard-active
+		;;
+	guard_refresh)
+		log guard-refresh
+		if [ -e "$MICLASH_DNS_GATE_FAIL-guard-refresh" ] ||
+		   { [ -e "$MICLASH_DNS_GATE_FAIL-guard-refresh-final" ] && [ -e /var/run/miclash/firewall-active ]; }; then
+			exit 1
+		fi
+		if [ -e "$MICLASH_DNS_GATE_FAIL-guard-desired-off" ]; then
+			rm -f /var/run/miclash/guard-active
+		else
+			: > /var/run/miclash/guard-active
+		fi
+		;;
+	start)
+		log "rules-start:${1:-}"
+		require_guard
+		[ "${1:-}" = true ] || exit 92
+		[ ! -e "$MICLASH_DNS_GATE_FAIL-firewall-start" ] || exit 1
+		: > /var/run/miclash/firewall-active
+		;;
+	stop)
+		log "rules-stop:${1:-}:${2:-}:${3:-}"
+		require_guard
+		[ "${2:-}" = true ] || exit 93
+		rm -f /var/run/miclash/firewall-active
+		[ ! -e "$MICLASH_DNS_GATE_FAIL-firewall-stop" ] || exit 1
+		;;
+	package_cleanup)
+		log rules-package-cleanup
+		require_guard
+		rm -f /var/run/miclash/firewall-active
+		;;
+	*) exit 94 ;;
+esac
+EOF
+chmod 0700 /opt/clash/bin/clash-rules
+printf '%s\n' 'mode: rule' > /opt/clash/config.yaml
+
+procd_open_instance() { printf '%s\n' procd-open >> "$MICLASH_DNS_GATE_LOG"; }
+procd_set_param() { :; }
+procd_close_instance() { printf '%s\n' procd-close >> "$MICLASH_DNS_GATE_LOG"; }
+run_init_start() ( . "$init"; start_service )
+run_init_stop() ( . "$init"; stop_service )
+reset_init_state() {
+	reset_state
+	rm -f /var/run/miclash/guard-active /var/run/miclash/firewall-active
+	: > "$MICLASH_DNS_GATE_LOG"
+}
+
+reset_init_state
+: > "$MICLASH_DNS_GATE_FAIL-guard-start"
+if run_init_start >/dev/null 2>&1; then
+	echo 'shipped init ignored Guard establishment failure' >&2; exit 1
+fi
+[ ! -e /var/run/miclash/firewall-active ]
+[ ! -e /etc/miclash/dns-ownership.json ]
+
+reset_init_state
+: > "$MICLASH_DNS_GATE_FAIL-guard-desired-off"
+run_init_start || { cat "$MICLASH_DNS_GATE_LOG.ucode" >&2; exit 1; }
+assert_no_guard
+assert_before guard-start rules-start:true
+assert_before rules-start:true dnsmasq-restart
+assert_before dnsmasq-running guard-refresh
+
+reset_init_state
+: > "$MICLASH_DNS_GATE_FAIL-restart"
+if run_init_start >/dev/null 2>&1; then
+	echo 'shipped init ignored DNS failure' >&2; exit 1
+fi
+assert_guard
+[ ! -e /var/run/miclash/firewall-active ]
+assert_before guard-start rules-start:true
+assert_before dnsmasq-restart rules-stop:false:true:
+
+reset_init_state
+: > "$MICLASH_DNS_GATE_FAIL-guard-refresh-final"
+if run_init_start >/dev/null 2>&1; then
+	echo 'shipped init ignored final Guard refresh failure' >&2; exit 1
+fi
+assert_guard
+[ -e /var/run/miclash/firewall-active ]
+
+reset_init_state
+run_init_start
+: > "$MICLASH_DNS_GATE_FAIL-guard-desired-off"
+: > "$MICLASH_DNS_GATE_LOG"
+run_init_stop
+assert_no_guard
+[ ! -e /var/run/miclash/firewall-active ]
+assert_before guard-start rules-stop:false:true:
+assert_before rules-stop:false:true: dnsmasq-restart
+assert_before dnsmasq-running guard-refresh
+
+reset_init_state
+run_init_start
+: > "$MICLASH_DNS_GATE_FAIL-restart"
+: > "$MICLASH_DNS_GATE_LOG"
+if run_init_stop >/dev/null 2>&1; then
+	echo 'shipped init ignored DNS cleanup failure' >&2; exit 1
+fi
+assert_guard
+[ ! -e /var/run/miclash/firewall-active ]
 
 UCODE_BIN="$UCODE_BIN" "$repo_root/tools/run-ucode-tests.sh" \
 	"$repo_root/tests/ucode/test-dns.uc"

@@ -3349,6 +3349,7 @@ strict_package_firewall_cleanup() {
 }
 
 start() {
+	local preserve_guard="${1:-false}"
     msg "Starting Clash rules script"
 
     # Check if config file exists before proceeding
@@ -3361,7 +3362,9 @@ start() {
     load_all_settings_once
     preflight_check_tun_stack
 
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+    if [ "$preserve_guard" = "true" ]; then
+		:
+    elif [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
         apply_guard_rules || {
             msg "ERROR: Failed to apply client forwarding guard"
             return 1
@@ -3530,10 +3533,10 @@ esac
 
 case "$1" in
     start)
-        start
+        start "${2:-false}"
         ;;
     stop)
-        stop
+        stop "${2:-false}" "${3:-false}" "${4:-false}"
         ;;
     restart)
         stop

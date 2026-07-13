@@ -359,6 +359,7 @@ export function uci(initial) {
 		cursor_calls: 0,
 		fail_set_at: null,
 		fail_commit: false,
+		on_cursor: null,
 		pending_changes: {},
 		calls: []
 	};
@@ -421,6 +422,7 @@ export function uci(initial) {
 
 	fake.cursor = () => {
 		fake.cursor_calls++;
+		if (type(fake.on_cursor) == 'function') fake.on_cursor(fake.cursor_calls);
 		return make_cursor();
 	};
 	let default_cursor = make_cursor();

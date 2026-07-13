@@ -25,6 +25,23 @@ function count(values, wanted) {
 	return result;
 };
 
+function owned_target_unambiguous(document, current) {
+	if (document.target_preexisting) return true;
+	if (count(current.server.value, TARGET) != 1) return false;
+	let target_index = -1;
+	for (let i = 0; i < length(current.server.value); i++)
+		if (current.server.value[i] == TARGET) target_index = i;
+	let offset = 0;
+	for (let original in document.original.server.value) {
+		let found = -1;
+		for (let i = offset; i < target_index; i++)
+			if (current.server.value[i] == original) { found = i; break; }
+		if (found < 0) return false;
+		offset = found + 1;
+	}
+	return true;
+};
+
 function option(value, list) {
 	if (value == null) return { present: false, value: list ? [] : null };
 	if (list) {
@@ -118,7 +135,7 @@ function secure_read(runtime, path, maximum, parents) {
 
 function validate_manifest(value) {
 	if (!exact_fields(value, { version: true, owner: true, section: true, original: true,
-	    target_preexisting: true, state: true, transition: true }) || value.version != 1 ||
+	    target_preexisting: true, state: true, transition: true, clean: true }) || value.version != 1 ||
 	    value.owner != 'miclash' || type(value.section) != 'string' || !length(value.section) ||
 	    type(value.target_preexisting) != 'bool' ||
 	    (value.state != 'active' && value.state != 'clean')) return null;
@@ -132,9 +149,11 @@ function validate_manifest(value) {
 		if (before == null || after == null) return null;
 		transition = { intent: value.transition.intent, before, after };
 	}
-	if (value.state == 'clean' && transition != null) return null;
+	let clean = value.clean == null ? null : validate_snapshot(value.clean);
+	if ((value.state == 'clean' && (transition != null || clean == null)) ||
+	    (value.state == 'active' && clean != null)) return null;
 	return { version: 1, owner: 'miclash', section: value.section, original,
-		target_preexisting: value.target_preexisting, state: value.state, transition };
+		target_preexisting: value.target_preexisting, state: value.state, transition, clean };
 };
 
 function load_manifest(runtime) {
@@ -169,8 +188,8 @@ function assert_mutation_allowed(runtime, package_cleanup) {
 	fail('BUSY');
 };
 
-function raw_observe(runtime) {
-	let cursor = runtime?.uci?.cursor?.();
+function raw_observe(runtime, supplied_cursor) {
+	let cursor = supplied_cursor ?? runtime?.uci?.cursor?.();
 	if (cursor == null) fail('INTERNAL');
 	let conflicts = [];
 	if (!empty_object(cursor.changes('dhcp'))) push(conflicts, 'PENDING_CHANGES');
@@ -193,6 +212,7 @@ export function observe(runtime) {
 		ownership = { trusted: true, status: 'trusted', state: document.state,
 			transition: document.transition, transition_state: null,
 			original: clone(document.original), target_preexisting: document.target_preexisting,
+			clean: clone(document.clean),
 			document: clone(document) };
 		if (result.section != document.section) push(result.conflicts, 'SECTION_IDENTITY');
 		if (document.transition != null && result.current != null) {
@@ -201,8 +221,8 @@ export function observe(runtime) {
 			else push(result.conflicts, 'THIRD_STATE');
 		}
 		else if (document.state == 'active' && result.current != null) {
-			if (!document.target_preexisting && count(result.current.server.value, TARGET) < 1)
-				push(result.conflicts, 'TARGET_MISSING');
+			if (!owned_target_unambiguous(document, result.current))
+				push(result.conflicts, 'TARGET_AMBIGUOUS');
 			if (!result.current.cachesize.present || result.current.cachesize.value != '0' ||
 			    !result.current.noresolv.present || result.current.noresolv.value != '1')
 				push(result.conflicts, 'SCALAR_DRIFT');
@@ -242,10 +262,11 @@ export function desired(observed) {
 		before: clone(observed.current), after, original, target_preexisting, authority_state };
 };
 
-function persist(runtime, section, original, target_preexisting, state, transition) {
+function persist(runtime, section, original, target_preexisting, state, transition, clean) {
 	assert_held(runtime, runtime.mutation_lock_lease);
 	write_json(runtime, MANIFEST_PATH, { version: 1, owner: 'miclash', section,
-		original: clone(original), target_preexisting, state, transition: clone(transition) }, 0o600);
+		original: clone(original), target_preexisting, state, transition: clone(transition),
+		clean: clone(clean) }, 0o600);
 };
 
 function set_option(cursor, section, name, value) {
@@ -255,8 +276,12 @@ function set_option(cursor, section, name, value) {
 	if (!value.present && ok != true && cursor.get('dhcp', section, name) != null) fail('INTERNAL');
 };
 
-function commit_snapshot(runtime, section, value) {
+function commit_snapshot(runtime, section, expected_before, value) {
 	let cursor = runtime.uci.cursor(), commit_started = false;
+	let same_cursor = raw_observe(runtime, cursor);
+	if (length(same_cursor.conflicts) || same_cursor.section != section ||
+	    !same(same_cursor.current, expected_before))
+		fail('CORRUPT_STATE');
 	try {
 		set_option(cursor, section, 'server', value.server);
 		set_option(cursor, section, 'cachesize', value.cachesize);
@@ -286,11 +311,20 @@ function restart_and_verify(runtime, section, expected) {
 };
 
 function exact_plan(plan, fresh) {
-	return plan?.version == 1 && plan.action == 'apply' && plan.section == fresh.section &&
-		same(plan.before, fresh.current) &&
-		((plan.authority_state == 'absent' && fresh.ownership.status == 'absent') ||
-		 (plan.authority_state == 'active' && fresh.ownership.trusted &&
-		  fresh.ownership.state == 'active' && fresh.ownership.transition == null));
+	let expected;
+	try { expected = desired(fresh); }
+	catch (error) { return false; }
+	return same(plan, expected);
+};
+
+function prove_clean(runtime, document) {
+	if (document?.state != 'clean' || document.transition != null || document.clean == null)
+		fail('CORRUPT_STATE');
+	let observed = raw_observe(runtime);
+	if (length(observed.conflicts) || observed.section != document.section ||
+	    !same(observed.current, document.clean))
+		fail('CORRUPT_STATE');
+	return true;
 };
 
 function finish_transition(runtime, document, intent) {
@@ -299,10 +333,12 @@ function finish_transition(runtime, document, intent) {
 	    (observed.ownership.transition_state != 'before' && observed.ownership.transition_state != 'after'))
 		fail('CORRUPT_STATE');
 	if (observed.ownership.transition_state == 'before')
-		commit_snapshot(runtime, document.section, transition.after);
+		commit_snapshot(runtime, document.section, transition.before, transition.after);
 	restart_and_verify(runtime, document.section, transition.after);
 	let state = intent == 'apply' ? 'active' : 'clean';
-	persist(runtime, document.section, document.original, document.target_preexisting, state, null);
+	persist(runtime, document.section, document.original, document.target_preexisting, state, null,
+		state == 'clean' ? transition.after : null);
+	if (state == 'clean') prove_clean(runtime, load_manifest(runtime).document);
 	return { changed: true, state };
 };
 
@@ -313,7 +349,7 @@ function apply_locked(runtime, plan) {
 	if (fresh.ownership.trusted && same(plan.before, plan.after))
 		return { changed: false, state: 'active' };
 	let transition = { intent: 'apply', before: clone(plan.before), after: clone(plan.after) };
-	persist(runtime, plan.section, plan.original, plan.target_preexisting, 'active', transition);
+	persist(runtime, plan.section, plan.original, plan.target_preexisting, 'active', transition, null);
 	let document = load_manifest(runtime).document;
 	return finish_transition(runtime, document, 'apply');
 };
@@ -331,7 +367,8 @@ function without_owned_target(values) {
 
 function cleanup_after(document, current) {
 	let after = clone(current);
-	if (!document.target_preexisting && count(after.server.value, TARGET) > 0) {
+	if (!document.target_preexisting) {
+		if (!owned_target_unambiguous(document, current)) fail('CORRUPT_STATE');
 		after.server.value = without_owned_target(after.server.value);
 		after.server.present = length(after.server.value) > 0 || document.original.server.present;
 	}
@@ -346,6 +383,7 @@ function secure_unlink_manifest(runtime) {
 	let loaded = load_manifest(runtime);
 	if (!loaded.trusted || loaded.document.state != 'clean' || loaded.document.transition != null)
 		fail('CORRUPT_STATE');
+	prove_clean(runtime, loaded.document);
 	if (runtime.fs.unlink(MANIFEST_PATH) != true || runtime.fs.lstat(MANIFEST_PATH) != null)
 		fail('INTERNAL');
 };
@@ -367,6 +405,7 @@ function migrate_legacy(runtime) {
 	if (captured.status != 'read') fail('CORRUPT_STATE');
 	let legacy = parse_legacy(captured.source);
 	if (legacy == null) fail('CORRUPT_STATE');
+	if (!legacy.cachesize.present && !legacy.noresolv.present) fail('CORRUPT_STATE');
 	let observed = raw_observe(runtime);
 	if (length(observed.conflicts) || observed.current == null ||
 	    count(observed.current.server.value, TARGET) < 1 ||
@@ -379,7 +418,7 @@ function migrate_legacy(runtime) {
 		let servers = without_owned_target(observed.current.server.value);
 		let original = { server: { present: length(servers) > 0, value: servers },
 			cachesize: legacy.cachesize, noresolv: legacy.noresolv };
-		persist(runtime, observed.section, original, false, 'active', null);
+		persist(runtime, observed.section, original, false, 'active', null, null);
 	}
 	else if (loaded.document.section != observed.section || loaded.document.state != 'active' ||
 	         loaded.document.transition != null || loaded.document.target_preexisting ||
@@ -406,6 +445,7 @@ function recover_locked(runtime, intent) {
 	let document = loaded.document;
 	if (document.transition == null) {
 		if (document.state != intent) fail('CORRUPT_STATE');
+		if (intent == 'clean') prove_clean(runtime, document);
 		return intent == 'clean' ? { clean: true, changed: false, state: 'clean' } :
 			{ changed: false, state: 'active' };
 	}
@@ -428,7 +468,11 @@ function cleanup_locked(runtime) {
 	let loaded = load_manifest(runtime);
 	if (loaded.status == 'absent') {
 		let observed = observe(runtime);
-		if (length(observed.conflicts)) fail('CORRUPT_STATE');
+		if (length(observed.conflicts) || observed.current == null ||
+		    count(observed.current.server.value, TARGET) > 0 ||
+		    (observed.current.cachesize.present && observed.current.cachesize.value == '0') ||
+		    (observed.current.noresolv.present && observed.current.noresolv.value == '1'))
+			fail('CORRUPT_STATE');
 		return { clean: true, changed: false };
 	}
 	if (!loaded.trusted) fail('CORRUPT_STATE');
@@ -438,6 +482,7 @@ function cleanup_locked(runtime) {
 		loaded = load_manifest(runtime);
 	}
 	if (loaded.document.state == 'clean') {
+		prove_clean(runtime, loaded.document);
 		if (!package_mode) secure_unlink_manifest(runtime);
 		return { clean: true, changed: false };
 	}
@@ -447,7 +492,7 @@ function cleanup_locked(runtime) {
 	let after = cleanup_after(loaded.document, raw.current);
 	let transition = { intent: 'cleanup', before: clone(raw.current), after };
 	persist(runtime, raw.section, loaded.document.original, loaded.document.target_preexisting,
-		'active', transition);
+		'active', transition, null);
 	finish_transition(runtime, load_manifest(runtime).document, 'cleanup');
 	if (!package_mode) secure_unlink_manifest(runtime);
 	return { clean: true, changed: !same(raw.current, after) };

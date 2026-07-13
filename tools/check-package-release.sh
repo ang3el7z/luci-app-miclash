@@ -56,6 +56,11 @@ cat > "$fixture/bin/rm" <<'EOF'
 state="$MICLASH_RELEASE_TEST_STATE"
 last=
 for item in "$@"; do last="$item"; done
+if [ -f "$state/fail-dns-proof-remove" ]; then
+	for item in "$@"; do
+		[ "$item" != /var/run/miclash/package-removal-release.cleanup/dns-ownership.json ] || exit 1
+	done
+fi
 if [ -f "$state/fail-hold-remove" ] &&
 	[ "$last" = /var/run/miclash/package-removal-release/barrier-complete.hold ]; then
 	exit 1
@@ -172,12 +177,12 @@ proof_retained() {
 }
 
 prepare() {
-	rm -rf "$BARRIER" "$RELEASE"
+	rm -rf "$BARRIER" "$RELEASE" "$RELEASE.cleanup" "$RELEASE.done"
 	mkdir "$BARRIER" "$RELEASE"
 	chmod 0700 "$BARRIER" "$RELEASE"
 	printf 'complete\n' > "$BARRIER/complete"
 	printf 'complete\n' > "$RELEASE/complete"
-	printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"clean","transition":null}' > "$RELEASE/dns-ownership.json"
+	printf '%s\n' '{"version":1,"owner":"miclash","section":"main","original":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}},"target_preexisting":false,"state":"clean","transition":null,"clean":{"server":{"present":false,"value":[]},"cachesize":{"present":false,"value":null},"noresolv":{"present":false,"value":null}}}' > "$RELEASE/dns-ownership.json"
 	cp "$helper" "$RELEASE/helper"
 	chmod 0600 "$BARRIER/complete" "$RELEASE/complete" "$RELEASE/dns-ownership.json"
 	chmod 0700 "$RELEASE/helper"
@@ -374,6 +379,24 @@ if case_enabled postrm-release-cleanup; then
 	umount "$RELEASE"
 	run_postrm
 	[ ! -e "$BARRIER" ] && [ ! -e "$RELEASE" ]
+fi
+
+if case_enabled postrm-dns-debris-retry; then
+	prepare
+	: > "$fixture/state/fail-dns-proof-remove"
+	if run_postrm; then
+		echo 'actual postrm ignored failed DNS proof debris deletion' >&2
+		exit 1
+	fi
+	[ -f "$RELEASE.done" ] && [ ! -e "$RELEASE.cleanup/complete" ] &&
+		[ -f "$RELEASE.cleanup/dns-ownership.json" ] || {
+		echo 'actual postrm did not durably commit completion before debris cleanup' >&2
+		exit 1
+	}
+	rm -f "$fixture/state/fail-dns-proof-remove"
+	run_postrm
+	[ ! -e "$BARRIER" ] && [ ! -e "$RELEASE" ] &&
+		[ ! -e "$RELEASE.cleanup" ] && [ ! -e "$RELEASE.done" ]
 fi
 
 if case_enabled postrm-nft-only-retry; then
