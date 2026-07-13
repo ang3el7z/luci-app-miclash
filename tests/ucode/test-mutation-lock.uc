@@ -49,6 +49,9 @@ blocked.fs.mkdir(BARRIER);
 blocked.fs.set_mode(BARRIER, 0o700);
 assert_throws(() => acquire(blocked, { barrier: 'normal', wait_ms: 0 }), 'BUSY');
 assert_equal(blocked.fs.lstat(LOCK), null, 'barrier precheck performs no lock mutation');
+assert_throws(() => acquire(blocked, { barrier: 'package', wait_ms: 0 }), 'BUSY');
+assert_equal(blocked.fs.lstat(LOCK), null,
+	'package-mode ucode without an exact inherited owner is participant-only');
 
 let shared = fakes.fs({
 	'/proc/sys/kernel/random/boot_id': BOOT + '\n',

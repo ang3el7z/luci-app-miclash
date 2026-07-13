@@ -23,6 +23,90 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Caller-controlled package mode is join-only. A retained barrier plus
+# MICLASH_MUTATION_LOCK_PACKAGE=1 must never authorize a fresh package owner.
+mkdir /var/run/miclash/package-removal
+chmod 0700 /var/run/miclash/package-removal
+set +e
+(
+	export MICLASH_MUTATION_LOCK_PACKAGE=1
+	unset MICLASH_MUTATION_LOCK_TOKEN
+	. "$helper"
+	miclash_mutation_lock_enter package 0
+) >/dev/null 2>&1
+forged_package_code=$?
+set -e
+if [ "$forged_package_code" -eq 0 ]; then
+	echo 'caller environment created a fresh package mutation owner' >&2
+	exit 1
+fi
+[ ! -e /var/run/miclash/mutation.lock ]
+set +e
+(
+	export MICLASH_MUTATION_LOCK_PACKAGE=1
+	MICLASH_MUTATION_LOCK_TOKEN='12345678-1234-1234-1234-123456789abc:999999:1:00000000000000000000000000000001'
+	export MICLASH_MUTATION_LOCK_TOKEN
+	. "$helper"
+	miclash_mutation_lock_enter package 0
+) >/dev/null 2>&1
+forged_token_code=$?
+set -e
+if [ "$forged_token_code" -eq 0 ]; then
+	echo 'forged package token bypassed the retained removal barrier' >&2
+	exit 1
+fi
+[ ! -e /var/run/miclash/mutation.lock ]
+
+# The internal owner API is reserved for package-remove. Its exact exported
+# token lets the ordinary rc.common/default_prerm service child join as a
+# participant while the package owner remains live.
+sed "s#/usr/share/miclash/mutation-lock.sh#$helper#g" \
+	"$repo_root/luci-app-miclash/rootfs/etc/init.d/clash" > "$work/clash-init"
+sed "s#/usr/share/miclash/mutation-lock.sh#$helper#g" \
+	"$repo_root/luci-app-miclash/rootfs/etc/init.d/miclash-guard" > "$work/guard-init"
+cat > "$work/default-prerm-child.sh" <<'DEFAULT_PRERM'
+#!/bin/sh
+set -eu
+. "$1"
+DEFAULT_PRERM_READY="$2/default-prerm.ready"
+stop_service_locked() {
+	miclash_mutation_lock_assert_held
+	[ "$MICLASH_MUTATION_LOCK_KIND" = participant ]
+	[ "$MICLASH_MUTATION_LOCK_TOKEN" = "$EXPECTED_PACKAGE_TOKEN" ]
+	printf '%s\n' participant > "$DEFAULT_PRERM_READY"
+}
+stop_service
+DEFAULT_PRERM
+chmod 0700 "$work/default-prerm-child.sh"
+cat > "$work/guard-child.sh" <<'GUARD_CHILD'
+#!/bin/sh
+set -eu
+. "$1"
+GUARD_READY="$2/guard.ready"
+remove_locked() {
+	miclash_mutation_lock_assert_held
+	[ "$MICLASH_MUTATION_LOCK_KIND" = participant ]
+	[ "$MICLASH_MUTATION_LOCK_TOKEN" = "$EXPECTED_PACKAGE_TOKEN" ]
+	printf '%s\n' participant > "$GUARD_READY"
+}
+remove
+GUARD_CHILD
+chmod 0700 "$work/guard-child.sh"
+(
+	. "$helper"
+	miclash_mutation_lock_enter_package_owner 0
+	EXPECTED_PACKAGE_TOKEN="$MICLASH_MUTATION_LOCK_TOKEN"
+	export EXPECTED_PACKAGE_TOKEN
+	"$work/default-prerm-child.sh" "$work/clash-init" "$work"
+	[ -s "$work/default-prerm.ready" ]
+	"$work/guard-child.sh" "$work/guard-init" "$work"
+	[ -s "$work/guard.ready" ]
+	miclash_mutation_lock_assert_held
+	miclash_mutation_lock_leave
+)
+[ ! -e /var/run/miclash/mutation.lock ]
+rmdir /var/run/miclash/package-removal
+
 cat > "$work/owner.sh" <<'OWNER'
 #!/bin/sh
 set -eu

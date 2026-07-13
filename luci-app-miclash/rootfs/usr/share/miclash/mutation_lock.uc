@@ -312,6 +312,8 @@ export function acquire(runtime, options) {
 			settle_takeover(runtime);
 			if (runtime.mutation_lock_token != null)
 				lease = join_owner(runtime, runtime.mutation_lock_token);
+			else if (mode == 'package')
+				lease = null;
 			else {
 				lease = create_owner(runtime);
 				if (lease == null && runtime.fs.lstat(TAKEOVER) != null) {

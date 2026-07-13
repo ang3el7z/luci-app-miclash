@@ -48,15 +48,32 @@ command="${1:-}"; shift || true
 case "$command:${1:-}" in
 	show:firewall)
 		[ ! -f "$state/fail-firewall-inventory" ] || exit 1
-		[ ! -f "$state/firewall-section" ] || echo "firewall.miclash='include'"
-		[ ! -f "$state/fail-firewall-verify" ] || [ -f "$state/firewall-section" ] || exit 1
+		if [ -f "$state/firewall-committed-section" ] && \
+			[ ! -f "$state/firewall-delete-pending" ]; then
+			echo "firewall.miclash='include'"
+		fi
+		[ ! -f "$state/fail-firewall-verify" ] || \
+			{ [ -f "$state/firewall-committed-section" ] && \
+			  [ ! -f "$state/firewall-delete-pending" ]; } || exit 1
 		;;
 	delete:firewall.miclash)
 		[ ! -f "$state/fail-firewall-delete" ] || exit 1
-		rm -f "$state/firewall-section"
+		: > "$state/firewall-delete-pending"
 		;;
 	commit:firewall)
-		[ ! -f "$state/fail-firewall-commit" ]
+		[ ! -f "$state/fail-firewall-commit" ] || exit 1
+		if [ -f "$state/firewall-delete-pending" ]; then
+			rm -f "$state/firewall-committed-section" \
+				"$state/firewall-delete-pending"
+		fi
+		: > "$state/firewall-commit-succeeded"
+		;;
+	changes:firewall)
+		[ ! -f "$state/fail-firewall-changes" ] || exit 1
+		[ ! -f "$state/firewall-delete-pending" ] || \
+			echo "-firewall.miclash"
+		[ ! -f "$state/firewall-extra-pending" ] || \
+			echo "firewall.foreign='include'"
 		;;
 	show:dhcp)
 		[ ! -f "$state/fail-dhcp-inventory" ] || exit 1
@@ -159,7 +176,7 @@ chmod 0700 /var/run/miclash/package-removal
 
 . /usr/share/miclash/mutation-lock.sh
 run_package_entrypoint() {
-	miclash_mutation_lock_enter package 1000 || return 1
+	miclash_mutation_lock_enter_package_owner 1000 || return 1
 	MICLASH_MUTATION_LOCK_PACKAGE=1
 	export MICLASH_MUTATION_LOCK_PACKAGE
 	"$@"
@@ -170,7 +187,7 @@ run_package_entrypoint() {
 
 reset_firewall() {
 	rm -f "$fixture/state"/*
-	: > "$fixture/state/firewall-section"
+	: > "$fixture/state/firewall-committed-section"
 	printf 'table inet clash { }\n' > "$fixture/state/nft-rules"
 	: > /var/etc/miclash.include
 }
@@ -178,7 +195,8 @@ reset_firewall() {
 PATH="$fixture/nftbin:$fixture/bin:/usr/bin:/bin"
 export PATH
 for failure in fail-nft-inventory fail-nft-delete fail-nft-verify \
-	fail-firewall-inventory fail-firewall-delete fail-firewall-commit fail-firewall-verify; do
+	fail-firewall-inventory fail-firewall-delete fail-firewall-commit \
+	fail-firewall-changes firewall-extra-pending fail-firewall-verify; do
 	reset_firewall
 	: > "$fixture/state/$failure"
 	if run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup >/dev/null 2>&1; then
@@ -189,6 +207,11 @@ for failure in fail-nft-inventory fail-nft-delete fail-nft-verify \
 	[ -f /var/run/miclash/guard-active ]
 	rm -f "$fixture/state/$failure"
 	run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup
+	if [ -e "$fixture/state/firewall-committed-section" ] || \
+		[ -e "$fixture/state/firewall-delete-pending" ]; then
+		echo 'firewall retry accepted overlay-only absence without committing persistent state' >&2
+		exit 1
+	fi
 done
 
 PATH="$fixture/iptbin:$fixture/bin:/usr/bin:/bin"

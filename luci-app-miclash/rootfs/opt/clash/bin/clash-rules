@@ -3307,7 +3307,7 @@ strict_package_firewall_cleanup() {
 	local before_nft="/tmp/miclash-nft-before.$$" after_nft="/tmp/miclash-nft-after.$$"
 	local before_iptables="/tmp/miclash-iptables-before.$$" after_iptables="/tmp/miclash-iptables-after.$$"
 	local firewall_before="/tmp/miclash-firewall-before.$$" firewall_after="/tmp/miclash-firewall-after.$$"
-	local have_backend=false
+	local firewall_changes="" have_backend=false
 
 	if hash nft 2>/dev/null; then
 		have_backend=true
@@ -3329,8 +3329,12 @@ strict_package_firewall_cleanup() {
 	uci -q show firewall > "$firewall_before" 2>/dev/null || return 1
 	if grep -q '^firewall\.miclash=' "$firewall_before"; then
 		uci -q delete firewall.miclash || return 1
-		uci -q commit firewall || return 1
 	fi
+	# Commit even when the overlay already hides the section. A previous failed
+	# commit may have left a pending delete that `uci show` omits.
+	uci -q commit firewall || return 1
+	firewall_changes=$(uci -q changes firewall 2>/dev/null) || return 1
+	[ -z "$firewall_changes" ] || return 1
 	uci -q show firewall > "$firewall_after" 2>/dev/null || return 1
 	! grep -q '^firewall\.miclash=' "$firewall_after" || return 1
 	if [ -e /var/etc/miclash.include ] || [ -L /var/etc/miclash.include ]; then

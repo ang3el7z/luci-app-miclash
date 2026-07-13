@@ -130,6 +130,39 @@ line_of() { grep -n -m1 "^$1$" "$log" | cut -d: -f1; }
 [ "$(line_of 'clash package_cleanup')" -lt "$(line_of 'miclash-guard remove')" ]
 [ "$(cat "$log.probes")" -eq 0 ]
 
+# Stale legacy PID-only worker locks are not identity proof. Package removal
+# must never signal an unrelated live process whose PID was recycled into one
+# of these records; the shared mutation lease already provides quiescence.
+start_unrelated_process() {
+	marker="$1"
+	release="$2"
+	sh -c 'trap '\''printf TERM > "$1"'\'' TERM; while [ ! -e "$2" ]; do sleep 0.02; done' \
+		sh "$marker" "$release" &
+	unrelated_pid=$!
+}
+
+reset_state
+rm -f "$log.unrelated-release"
+start_unrelated_process "$log.update-unrelated-signalled" "$log.unrelated-release"
+update_unrelated_pid="$unrelated_pid"
+start_unrelated_process "$log.autoupdate-unrelated-signalled" "$log.unrelated-release"
+autoupdate_unrelated_pid="$unrelated_pid"
+mkdir -p /tmp/miclash-update.lock /tmp/miclash-autoupdate.lock
+printf '%s\n' "$update_unrelated_pid" > /tmp/miclash-update.lock/pid
+printf '%s\n' "$autoupdate_unrelated_pid" > /tmp/miclash-autoupdate.lock/pid
+/usr/share/miclash/package-remove
+if [ -e "$log.update-unrelated-signalled" ] || \
+	[ -e "$log.autoupdate-unrelated-signalled" ] || \
+	! kill -0 "$update_unrelated_pid" 2>/dev/null || \
+	! kill -0 "$autoupdate_unrelated_pid" 2>/dev/null; then
+	echo 'package removal signalled an unrelated PID from a stale worker lock' >&2
+	exit 1
+fi
+touch "$log.unrelated-release"
+wait "$update_unrelated_pid" 2>/dev/null || true
+wait "$autoupdate_unrelated_pid" 2>/dev/null || true
+rm -rf /tmp/miclash-update.lock /tmp/miclash-autoupdate.lock
+
 reset_state
 : > "$log.fail-routing"
 if /usr/share/miclash/package-remove; then

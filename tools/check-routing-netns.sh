@@ -37,6 +37,8 @@ IFS="$old_ifs"
 # Exercise the actual prerm entrypoint while the module, reservation files and
 # manifest are all still available. It removes exact owned tuples but retains
 # an empty trusted manifest until later prerm steps have succeeded.
+. "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh"
+miclash_mutation_lock_enter_package_owner 1000
 "$UCODE_BIN" "$@" "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/routing-cleanup.uc"
 [ -f /var/run/miclash/routing-ownership.json ]
 [ -d /var/run/miclash/package-removal ]
@@ -55,6 +57,7 @@ rm -f /var/run/miclash/routing-ownership.json
 [ -z "$(ip -4 route show table 100 2>/dev/null)" ]
 [ -z "$(ip -4 route show table 101 2>/dev/null)" ]
 rm -f /var/run/miclash/routing-ownership.json
+miclash_mutation_lock_leave
 
 producer_dir="$(mktemp -d)"
 trap 'rm -rf "$producer_dir"' EXIT INT TERM

@@ -290,11 +290,16 @@ miclash_mutation_lock_barrier_allowed() {
 	case "$mode:$active" in normal:0|package:1) return 0 ;; *) return 1 ;; esac
 }
 
-miclash_mutation_lock_enter() {
+miclash_mutation_lock_enter_internal() {
 	mode="${1:-normal}"
 	wait_ms="${2:-0}"
+	authority="${3:-participant-only}"
 	case "$mode" in normal|package) ;; *) return 2 ;; esac
 	case "$wait_ms" in ''|*[!0-9]*) return 2 ;; esac
+	case "$authority" in participant-only|package-owner-internal) ;; *) return 2 ;; esac
+	[ "$authority" != package-owner-internal ] || {
+		[ "$mode" = package ] && [ -z "${MICLASH_MUTATION_LOCK_TOKEN:-}" ] || return 2
+	}
 	miclash_mutation_lock_secure_root || return 1
 	miclash_mutation_lock_barrier_allowed "$mode" || return 75
 	if [ "$MICLASH_MUTATION_LOCK_DEPTH" -gt 0 ]; then
@@ -307,6 +312,8 @@ miclash_mutation_lock_enter() {
 		if miclash_mutation_lock_settle_takeover; then
 			if [ -n "${MICLASH_MUTATION_LOCK_TOKEN:-}" ]; then
 				miclash_mutation_lock_join && acquired=1 || acquired=0
+			elif [ "$mode" = package ] && [ "$authority" != package-owner-internal ]; then
+				acquired=0
 			else
 				miclash_mutation_lock_create_owner && acquired=1 || {
 					miclash_mutation_lock_takeover >/dev/null 2>&1 || true
@@ -329,6 +336,14 @@ miclash_mutation_lock_enter() {
 		[ "$attempts" -le 0 ] || sleep 0.05
 	done
 	miclash_mutation_lock_busy
+}
+
+miclash_mutation_lock_enter() {
+	miclash_mutation_lock_enter_internal "${1:-normal}" "${2:-0}" participant-only
+}
+
+miclash_mutation_lock_enter_package_owner() {
+	miclash_mutation_lock_enter_internal package "${1:-0}" package-owner-internal
 }
 
 miclash_mutation_lock_assert_held() {

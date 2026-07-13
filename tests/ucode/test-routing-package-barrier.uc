@@ -5,10 +5,30 @@ import * as fakes from './fakes.uc';
 import { empty_outputs, runtime, seed, set_route_json, set_rule_json } from './routing-rereview-testlib.uc';
 
 const BARRIER = '/var/run/miclash/package-removal';
+let package_pid = 9100;
 
 function establish_barrier(value) {
 	value.fs.mkdir(BARRIER);
 	value.fs.set_mode(BARRIER, 0o700);
+};
+
+function authorize_package(value) {
+	package_pid++;
+	let started = 1700 + package_pid;
+	value.fs.files['/proc/' + package_pid + '/stat'] = package_pid + ' (package owner) S ' +
+		join(' ', [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, started ]) + '\n';
+	let owner = {
+		fs: value.fs,
+		clock: value.clock,
+		random: fakes.entropy(),
+		mutation_lock_self: {
+			boot: '12345678-1234-1234-1234-123456789abc', pid: package_pid, start: started
+		}
+	};
+	let lease = acquire(owner, { barrier: 'normal', wait_ms: 0 });
+	value.mutation_lock_token = lease.token;
+	establish_barrier(value);
+	return () => release(owner, lease);
 };
 
 let wanted = desired({ proxy_mode: 'tproxy', ip_families: [ 'ipv4' ] }, {});
@@ -31,11 +51,12 @@ assert_equal(length(ordinary.process.calls), 0,
 	'ordinary cleanup cannot bypass package-removal exclusion');
 
 let never_started = runtime(empty_outputs());
-establish_barrier(never_started);
+let release_never_started = authorize_package(never_started);
 never_started.package_removal_cleanup = true;
 never_started.package_removal_preserve_manifest = true;
 assert_equal(cleanup(never_started).clean, true,
 	'package cleanup accepts a freshly proved empty never-started installation');
+release_never_started();
 let adopted_raw = never_started.fs.readfile('/var/run/miclash/routing-ownership.json');
 assert_true(adopted_raw != null,
 	'package cleanup must persist proof of the freshly observed empty kernel state');
@@ -53,10 +74,11 @@ let collision_outputs = empty_outputs();
 collision_outputs['ip -j -4 route show table 100 2>/dev/null'] =
 	'[{"type":"local","dst":"default","dev":"lo","table":100}]\n';
 let unmanifested_collision = runtime(collision_outputs);
-establish_barrier(unmanifested_collision);
+let release_collision = authorize_package(unmanifested_collision);
 unmanifested_collision.package_removal_cleanup = true;
 unmanifested_collision.package_removal_preserve_manifest = true;
 assert_throws(() => cleanup(unmanifested_collision), 'INTERNAL');
+release_collision();
 assert_equal(unmanifested_collision.fs.readfile('/var/run/miclash/routing-ownership.json'), null,
 	'package cleanup does not bless a canonical reserved-table collision');
 assert_equal(length(unmanifested_collision.process.calls), 0,
@@ -65,10 +87,11 @@ assert_equal(length(unmanifested_collision.process.calls), 0,
 let protocol_outputs = empty_outputs();
 set_route_json(protocol_outputs, wanted.routes[0]);
 let unmanifested_protocol = runtime(protocol_outputs);
-establish_barrier(unmanifested_protocol);
+let release_protocol = authorize_package(unmanifested_protocol);
 unmanifested_protocol.package_removal_cleanup = true;
 unmanifested_protocol.package_removal_preserve_manifest = true;
 assert_throws(() => cleanup(unmanifested_protocol), 'INTERNAL');
+release_protocol();
 assert_equal(unmanifested_protocol.fs.readfile('/var/run/miclash/routing-ownership.json'), null,
 	'package cleanup does not bless unmanifested protocol-242 state');
 assert_equal(length(unmanifested_protocol.process.calls), 0,
@@ -78,7 +101,7 @@ let dedicated_outputs = empty_outputs();
 set_route_json(dedicated_outputs, wanted.routes[0]);
 set_rule_json(dedicated_outputs, wanted.rules[0]);
 let dedicated = seed(runtime(dedicated_outputs), wanted.routes, wanted.rules);
-establish_barrier(dedicated);
+let release_dedicated = authorize_package(dedicated);
 dedicated.package_removal_cleanup = true;
 dedicated.package_removal_preserve_manifest = true;
 dedicated.process.run = (request) => {
@@ -88,6 +111,7 @@ dedicated.process.run = (request) => {
 	return { code: 0 };
 };
 cleanup(dedicated);
+release_dedicated();
 assert_equal(length(dedicated.process.calls), 2,
 	'the fixed internal package cleanup capability may retire exact committed tuples');
 assert_true(dedicated.fs.lstat('/var/run/miclash/routing-ownership.json')?.type == 'file',
@@ -125,8 +149,11 @@ assert_true(type(callback) == 'function', 'successful TUN apply arms a watcher b
 callback({ interface: 'clash-tun', action: 'remove' });
 watched.clock.advance(0);
 assert_equal(reconciled, 1, 'the pre-barrier watcher drain completes under its original lease');
+watched.fs.rmdir(BARRIER);
+let release_package_owner = authorize_package(package_contender);
 let package_lease = acquire(package_contender, { barrier: 'package', wait_ms: 0 });
 release(package_contender, package_lease);
+release_package_owner();
 watched.fs.rmdir(BARRIER);
 establish_barrier(watched);
 callback({ interface: 'clash-tun', action: 'remove' });

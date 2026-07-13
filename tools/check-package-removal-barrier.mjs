@@ -35,6 +35,7 @@ const files = {
 };
 const workflow = source('.github/workflows/checks.yml');
 const releaseHelper = source('luci-app-miclash/rootfs/usr/share/miclash/package-release');
+const lockHelper = source('luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh');
 
 const sharedLockShell = '/usr/share/miclash/mutation-lock.sh';
 const shellWriters = {
@@ -57,6 +58,22 @@ for (const [name, text] of Object.entries(shellWriters)) {
 	check(!text.includes('MICLASH_MUTATION_LOCK_HELPER:-'),
 		`${name} must not accept an environment override for sourced root code`);
 }
+
+const packageOwnerApi = 'miclash_mutation_lock_enter_package_owner';
+check(lockHelper.includes(`${packageOwnerApi}()`),
+	'shared lock must expose a distinct internal package-owner API');
+check(files.remove.includes(`${packageOwnerApi} 30000`) &&
+	!files.remove.includes('miclash_mutation_lock_enter package 30000'),
+	'only package-remove may request creation of the package owner');
+for (const [name, text] of Object.entries(shellWriters))
+	if (name !== 'remove')
+		check(!text.includes(packageOwnerApi),
+			`${name} must never request package-owner authority`);
+const publicEnter = blockBetween(lockHelper, 'miclash_mutation_lock_enter() {',
+	`${packageOwnerApi}() {`);
+check(publicEnter.includes('participant-only') &&
+	!publicEnter.includes('package-owner-internal'),
+	'public package mode must be participant-only regardless of caller environment');
 
 check(files.routing.includes("from 'miclash.mutation_lock'"),
 	'routing must use the shared ucode mutation lock');
@@ -82,7 +99,7 @@ check(!ordinaryPrerm.includes('routing-cleanup.uc'),
 	'prerm must not bypass process quiescence by calling routing cleanup directly');
 
 const removeMain = files.remove.lastIndexOf('establish_barrier ||');
-const lockMain = files.remove.lastIndexOf('miclash_mutation_lock_enter package');
+const lockMain = files.remove.lastIndexOf(`${packageOwnerApi} 30000`);
 const quiesceMain = files.remove.lastIndexOf('quiesce_update_triggers ||');
 check(removeMain >= 0 && lockMain > removeMain && quiesceMain > lockMain,
 	'package removal must establish the barrier, acquire the shared lock, then quiesce writers');
