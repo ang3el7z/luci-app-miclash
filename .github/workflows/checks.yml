@@ -107,6 +107,10 @@ jobs:
         shell: bash
         run: UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/run-ucode-tests.sh
 
+      - name: Run Guard runtime transaction and exact-proof gate
+        shell: bash
+        run: UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/check-guard-runtime.sh
+
       - name: Run isolated routing lifecycle and producer deadline gates
         shell: bash
         run: |

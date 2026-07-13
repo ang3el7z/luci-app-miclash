@@ -357,6 +357,8 @@ define Package/$(PKG_NAME)/postrm
 				[ ! -e /usr/share/miclash/dns-cleanup.uc ] && \
 				[ ! -e /usr/share/miclash/guard.uc ] && \
 				[ ! -e /usr/share/miclash/guard-bootstrap.uc ] && \
+				[ ! -e /usr/share/miclash/guard_runtime.uc ] && \
+				[ ! -e /usr/share/miclash/guard-runtime.uc ] && \
 				[ ! -e /usr/share/miclash/package-remove ] && \
 				[ ! -e /usr/share/miclash/package-release ]; then
 					"$$RELEASE_DIR/helper" "$$RELEASE_DIR" || {

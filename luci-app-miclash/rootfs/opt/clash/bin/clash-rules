@@ -1499,29 +1499,65 @@ format_nft_elements() {
     tr '\n' ',' | sed 's/,$//'
 }
 
+guard_expected_interfaces=""
+guard_expected_csv=""
+
+capture_guard_expected_interfaces() {
+	local iface
+	guard_expected_interfaces=$(get_guard_wan_interfaces) || return 1
+	for iface in $guard_expected_interfaces; do
+		case "$iface" in
+			''|*[!A-Za-z0-9_.:@-]*)
+				msg "ERROR: Invalid Guard interface identity"
+				return 1
+				;;
+		esac
+		[ "${#iface}" -le 15 ] || return 1
+	done
+	guard_expected_csv=$(printf '%s\n' $guard_expected_interfaces | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
+}
+
+guard_emergency_protect() {
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc protect
+}
+
+guard_emergency_release() {
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc release
+}
+
+guard_bootstrap_disable() {
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc disable
+}
+
 remove_nft_guard_rules() {
-    nft delete table inet "$GUARD_NFT_TABLE" 2>/dev/null
+	if nft list table inet "$GUARD_NFT_TABLE" >/dev/null 2>&1; then
+		nft delete table inet "$GUARD_NFT_TABLE" >/dev/null 2>&1 || return 1
+	fi
+	return 0
 }
 
 verify_nft_guard_rules() {
-	nft list table inet "$GUARD_NFT_TABLE" >/dev/null 2>&1 || return 1
-	nft list chain inet "$GUARD_NFT_TABLE" forward 2>/dev/null |
-		grep -q 'comment "miclash-guard"'
+	nft -j list table inet "$GUARD_NFT_TABLE" 2>/dev/null |
+		/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc verify-nft "$guard_expected_csv"
 }
 
 verify_iptables_guard_for_cmd() {
-	local cmd="$1"
-	command -v "$cmd" >/dev/null 2>&1 || return 0
-	$cmd -t filter -C FORWARD -j "$GUARD_FORWARD_CHAIN" >/dev/null 2>&1 &&
-		$cmd -t filter -S "$GUARD_FORWARD_CHAIN" 2>/dev/null | grep -q -- '-j DROP'
+	local cmd="$1" family="$2" save
+	command -v "$cmd" >/dev/null 2>&1 || return 1
+	save="${cmd}-save"
+	command -v "$save" >/dev/null 2>&1 || return 1
+	$save -t filter 2>/dev/null |
+		/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc "verify-iptables$family" "$guard_expected_csv"
 }
 
 verify_guard_rules() {
+	[ -n "${guard_expected_csv+x}" ] || guard_expected_csv=""
+	[ -n "$guard_expected_interfaces" ] || capture_guard_expected_interfaces || return 1
 	if hash nft 2>/dev/null; then
 		verify_nft_guard_rules
 	elif hash iptables 2>/dev/null; then
-		verify_iptables_guard_for_cmd iptables || return 1
-		verify_iptables_guard_for_cmd ip6tables || return 1
+		verify_iptables_guard_for_cmd iptables 4 || return 1
+		verify_iptables_guard_for_cmd ip6tables 6 || return 1
 	else
 		return 1
 	fi
@@ -1552,49 +1588,45 @@ remove_guard_rules_strict() {
 	   nft list table inet "$GUARD_NFT_TABLE" >/dev/null 2>&1; then
 		nft delete table inet "$GUARD_NFT_TABLE" >/dev/null 2>&1 || result=1
 	fi
-	remove_iptables_guard_rules
+	remove_iptables_guard_rules || result=1
 	verify_guard_absent || result=1
 	return "$result"
 }
 
 apply_nft_guard_rules() {
-    local wan_interfaces
     local local4_elements
     local local6_elements
 
-    wan_interfaces=$(get_guard_wan_interfaces)
-
-    remove_nft_guard_rules
+    remove_nft_guard_rules || return 1
     nft add table inet "$GUARD_NFT_TABLE" || return 1
     nft add set inet "$GUARD_NFT_TABLE" local4 '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
     nft add set inet "$GUARD_NFT_TABLE" local6 '{ type ipv6_addr; flags interval; auto-merge; }' || return 1
 
     local4_elements=$(printf '%s\n' $RESERVED_NETWORKS | format_nft_elements)
     local6_elements=$(printf '%s\n' $RESERVED_NETWORKS6 | format_nft_elements)
-    [ -n "$local4_elements" ] && nft add element inet "$GUARD_NFT_TABLE" local4 "{ $local4_elements }"
-    [ -n "$local6_elements" ] && nft add element inet "$GUARD_NFT_TABLE" local6 "{ $local6_elements }"
+    [ -z "$local4_elements" ] || nft add element inet "$GUARD_NFT_TABLE" local4 "{ $local4_elements }" || return 1
+    [ -z "$local6_elements" ] || nft add element inet "$GUARD_NFT_TABLE" local6 "{ $local6_elements }" || return 1
 
     nft add chain inet "$GUARD_NFT_TABLE" forward '{ type filter hook forward priority 1; policy accept; }' || return 1
 
-    nft add rule inet "$GUARD_NFT_TABLE" forward ct state established,related accept
-    nft add rule inet "$GUARD_NFT_TABLE" forward iifname "clash-tun" accept
-    nft add rule inet "$GUARD_NFT_TABLE" forward oifname "clash-tun" accept
-    nft add rule inet "$GUARD_NFT_TABLE" forward ct status dnat accept
-    nft add rule inet "$GUARD_NFT_TABLE" forward udp sport 67 udp dport 68 accept
-    nft add rule inet "$GUARD_NFT_TABLE" forward udp sport 68 udp dport 67 accept
-    nft add rule inet "$GUARD_NFT_TABLE" forward ip daddr @local4 accept
-    nft add rule inet "$GUARD_NFT_TABLE" forward ip6 daddr @local6 accept
+    nft add rule inet "$GUARD_NFT_TABLE" forward ct state established,related accept || return 1
+    nft add rule inet "$GUARD_NFT_TABLE" forward iifname "clash-tun" accept || return 1
+    nft add rule inet "$GUARD_NFT_TABLE" forward oifname "clash-tun" accept || return 1
+    nft add rule inet "$GUARD_NFT_TABLE" forward ct status dnat accept || return 1
+    nft add rule inet "$GUARD_NFT_TABLE" forward udp sport 67 udp dport 68 accept || return 1
+    nft add rule inet "$GUARD_NFT_TABLE" forward udp sport 68 udp dport 67 accept || return 1
+    nft add rule inet "$GUARD_NFT_TABLE" forward ip daddr @local4 accept || return 1
+    nft add rule inet "$GUARD_NFT_TABLE" forward ip6 daddr @local6 accept || return 1
 
-    if [ -n "$wan_interfaces" ]; then
-        msg "Client forwarding guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')"
-        echo "$wan_interfaces" | while IFS= read -r iface; do
-            [ -n "$iface" ] || continue
-            nft add rule inet "$GUARD_NFT_TABLE" forward oifname "$iface" drop comment "miclash-guard"
+    if [ -n "$guard_expected_interfaces" ]; then
+        msg "Client forwarding guard external interfaces: $(echo "$guard_expected_interfaces" | tr '\n' ' ')"
+        for iface in $guard_expected_interfaces; do
+            nft add rule inet "$GUARD_NFT_TABLE" forward oifname "$iface" drop comment "miclash-guard" || return 1
         done
     else
         warn "Client forwarding guard could not detect WAN interfaces; falling back to blocking all non-local forwarding"
-        nft add rule inet "$GUARD_NFT_TABLE" forward meta nfproto ipv4 drop comment "miclash-guard"
-        nft add rule inet "$GUARD_NFT_TABLE" forward meta nfproto ipv6 drop comment "miclash-guard"
+        nft add rule inet "$GUARD_NFT_TABLE" forward meta nfproto ipv4 drop comment "miclash-guard" || return 1
+        nft add rule inet "$GUARD_NFT_TABLE" forward meta nfproto ipv6 drop comment "miclash-guard" || return 1
     fi
 
     msg "Client forwarding guard enabled (nftables)"
@@ -1605,10 +1637,14 @@ remove_iptables_guard_for_cmd() {
 
     command -v "$cmd" >/dev/null 2>&1 || return 0
 
-    while $cmd -t filter -D FORWARD -j "$GUARD_FORWARD_CHAIN" 2>/dev/null; do :; done
-    $cmd -t filter -F "$GUARD_FORWARD_CHAIN" 2>/dev/null
-    $cmd -t filter -X "$GUARD_FORWARD_CHAIN" 2>/dev/null
-    remove_iptables_legacy_output_guard_for_cmd "$cmd"
+	while $cmd -t filter -C FORWARD -j "$GUARD_FORWARD_CHAIN" >/dev/null 2>&1; do
+		$cmd -t filter -D FORWARD -j "$GUARD_FORWARD_CHAIN" >/dev/null 2>&1 || return 1
+	done
+	if $cmd -t filter -S "$GUARD_FORWARD_CHAIN" >/dev/null 2>&1; then
+		$cmd -t filter -F "$GUARD_FORWARD_CHAIN" >/dev/null 2>&1 || return 1
+		$cmd -t filter -X "$GUARD_FORWARD_CHAIN" >/dev/null 2>&1 || return 1
+	fi
+	remove_iptables_legacy_output_guard_for_cmd "$cmd"
 }
 
 remove_iptables_legacy_output_guard_for_cmd() {
@@ -1618,14 +1654,19 @@ remove_iptables_legacy_output_guard_for_cmd() {
     command -v "$cmd" >/dev/null 2>&1 || return 0
 
     # Remove stale pre-client-only guard runtime state from older installs.
-    while $cmd -t filter -D OUTPUT -j "$legacy_output_chain" 2>/dev/null; do :; done
-    $cmd -t filter -F "$legacy_output_chain" 2>/dev/null
-    $cmd -t filter -X "$legacy_output_chain" 2>/dev/null
+	while $cmd -t filter -C OUTPUT -j "$legacy_output_chain" >/dev/null 2>&1; do
+		$cmd -t filter -D OUTPUT -j "$legacy_output_chain" >/dev/null 2>&1 || return 1
+	done
+	if $cmd -t filter -S "$legacy_output_chain" >/dev/null 2>&1; then
+		$cmd -t filter -F "$legacy_output_chain" >/dev/null 2>&1 || return 1
+		$cmd -t filter -X "$legacy_output_chain" >/dev/null 2>&1 || return 1
+	fi
+	return 0
 }
 
 remove_iptables_legacy_output_guard_rules() {
-    remove_iptables_legacy_output_guard_for_cmd iptables
-    remove_iptables_legacy_output_guard_for_cmd ip6tables
+	remove_iptables_legacy_output_guard_for_cmd iptables || return 1
+	remove_iptables_legacy_output_guard_for_cmd ip6tables || return 1
 }
 
 ensure_iptables_guard_chain() {
@@ -1633,10 +1674,13 @@ ensure_iptables_guard_chain() {
     local base_chain="$2"
     local guard_chain="$3"
 
-    $cmd -t filter -N "$guard_chain" 2>/dev/null
-    $cmd -t filter -F "$guard_chain" 2>/dev/null
-    while $cmd -t filter -D "$base_chain" -j "$guard_chain" 2>/dev/null; do :; done
-    $cmd -t filter -I "$base_chain" 1 -j "$guard_chain"
+	$cmd -t filter -S "$guard_chain" >/dev/null 2>&1 ||
+		$cmd -t filter -N "$guard_chain" >/dev/null 2>&1 || return 1
+	$cmd -t filter -F "$guard_chain" >/dev/null 2>&1 || return 1
+	while $cmd -t filter -C "$base_chain" -j "$guard_chain" >/dev/null 2>&1; do
+		$cmd -t filter -D "$base_chain" -j "$guard_chain" >/dev/null 2>&1 || return 1
+	done
+	$cmd -t filter -I "$base_chain" 1 -j "$guard_chain" || return 1
 }
 
 apply_iptables_guard_for_cmd() {
@@ -1647,73 +1691,91 @@ apply_iptables_guard_for_cmd() {
 
     command -v "$cmd" >/dev/null 2>&1 || return 0
 
-    remove_iptables_guard_for_cmd "$cmd"
+    remove_iptables_guard_for_cmd "$cmd" || return 1
     ensure_iptables_guard_chain "$cmd" FORWARD "$GUARD_FORWARD_CHAIN" || return 1
 
-    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -i clash-tun -j RETURN
-    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -o clash-tun -j RETURN
-    [ "$family" = "ipv4" ] && $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -m conntrack --ctstate DNAT -j RETURN 2>/dev/null
-    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -p udp --sport 67 --dport 68 -j RETURN 2>/dev/null
-    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -p udp --sport 68 --dport 67 -j RETURN 2>/dev/null
+    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN || return 1
+    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -i clash-tun -j RETURN || return 1
+    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -o clash-tun -j RETURN || return 1
+    [ "$family" != "ipv4" ] || $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -m conntrack --ctstate DNAT -j RETURN 2>/dev/null || return 1
+    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -p udp --sport 67 --dport 68 -j RETURN 2>/dev/null || return 1
+    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -p udp --sport 68 --dport 67 -j RETURN 2>/dev/null || return 1
 
     for network in $reserved_networks; do
-        $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -d "$network" -j RETURN 2>/dev/null
+		$cmd -t filter -A "$GUARD_FORWARD_CHAIN" -d "$network" -j RETURN 2>/dev/null || return 1
     done
 
     if [ -n "$wan_interfaces" ]; then
-        echo "$wan_interfaces" | while IFS= read -r iface; do
-            [ -n "$iface" ] || continue
-            $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -o "$iface" -j DROP
-        done
+		for iface in $wan_interfaces; do
+			$cmd -t filter -A "$GUARD_FORWARD_CHAIN" -o "$iface" -j DROP || return 1
+		done
     else
-        $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -j DROP
+		$cmd -t filter -A "$GUARD_FORWARD_CHAIN" -j DROP || return 1
     fi
 
-    $cmd -t filter -A "$GUARD_FORWARD_CHAIN" -j RETURN
+	$cmd -t filter -A "$GUARD_FORWARD_CHAIN" -j RETURN || return 1
 }
 
 remove_iptables_guard_rules() {
-    remove_iptables_guard_for_cmd iptables
-    remove_iptables_guard_for_cmd ip6tables
+	remove_iptables_guard_for_cmd iptables || return 1
+	remove_iptables_guard_for_cmd ip6tables || return 1
 }
 
 apply_iptables_guard_rules() {
-    local wan_interfaces
-
-    wan_interfaces=$(get_guard_wan_interfaces)
-    [ -n "$wan_interfaces" ] && msg "Client forwarding guard external interfaces: $(echo "$wan_interfaces" | tr '\n' ' ')" || \
+	[ -n "$guard_expected_interfaces" ] && msg "Client forwarding guard external interfaces: $(echo "$guard_expected_interfaces" | tr '\n' ' ')" || \
         warn "Client forwarding guard could not detect WAN interfaces; falling back to blocking all non-local forwarding"
 
-    apply_iptables_guard_for_cmd iptables ipv4 "$wan_interfaces" "$RESERVED_NETWORKS" || return 1
+    apply_iptables_guard_for_cmd iptables ipv4 "$guard_expected_interfaces" "$RESERVED_NETWORKS" || return 1
 
-    if command -v ip6tables >/dev/null 2>&1; then
-        apply_iptables_guard_for_cmd ip6tables ipv6 "$wan_interfaces" "$RESERVED_NETWORKS6" || return 1
-    else
-        warn "ip6tables not found; IPv6 guard rules cannot be installed on the iptables backend"
-    fi
+	command -v ip6tables >/dev/null 2>&1 || {
+		warn "ip6tables not found; refusing a partially protected iptables backend"
+		return 1
+	}
+	apply_iptables_guard_for_cmd ip6tables ipv6 "$guard_expected_interfaces" "$RESERVED_NETWORKS6" || return 1
 
     msg "Client forwarding guard enabled (iptables)"
 }
 
 apply_guard_rules() {
-    # Migration cleanup: remove stale pre-client-only iptables guard state even when nftables is active.
-    remove_iptables_legacy_output_guard_rules
+	capture_guard_expected_interfaces || return 1
+	guard_emergency_protect || return 1
+
+	# Migration cleanup: remove stale pre-client-only iptables guard state even when nftables is active.
+	remove_iptables_legacy_output_guard_rules || {
+		guard_emergency_protect >/dev/null 2>&1 || true
+		return 1
+	}
 
     if hash nft 2>/dev/null; then
-        apply_nft_guard_rules
+		apply_nft_guard_rules && verify_nft_guard_rules || {
+			guard_emergency_protect >/dev/null 2>&1 || true
+			return 1
+		}
     elif hash iptables 2>/dev/null; then
-        apply_iptables_guard_rules
+		apply_iptables_guard_rules &&
+			verify_iptables_guard_for_cmd iptables 4 &&
+			verify_iptables_guard_for_cmd ip6tables 6 || {
+				guard_emergency_protect >/dev/null 2>&1 || true
+				return 1
+			}
     else
         msg "ERROR: Neither nftables nor iptables found for client forwarding guard"
         return 1
     fi
+	guard_emergency_release || {
+		guard_emergency_protect >/dev/null 2>&1 || true
+		return 1
+	}
+	return 0
 }
 
 remove_guard_rules() {
-    remove_nft_guard_rules
-    remove_iptables_guard_rules
-    msg "Client forwarding guard disabled"
+	guard_emergency_protect || return 1
+	remove_guard_rules_strict || {
+		guard_emergency_protect >/dev/null 2>&1 || true
+		return 1
+	}
+	msg "Client forwarding guard runtime disabled; bootstrap retained"
 }
 
 refresh_guard_rules() {
@@ -1738,21 +1800,20 @@ finalize_guard_rules() {
 		return 0
 	fi
 
-	if remove_guard_rules_strict && verify_guard_absent; then
+	# Explicit disabled finalization is the only ordinary path allowed to release
+	# the transient emergency owner. Establish and freshly prove it before the
+	# first destructive runtime mutation.
+	guard_emergency_protect || {
+		msg "ERROR: Disabled Guard finalization could not establish bootstrap protection"
+		return 1
+	}
+	if remove_guard_rules_strict && verify_guard_absent && guard_bootstrap_disable; then
 		msg "Client forwarding guard finalization verified disabled state"
 		return 0
 	fi
 
-	# A failed disabled-policy removal may have partially deleted Guard. Never
-	# return from that failure until fail-closed protection has been restored and
-	# freshly observed. If the old Guard survived, verification is non-mutating.
-	if ! verify_guard_rules; then
-		apply_guard_rules && verify_guard_rules || {
-			msg "ERROR: Failed Guard removal could not be restored"
-			return 1
-		}
-	fi
-	msg "ERROR: Guard removal failed; fail-closed Guard restored and verified"
+	guard_emergency_protect >/dev/null 2>&1 || true
+	msg "ERROR: Guard removal failed; verified emergency Guard retained"
 	return 1
 }
 
@@ -3658,7 +3719,7 @@ case "$1" in
         ;;
     guard_start)
         load_all_settings_once
-		apply_guard_rules && verify_guard_rules
+		apply_guard_rules
         ;;
     guard_stop)
         remove_guard_rules
@@ -3676,7 +3737,7 @@ case "$1" in
 		;;
 	package_guard_start)
 		trusted_package_authority && load_all_settings_once &&
-			apply_guard_rules && verify_guard_rules
+			apply_guard_rules
 		;;
 	package_guard_verify)
 		trusted_package_authority && verify_guard_rules

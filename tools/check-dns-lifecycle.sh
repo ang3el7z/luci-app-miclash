@@ -269,10 +269,46 @@ cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" "$fixture/clas
 chmod 0700 "$fixture/clash-rules.actual"
 cat > "$fixture/ucode" <<'EOF'
 #!/bin/sh
+for argument in "$@"; do
+	[ "$argument" != /usr/share/miclash/guard-runtime.uc ] || guard_runtime=1
+done
+if [ "${guard_runtime:-0}" = 1 ]; then
+	while [ "${1:-}" != /usr/share/miclash/guard-runtime.uc ]; do shift; done
+	shift
+	command="${1:-}"
+	printf '%s\n' "guard-runtime-$command" >> "$MICLASH_DNS_GATE_NFT_LOG"
+	case "$command" in
+		protect)
+			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-protect" ] || exit 1
+			: > "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+			;;
+		release)
+			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-release" ] || exit 1
+			rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+			;;
+		disable)
+			rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+			;;
+		verify-nft)
+			cat >/dev/null
+			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-verify" ] || exit 1
+			[ -e "$MICLASH_DNS_GATE_NFT_STATE" ]
+			;;
+		verify-iptables4|verify-iptables6)
+			cat >/dev/null
+			exit 1
+			;;
+		*) exit 1 ;;
+	esac
+	exit $?
+fi
 exec "$UCODE_BIN" -L "$MICLASH_DNS_GATE_MODULE_DIR/*.so" \
 	-L "$MICLASH_DNS_GATE_FIXTURE/*.uc" "$@" >> "$MICLASH_DNS_GATE_LOG.ucode" 2>&1
 EOF
 chmod 0700 "$fixture/ucode"
+mkdir -p /usr/bin
+[ -e /usr/bin/ucode ] || : > /usr/bin/ucode
+mount --bind "$fixture/ucode" /usr/bin/ucode
 cat > "$fixture/logger" <<'EOF'
 #!/bin/sh
 exit 0
@@ -282,6 +318,7 @@ PATH="$fixture:$PATH"
 export PATH
 
 export MICLASH_DNS_GATE_NFT_STATE="$fixture/nft-guard-active"
+export MICLASH_DNS_GATE_EMERGENCY_STATE="$fixture/nft-guard-emergency"
 export MICLASH_DNS_GATE_NFT_LOG="$fixture/nft.log"
 cat > "$fixture/nft" <<'EOF'
 #!/bin/sh
@@ -295,6 +332,9 @@ case "$*" in
 	'list table inet miclash_guard')
 		[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] && echo 'table inet miclash_guard' || exit 1
 		;;
+	'-j list table inet miclash_guard')
+		[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] && echo '{"nftables":[]}' || exit 1
+		;;
 	'list chain inet miclash_guard forward')
 		[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] || exit 1
 		echo 'chain forward { meta nfproto ipv4 drop comment "miclash-guard"; }'
@@ -306,6 +346,7 @@ case "$*" in
 	'add table inet miclash_guard')
 		: > "$MICLASH_DNS_GATE_NFT_STATE"
 		;;
+	add\ rule\ *) [ ! -e "$MICLASH_DNS_GATE_FAIL-guard-add" ] ;;
 	add\ *) ;;
 	*) exit 1 ;;
 esac
@@ -319,6 +360,7 @@ run_actual_rules() {
 printf '%s\n' 'INTERNET_ONLY_MICLASH=true' > /opt/clash/settings
 rm -rf /var/run/miclash/package-removal
 : > "$MICLASH_DNS_GATE_NFT_STATE"
+: > "$MICLASH_DNS_GATE_EMERGENCY_STATE"
 : > "$MICLASH_DNS_GATE_NFT_LOG"
 if ! run_actual_rules guard_finalize; then
 	echo 'shipped clash-rules lacks successful enabled Guard finalization' >&2
@@ -330,31 +372,79 @@ if grep -Eq '^(add|delete) ' "$MICLASH_DNS_GATE_NFT_LOG"; then
 	echo 'enabled Guard finalization mutated proven Guard state' >&2; exit 1
 fi
 
+# A protection precondition failure must occur before any destructive runtime
+# mutation and preserve the last exact runtime Guard.
+: > "$MICLASH_DNS_GATE_NFT_STATE"
+rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-guard-protect"
+printf '%s\n' 'INTERNET_ONLY_MICLASH=false' > /opt/clash/settings
+if run_actual_rules guard_finalize; then
+	echo 'disabled finalization ignored emergency protection failure' >&2; exit 1
+fi
+[ -e "$MICLASH_DNS_GATE_NFT_STATE" ]
+! grep -Fq 'delete table inet miclash_guard' "$MICLASH_DNS_GATE_NFT_LOG"
+rm -f "$MICLASH_DNS_GATE_FAIL-guard-protect"
+
+# Every nft mutation failure and every exact-proof failure retains the freshly
+# established emergency owner and refuses to publish success.
+for failure in guard-add guard-verify; do
+	printf '%s\n' 'INTERNET_ONLY_MICLASH=true' > /opt/clash/settings
+	rm -f "$MICLASH_DNS_GATE_NFT_STATE" "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+	: > "$MICLASH_DNS_GATE_NFT_LOG"
+	: > "$MICLASH_DNS_GATE_FAIL-$failure"
+	if run_actual_rules guard_start; then
+		echo "runtime Guard rebuild ignored $failure" >&2; exit 1
+	fi
+	[ -e "$MICLASH_DNS_GATE_EMERGENCY_STATE" ]
+	grep -Fq 'guard-runtime-protect' "$MICLASH_DNS_GATE_NFT_LOG"
+	! grep -Fq 'guard-runtime-release' "$MICLASH_DNS_GATE_NFT_LOG"
+	rm -f "$MICLASH_DNS_GATE_FAIL-$failure"
+done
+
+# A release failure occurs only after exact runtime proof; it still reports
+# failure and leaves emergency protection installed for retry.
+printf '%s\n' 'INTERNET_ONLY_MICLASH=true' > /opt/clash/settings
+rm -f "$MICLASH_DNS_GATE_NFT_STATE" "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-guard-release"
+if run_actual_rules guard_start; then
+	echo 'runtime Guard rebuild ignored emergency release failure' >&2; exit 1
+fi
+[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] && [ -e "$MICLASH_DNS_GATE_EMERGENCY_STATE" ]
+grep -Fq 'guard-runtime-verify-nft' "$MICLASH_DNS_GATE_NFT_LOG"
+grep -Fq 'guard-runtime-release' "$MICLASH_DNS_GATE_NFT_LOG"
+rm -f "$MICLASH_DNS_GATE_FAIL-guard-release"
+
 printf '%s\n' 'INTERNET_ONLY_MICLASH=false' > /opt/clash/settings
 : > "$MICLASH_DNS_GATE_NFT_STATE"
+rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
 : > "$MICLASH_DNS_GATE_NFT_LOG"
 : > "$MICLASH_DNS_GATE_FAIL-guard-remove"
 if run_actual_rules guard_finalize; then
 	echo 'shipped clash-rules ignored Guard removal failure' >&2; exit 1
 fi
-[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] || {
+[ -e "$MICLASH_DNS_GATE_EMERGENCY_STATE" ] || {
 	echo 'shipped clash-rules returned from finalization failure without proven Guard' >&2; exit 1
 }
 grep -Fq 'delete table inet miclash_guard' "$MICLASH_DNS_GATE_NFT_LOG"
-grep -Fq 'list chain inet miclash_guard forward' "$MICLASH_DNS_GATE_NFT_LOG"
+grep -Fq 'guard-runtime-protect' "$MICLASH_DNS_GATE_NFT_LOG"
+! grep -Fq 'guard-runtime-release' "$MICLASH_DNS_GATE_NFT_LOG"
 rm -f "$MICLASH_DNS_GATE_FAIL-guard-remove"
 
 : > "$MICLASH_DNS_GATE_NFT_STATE"
+rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
 : > "$MICLASH_DNS_GATE_NFT_LOG"
 : > "$MICLASH_DNS_GATE_FAIL-guard-inventory"
 if run_actual_rules guard_finalize; then
 	echo 'shipped clash-rules accepted disabled Guard state without a readable backend inventory' >&2
 	exit 1
 fi
-[ -e "$MICLASH_DNS_GATE_NFT_STATE" ] || {
+[ -e "$MICLASH_DNS_GATE_EMERGENCY_STATE" ] || {
 	echo 'Guard inventory failure did not restore fail-closed protection' >&2; exit 1
 }
-grep -Fq 'list chain inet miclash_guard forward' "$MICLASH_DNS_GATE_NFT_LOG"
+grep -Fq 'guard-runtime-protect' "$MICLASH_DNS_GATE_NFT_LOG"
+! grep -Fq 'guard-runtime-release' "$MICLASH_DNS_GATE_NFT_LOG"
 rm -f "$MICLASH_DNS_GATE_FAIL-guard-inventory"
 
 cat > /opt/clash/bin/clash <<'EOF'

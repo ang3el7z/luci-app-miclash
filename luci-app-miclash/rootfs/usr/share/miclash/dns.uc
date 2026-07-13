@@ -149,6 +149,8 @@ function validate_manifest(value) {
 	    (value.state != 'active' && value.state != 'clean')) return null;
 	let original = validate_snapshot(value.original);
 	if (original == null) return null;
+	if (value.target_preexisting != (count(original.server.value, TARGET) > 0))
+		return null;
 	let transition = null;
 	if (value.transition != null) {
 		if (!exact_fields(value.transition, { intent: true, before: true, after: true }) ||
@@ -435,7 +437,7 @@ function migrate_legacy(runtime) {
 	if (!legacy.cachesize.present && !legacy.noresolv.present) fail('CORRUPT_STATE');
 	let observed = raw_observe(runtime);
 	if (length(observed.conflicts) || observed.current == null ||
-	    count(observed.current.server.value, TARGET) < 1 ||
+	    count(observed.current.server.value, TARGET) != 1 ||
 	    !observed.current.cachesize.present || observed.current.cachesize.value != '0' ||
 	    !observed.current.noresolv.present || observed.current.noresolv.value != '1')
 		fail('CORRUPT_STATE');
@@ -453,7 +455,9 @@ function migrate_legacy(runtime) {
 	         !same(loaded.document.original.noresolv, legacy.noresolv))
 		fail('CORRUPT_STATE');
 	let verified = load_manifest(runtime);
-	if (!verified.trusted || verified.document.state != 'active') fail('CORRUPT_STATE');
+	if (!verified.trusted || verified.document.state != 'active' ||
+	    !owned_target_unambiguous(verified.document, observed.current))
+		fail('CORRUPT_STATE');
 	if (runtime.fs.unlink(LEGACY_PATH) != true || runtime.fs.lstat(LEGACY_PATH) != null)
 		fail('INTERNAL');
 	return true;

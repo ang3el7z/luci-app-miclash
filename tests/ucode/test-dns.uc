@@ -344,6 +344,32 @@ assert_throws(() => recover(ambiguous_legacy, 'active'), 'CORRUPT_STATE',
 assert_true(ambiguous_legacy.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
 	'ambiguous legacy input is retained');
 
+let duplicate_legacy = runtime({ uci: { dhcp: {
+	main: { '.type': 'dnsmasq', server: [ TARGET, TARGET ], cachesize: '0', noresolv: '1' }
+} } });
+duplicate_legacy.fs.mkdir('/opt'); duplicate_legacy.fs.mkdir('/opt/clash');
+duplicate_legacy.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=1000\nNORESOLV=\n');
+assert_throws(() => recover(duplicate_legacy, 'active'), 'CORRUPT_STATE',
+	'legacy migration requires exactly one active target');
+assert_true(duplicate_legacy.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
+	'duplicate-target legacy evidence is retained');
+
+for (let contradiction in [
+	{ preexisting: false, original: snapshot([ TARGET, '1.1.1.1' ], '1000', null) },
+	{ preexisting: true, original: snapshot([ '1.1.1.1' ], '1000', null) }
+]) {
+	let legacy = runtime({ uci: { dhcp: {
+		main: { '.type': 'dnsmasq', server: [ TARGET, '1.1.1.1' ], cachesize: '0', noresolv: '1' }
+	} } });
+	legacy.fs.mkdir('/opt'); legacy.fs.mkdir('/opt/clash');
+	legacy.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=1000\nNORESOLV=\n');
+	seed(legacy, document(contradiction.original, contradiction.preexisting, 'active'));
+	assert_throws(() => recover(legacy, 'active'), 'CORRUPT_STATE',
+		'legacy coexistence rejects contradictory target ownership semantics');
+	assert_true(legacy.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
+		'contradictory coexistence preserves legacy evidence');
+}
+
 let cursor_race = runtime();
 cursor_race.uci_fake.on_cursor = (calls) => {
 	if (calls == 4) cursor_race.uci_fake.values.dhcp.main.cachesize = '77';

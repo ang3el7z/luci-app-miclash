@@ -52,6 +52,31 @@ exit 1
 EOF
 cat > "$fixture/bin/ucode" <<'EOF'
 #!/bin/sh
+for argument in "$@"; do
+	[ "$argument" != /usr/share/miclash/guard-runtime.uc ] || guard_runtime=1
+done
+if [ "${guard_runtime:-0}" = 1 ]; then
+	while [ "${1:-}" != /usr/share/miclash/guard-runtime.uc ]; do shift; done
+	shift
+	command="${1:-}"
+	case "$command" in
+		protect) : > "${MICLASH_PACKAGE_TEST_LOG}.emergency-guard" ;;
+		release) rm -f "${MICLASH_PACKAGE_TEST_LOG}.emergency-guard" ;;
+		disable) rm -f "${MICLASH_PACKAGE_TEST_LOG}.emergency-guard" ;;
+		verify-nft)
+			cat >/dev/null
+			[ -f "${MICLASH_PACKAGE_TEST_LOG}.nft-guard" ] || exit 1
+			if [ "${MICLASH_MUTATION_LOCK_PACKAGE:-}" = 1 ]; then
+				: > /var/run/miclash/package-guard-proven
+				cp "$MICLASH_PACKAGE_RULES_SHIM" /opt/clash/bin/clash-rules
+				chmod 0700 /opt/clash/bin/clash-rules
+			fi
+			;;
+		verify-iptables4|verify-iptables6) cat >/dev/null; exit 1 ;;
+		*) exit 1 ;;
+	esac
+	exit $?
+fi
 [ -d /var/run/miclash/package-removal ]
 [ -f /var/run/miclash/guard-active ]
 [ -f /var/run/miclash/package-guard-proven ] || {
@@ -80,6 +105,9 @@ case "$*" in
 esac
 EOF
 chmod 0700 "$fixture/bin/logger" "$fixture/bin/ubus" "$fixture/bin/ucode"
+mkdir -p /usr/bin
+[ -e /usr/bin/ucode ] || : > /usr/bin/ucode
+mount --bind "$fixture/bin/ucode" /usr/bin/ucode
 
 for service in miclashd miclash-autoupdate miclash-memory-guard cron; do
 	cat > "/etc/init.d/$service" <<'EOF'

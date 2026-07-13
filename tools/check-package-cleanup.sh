@@ -25,6 +25,7 @@ mkdir -p "$fixture/bin" "$fixture/nftbin" "$fixture/iptbin" "$fixture/state"
 export MICLASH_CLEANUP_STATE="$fixture/state"
 ln -s /usr/bin/mawk "$fixture/bin/awk"
 
+cp "$repo_root"/luci-app-miclash/rootfs/usr/share/miclash/*.uc /usr/share/miclash/
 cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh" \
 	/usr/share/miclash/mutation-lock.sh
 cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" \
@@ -32,6 +33,32 @@ cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" \
 cp "$repo_root/luci-app-miclash/rootfs/etc/init.d/clash" /etc/init.d/clash
 chmod 0600 /usr/share/miclash/mutation-lock.sh
 chmod 0700 /opt/clash/bin/clash-rules /etc/init.d/clash
+
+cat > "$fixture/bin/ucode" <<'EOF'
+#!/bin/sh
+state="$MICLASH_CLEANUP_STATE"
+while [ "${1:-}" != /usr/share/miclash/guard-runtime.uc ]; do
+	[ "$#" -gt 0 ] || exit 1
+	shift
+done
+shift
+command="${1:-}"
+printf '%s\n' "guard-runtime-$command" >> "$state/guard-runtime.log"
+case "$command" in
+	protect) : > "$state/emergency-active" ;;
+	release) rm -f "$state/emergency-active" ;;
+	disable) rm -f "$state/emergency-active" ;;
+	verify-nft|verify-iptables4|verify-iptables6)
+		cat >/dev/null
+		[ -e "$state/guard-active" ]
+		;;
+	*) exit 1 ;;
+esac
+EOF
+chmod 0700 "$fixture/bin/ucode"
+mkdir -p /usr/bin
+[ -e /usr/bin/ucode ] || : > /usr/bin/ucode
+mount --bind "$fixture/bin/ucode" /usr/bin/ucode
 
 cat > "$fixture/bin/logger" <<'EOF'
 #!/bin/sh
@@ -128,6 +155,9 @@ case "$*" in
 	'list table inet miclash_guard')
 		[ -f "$state/guard-active" ] && echo 'table inet miclash_guard' || exit 1
 		;;
+	'-j list table inet miclash_guard')
+		[ -f "$state/guard-active" ] && echo '{"nftables":[]}' || exit 1
+		;;
 	'list chain inet miclash_guard forward')
 		[ -f "$state/guard-active" ] || exit 1
 		echo 'chain forward { meta nfproto ipv4 drop comment "miclash-guard"; }'
@@ -156,19 +186,28 @@ state="$MICLASH_CLEANUP_STATE"
 printf '%s\n' "$*" >> "$state/iptables.log"
 [ ! -f "$state/fail-iptables-delete" ] || exit 1
 case "$*" in
-	*' -C FORWARD -j MICLASH_GUARD_FORWARD') [ -f "$state/guard-active" ] ;;
+	*' -C OUTPUT -j MICLASH_GUARD_OUTPUT'|*' -S MICLASH_GUARD_OUTPUT') exit 1 ;;
+	*' -C FORWARD -j MICLASH_GUARD_FORWARD')
+		[ -f "$state/guard-jump" ] || exit 1
+		;;
 	*' -S MICLASH_GUARD_FORWARD')
-		[ -f "$state/guard-active" ] || exit 1
+		[ -f "$state/guard-chain" ] || exit 1
 		echo '-A MICLASH_GUARD_FORWARD -j DROP'
 		;;
 	*' -D FORWARD -j MICLASH_GUARD_FORWARD')
-		[ -f "$state/guard-active" ] || exit 1
-		rm -f "$state/guard-active"
+		[ -f "$state/guard-jump" ] || exit 1
+		rm -f "$state/guard-jump" "$state/guard-active"
 		;;
-	*' -N MICLASH_GUARD_FORWARD'|*' -I FORWARD 1 -j MICLASH_GUARD_FORWARD'|*' -A MICLASH_GUARD_FORWARD '*)
+	*' -N MICLASH_GUARD_FORWARD') : > "$state/guard-chain" ;;
+	*' -I FORWARD 1 -j MICLASH_GUARD_FORWARD')
+		: > "$state/guard-jump"; : > "$state/guard-active"
+		;;
+	*' -A MICLASH_GUARD_FORWARD '*)
+		[ -f "$state/guard-chain" ] || exit 1
 		: > "$state/guard-active"
 		;;
-	*' -F MICLASH_GUARD_FORWARD'|*' -X MICLASH_GUARD_FORWARD') ;;
+	*' -F MICLASH_GUARD_FORWARD') ;;
+	*' -X MICLASH_GUARD_FORWARD') rm -f "$state/guard-chain" "$state/guard-active" ;;
 	*' -D '*)
 		[ -s "$state/iptables-rules" ] || exit 1
 		: > "$state/iptables-rules"; : > "$state/iptables-deleted" ;;
@@ -176,6 +215,8 @@ case "$*" in
 esac
 exit 0
 EOF
+cp "$fixture/iptbin/iptables" "$fixture/iptbin/ip6tables"
+cp "$fixture/iptbin/iptables-save" "$fixture/iptbin/ip6tables-save"
 cat > /etc/init.d/dnsmasq <<'EOF'
 #!/bin/sh
 [ "${1:-}" = restart ] || exit 1
@@ -192,6 +233,7 @@ shift
 EOF
 chmod 0700 "$fixture/bin/logger" "$fixture/bin/sysctl" "$fixture/bin/uci" \
 	"$fixture/nftbin/nft" "$fixture/iptbin/iptables" "$fixture/iptbin/iptables-save" \
+	"$fixture/iptbin/ip6tables" "$fixture/iptbin/ip6tables-save" \
 	/etc/init.d/dnsmasq /etc/rc.common
 
 mkdir /var/run/miclash/package-removal
@@ -261,6 +303,12 @@ for failure in fail-iptables-inventory fail-iptables-delete fail-iptables-verify
 	fi
 	[ -f /var/run/miclash/routing-ownership.json ]
 	[ -f /var/run/miclash/guard-active ]
+	if [ "$failure" = fail-iptables-delete ]; then
+		[ -f "$fixture/state/emergency-active" ] || {
+			echo 'iptables Guard mutation failure lost emergency protection' >&2
+			exit 1
+		}
+	fi
 	rm -f "$fixture/state/$failure"
 	run_package_entrypoint /opt/clash/bin/clash-rules package_cleanup
 done

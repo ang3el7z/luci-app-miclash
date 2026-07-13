@@ -177,14 +177,33 @@ work_host=$(mktemp -d "$root/tmp/miclash-network-capture.XXXXXX") || \
 	fail 'cannot create unique isolated work directory'
 case "$work_host/" in "$root/tmp/miclash-network-capture."*) ;; *) fail 'unsafe work path' ;; esac
 cleanup() {
+	rm -f -- "$root/usr/bin/ucode"
 	rm -rf -- "$work_host"
 }
 trap cleanup EXIT HUP INT TERM
 
 work_chroot=${work_host#"$root"}
-mkdir -p "$work_host/bin-common" "$work_host/bin-nft" "$work_host/bin-iptables" "$work_host/records"
+mkdir -p "$work_host/bin-common" "$work_host/bin-nft" "$work_host/bin-iptables" "$work_host/records" \
+	"$root/usr/bin"
 cp "$legacy_rules" "$work_host/clash-rules"
 chmod 0700 "$work_host/clash-rules"
+
+[ ! -e "$root/usr/bin/ucode" ] || fail 'disposable capture root unexpectedly contains /usr/bin/ucode'
+cat > "$work_host/guard-ucode-fake" <<'FAKE'
+#!/bin/sh
+while [ "${1:-}" != /usr/share/miclash/guard-runtime.uc ]; do
+	[ "$#" -gt 0 ] || exit 1
+	shift
+done
+shift
+case "${1:-}" in
+	protect|release|disable) exit 0 ;;
+	verify-nft|verify-iptables4|verify-iptables6) cat >/dev/null; exit 0 ;;
+	*) exit 1 ;;
+esac
+FAKE
+chmod 0700 "$work_host/guard-ucode-fake"
+ln -s "$work_chroot/guard-ucode-fake" "$root/usr/bin/ucode"
 
 cat > "$work_host/network-fake" <<'FAKE'
 #!/bin/sh
@@ -192,7 +211,7 @@ set -u
 cmd=${0##*/}
 case "$cmd" in
 	nft) record="$MICLASH_RECORD_DIR/nft.raw" ;;
-	iptables|ip6tables|ipset) record="$MICLASH_RECORD_DIR/iptables.raw" ;;
+	iptables|ip6tables|iptables-save|ip6tables-save|ipset) record="$MICLASH_RECORD_DIR/iptables.raw" ;;
 	ip) record="$MICLASH_RECORD_DIR/routes.raw" ;;
 	*) exit 127 ;;
 esac
@@ -236,7 +255,9 @@ exit 0
 FAKE
 chmod 0700 "$work_host/network-fake"
 for cmd in nft ip; do cp "$work_host/network-fake" "$work_host/bin-nft/$cmd"; done
-for cmd in iptables ip6tables ipset ip; do cp "$work_host/network-fake" "$work_host/bin-iptables/$cmd"; done
+for cmd in iptables ip6tables iptables-save ip6tables-save ipset ip; do
+	cp "$work_host/network-fake" "$work_host/bin-iptables/$cmd"
+done
 
 cat > "$work_host/control-fake" <<'FAKE'
 #!/bin/sh

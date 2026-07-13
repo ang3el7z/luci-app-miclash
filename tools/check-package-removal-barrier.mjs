@@ -149,6 +149,7 @@ for (const mutator of [ '/opt/clash/bin/clash-rules', '/opt/clash/bin/miclash-up
 	'/etc/hotplug.d/iface/40-clash', '/etc/hotplug.d/net/99-clash-tun',
 	'/usr/share/miclash/routing.uc', '/usr/share/miclash/routing-cleanup.uc',
 	'/usr/share/miclash/guard.uc', '/usr/share/miclash/guard-bootstrap.uc',
+	'/usr/share/miclash/guard_runtime.uc', '/usr/share/miclash/guard-runtime.uc',
 	'/usr/share/miclash/package-remove' ])
 	check(postrm.includes(`[ ! -e ${mutator} ]`),
 		`postrm completion release must prove mutator removal: ${mutator}`);
