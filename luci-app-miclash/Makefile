@@ -336,31 +336,31 @@ define Package/$(PKG_NAME)/postrm
 				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR/complete" 2>/dev/null)" = '0:600' ] && \
 				[ "$$(stat -c '%u:%a' "$$RELEASE_DIR/helper" 2>/dev/null)" = '0:700' ] && \
 				valid_dns_release_proof "$$RELEASE_DIR/dns-ownership.json" && \
-				[ ! -e /var/run/miclash/routing-ownership.json ] && \
-				[ ! -e /etc/miclash/dns-ownership.json ] && \
-				[ ! -e /opt/clash/.dns_backup ] && \
-				[ ! -e /opt/clash/bin/clash-rules ] && \
-				[ ! -e /opt/clash/bin/miclash-update ] && \
-				[ ! -e /opt/clash/bin/miclash-service ] && \
-				[ ! -e /opt/clash/bin/miclash-autoupdate ] && \
-				[ ! -e /opt/clash/bin/miclash-memory-guard ] && \
-				[ ! -e /etc/init.d/clash ] && \
-				[ ! -e /etc/init.d/miclash-autoupdate ] && \
-				[ ! -e /etc/init.d/miclash-memory-guard ] && \
-				[ ! -e /etc/init.d/miclash-guard ] && \
-				[ ! -e /etc/hotplug.d/iface/40-clash ] && \
-				[ ! -e /etc/hotplug.d/net/99-clash-tun ] && \
-				[ ! -e /usr/share/miclash/routing.uc ] && \
-				[ ! -e /usr/share/miclash/routing-cleanup.uc ] && \
-				[ ! -e /usr/share/miclash/dns.uc ] && \
-				[ ! -e /usr/share/miclash/dns-control.uc ] && \
-				[ ! -e /usr/share/miclash/dns-cleanup.uc ] && \
-				[ ! -e /usr/share/miclash/guard.uc ] && \
-				[ ! -e /usr/share/miclash/guard-bootstrap.uc ] && \
-				[ ! -e /usr/share/miclash/guard_runtime.uc ] && \
-				[ ! -e /usr/share/miclash/guard-runtime.uc ] && \
-				[ ! -e /usr/share/miclash/package-remove ] && \
-				[ ! -e /usr/share/miclash/package-release ]; then
+				[ ! -e /var/run/miclash/routing-ownership.json ] && [ ! -L /var/run/miclash/routing-ownership.json ] && \
+				[ ! -e /etc/miclash/dns-ownership.json ] && [ ! -L /etc/miclash/dns-ownership.json ] && \
+				[ ! -e /opt/clash/.dns_backup ] && [ ! -L /opt/clash/.dns_backup ] && \
+				[ ! -e /opt/clash/bin/clash-rules ] && [ ! -L /opt/clash/bin/clash-rules ] && \
+				[ ! -e /opt/clash/bin/miclash-update ] && [ ! -L /opt/clash/bin/miclash-update ] && \
+				[ ! -e /opt/clash/bin/miclash-service ] && [ ! -L /opt/clash/bin/miclash-service ] && \
+				[ ! -e /opt/clash/bin/miclash-autoupdate ] && [ ! -L /opt/clash/bin/miclash-autoupdate ] && \
+				[ ! -e /opt/clash/bin/miclash-memory-guard ] && [ ! -L /opt/clash/bin/miclash-memory-guard ] && \
+				[ ! -e /etc/init.d/clash ] && [ ! -L /etc/init.d/clash ] && \
+				[ ! -e /etc/init.d/miclash-autoupdate ] && [ ! -L /etc/init.d/miclash-autoupdate ] && \
+				[ ! -e /etc/init.d/miclash-memory-guard ] && [ ! -L /etc/init.d/miclash-memory-guard ] && \
+				[ ! -e /etc/init.d/miclash-guard ] && [ ! -L /etc/init.d/miclash-guard ] && \
+				[ ! -e /etc/hotplug.d/iface/40-clash ] && [ ! -L /etc/hotplug.d/iface/40-clash ] && \
+				[ ! -e /etc/hotplug.d/net/99-clash-tun ] && [ ! -L /etc/hotplug.d/net/99-clash-tun ] && \
+				[ ! -e /usr/share/miclash/routing.uc ] && [ ! -L /usr/share/miclash/routing.uc ] && \
+				[ ! -e /usr/share/miclash/routing-cleanup.uc ] && [ ! -L /usr/share/miclash/routing-cleanup.uc ] && \
+				[ ! -e /usr/share/miclash/dns.uc ] && [ ! -L /usr/share/miclash/dns.uc ] && \
+				[ ! -e /usr/share/miclash/dns-control.uc ] && [ ! -L /usr/share/miclash/dns-control.uc ] && \
+				[ ! -e /usr/share/miclash/dns-cleanup.uc ] && [ ! -L /usr/share/miclash/dns-cleanup.uc ] && \
+				[ ! -e /usr/share/miclash/guard.uc ] && [ ! -L /usr/share/miclash/guard.uc ] && \
+				[ ! -e /usr/share/miclash/guard-bootstrap.uc ] && [ ! -L /usr/share/miclash/guard-bootstrap.uc ] && \
+				[ ! -e /usr/share/miclash/guard_runtime.uc ] && [ ! -L /usr/share/miclash/guard_runtime.uc ] && \
+				[ ! -e /usr/share/miclash/guard-runtime.uc ] && [ ! -L /usr/share/miclash/guard-runtime.uc ] && \
+				[ ! -e /usr/share/miclash/package-remove ] && [ ! -L /usr/share/miclash/package-remove ] && \
+				[ ! -e /usr/share/miclash/package-release ] && [ ! -L /usr/share/miclash/package-release ]; then
 					"$$RELEASE_DIR/helper" "$$RELEASE_DIR" || {
 						echo "MiClash package removal barrier remains active; retry postrm" >&2
 						exit 1

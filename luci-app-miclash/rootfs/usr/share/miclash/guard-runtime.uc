@@ -45,6 +45,17 @@ function mutate(runtime, lease, nft, batch) {
 	assert_held(runtime, lease);
 	return ok;
 };
+function mutate_terminal(runtime, lease, nft, batch) {
+	assert_held(runtime, lease);
+	for (let path in [ runtime.paths.tmp, runtime.paths.run ])
+		if (runtime.process.run({ command: '/bin/mkdir', args: [ '-p', path ] }).code != 0)
+			return false;
+	atomic_write(runtime, BATCH, batch, 0o600);
+	// This assertion is deliberately immediately before the one atomic nft
+	// mutation. Once nft succeeds, no later lease operation may flip success.
+	assert_held(runtime, lease);
+	return runtime.process.run({ command: nft, args: [ '-f', BATCH ] }).code == 0;
+};
 function ensure_table(runtime, lease, nft, table) {
 	let present = inventory(nft);
 	if (present == null) return false;
@@ -79,9 +90,11 @@ function disable_bootstrap(runtime, lease, nft) {
 	let lines = [];
 	for (let table in present) push(lines, 'delete table inet ' + table);
 	push(lines, '');
-	if (!mutate(runtime, lease, nft, join('\n', lines))) return false;
-	present = inventory(nft);
-	return present != null && length(present) == 0;
+	if (!mutate_terminal(runtime, lease, nft, join('\n', lines))) return false;
+	// The batch is atomic. A successful nft invocation is the terminal proof;
+	// another inventory could only convert committed success into an unsafe
+	// failure after all bootstrap protection has already been removed.
+	return true;
 };
 function stdin() { return require('fs').readfile('/dev/stdin'); };
 
@@ -96,25 +109,29 @@ function main() {
 	let package_mode = getenv('MICLASH_MUTATION_LOCK_PACKAGE') == '1';
 	if (package_mode && !trusted_package_barrier(runtime)) die('BUSY\n');
 	let lease = acquire(runtime, { barrier: package_mode ? 'package' : 'normal', wait_ms: 0 });
-	let ok = false, thrown = null;
+	let ok = false, thrown = null, terminal_success = false;
 	try {
 		assert_held(runtime, lease);
 		if (ARGV[0] == 'protect' || ARGV[0] == 'release' || ARGV[0] == 'disable') {
 			let nft = nft_binary(runtime);
 			if (nft == null) fail('INTERNAL');
-			ok = ARGV[0] == 'protect' ? protect(runtime, lease, nft) :
-				ARGV[0] == 'release' ? release_emergency(runtime, lease, nft) :
-				disable_bootstrap(runtime, lease, nft);
+			if (ARGV[0] == 'protect') ok = protect(runtime, lease, nft);
+			else if (ARGV[0] == 'release') ok = release_emergency(runtime, lease, nft);
+			else {
+				ok = disable_bootstrap(runtime, lease, nft);
+				terminal_success = ok;
+			}
 		}
 		else {
 			let expected = runtime_guard.interfaces(ARGV[1] ?? '');
 			ok = ARGV[0] == 'verify-nft' ? runtime_guard.verify_nft(stdin(), expected) :
 				runtime_guard.verify_iptables(stdin(), ARGV[0] == 'verify-iptables4' ? 'ipv4' : 'ipv6', expected);
 		}
-		assert_held(runtime, lease);
+		if (!terminal_success) assert_held(runtime, lease);
 	}
 	catch (error) { thrown = error; }
-	try { release(runtime, lease); } catch (error) { if (thrown == null) thrown = error; }
+	try { release(runtime, lease); }
+	catch (error) { if (!terminal_success && thrown == null) thrown = error; }
 	if (thrown != null || !ok) die((thrown?.code ?? thrown?.message ?? 'INTERNAL') + '\n');
 };
 

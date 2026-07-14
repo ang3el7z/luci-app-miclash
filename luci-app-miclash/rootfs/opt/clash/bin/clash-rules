@@ -1475,24 +1475,20 @@ get_wan6_interface() {
 
 # Client forwarding guard: interfaces considered external for fail-closed blocking.
 get_guard_wan_interfaces() {
-    local detected_list=""
-    local user_selected_list=""
-    local wan4=""
-    local wan6=""
-
-    [ -n "$DETECTED_WAN" ] && [ -d "/sys/class/net/$DETECTED_WAN" ] && detected_list="$detected_list $DETECTED_WAN"
-
-    wan4=$(get_wan_interface)
-    [ -n "$wan4" ] && detected_list="$detected_list $wan4"
-
-    wan6=$(get_wan6_interface)
-    [ -n "$wan6" ] && detected_list="$detected_list $wan6"
-
-    if [ -n "$EXCLUDED_INTERFACES" ]; then
-        user_selected_list=$(echo "$EXCLUDED_INTERFACES" | tr ',' ' ' | tr -s ' ' | xargs)
-    fi
-
-    echo "$detected_list $user_selected_list" | tr ' ' '\n' | grep -v '^$' | sort -u
+	[ -z "$DETECTED_WAN" ] || printf '%s\n' "$DETECTED_WAN"
+	ip route show default 2>/dev/null | awk '
+		{ for (field = 1; field < NF; field++) if ($field == "dev") print $(field + 1) }
+	'
+	ip -6 route show default 2>/dev/null | awk '
+		{ for (field = 1; field < NF; field++) if ($field == "dev") print $(field + 1) }
+	'
+	if command -v uci >/dev/null 2>&1; then
+		uci -q get network.wan.device 2>/dev/null || true
+		uci -q get network.wan.ifname 2>/dev/null || true
+		uci -q get network.wan6.device 2>/dev/null || true
+		uci -q get network.wan6.ifname 2>/dev/null || true
+	fi
+	[ -z "$EXCLUDED_INTERFACES" ] || printf '%s\n' "$EXCLUDED_INTERFACES" | tr ',[:space:]' '\n'
 }
 
 format_nft_elements() {
@@ -1501,20 +1497,33 @@ format_nft_elements() {
 
 guard_expected_interfaces=""
 guard_expected_csv=""
+guard_expected_captured=false
 
 capture_guard_expected_interfaces() {
-	local iface
-	guard_expected_interfaces=$(get_guard_wan_interfaces) || return 1
-	for iface in $guard_expected_interfaces; do
+	local candidates iface old_ifs invalid=false
+	[ "$guard_expected_captured" = false ] || return 0
+	candidates=$(get_guard_wan_interfaces) || return 1
+	old_ifs=$IFS
+	IFS='
+'
+	set -f
+	for iface in $candidates; do
 		case "$iface" in
 			''|*[!A-Za-z0-9_.:@-]*)
-				msg "ERROR: Invalid Guard interface identity"
-				return 1
+				invalid=true
 				;;
 		esac
-		[ "${#iface}" -le 15 ] || return 1
+		[ "${#iface}" -le 15 ] || invalid=true
 	done
-	guard_expected_csv=$(printf '%s\n' $guard_expected_interfaces | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
+	set +f
+	IFS=$old_ifs
+	if [ "$invalid" = true ]; then
+		msg "ERROR: Invalid Guard interface identity"
+		return 1
+	fi
+	guard_expected_interfaces=$(printf '%s\n' "$candidates" | sed '/^$/d' | sort -u) || return 1
+	guard_expected_csv=$(printf '%s\n' "$guard_expected_interfaces" | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
+	guard_expected_captured=true
 }
 
 guard_emergency_protect() {
@@ -1551,8 +1560,7 @@ verify_iptables_guard_for_cmd() {
 }
 
 verify_guard_rules() {
-	[ -n "${guard_expected_csv+x}" ] || guard_expected_csv=""
-	[ -n "$guard_expected_interfaces" ] || capture_guard_expected_interfaces || return 1
+	[ "$guard_expected_captured" = true ] || capture_guard_expected_interfaces || return 1
 	if hash nft 2>/dev/null; then
 		verify_nft_guard_rules
 	elif hash iptables 2>/dev/null; then
@@ -1737,6 +1745,7 @@ apply_iptables_guard_rules() {
 }
 
 apply_guard_rules() {
+	guard_expected_captured=false
 	capture_guard_expected_interfaces || return 1
 	guard_emergency_protect || return 1
 
@@ -1812,7 +1821,10 @@ finalize_guard_rules() {
 		return 0
 	fi
 
-	guard_emergency_protect >/dev/null 2>&1 || true
+	if ! guard_emergency_protect; then
+		msg "ERROR: Guard removal failed and emergency Guard could not be freshly proven"
+		return 1
+	fi
 	msg "ERROR: Guard removal failed; verified emergency Guard retained"
 	return 1
 }
@@ -3703,8 +3715,8 @@ case "$1" in
         stop "${2:-false}" "${3:-false}" "${4:-false}"
         ;;
     restart)
-        stop
-        start
+        stop || exit $?
+        start || exit $?
         ;;
     update)
         providers_exist=$(extract_proxy_providers)

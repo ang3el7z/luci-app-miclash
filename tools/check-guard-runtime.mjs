@@ -24,6 +24,13 @@ function body(source, name) {
 	check(next > start, `unterminated function ${name}`);
 	return source.slice(start, next + 2);
 }
+function ucBody(source, name) {
+	const start = source.indexOf(`function ${name}(`);
+	check(start >= 0, `missing function ${name}`);
+	const next = source.indexOf('\n};', start);
+	check(next > start, `unterminated function ${name}`);
+	return source.slice(start, next + 3);
+}
 function ordered(source, names, message) {
 	let at = -1;
 	for (const name of names) {
@@ -44,6 +51,22 @@ check(apply.includes('guard_emergency_release || {') &&
 	apply.slice(apply.indexOf('guard_emergency_release || {')).includes('guard_emergency_protect'),
 	'a failed emergency release must re-establish and freshly prove protection');
 
+const captureExpected = body(rules, 'capture_guard_expected_interfaces');
+const collectExpected = body(rules, 'get_guard_wan_interfaces');
+check(rules.includes('guard_expected_captured=false') &&
+	captureExpected.includes('[ "$guard_expected_captured" = false ] || return 0') &&
+	captureExpected.includes('guard_expected_captured=true') &&
+	apply.indexOf('guard_expected_captured=false') < apply.indexOf('capture_guard_expected_interfaces'),
+	'Guard expected-interface capture must freeze even an intentionally empty snapshot');
+check(collectExpected.includes("awk '") && collectExpected.includes("$field == \"dev\"") &&
+	collectExpected.includes('ip route show default') &&
+	collectExpected.includes('ip -6 route show default'),
+	'Guard capture must enumerate every default-route dev token for both families');
+check((captureExpected.match(/sort -u/g) || []).length === 1,
+	'Guard capture must sort and deduplicate its complete candidate set exactly once');
+check(!collectExpected.includes('sort -u'),
+	'Guard candidate collection must not pre-sort a partial set');
+
 const remove = body(rules, 'remove_guard_rules');
 ordered(remove, [ 'guard_emergency_protect || return 1', 'remove_guard_rules_strict' ],
 	'ordinary runtime removal must establish protection first');
@@ -57,6 +80,32 @@ const finalize = body(rules, 'finalize_guard_rules');
 ordered(finalize, [ 'guard_emergency_protect ||', 'remove_guard_rules_strict',
 	'verify_guard_absent', 'guard_bootstrap_disable' ],
 	'explicit disable must prove protection and runtime absence before release');
+
+const disable = ucBody(entry, 'disable_bootstrap');
+const mutateAt = disable.indexOf('mutate_terminal(runtime, lease, nft');
+check(mutateAt >= 0 && disable.indexOf('inventory(nft)', mutateAt) < 0 &&
+	disable.slice(mutateAt).includes('return true'),
+	'successful atomic bootstrap deletion must be terminal without post-delete inventory');
+check(disable.includes('if (!mutate_terminal(runtime, lease, nft') && disable.includes('return false'),
+	'failed atomic bootstrap deletion must propagate failure for fresh re-protection');
+const terminalMutate = ucBody(entry, 'mutate_terminal');
+const terminalRun = terminalMutate.indexOf("args: [ '-f', BATCH ]");
+check(terminalRun > terminalMutate.lastIndexOf('assert_held(runtime, lease)', terminalRun) &&
+	terminalMutate.lastIndexOf('assert_held(runtime, lease)', terminalRun) >
+		terminalMutate.indexOf('atomic_write(runtime, BATCH') &&
+	terminalMutate.indexOf('assert_held(runtime, lease)', terminalRun) < 0 &&
+	disable.includes('mutate_terminal(runtime, lease, nft'),
+	'terminal deletion must prove lease authority immediately before nft and never assert afterward');
+const main = ucBody(entry, 'main');
+check(main.includes('terminal_success') &&
+	main.includes('if (!terminal_success) assert_held(runtime, lease)') &&
+	main.includes('if (!terminal_success && thrown == null) thrown = error'),
+	'terminal deletion success must make lease cleanup best-effort without flipping status');
+
+const restartAt = rules.indexOf('    restart)');
+const restart = rules.slice(restartAt, rules.indexOf('    update)', restartAt));
+check(/stop\s*\|\|\s*(return|exit)/.test(restart) && /start\s*\|\|\s*(return|exit)/.test(restart),
+	'clash-rules restart must stop on each failed lifecycle phase');
 
 check(!rules.includes("grep -q 'comment \\\"miclash-guard\\\"'") &&
 	!rules.includes("grep -q -- '-j DROP'"),

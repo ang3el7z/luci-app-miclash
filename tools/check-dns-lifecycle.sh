@@ -287,10 +287,14 @@ if [ "${guard_runtime:-0}" = 1 ]; then
 			rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
 			;;
 		disable)
+			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-disable" ] || exit 1
 			rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-post-delete-inventory" ] ||
+				: > "$MICLASH_DNS_GATE_FAIL-guard-inventory"
 			;;
 		verify-nft)
 			cat >/dev/null
+			printf '%s\n' "guard-expected:${2:-}" >> "$MICLASH_DNS_GATE_NFT_LOG"
 			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-verify" ] || exit 1
 			[ -e "$MICLASH_DNS_GATE_NFT_STATE" ]
 			;;
@@ -320,6 +324,19 @@ export PATH
 export MICLASH_DNS_GATE_NFT_STATE="$fixture/nft-guard-active"
 export MICLASH_DNS_GATE_EMERGENCY_STATE="$fixture/nft-guard-emergency"
 export MICLASH_DNS_GATE_NFT_LOG="$fixture/nft.log"
+export MICLASH_DNS_GATE_ROUTE4="$fixture/route4"
+export MICLASH_DNS_GATE_ROUTE6="$fixture/route6"
+export MICLASH_DNS_GATE_IP_LOG="$fixture/ip.log"
+cat > "$fixture/ip" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$MICLASH_DNS_GATE_IP_LOG"
+case "$*" in
+	'route show default') cat "$MICLASH_DNS_GATE_ROUTE4" ;;
+	'-6 route show default') cat "$MICLASH_DNS_GATE_ROUTE6" ;;
+	*) exit 0 ;;
+esac
+EOF
+chmod 0700 "$fixture/ip"
 cat > "$fixture/nft" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$MICLASH_DNS_GATE_NFT_LOG"
@@ -357,6 +374,8 @@ run_actual_rules() {
 	rm -rf /var/run/miclash/mutation.lock /var/run/miclash/mutation.lock.takeover
 	"$fixture/clash-rules.actual" "$@" > "$fixture/rules.out" 2>&1
 }
+: > "$MICLASH_DNS_GATE_ROUTE4"
+: > "$MICLASH_DNS_GATE_ROUTE6"
 printf '%s\n' 'INTERNET_ONLY_MICLASH=true' > /opt/clash/settings
 rm -rf /var/run/miclash/package-removal
 : > "$MICLASH_DNS_GATE_NFT_STATE"
@@ -371,6 +390,54 @@ fi
 if grep -Eq '^(add|delete) ' "$MICLASH_DNS_GATE_NFT_LOG"; then
 	echo 'enabled Guard finalization mutated proven Guard state' >&2; exit 1
 fi
+
+# Production capture collects every route dev token plus saved/manual sources,
+# validates identities, and passes one sorted/deduplicated immutable snapshot to
+# both construction and exact proof.
+cat > "$MICLASH_DNS_GATE_ROUTE4" <<'EOF'
+default proto dhcp scope global metric 900 dev wan-z
+default via 192.0.2.1 metric 10 dev wan-a proto dhcp
+default via 192.0.2.2 dev dup-wan metric 50
+EOF
+cat > "$MICLASH_DNS_GATE_ROUTE6" <<'EOF'
+default from 2001:db8::/64 via fe80::1 proto ra metric 512 dev wan6-z pref medium
+default dev wan-a metric 1024 pref medium
+EOF
+cat > /opt/clash/settings <<'EOF'
+INTERNET_ONLY_MICLASH=true
+DETECTED_WAN=saved-wan
+EXCLUDED_INTERFACES=manual-wan,dup-wan
+EOF
+rm -f "$MICLASH_DNS_GATE_NFT_STATE" "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_IP_LOG"
+run_actual_rules guard_start
+grep -Fxq 'guard-expected:dup-wan,manual-wan,saved-wan,wan-a,wan-z,wan6-z' \
+	"$MICLASH_DNS_GATE_NFT_LOG"
+for iface in dup-wan manual-wan saved-wan wan-a wan-z wan6-z; do
+	grep -Fq "add rule inet miclash_guard forward oifname $iface drop comment miclash-guard" \
+		"$MICLASH_DNS_GATE_NFT_LOG"
+done
+
+printf '%s\n' 'default via 192.0.2.1 metric 20 dev bad/name proto dhcp' \
+	> "$MICLASH_DNS_GATE_ROUTE4"
+: > "$MICLASH_DNS_GATE_ROUTE6"
+printf '%s\n' 'INTERNET_ONLY_MICLASH=true' > /opt/clash/settings
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+if run_actual_rules guard_start; then
+	echo 'Guard capture accepted an invalid route interface identity' >&2; exit 1
+fi
+! grep -Fq 'guard-runtime-protect' "$MICLASH_DNS_GATE_NFT_LOG"
+
+: > "$MICLASH_DNS_GATE_ROUTE4"
+: > "$MICLASH_DNS_GATE_ROUTE6"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_IP_LOG"
+run_actual_rules guard_start
+grep -Fxq 'guard-expected:' "$MICLASH_DNS_GATE_NFT_LOG"
+[ "$(wc -l < "$MICLASH_DNS_GATE_IP_LOG")" -eq 2 ] || {
+	echo 'empty Guard snapshot was re-detected inside one transaction' >&2; exit 1
+}
 
 # A protection precondition failure must occur before any destructive runtime
 # mutation and preserve the last exact runtime Guard.
@@ -431,6 +498,34 @@ grep -Fq 'delete table inet miclash_guard' "$MICLASH_DNS_GATE_NFT_LOG"
 grep -Fq 'guard-runtime-protect' "$MICLASH_DNS_GATE_NFT_LOG"
 ! grep -Fq 'guard-runtime-release' "$MICLASH_DNS_GATE_NFT_LOG"
 rm -f "$MICLASH_DNS_GATE_FAIL-guard-remove"
+
+: > "$MICLASH_DNS_GATE_NFT_STATE"
+rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-guard-disable"
+if run_actual_rules guard_finalize; then
+	echo 'shipped clash-rules ignored atomic bootstrap deletion failure' >&2; exit 1
+fi
+[ -e "$MICLASH_DNS_GATE_EMERGENCY_STATE" ] || {
+	echo 'bootstrap deletion failure was not freshly re-protected' >&2; exit 1
+}
+[ "$(grep -c '^guard-runtime-protect$' "$MICLASH_DNS_GATE_NFT_LOG")" -ge 2 ]
+rm -f "$MICLASH_DNS_GATE_FAIL-guard-disable"
+
+: > "$MICLASH_DNS_GATE_NFT_STATE"
+rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-guard-post-delete-inventory"
+run_actual_rules guard_finalize
+[ ! -e "$MICLASH_DNS_GATE_EMERGENCY_STATE" ]
+[ -e "$MICLASH_DNS_GATE_FAIL-guard-inventory" ]
+awk '
+	/^guard-runtime-disable$/ { disabled = 1; next }
+	disabled && /^guard-runtime-protect$/ { bad = 1 }
+	END { exit(!disabled || bad) }
+' "$MICLASH_DNS_GATE_NFT_LOG"
+rm -f "$MICLASH_DNS_GATE_FAIL-guard-post-delete-inventory" \
+	"$MICLASH_DNS_GATE_FAIL-guard-inventory"
 
 : > "$MICLASH_DNS_GATE_NFT_STATE"
 rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
@@ -530,6 +625,12 @@ procd_set_param() { :; }
 procd_close_instance() { printf '%s\n' procd-close >> "$MICLASH_DNS_GATE_LOG"; }
 run_init_start() ( . "$init"; start_service )
 run_init_stop() ( . "$init"; stop_service )
+run_init_reload() (
+	. "$init"
+	stop() { stop_service_locked; }
+	start() { start_service_locked; }
+	reload_service
+)
 reset_init_state() {
 	reset_state
 	rm -f /var/run/miclash/guard-active /var/run/miclash/firewall-active
@@ -609,6 +710,32 @@ if run_init_stop >/dev/null 2>&1; then
 fi
 assert_guard
 [ ! -e /var/run/miclash/firewall-active ]
+
+reset_init_state
+run_init_start
+: > "$MICLASH_DNS_GATE_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-firewall-stop"
+if run_init_reload >/dev/null 2>&1; then
+	echo 'shipped init reload ignored stop failure' >&2; exit 1
+fi
+assert_guard
+grep -Fq 'rules-stop:false:true:' "$MICLASH_DNS_GATE_LOG"
+if grep -Fq 'rules-start:true' "$MICLASH_DNS_GATE_LOG"; then
+	echo 'shipped init reload started after stop failure' >&2; exit 1
+fi
+rm -f "$MICLASH_DNS_GATE_FAIL-firewall-stop"
+
+reset_init_state
+run_init_start
+: > "$MICLASH_DNS_GATE_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-firewall-start"
+if run_init_reload >/dev/null 2>&1; then
+	echo 'shipped init reload ignored start failure' >&2; exit 1
+fi
+assert_guard
+grep -Fq 'rules-stop:false:true:' "$MICLASH_DNS_GATE_LOG"
+grep -Fq 'rules-start:true' "$MICLASH_DNS_GATE_LOG"
+rm -f "$MICLASH_DNS_GATE_FAIL-firewall-start"
 
 UCODE_BIN="$UCODE_BIN" "$repo_root/tools/run-ucode-tests.sh" \
 	"$repo_root/tests/ucode/test-dns.uc"

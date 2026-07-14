@@ -202,6 +202,28 @@ fi
 guard_present
 
 prepare
+mkdir -p /etc/miclash
+ln -s /nonexistent/miclash-dns-authority /etc/miclash/dns-ownership.json
+if run_postrm; then
+	echo 'actual postrm accepted a dangling DNS authority as absent' >&2
+	exit 1
+fi
+proof_retained
+guard_present
+rm -f /etc/miclash/dns-ownership.json
+
+prepare
+mkdir -p /usr/share/miclash
+ln -s /nonexistent/miclash-dns-control /usr/share/miclash/dns-control.uc
+if run_postrm; then
+	echo 'actual postrm accepted a dangling packaged mutator as absent' >&2
+	exit 1
+fi
+proof_retained
+guard_present
+rm -f /usr/share/miclash/dns-control.uc
+
+prepare
 : > "$BARRIER/unexpected"
 if "$RELEASE/helper" "$RELEASE"; then
 	echo 'release helper ignored unexpected barrier debris' >&2

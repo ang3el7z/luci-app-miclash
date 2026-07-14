@@ -146,13 +146,20 @@ for (const mutator of [ '/opt/clash/bin/clash-rules', '/opt/clash/bin/miclash-up
 	'/opt/clash/bin/miclash-service', '/opt/clash/bin/miclash-autoupdate',
 	'/opt/clash/bin/miclash-memory-guard', '/etc/init.d/clash',
 	'/etc/init.d/miclash-autoupdate', '/etc/init.d/miclash-memory-guard',
+	'/etc/init.d/miclash-guard',
 	'/etc/hotplug.d/iface/40-clash', '/etc/hotplug.d/net/99-clash-tun',
 	'/usr/share/miclash/routing.uc', '/usr/share/miclash/routing-cleanup.uc',
 	'/usr/share/miclash/guard.uc', '/usr/share/miclash/guard-bootstrap.uc',
-	'/usr/share/miclash/guard_runtime.uc', '/usr/share/miclash/guard-runtime.uc',
-	'/usr/share/miclash/package-remove' ])
-	check(postrm.includes(`[ ! -e ${mutator} ]`),
+	'/usr/share/miclash/dns.uc', '/usr/share/miclash/dns-control.uc',
+	'/usr/share/miclash/dns-cleanup.uc', '/usr/share/miclash/guard_runtime.uc',
+	'/usr/share/miclash/guard-runtime.uc', '/usr/share/miclash/package-remove',
+	'/usr/share/miclash/package-release' ])
+	check(postrm.includes(`[ ! -e ${mutator} ]`) && postrm.includes(`[ ! -L ${mutator} ]`),
 		`postrm completion release must prove mutator removal: ${mutator}`);
+for (const authority of [ '/var/run/miclash/routing-ownership.json',
+	'/etc/miclash/dns-ownership.json', '/opt/clash/.dns_backup' ])
+	check(postrm.includes(`[ ! -e ${authority} ]`) && postrm.includes(`[ ! -L ${authority} ]`),
+		`postrm completion release must reject dangling authority: ${authority}`);
 check(postrm.indexOf('rm -f /etc/miclash/guard-bootstrap.json') >
 	postrm.indexOf('valid_release_proof "$$BARRIER/complete"'),
 	'postrm must preserve Guard ownership state unless valid completion is proven');

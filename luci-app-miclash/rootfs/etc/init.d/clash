@@ -353,10 +353,11 @@ reload_service_locked() {
 	package_removal_active && return 1
 	msg "Reloading Clash service..."
 
-	stop
-	start
+	stop || return 1
+	start || return 1
 
 	msg "Clash service reloaded"
+	return 0
 }
 
 # Called by package manager during removal (`/etc/init.d/clash delete`).
