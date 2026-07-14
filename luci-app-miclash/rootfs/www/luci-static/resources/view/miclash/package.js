@@ -12,7 +12,7 @@ async function detectPackageManager() {
 	for (let i = 0; i < checks.length; i++) {
 		try {
 			const probe = await fs.exec(checks[i].bin, ['--version']);
-			if (probe && typeof probe.code === 'number') return checks[i];
+			if (probe && probe.code === 0) return checks[i];
 		} catch (e) {}
 	}
 
