@@ -45,23 +45,6 @@ function parseVersionFromOpkgStatus(raw, packageNames) {
 	return '';
 }
 
-function parseVersionFromApkStatus(raw, packageNames) {
-	const text = String(raw || '');
-	if (!text) return '';
-
-	for (let i = 0; i < packageNames.length; i++) {
-		const escaped = String(packageNames[i] || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		const pattern = new RegExp(
-			'(^|\\n)P:' + escaped + '\\s*[\\s\\S]*?\\nV:([^\\s\\n]+)',
-			'i'
-		);
-		const match = text.match(pattern);
-		if (match && match[2]) return match[2].trim();
-	}
-
-	return '';
-}
-
 function normalizeAppVersion(version) {
 	const str = String(version || '').trim();
 	if (!str) return '';
@@ -188,7 +171,6 @@ return L.Class.extend({
 	parseVersion: parseVersion,
 	parsePackageVersion: parsePackageVersion,
 	parseVersionFromOpkgStatus: parseVersionFromOpkgStatus,
-	parseVersionFromApkStatus: parseVersionFromApkStatus,
 	normalizeAppVersion: normalizeAppVersion,
 	normalizeVersion: normalizeVersion,
 	normalizeReleaseChannel: normalizeReleaseChannel,
