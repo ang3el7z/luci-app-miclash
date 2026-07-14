@@ -1,0 +1,207 @@
+name: Apply direct version fix
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-direct-fix:
+    if: github.event.pull_request.head.ref == 'agent/fix-openwrt25-version-detection-review'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-openwrt25-version-detection-review
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Add regression test first
+        shell: bash
+        run: |
+          cat > tools/check-package-version.mjs <<'EOF'
+          import assert from 'node:assert/strict';
+          import { existsSync, readFileSync } from 'node:fs';
+
+          const configPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js';
+          const packagePath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/package.js';
+          const menuPath = 'luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json';
+          const compatPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config-compat.js';
+
+          function loadModule(source, globals) {
+            return Function(...Object.keys(globals), source)(...Object.values(globals));
+          }
+
+          const packageSource = readFileSync(packagePath, 'utf8');
+          async function detectWith(exitCodes) {
+            const module = loadModule(packageSource, {
+              L: { Class: { extend: (value) => value } },
+              fs: {
+                exec: async (bin) => ({ code: exitCodes[bin] ?? 127 }),
+                read: async () => ''
+              },
+              _: (value) => value
+            });
+            return module.detectPackageManager();
+          }
+
+          assert.deepEqual(await detectWith({ '/bin/opkg': 0 }), { type: 'opkg', bin: '/bin/opkg' });
+          assert.deepEqual(await detectWith({ '/usr/bin/apk': 0, '/bin/opkg': 0 }), { type: 'apk', bin: '/usr/bin/apk' });
+
+          const configSource = readFileSync(configPath, 'utf8');
+          const start = configSource.indexOf('async function getVersions()');
+          const end = configSource.indexOf('\nasync function detectSystemArchitecture()', start);
+          assert.notEqual(start, -1);
+          assert.notEqual(end, -1);
+          const functionSource = configSource.slice(start, end);
+
+          const getVersions = Function(
+            'fs',
+            'parseVersion',
+            'parsePackageVersion',
+            'parseVersionFromOpkgStatus',
+            'normalizeAppVersion',
+            'detectPackageManager',
+            functionSource + '\nreturn getVersions;'
+          );
+
+          const parsePackageVersion = (raw, name) => {
+            const text = String(raw || '').trim();
+            if (text.startsWith(name + ' - ')) return text.slice((name + ' - ').length).split(/\s/)[0];
+            if (text.startsWith(name + '-')) return text.slice((name + '-').length).split(/\s/)[0];
+            return '';
+          };
+          const parseVersionFromOpkgStatus = (raw, names) => {
+            for (const name of names) {
+              const marker = 'Package: ' + name + '\nVersion: ';
+              const index = String(raw || '').indexOf(marker);
+              if (index !== -1) return String(raw).slice(index + marker.length).split(/\s/)[0];
+            }
+            return '';
+          };
+          const normalizeAppVersion = (value) => String(value || '').match(/^\d+(?:\.\d+)+/)?.[0] || '';
+          const parseVersion = (value, fallback) => String(value || '').match(/\d+\.\d+\.\d+/)?.[0] || fallback;
+
+          async function run(manager, packageResult, status = '') {
+            const calls = [];
+            const fs = {
+              exec: async (bin, args) => {
+                calls.push([bin, args]);
+                if (bin === '/opt/clash/bin/clash') return { code: 1, stdout: '', stderr: '' };
+                return packageResult;
+              },
+              read: async (path) => path === '/usr/lib/opkg/status' ? status : ''
+            };
+            const fn = getVersions(
+              fs,
+              parseVersion,
+              parsePackageVersion,
+              parseVersionFromOpkgStatus,
+              normalizeAppVersion,
+              async () => manager
+            );
+            return { result: await fn(), calls };
+          }
+
+          const apk = await run(
+            { type: 'apk', bin: '/usr/bin/apk' },
+            { code: 0, stdout: 'luci-app-miclash-0.9.2-r1\n', stderr: '' }
+          );
+          assert.equal(apk.result.app, '0.9.2');
+          assert.deepEqual(apk.calls.at(-1), ['/usr/bin/apk', ['info', '-v', 'luci-app-miclash']]);
+
+          const opkg = await run(
+            { type: 'opkg', bin: '/bin/opkg' },
+            { code: 0, stdout: 'luci-app-miclash - 0.9.2-r1\n', stderr: '' }
+          );
+          assert.equal(opkg.result.app, '0.9.2');
+          assert.deepEqual(opkg.calls.at(-1), ['/bin/opkg', ['list-installed', 'luci-app-miclash']]);
+
+          const fallback = await run(
+            null,
+            { code: 127, stdout: '', stderr: '' },
+            'Package: luci-app-miclash\nVersion: 0.9.1-r1\n'
+          );
+          assert.equal(fallback.result.app, '0.9.1');
+
+          const menu = JSON.parse(readFileSync(menuPath, 'utf8'));
+          assert.equal(menu['admin/services/miclash'].action.path, 'miclash/config');
+          assert.equal(existsSync(compatPath), false);
+          assert.match(functionSource, /const manager = await detectPackageManager\(\)/);
+          assert.match(functionSource, /manager\.type === 'apk'/);
+          assert.match(functionSource, /fs\.exec\(manager\.bin, args\)/);
+          assert.doesNotMatch(functionSource, /fs\.exec\('\/bin\/opkg'/);
+
+          console.log('package version compatibility checks passed');
+          EOF
+
+          if node tools/check-package-version.mjs; then
+            echo 'Regression test unexpectedly passed before the direct implementation.' >&2
+            exit 1
+          fi
+
+      - name: Apply direct fix
+        shell: python
+        run: |
+          from pathlib import Path
+          import json
+
+          config_path = Path('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js')
+          source = config_path.read_text()
+          old = """\ttry {
+          \t\tconst result = await fs.exec('/bin/opkg', ['list-installed', packageName]);
+          \t\tconst raw = String(result.stdout || '') + '\\n' + String(result.stderr || '');
+          \t\tconst parsed = parsePackageVersion(raw, packageName);
+          \t\tif (parsed) info.app = normalizeAppVersion(parsed);
+          \t} catch (_) {
+          \t\ttry {
+          \t\t\tconst result = await fs.exec('/usr/bin/apk', ['info', '-v', packageName]);
+          \t\t\tconst raw = String(result.stdout || '') + '\\n' + String(result.stderr || '');
+          \t\t\tconst parsed = parsePackageVersion(raw, packageName);
+          \t\t\tif (parsed) info.app = normalizeAppVersion(parsed);
+          \t\t} catch (_) {}
+          \t}
+          """
+          new = """\ttry {
+          \t\tconst manager = await detectPackageManager();
+          \t\tif (manager) {
+          \t\t\tconst args = manager.type === 'apk'
+          \t\t\t\t? ['info', '-v', packageName]
+          \t\t\t\t: ['list-installed', packageName];
+          \t\t\tconst result = await fs.exec(manager.bin, args);
+          \t\t\tif (result && result.code === 0) {
+          \t\t\t\tconst raw = String(result.stdout || '') + '\\n' + String(result.stderr || '');
+          \t\t\t\tconst parsed = parsePackageVersion(raw, packageName);
+          \t\t\t\tif (parsed) info.app = normalizeAppVersion(parsed);
+          \t\t\t}
+          \t\t}
+          \t} catch (_) {}
+          """
+          if source.count(old) != 1:
+            raise SystemExit('Expected exactly one legacy package-version block')
+          config_path.write_text(source.replace(old, new, 1))
+
+          menu_path = Path('luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json')
+          menu = json.loads(menu_path.read_text())
+          menu['admin/services/miclash']['action']['path'] = 'miclash/config'
+          menu_path.write_text(json.dumps(menu, ensure_ascii=False, indent='\t') + '\n')
+
+          Path('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config-compat.js').unlink(missing_ok=True)
+
+      - name: Verify and commit
+        shell: bash
+        run: |
+          node tools/check-package-version.mjs
+          for test_file in tools/check-*.mjs; do
+            node "$test_file"
+          done
+          git diff --check
+          rm -f .github/workflows/apply-direct-version-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: detect package version directly'
+          git push origin HEAD:agent/fix-openwrt25-version-detection-review
