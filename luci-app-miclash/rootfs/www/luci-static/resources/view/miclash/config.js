@@ -230,6 +230,7 @@ const writeSettingsMap = view_miclash_store.writeSettingsMap;
 const parseVersion = view_miclash_release.parseVersion;
 const parsePackageVersion = view_miclash_release.parsePackageVersion;
 const parseVersionFromOpkgStatus = view_miclash_release.parseVersionFromOpkgStatus;
+const parseVersionFromApkStatus = view_miclash_release.parseVersionFromApkStatus;
 const normalizeAppVersion = view_miclash_release.normalizeAppVersion;
 const normalizeVersion = view_miclash_release.normalizeVersion;
 const normalizeReleaseChannel = view_miclash_release.normalizeReleaseChannel;
@@ -272,18 +273,20 @@ async function getVersions() {
 	} catch (e) {}
 
 	try {
-		const result = await fs.exec('/bin/opkg', ['list-installed', packageName]);
-		const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-		const parsed = parsePackageVersion(raw, packageName);
-		if (parsed) info.app = normalizeAppVersion(parsed);
-	} catch (_) {
-		try {
-			const result = await fs.exec('/usr/bin/apk', ['info', '-v', packageName]);
+		const manager = await detectPackageManager();
+		if (manager && manager.type === 'apk') {
+			const result = await fs.exec(manager.bin, ['list', '-I', packageName]);
 			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
 			const parsed = parsePackageVersion(raw, packageName);
 			if (parsed) info.app = normalizeAppVersion(parsed);
-		} catch (_) {}
-	}
+		} else {
+			const bin = manager && manager.type === 'opkg' ? manager.bin : '/bin/opkg';
+			const result = await fs.exec(bin, ['list-installed', packageName]);
+			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
+			const parsed = parsePackageVersion(raw, packageName);
+			if (parsed) info.app = normalizeAppVersion(parsed);
+		}
+	} catch (_) {}
 
 	if (info.app === 'unknown') {
 		try {
@@ -291,6 +294,17 @@ async function getVersions() {
 			const parsed = parseVersionFromOpkgStatus(opkgStatusRaw, [packageName]);
 			if (parsed) info.app = normalizeAppVersion(parsed);
 		} catch (_) {}
+	}
+
+	if (info.app === 'unknown') {
+		const apkStatusPaths = ['/lib/apk/db/installed', '/usr/lib/apk/db/installed'];
+		for (let i = 0; i < apkStatusPaths.length && info.app === 'unknown'; i++) {
+			try {
+				const apkStatusRaw = await fs.read(apkStatusPaths[i]);
+				const parsed = parseVersionFromApkStatus(apkStatusRaw, [packageName]);
+				if (parsed) info.app = normalizeAppVersion(parsed);
+			} catch (_) {}
+		}
 	}
 
 	return info;
