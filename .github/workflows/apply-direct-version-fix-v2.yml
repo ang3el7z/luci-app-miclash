@@ -1,0 +1,99 @@
+name: Apply minimal direct version fix
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/fix-openwrt25-version-detection-review'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-openwrt25-version-detection-review
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Patch config directly
+        shell: python
+        run: |
+          from pathlib import Path
+          import json
+
+          config_path = Path('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js')
+          source = config_path.read_text()
+          old = """\ttry {
+          \t\tconst result = await fs.exec('/bin/opkg', ['list-installed', packageName]);
+          \t\tconst raw = String(result.stdout || '') + '\\n' + String(result.stderr || '');
+          \t\tconst parsed = parsePackageVersion(raw, packageName);
+          \t\tif (parsed) info.app = normalizeAppVersion(parsed);
+          \t} catch (_) {
+          \t\ttry {
+          \t\t\tconst result = await fs.exec('/usr/bin/apk', ['info', '-v', packageName]);
+          \t\t\tconst raw = String(result.stdout || '') + '\\n' + String(result.stderr || '');
+          \t\t\tconst parsed = parsePackageVersion(raw, packageName);
+          \t\t\tif (parsed) info.app = normalizeAppVersion(parsed);
+          \t\t} catch (_) {}
+          \t}
+          """
+          new = """\ttry {
+          \t\tconst manager = await detectPackageManager();
+          \t\tif (manager) {
+          \t\t\tconst args = manager.type === 'apk'
+          \t\t\t\t? ['info', '-v', packageName]
+          \t\t\t\t: ['list-installed', packageName];
+          \t\t\tconst result = await fs.exec(manager.bin, args);
+          \t\t\tif (result && result.code === 0) {
+          \t\t\t\tconst raw = String(result.stdout || '') + '\\n' + String(result.stderr || '');
+          \t\t\t\tconst parsed = parsePackageVersion(raw, packageName);
+          \t\t\t\tif (parsed) info.app = normalizeAppVersion(parsed);
+          \t\t\t}
+          \t\t}
+          \t} catch (_) {}
+          """
+          if source.count(old) != 1:
+              raise SystemExit('Expected exactly one legacy package-version block')
+          config_path.write_text(source.replace(old, new, 1))
+
+          menu_path = Path('luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json')
+          menu = json.loads(menu_path.read_text())
+          menu['admin/services/miclash']['action']['path'] = 'miclash/config'
+          menu_path.write_text(json.dumps(menu, ensure_ascii=False, indent='\t') + '\n')
+
+          Path('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config-compat.js').unlink(missing_ok=True)
+
+      - name: Verify exact source change
+        shell: python
+        run: |
+          from pathlib import Path
+          import json
+
+          source = Path('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js').read_text()
+          start = source.index('async function getVersions()')
+          end = source.index('\nasync function detectSystemArchitecture()', start)
+          block = source[start:end]
+          assert 'const manager = await detectPackageManager();' in block
+          assert "manager.type === 'apk'" in block
+          assert 'fs.exec(manager.bin, args)' in block
+          assert "fs.exec('/bin/opkg'" not in block
+          assert "fs.exec('/usr/bin/apk'" not in block
+          menu = json.loads(Path('luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json').read_text())
+          assert menu['admin/services/miclash']['action']['path'] == 'miclash/config'
+          assert not Path('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config-compat.js').exists()
+
+      - name: Commit direct source fix
+        shell: bash
+        run: |
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js
+          git add luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json
+          git add -u luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config-compat.js
+          git commit -m 'fix: detect package version directly'
+          git push origin HEAD:agent/fix-openwrt25-version-detection-review
