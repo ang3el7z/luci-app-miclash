@@ -84,12 +84,19 @@ const opkg = await loadVersions(
 assert.equal(opkg.data[4].app, '0.9.2');
 assert.deepEqual(opkg.calls, [['/bin/opkg', ['list-installed', 'luci-app-miclash']]]);
 
-const failed = await loadVersions(
+const known = await loadVersions(
 	{ type: 'apk', bin: '/usr/bin/apk' },
-	{ code: 1, stdout: '', stderr: 'not installed' },
+	{ code: 0, stdout: 'luci-app-miclash-9.9.9-r1\n', stderr: '' },
 	'0.9.1'
 );
-assert.equal(failed.data[4].app, '0.9.1', 'a failed compatibility probe must preserve the original result');
+assert.equal(known.data[4].app, '0.9.1', 'an already detected version must be preserved');
+assert.deepEqual(known.calls, [], 'the compatibility probe must not run when the base view already found a version');
+
+const failed = await loadVersions(
+	{ type: 'apk', bin: '/usr/bin/apk' },
+	{ code: 1, stdout: '', stderr: 'not installed' }
+);
+assert.equal(failed.data[4].app, 'unknown', 'a failed compatibility probe must preserve the original result');
 
 const menu = JSON.parse(readFileSync(menuPath, 'utf8'));
 assert.equal(menu['admin/services/miclash'].action.path, 'miclash/config-compat');
