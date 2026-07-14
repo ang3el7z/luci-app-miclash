@@ -3,10 +3,12 @@
 		"title": "MiClash",
 		"action": {
 			"type": "view",
-			"path": "miclash/config-compat"
+			"path": "miclash/config"
 		},
 		"depends": {
-			"acl": [ "luci-app-miclash" ]
+			"acl": [
+				"luci-app-miclash"
+			]
 		},
 		"i18n": "miclash"
 	}

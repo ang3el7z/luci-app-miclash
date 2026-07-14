@@ -272,18 +272,19 @@ async function getVersions() {
 	} catch (e) {}
 
 	try {
-		const result = await fs.exec('/bin/opkg', ['list-installed', packageName]);
-		const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-		const parsed = parsePackageVersion(raw, packageName);
-		if (parsed) info.app = normalizeAppVersion(parsed);
-	} catch (_) {
-		try {
-			const result = await fs.exec('/usr/bin/apk', ['info', '-v', packageName]);
-			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-			const parsed = parsePackageVersion(raw, packageName);
-			if (parsed) info.app = normalizeAppVersion(parsed);
-		} catch (_) {}
-	}
+		const manager = await detectPackageManager();
+		if (manager) {
+			const args = manager.type === 'apk'
+				? ['info', '-v', packageName]
+				: ['list-installed', packageName];
+			const result = await fs.exec(manager.bin, args);
+			if (result && result.code === 0) {
+				const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
+				const parsed = parsePackageVersion(raw, packageName);
+				if (parsed) info.app = normalizeAppVersion(parsed);
+			}
+		}
+	} catch (_) {}
 
 	if (info.app === 'unknown') {
 		try {
