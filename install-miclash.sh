@@ -24,6 +24,7 @@ MICLASH_INSTALLED_NORM=""
 INSTALL_ACTION=""
 PKG_UPDATED=0
 STATUS_FILE=""
+STATUS_TARGET_VERSION=""
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
@@ -55,17 +56,54 @@ write_status() {
     [ -n "$STATUS_FILE" ] || return 0
     state="$1"
     phase="$2"
-    shift 2 || true
-    message="$(status_text "$*")"
+    case "$state:$phase" in
+        running:queued|running:dependencies|running:download|running:install|success:done|failed:error) ;;
+        *) return 1 ;;
+    esac
+    validate_status_authority || return 1
+    updated_at="$(date +%s 2>/dev/null || true)"
+    case "$updated_at" in ''|*[!0-9]*) return 1 ;; esac
+    tmp="$STATUS_FILE.tmp.$$"
+    [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 1
+    (
+        umask 077
+        set -C
+        exec 3> "$tmp"
+        printf 'protocol=miclash-update-status-v1\n' >&3
+        printf 'token=%s\n' "$CURRENT_TOKEN" >&3
+        printf 'state=%s\n' "$state" >&3
+        printf 'phase=%s\n' "$phase" >&3
+        printf 'target_version=%s\n' "$STATUS_TARGET_VERSION" >&3
+        printf 'updated_at=%s\n' "$updated_at" >&3
+        exec 3>&-
+        chmod 0600 "$tmp"
+    ) || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    mv "$tmp" "$STATUS_FILE" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] &&
+        [ "$(stat -c '%u:%a' "$STATUS_FILE" 2>/dev/null)" = 0:600 ]
+}
+
+validate_status_authority() {
+    [ -n "$STATUS_FILE" ] && [ -n "$CURRENT_TOKEN" ] &&
+        [ -n "$STATUS_TARGET_VERSION" ] || return 1
+    case "$STATUS_FILE" in /tmp/miclash/updates/handoff-*.status) ;; *) return 1 ;; esac
     status_dir="${STATUS_FILE%/*}"
-    [ "$status_dir" = "$STATUS_FILE" ] || mkdir -p "$status_dir" 2>/dev/null || true
-    {
-        printf 'state=%s\n' "$state"
-        printf 'phase=%s\n' "$phase"
-        printf 'token=%s\n' "${CURRENT_TOKEN:-}"
-        printf 'message=%s\n' "$message"
-        printf 'updated_at=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } > "$STATUS_FILE.tmp.$$" 2>/dev/null && mv "$STATUS_FILE.tmp.$$" "$STATUS_FILE" 2>/dev/null || true
+    [ "$status_dir" = /tmp/miclash/updates ] || return 1
+    [ ! -L "$status_dir" ] && [ -d "$status_dir" ] || return 1
+    [ "$(stat -c '%u:%a' "$status_dir" 2>/dev/null)" = 0:700 ] || return 1
+    [ "$(readlink -f "$status_dir" 2>/dev/null)" = "$status_dir" ] || return 1
+    status_name="${STATUS_FILE##*/}"
+    operation="${status_name#handoff-}"
+    operation="${operation%.status}"
+    printf '%s\n' "$operation" | grep -Eq '^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$' || return 1
+    printf '%s\n' "$CURRENT_TOKEN" | grep -Eq '^[0-9a-f]{32}$' || return 1
+    printf '%s\n' "$STATUS_TARGET_VERSION" |
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+    if [ -e "$STATUS_FILE" ] || [ -L "$STATUS_FILE" ]; then
+        [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] || return 1
+        [ "$(stat -c '%u:%a' "$STATUS_FILE" 2>/dev/null)" = 0:600 ] || return 1
+        [ "$(readlink -f "$STATUS_FILE" 2>/dev/null)" = "$STATUS_FILE" ] || return 1
+    fi
 }
 
 cleanup() {
@@ -476,12 +514,14 @@ run_app_mode() {
     done
 
     [ -n "$MICLASH_TARGET_TAG" ] || die "missing --target-tag"
+    STATUS_TARGET_VERSION="$MICLASH_TARGET_TAG"
     case "$INSTALL_ACTION" in
         install|update|reinstall) ;;
         *) die "unsupported app mode: $INSTALL_ACTION" ;;
     esac
 
-    write_status running queued "Starting MiClash package update"
+    validate_status_authority || die "invalid update status authority"
+    write_status running queued "Starting MiClash package update" || die "failed to write update status"
     detect_openwrt
     ensure_curl
     fetch_miclash_release
@@ -489,8 +529,28 @@ run_app_mode() {
     pkg_update
     install_deps
     install_miclash
-    write_status success done "MiClash package installed; services remain stopped"
+    write_status success done "MiClash package installed; services remain stopped" || {
+        printf '%s\n' "MiClash package installed, but final status handoff failed" >&2
+        exit 1
+    }
     echo "MiClash package installed; services remain stopped"
+}
+
+run_status_protocol_test() {
+    MICLASH_TARGET_TAG=""
+    STATUS_FILE=""
+    CURRENT_TOKEN=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --target-tag) [ $# -gt 1 ] || return 64; MICLASH_TARGET_TAG="$2"; shift 2 ;;
+            --status-file) [ $# -gt 1 ] || return 64; STATUS_FILE="$2"; shift 2 ;;
+            --token) [ $# -gt 1 ] || return 64; CURRENT_TOKEN="$2"; shift 2 ;;
+            *) return 64 ;;
+        esac
+    done
+    STATUS_TARGET_VERSION="$MICLASH_TARGET_TAG"
+    validate_status_authority || return 65
+    write_status success done || return 70
 }
 
 install_mihomo() {
@@ -590,7 +650,10 @@ main() {
     sep
 }
 
-if [ "${1:-}" = "app" ]; then
+if [ "${1:-}" = "status-protocol-test" ]; then
+    shift
+    run_status_protocol_test "$@"
+elif [ "${1:-}" = "app" ]; then
     shift
     run_app_mode "$@"
 else

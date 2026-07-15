@@ -504,22 +504,27 @@ function prepare_installer(runtime, resolved) {
 	return candidate;
 };
 
-function consume_handoff(runtime, path, token, expected_version) {
+function consume_handoff(runtime, path, token, expected_version, started_at) {
 	let before = runtime.fs.lstat(path);
 	if (before?.type != 'file' || before.nlink != 1 ||
 	    before.mode != 0o600 || (before.uid != null && before.uid != 0) ||
 	    runtime.fs.realpath(path) != path)
 		errors.fail('INTERNAL');
-	let body = runtime.fs.readfile(path), after = runtime.fs.lstat(path), value;
+	let body = runtime.fs.readfile(path), after = runtime.fs.lstat(path);
 	if (type(body) != 'string' || !same_node(before, after) ||
 	    after.mode != 0o600 || (after.uid != null && after.uid != 0) ||
 	    runtime.fs.realpath(path) != path)
 		errors.fail('INTERNAL');
-	try { value = json(body); }
-	catch (error) { errors.fail('INTERNAL'); }
-	exact(value, { token: true, state: true, version: true });
-	if (type(value.token) != 'string' || value.token != token ||
-	    value.state != 'success' || value.version != expected_version)
+	let lines = split(body, '\n');
+	if (length(lines) != 7 || lines[6] != '' ||
+	    lines[0] != 'protocol=miclash-update-status-v1' ||
+	    lines[1] != 'token=' + token || lines[2] != 'state=success' ||
+	    lines[3] != 'phase=done' || lines[4] != 'target_version=' + expected_version)
+		errors.fail('INTERNAL');
+	let found = match(lines[5], /^updated_at=([0-9]+)$/);
+	let updated = found == null ? null : int(found[1]);
+	let now = int(runtime.clock.now() / 1000);
+	if (updated == null || updated < started_at || updated > now + 300)
 		errors.fail('INTERNAL');
 	return { path, identity: after };
 };
@@ -639,10 +644,11 @@ export function create(app) {
 				let token = app.runtime.random.hex(16);
 				if (type(token) != 'string' || !match(token, /^[0-9a-f]{32}$/))
 					errors.fail('INTERNAL');
-				let handoff_path = UPDATE_ROOT + '/handoff-' + ctx.id + '.json';
+				let handoff_path = UPDATE_ROOT + '/handoff-' + ctx.id + '.status';
 				if (app.runtime.fs.lstat(handoff_path) != null)
 					errors.fail('INTERNAL');
 				ctx.stage('install', 75, 'install');
+				let handoff_started = int(app.runtime.clock.now() / 1000);
 				let reply = app.runtime.process.run({ command: '/bin/ash', args: [
 					candidate.path, 'app', '--target-tag', resolved.version,
 					'--mode', 'update', '--status-file', handoff_path, '--token', token
@@ -653,7 +659,8 @@ export function create(app) {
 					errors.fail('INTERNAL');
 				if (!response_ok(reply))
 					errors.fail('HEALTH_FAILED');
-				handoff = consume_handoff(app.runtime, handoff_path, token, resolved.version);
+				handoff = consume_handoff(app.runtime, handoff_path, token,
+					resolved.version, handoff_started);
 				remove_owned(app.runtime, handoff);
 				handoff = null;
 				set_status({ state: 'success', kind: 'miclash', stage: 'done',
@@ -665,7 +672,7 @@ export function create(app) {
 			catch (error) {
 				let normalized = errors.normalize(error);
 				if (handoff == null) {
-					let candidate_path = UPDATE_ROOT + '/handoff-' + ctx.id + '.json';
+					let candidate_path = UPDATE_ROOT + '/handoff-' + ctx.id + '.status';
 					let identity = app.runtime.fs.lstat(candidate_path);
 					if (identity?.type == 'file') handoff = { path: candidate_path, identity };
 				}

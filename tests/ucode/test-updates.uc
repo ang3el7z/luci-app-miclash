@@ -40,6 +40,17 @@ function environment(options) {
 			filesystem.mkdir(directory);
 	let clock = fakes.clock(1700000000000);
 	let process = fakes.process();
+	if (options.stale_handoff) {
+		filesystem.on_lstat = (path, count) => {
+			if (count == 1 && match(path, /\/handoff-.*\.status$/)) {
+				filesystem.writefile(path,
+					'protocol=miclash-update-status-v1\ntoken=' +
+					'0123456789abcdef0123456789abcdef\nstate=success\n' +
+					'phase=done\ntarget_version=v9.9.9\nupdated_at=1\n');
+				filesystem.chmod(path, 0o600);
+			}
+		};
+	}
 	let responses = {
 		[RELEASE_LATEST]: fixture('mihomo-release.json'),
 		[RELEASES]: fixture('mihomo-prereleases.json'),
@@ -121,10 +132,14 @@ function environment(options) {
 			else {
 				let status_path = request.args[index(request.args, '--status-file') + 1];
 				let token = request.args[index(request.args, '--token') + 1];
-				filesystem.writefile(status_path, sprintf('%J', {
-					token: options.forged_handoff ? 'forged' : token,
-					state: 'success', version: 'v9.9.9'
-				}));
+				filesystem.writefile(status_path,
+					'protocol=miclash-update-status-v1\n' +
+					'token=' + (options.forged_handoff ?
+						'fedcba9876543210fedcba9876543210' : token) + '\n' +
+					'state=success\nphase=done\n' +
+					'target_version=v9.9.9\nupdated_at=' +
+					(options.stale_timestamp ? '1' : '1700000000') + '\n' +
+					(options.extra_handoff_field ? 'unexpected=value\n' : ''));
 				if (options.weak_handoff) filesystem.chmod(status_path, 0o644);
 				if (options.fail_installer_run)
 					process.replies[key] = { code: 1 };
@@ -395,6 +410,15 @@ let forged_op = forged.updater.update_miclash({ version: 'v9.9.9' }, 'luci');
 forged.clock.advance(0);
 assert_equal(forged.ops.get(forged_op.id).state, 'failure');
 assert_equal(forged.ops.get(forged_op.id).error.code, 'INTERNAL');
+for (let protocol_failure in [
+	{ stale_handoff: true }, { stale_timestamp: true }, { extra_handoff_field: true }
+]) {
+	let rejected_handoff = environment(protocol_failure);
+	let rejected_handoff_op = rejected_handoff.updater.update_miclash(
+		{ version: 'v9.9.9' }, 'luci');
+	rejected_handoff.clock.advance(0);
+	assert_equal(rejected_handoff.ops.get(rejected_handoff_op.id).state, 'failure');
+}
 let weak_handoff = environment({ weak_handoff: true });
 let weak_handoff_op = weak_handoff.updater.update_miclash(
 	{ version: 'v9.9.9' }, 'luci');
