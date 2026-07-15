@@ -7,6 +7,8 @@ const CAPTURE_PREFIX = '/usr/bin/timeout -s KILL 2 ';
 const TEST_BOOT = '12345678-1234-1234-1234-123456789abc';
 
 let host_fs = require('fs');
+let network_root = 'tests/fixtures/network';
+let network_scenarios = json(host_fs.readfile(network_root + '/scenarios.json')).scenarios;
 assert_equal(host_fs.readfile('luci-app-miclash/rootfs/etc/iproute2/rt_protos.d/miclash.conf'),
 	'242 miclash\n', 'iproute2 protocol 242 has an explicit packaged MiClash reservation');
 assert_equal(host_fs.readfile('luci-app-miclash/rootfs/etc/iproute2/rt_tables.d/miclash.conf'),
@@ -132,6 +134,58 @@ function canonical_rule(item) {
 	return { family: item.family, priority: item.priority, mark: item.mark,
 		mask: item.mask, table: item.table };
 };
+function golden_routing_projection(text, context) {
+	if (text == null) die(context + ': missing route golden');
+	let routes = [], rules = [];
+	for (let line in split(text, '\n')) {
+		if (!length(line) || substr(line, 0, 1) == '#') continue;
+		let fields = split(line, ' '), family = 'ipv4', at = 1;
+		if (fields[at] == '-6') { family = 'ipv6'; at++; }
+		if (fields[at] == 'route' && fields[at + 1] == 'replace') {
+			if (length(fields) == at + 8 && fields[at + 2] == 'local' &&
+			    fields[at + 3] == 'default' && fields[at + 4] == 'dev' &&
+			    fields[at + 6] == 'table' && match(fields[at + 7], /^[0-9]+$/))
+				push(routes, { family, table: int(fields[at + 7]), kind: 'local',
+					destination: 'default', device: fields[at + 5] });
+			else if (length(fields) == at + 7 && fields[at + 2] == 'default' &&
+			    fields[at + 3] == 'dev' && fields[at + 5] == 'table' &&
+			    match(fields[at + 6], /^[0-9]+$/))
+				push(routes, { family, table: int(fields[at + 6]), kind: 'unicast',
+					destination: 'default', device: fields[at + 4] });
+			else if (length(fields) == at + 8 && fields[at + 2] == 'unreachable' &&
+			    fields[at + 3] == 'default' && fields[at + 4] == 'metric' &&
+			    match(fields[at + 5], /^[0-9]+$/) && fields[at + 6] == 'table' &&
+			    match(fields[at + 7], /^[0-9]+$/))
+				push(routes, { family, table: int(fields[at + 7]), kind: 'unreachable',
+					destination: 'default', device: null, unreachable: true,
+					metric: int(fields[at + 5]) });
+			else
+				die(context + ': unsupported route golden line: ' + line);
+		}
+		else if (fields[at] == 'rule' && fields[at + 1] == 'add' &&
+		    length(fields) == at + 8 && fields[at + 2] == 'pref' &&
+		    match(fields[at + 3], /^[0-9]+$/) && fields[at + 4] == 'fwmark' &&
+		    match(fields[at + 5], /^0x[0-9a-f]+$/) && fields[at + 6] == 'table' &&
+		    match(fields[at + 7], /^[0-9]+$/))
+			push(rules, { family, priority: int(fields[at + 3]), mark: fields[at + 5],
+				mask: '0xffffffff', table: int(fields[at + 7]) });
+		else
+			die(context + ': unsupported route golden line: ' + line);
+	}
+	return { routes, rules };
+};
+
+for (let scenario in network_scenarios) {
+	let file = network_root + '/routes/' + scenario.expected.routes;
+	let expected = golden_routing_projection(host_fs.readfile(file), scenario.name + ': ' + file);
+	let compiled = desired(scenario);
+	let actual = {
+		routes: map(compiled.routes, canonical_route),
+		rules: map(compiled.rules, canonical_rule)
+	};
+	assert_equal(encoded(actual), encoded(expected),
+		scenario.name + ': exact compiler-owned routing semantics and order from ' + file);
+}
 function manifest(routes, rules, transition) {
 	return sprintf('%J\n', {
 		version: 2, owner: 'miclash', protocol: 242,
