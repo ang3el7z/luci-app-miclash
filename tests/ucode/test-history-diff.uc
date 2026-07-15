@@ -326,6 +326,32 @@ let after_collision_record = collision.revisions.snapshot_bytes(
 assert_true(after_collision_record.revision != collision_revision);
 assert_equal(collision.fs.readfile(collision_path + '/foreign'), 'foreign');
 
+// A metadata-valid maximum timestamp cannot influence generation until its
+// canonical bytes have also authenticated against the recorded size and hash.
+let corrupt_maximum = environment();
+let corrupt_maximum_record = corrupt_maximum.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'maximum-original\n', {});
+let corrupt_maximum_metadata = read_revision_metadata(
+	corrupt_maximum, corrupt_maximum_record);
+let corrupt_maximum_revision = '9999999999999-' +
+	substr(corrupt_maximum_record.hash, 0, 12) + '-' +
+	split(corrupt_maximum_record.revision, '-')[2];
+corrupt_maximum_metadata.revision = corrupt_maximum_revision;
+corrupt_maximum_metadata.timestamp = 9999999999999;
+corrupt_maximum_metadata.content_revision = corrupt_maximum_revision;
+corrupt_maximum.fs.rename(revision_directory(corrupt_maximum_record),
+	'/opt/clash/history/config.yaml/' + corrupt_maximum_revision);
+corrupt_maximum_record.revision = corrupt_maximum_revision;
+write_revision_metadata(corrupt_maximum, corrupt_maximum_record,
+	corrupt_maximum_metadata);
+corrupt_maximum.fs.writefile(
+	revision_directory(corrupt_maximum_record) + '/config.yaml', 'tampered\n');
+corrupt_maximum.fs.set_mode(
+	revision_directory(corrupt_maximum_record) + '/config.yaml', 0o600);
+let after_corrupt_maximum = corrupt_maximum.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'safe-after-corrupt\n', {});
+assert_equal(after_corrupt_maximum.timestamp, corrupt_maximum.clock.now());
+
 let maximum = environment();
 let maximum_record = maximum.revisions.snapshot_bytes(
 	'config.yaml', 'manual', 'maximum\n', {});
@@ -342,6 +368,68 @@ write_revision_metadata(maximum, maximum_record, maximum_metadata);
 assert_equal(maximum.revisions.list('config.yaml')[0].corrupt, false);
 assert_throws(() => maximum.revisions.snapshot_bytes(
 	'config.yaml', 'manual', 'beyond-maximum\n', {}), 'INTERNAL');
+
+function assert_cross_layout_rejected(current, revision) {
+	let found = null;
+	for (let record in current.revisions.list('config.yaml'))
+		if (record.revision == revision)
+			found = record;
+	assert_equal(found?.corrupt, true);
+	assert_throws(() => current.revisions.read(
+		'config.yaml', revision), 'CORRUPT_STATE');
+	assert_throws(() => current.revisions.get(
+		'config.yaml', revision), 'CORRUPT_STATE');
+	let opened = current.revisions.open_draft('config.yaml', revision, 'luci');
+	assert_equal(finish(current, opened).error.code, 'CORRUPT_STATE');
+	let restored = current.revisions.restore('config.yaml', revision, 'luci');
+	assert_equal(finish(current, restored).error.code, 'CORRUPT_STATE');
+};
+
+// Three-part IDs are directory-only. A paired-file lookalike is visible as
+// corrupt and is rejected by every content-consuming entrypoint.
+let new_as_legacy = environment();
+let new_as_legacy_record = new_as_legacy.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'new-as-legacy\n', {});
+let new_as_legacy_revision = new_as_legacy_record.revision;
+remove_revision_directory(new_as_legacy, new_as_legacy_record);
+let new_as_legacy_base = '/opt/clash/history/config.yaml/' +
+	new_as_legacy_revision;
+new_as_legacy.fs.writefile(new_as_legacy_base + '.yaml', 'new-as-legacy\n');
+new_as_legacy.fs.set_mode(new_as_legacy_base + '.yaml', 0o600);
+new_as_legacy.fs.writefile(new_as_legacy_base + '.json', sprintf('%J\n', {
+	revision: new_as_legacy_revision,
+	filename: new_as_legacy_revision + '.yaml', profile: 'config.yaml',
+	source: 'manual', timestamp: new_as_legacy_record.timestamp,
+	hash: new_as_legacy_record.hash, validation_result: null,
+	activation_result: null, mihomo_version: null, operation_id: null,
+	parent_revision: null, restored_revision: null
+}));
+new_as_legacy.fs.set_mode(new_as_legacy_base + '.json', 0o600);
+assert_cross_layout_rejected(new_as_legacy, new_as_legacy_revision);
+
+// Two-part legacy IDs are paired-file-only. A directory lookalike is likewise
+// visible but never read, opened, or restored.
+let legacy_as_new = environment();
+let legacy_as_new_content = 'legacy-as-new\n';
+let legacy_as_new_hash = legacy_as_new.runtime.digest.sha256(legacy_as_new_content);
+let legacy_as_new_revision = '1699999999999-abcdefabcdefabcd';
+let legacy_as_new_base = '/opt/clash/history/config.yaml/' +
+	legacy_as_new_revision;
+legacy_as_new.fs.mkdir(legacy_as_new_base);
+legacy_as_new.fs.chmod(legacy_as_new_base, 0o700);
+legacy_as_new.fs.writefile(legacy_as_new_base + '/config.yaml',
+	legacy_as_new_content);
+legacy_as_new.fs.set_mode(legacy_as_new_base + '/config.yaml', 0o600);
+legacy_as_new.fs.writefile(legacy_as_new_base + '/metadata.json', sprintf('%J\n', {
+	revision: legacy_as_new_revision, filename: 'config.yaml',
+	profile: 'config.yaml', source: 'manual', timestamp: 1699999999999,
+	hash: legacy_as_new_hash, size: length(legacy_as_new_content),
+	validation_result: null, activation_result: null, mihomo_version: null,
+	operation_id: null, parent_revision: null, restored_revision: null,
+	content_revision: legacy_as_new_revision, duplicate_of: null
+}));
+legacy_as_new.fs.set_mode(legacy_as_new_base + '/metadata.json', 0o600);
+assert_cross_layout_rejected(legacy_as_new, legacy_as_new_revision);
 
 // Opening a historical revision affects Draft only and uses one outer operation.
 let operations_before = length(env.ops.list());

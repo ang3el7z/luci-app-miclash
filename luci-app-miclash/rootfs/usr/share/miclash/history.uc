@@ -243,9 +243,20 @@ export function create(runtime, options) {
 	function revision_files(profile, revision) {
 		let destination = paths(profile, revision);
 		let stat = runtime.fs.lstat(destination.base);
-		if (stat == null)
+		let legacy_yaml = runtime.fs.lstat(destination.legacy_yaml);
+		let legacy_json = runtime.fs.lstat(destination.legacy_json);
+		let directory_layout = length(split(revision, '-')) == 3;
+		if (!directory_layout) {
+			if (stat != null || (legacy_yaml == null) != (legacy_json == null))
+				errors.fail('CORRUPT_STATE');
 			return { yaml: destination.legacy_yaml, json: destination.legacy_json,
 				base: null, identity: null, legacy: true };
+		}
+		if (legacy_yaml != null || legacy_json != null)
+			errors.fail('CORRUPT_STATE');
+		if (stat == null)
+			return { yaml: destination.yaml, json: destination.json,
+				base: destination.base, identity: null, legacy: false };
 		if (stat?.type != 'directory' || runtime.fs.realpath(destination.base) != destination.base ||
 		    (stat.uid != null && stat.uid != 0) ||
 		    (stat.mode != null && (stat.mode & 0o777) != 0o700))
@@ -404,14 +415,14 @@ export function create(runtime, options) {
 		let names = runtime.fs.lsdir(directory(profile));
 		if (type(names) != 'array')
 			errors.fail('INTERNAL');
+		let revisions = {};
 		for (let name in names) {
-			let found = match(name, /^([0-9]{13}-[0-9a-f]{16})\.json$/);
-			let revision = found?.[1];
-			if (revision == null && match(name,
-				/^[0-9]{13}-[0-9a-f]{12}-[0-9a-f]{16}$/))
-				revision = name;
-			if (revision == null)
-				continue;
+			let found = match(name,
+				/^([0-9]{13}-([0-9a-f]{16}|[0-9a-f]{12}-[0-9a-f]{16}))(\.(json|yaml))?$/);
+			if (found != null)
+				revisions[found[1]] = true;
+		}
+		for (let revision in revisions) {
 			try {
 				let record = read_record(profile, revision);
 				canonical_record(profile, record);
@@ -451,13 +462,17 @@ export function create(runtime, options) {
 		let existing_records = all_records(profile);
 		let latest_timestamp = -1;
 		for (let candidate in existing_records) {
-			if (candidate.corrupt === false && candidate.timestamp > latest_timestamp)
-				latest_timestamp = candidate.timestamp;
-			if (candidate.corrupt === false && candidate.hash == hash && candidate.size == length(content))
-				try {
-					if (read_content(profile, candidate.revision).content == content)
-						duplicate = candidate;
-				} catch (error) {}
+			if (candidate.corrupt !== false)
+				continue;
+			let authenticated;
+			try { authenticated = read_content(profile, candidate.revision); }
+			catch (error) { continue; }
+			if (authenticated.record.timestamp > latest_timestamp)
+				latest_timestamp = authenticated.record.timestamp;
+			if (authenticated.record.hash == hash &&
+			    authenticated.record.size == length(content) &&
+			    authenticated.content == content)
+				duplicate = authenticated.record;
 		}
 
 		let revision = null;
