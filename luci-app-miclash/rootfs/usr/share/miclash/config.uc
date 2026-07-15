@@ -232,12 +232,17 @@ export function create(runtime, operations, history) {
 			record_active(profile, candidate_hash, ctx.id);
 			if (!healthy(runtime.service, profile, previous.content)) {
 				history.mark_activation(profile, snapshot.revision, 'health_failed');
-				return { ok: false, error: errors.new('HEALTH_FAILED', 'HEALTH_FAILED', {
-					profile, revision: snapshot.revision
-				}) };
+				return {
+					ok: false,
+					activated: true,
+					reload_ok: false,
+					error: errors.new('HEALTH_FAILED', 'HEALTH_FAILED', {
+						profile, revision: snapshot.revision
+					})
+				};
 			}
 			history.mark_activation(profile, snapshot.revision, 'success');
-			return { ok: true };
+			return { ok: true, activated: true, reload_ok: true };
 		});
 	};
 	function submit(kind, source, profile, worker) {

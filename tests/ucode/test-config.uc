@@ -82,6 +82,8 @@ let internal = internal_env.ops.submit('subscription.update', 'auto', {}, (ctx) 
 });
 assert_equal(finish(internal_env, internal).state, 'success');
 assert_equal(internal_result?.ok, true);
+assert_equal(internal_result?.activated, true);
+assert_equal(internal_result?.reload_ok, true);
 assert_equal(length(internal_env.ops.list()), 1);
 assert_equal(internal_env.fs.readfile('/opt/clash/config.yaml'), fixture('valid.yaml'));
 assert_throws(() => internal_env.cfg.validate_in_operation(
@@ -235,6 +237,16 @@ assert_equal(unhealthy_env.fs.readfile('/opt/clash/config.yaml'),
 assert_equal(unhealthy_env.cfg.read_draft('config.yaml'), 'still-draft\n');
 assert_equal(length(unhealthy_env.revisions.list('config.yaml')), 1);
 assert_equal(unhealthy_env.revisions.list('config.yaml')[0].activation_result, 'health_failed');
+let unhealthy_internal_result = null;
+let unhealthy_internal = unhealthy_env.ops.submit('subscription.update', 'auto', {}, (ctx) => {
+	unhealthy_internal_result = unhealthy_env.cfg.apply_in_operation(
+		ctx, 'config.yaml', fixture('valid.yaml'), 'auto');
+	ctx.complete(unhealthy_internal_result.error);
+	return false;
+});
+assert_equal(finish(unhealthy_env, unhealthy_internal).error.code, 'HEALTH_FAILED');
+assert_equal(unhealthy_internal_result.activated, true);
+assert_equal(unhealthy_internal_result.reload_ok, false);
 
 // Activation passes byte-exact pre-Active controller configuration to reload,
 // then health observes the already replaced Active. Reload failure never rolls back.

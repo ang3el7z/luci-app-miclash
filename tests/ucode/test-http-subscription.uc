@@ -291,7 +291,9 @@ function subscription_environment(responses, initial_settings) {
 		validate: (patch) => patch,
 		set: (patch) => { push(calls.settings, patch); return value; }
 	};
-	let config = { validation_result: { ok: true }, activation_result: { ok: true } };
+	let config = { validation_result: { ok: true }, activation_result: {
+		ok: true, activated: true, reload_ok: true
+	} };
 	config.validate_in_operation = (ctx, profile, content) => {
 			push(calls.validate, { id: ctx.id, profile, content });
 			return config.validation_result;
@@ -336,6 +338,17 @@ assert_equal(direct_sub.calls.validate[0].id, direct_sub.calls.apply[0].id);
 assert_match(direct_sub.calls.apply[0].content, /^mode: rule\n# Proxy Mode: TPROXY\nredir-port: 7892\ntproxy-port: 7894\n/);
 assert_equal(direct_sub.calls.apply[0].extra.download_result, 'success');
 assert_equal(direct_sub.calls.apply[0].extra.validation_result, 'success');
+let scheduled_outcome = direct_sub.client.consume_scheduler_outcome(updated.id);
+assert_equal(scheduled_outcome.downloaded, true);
+assert_equal(scheduled_outcome.validated, true);
+assert_equal(scheduled_outcome.activated, true);
+assert_equal(scheduled_outcome.reload_ok, true);
+assert_equal(scheduled_outcome.interval_hours, 12);
+assert_true(index(sprintf('%J', scheduled_outcome), 'subscriptions.example.test') < 0);
+assert_equal(direct_sub.client.consume_scheduler_outcome(updated.id), null,
+	'scheduler outcome is one-shot');
+assert_throws(() => direct_sub.client.consume_scheduler_outcome('../bad'),
+	'INVALID_ARGUMENT');
 
 // URL + interval validation happens before queue mutation. The valid patch is
 // committed by one central worker and one settings transaction.
@@ -423,12 +436,31 @@ let activation = subscription_environment({
 	'https://subscriptions.example.test/health-fail': { body: yaml }
 });
 activation.config.activation_result = {
-	ok: false, error: errors.new('HEALTH_FAILED', 'HEALTH_FAILED', { profile: 'config.yaml' })
+	ok: false, activated: true, reload_ok: false,
+	error: errors.new('HEALTH_FAILED', 'HEALTH_FAILED', { profile: 'config.yaml' })
 };
 let activation_op = activation.client.update({ profile: 'config.yaml',
 	url: 'https://subscriptions.example.test/health-fail' }, 'auto');
 assert_equal(finish_subscription(activation, activation_op).error.code, 'HEALTH_FAILED');
 assert_equal(length(activation.ops.list()), 1);
+let activation_outcome = activation.client.consume_scheduler_outcome(activation_op.id);
+assert_equal(activation_outcome.downloaded, true);
+assert_equal(activation_outcome.validated, true);
+assert_equal(activation_outcome.activated, true);
+assert_equal(activation_outcome.reload_ok, false);
+assert_equal(activation.ops.get(activation_op.id).stage, 'reload');
+
+// The internal bridge is bounded even when no scheduler consumes manual
+// results. The oldest record expires and the newest remains exact-id scoped.
+let bounded_ids = [];
+for (let index = 0; index < 65; index++) {
+	let operation = direct_sub.client.update({ profile: 'config.yaml',
+		url: 'https://subscriptions.example.test/config.yaml' }, 'luci');
+	push(bounded_ids, operation.id);
+	finish_subscription(direct_sub, operation);
+}
+assert_equal(direct_sub.client.consume_scheduler_outcome(bounded_ids[0]), null);
+assert_equal(direct_sub.client.consume_scheduler_outcome(bounded_ids[64]).reload_ok, true);
 
 // Header/device values and public operation status cannot disclose or inject
 // the subscription secret.

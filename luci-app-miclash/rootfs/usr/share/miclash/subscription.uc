@@ -184,6 +184,25 @@ export function create(app) {
 	    type(app?.settings?.get) != 'function' || type(app?.settings?.validate) != 'function' ||
 	    type(app?.settings?.set) != 'function' || type(adapter?.download) != 'function')
 		invalid();
+	let scheduler_outcomes = {};
+	let scheduler_outcome_order = [];
+
+	function scheduler_outcome(id) {
+		let value = {
+			downloaded: false,
+			validated: false,
+			activated: false,
+			reload_ok: false,
+			interval_hours: null
+		};
+		scheduler_outcomes[id] = value;
+		push(scheduler_outcome_order, id);
+		while (length(scheduler_outcome_order) > 64) {
+			let expired = shift(scheduler_outcome_order);
+			delete scheduler_outcomes[expired];
+		}
+		return value;
+	};
 
 	function current() {
 		let value = app.settings.get();
@@ -276,8 +295,11 @@ export function create(app) {
 		let insecure = match(url, /^http:\/\//) != null;
 		return app.operations.submit('subscription.update', source,
 			{ profile, insecure }, (ctx) => {
+				let outcome = scheduler_outcome(ctx.id);
 				ctx.stage('attempt', 10, 'Subscription attempt started');
 				let candidate = fetch({ url });
+				outcome.downloaded = true;
+				outcome.interval_hours = candidate.interval_hours;
 				ctx.stage('download', 35, 'Subscription downloaded');
 				let content = transform(candidate.content, value.core.proxy_mode,
 					value.core.tun_stack);
@@ -287,19 +309,44 @@ export function create(app) {
 					ctx.complete(checked?.error ?? errors.new('VALIDATION_FAILED'));
 					return false;
 				}
+				outcome.validated = true;
 				ctx.stage('activation', 75, 'Activating subscription');
 				let applied = app.config.apply_in_operation(ctx, profile, content, source, {
 					attempt_result: 'success', download_result: 'success',
 					validation_result: 'success', activation_result: 'pending',
 					reload_result: 'pending', interval_hours: candidate.interval_hours
 				});
+				outcome.activated = applied?.activated === true;
+				outcome.reload_ok = applied?.reload_ok === true;
 				if (applied?.ok !== true) {
-					ctx.complete(applied?.error ?? errors.new('HEALTH_FAILED'));
+					let failure = applied?.error ?? errors.new('HEALTH_FAILED');
+					if (outcome.activated && !outcome.reload_ok &&
+					    errors.normalize(failure).code == 'HEALTH_FAILED') {
+						ctx.stage('reload', 95, 'Subscription reload failed');
+					}
+					ctx.complete(failure);
 					return false;
 				}
+				if (!outcome.activated || !outcome.reload_ok)
+					errors.fail('INTERNAL');
 				ctx.stage('reload', 95, 'Subscription active');
 				return true;
 			});
+	};
+	// One-shot, bounded, in-process bridge for the daemon scheduler. It contains
+	// only stage booleans and a validated interval, never payload or URL data.
+	api.consume_scheduler_outcome = (id) => {
+		id = schema.operation_id(id);
+		let value = scheduler_outcomes[id];
+		if (value == null)
+			return null;
+		delete scheduler_outcomes[id];
+		let remaining = [];
+		for (let candidate in scheduler_outcome_order)
+			if (candidate != id)
+				push(remaining, candidate);
+		scheduler_outcome_order = remaining;
+		return json(sprintf('%J', value));
 	};
 	api.set_url = (options, source) => {
 		exact(options, { profile: true, url: true, interval_hours: true });
