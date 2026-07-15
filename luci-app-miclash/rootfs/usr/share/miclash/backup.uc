@@ -181,6 +181,64 @@ function sorted(values) {
 	return output;
 };
 
+function settings_walk(value, omit_secrets, budget, depth) {
+	if (depth > 16 || --budget.remaining < 0) errors.fail('RESPONSE_TOO_LARGE');
+	if (type(value) == 'array') {
+		let output = [];
+		for (let item in value) push(output,
+			settings_walk(item, omit_secrets, budget, depth + 1));
+		return output;
+	}
+	if (type(value) == 'object') {
+		let output = {};
+		for (let name, item in value) {
+			if (omit_secrets && redact.secret_name(name)) continue;
+			output[name] = settings_walk(item, omit_secrets, budget, depth + 1);
+		}
+		return output;
+	}
+	if (value == null || type(value) == 'string' || type(value) == 'bool' ||
+	    type(value) == 'int' || type(value) == 'double') return value;
+	errors.fail('VALIDATION_FAILED');
+};
+
+function sanitized_settings(value) {
+	if (type(value) != 'object') errors.fail('VALIDATION_FAILED');
+	return settings_walk(value, true, { remaining: 4096 }, 0);
+};
+
+function settings_has_secret(value, budget, depth) {
+	if (depth > 16 || --budget.remaining < 0) errors.fail('RESPONSE_TOO_LARGE');
+	if (type(value) == 'array') {
+		for (let item in value)
+			if (settings_has_secret(item, budget, depth + 1)) return true;
+		return false;
+	}
+	if (type(value) == 'object') {
+		for (let name, item in value) {
+			if (redact.secret_name(name)) return true;
+			if (settings_has_secret(item, budget, depth + 1)) return true;
+		}
+		return false;
+	}
+	if (value == null || type(value) == 'string' || type(value) == 'bool' ||
+	    type(value) == 'int' || type(value) == 'double') return false;
+	errors.fail('VALIDATION_FAILED');
+};
+
+function settings_document(content, secret) {
+	let value;
+	try { value = json(content); }
+	catch (error) { errors.fail('VALIDATION_FAILED'); }
+	if (type(value) != 'object' || content != sprintf('%J\n', value))
+		errors.fail('VALIDATION_FAILED');
+	if (secret === false && settings_has_secret(value, { remaining: 4096 }, 0))
+		errors.fail('VALIDATION_FAILED');
+	// Traverse explicit-secret documents too so depth, size, and value kinds are closed.
+	if (secret === true) settings_walk(value, false, { remaining: 4096 }, 0);
+	return value;
+};
+
 function zeroes(count) {
 	let output = '';
 	for (let i = 0; i < count; i++) output += NUL;
@@ -332,7 +390,7 @@ function validate_manifest(manifest, archive, digest) {
 			errors.fail('VALIDATION_FAILED');
 		includes[include] = true; previous_include = include;
 	}
-	let seen = {}, previous_path = null, derived = {};
+	let seen = {}, previous_path = null, derived = {}, settings_seen = false;
 	for (let file in manifest.files) {
 		let member = archive.by_name[file?.path];
 		if (!exact_fields(file, file_fields) || type(file.secret) != 'bool' ||
@@ -344,12 +402,13 @@ function validate_manifest(manifest, archive, digest) {
 			errors.fail('VALIDATION_FAILED');
 		if (digest(member.content) != file.sha256) errors.fail('VALIDATION_FAILED');
 		seen[file.path] = true; previous_path = file.path;
+		if (file.path == 'settings/settings.json') settings_seen = true;
 		derived[split(file.path, '/')[0]] = true;
 	}
 	for (let member in archive.members)
 		if (member.name != 'manifest.json' && !seen[member.name])
 			errors.fail('VALIDATION_FAILED');
-	if (length(archive.members) != length(manifest.files) + 1 ||
+	if (!settings_seen || length(archive.members) != length(manifest.files) + 1 ||
 	    sprintf('%J', sorted(keys(derived))) != sprintf('%J', manifest.includes))
 		errors.fail('VALIDATION_FAILED');
 	return clone(manifest);
@@ -447,15 +506,6 @@ export function list(app, options) {
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
-function sanitized_settings(value) {
-	let output = clone(value);
-	for (let name in [ 'subscription_url', 'subscription_url_config_yaml',
-		'subscription_url_config2_yaml', 'subscription_url_config3_yaml' ])
-		if (output.core != null) delete output.core[name];
-	if (output.telegram != null) delete output.telegram.token;
-	return output;
-};
-
 function create_impl(app, options, source) {
 	options = validate_options(options, { include_secrets: true });
 	if (options.include_secrets != null && type(options.include_secrets) != 'bool') invalid();
@@ -489,8 +539,11 @@ function create_impl(app, options, source) {
 			push(files, { path, size: captured.size, sha256: captured.sha256, secret: false });
 		}
 		let desired = app.settings.load(env.runtime);
-		desired = include_secrets ? desired : sanitized_settings(desired);
+		desired = include_secrets ?
+			settings_walk(desired, false, { remaining: 4096 }, 0) : sanitized_settings(desired);
 		desired = app.settings.validate_patch(desired);
+		if (!include_secrets && settings_has_secret(desired, { remaining: 4096 }, 0))
+			internal();
 		let settings_text = sprintf('%J\n', desired), settings_path = 'settings/settings.json';
 		if (length(settings_text) > MAX_MEMBER) errors.fail('RESPONSE_TOO_LARGE');
 		contents[settings_path] = settings_text;
@@ -561,7 +614,11 @@ function manifest_from_archive(env, archive) {
 	try { manifest = json(manifest_member.content); }
 	catch (error) { errors.fail('VALIDATION_FAILED'); }
 	if (manifest_member.content != sprintf('%J\n', manifest)) errors.fail('VALIDATION_FAILED');
-	return { manifest: validate_manifest(manifest, parsed, env.runtime.digest.sha256), parsed };
+	manifest = validate_manifest(manifest, parsed, env.runtime.digest.sha256);
+	for (let file in manifest.files)
+		if (file.path == 'settings/settings.json')
+			settings_document(parsed.by_name[file.path].content, file.secret);
+	return { manifest, parsed };
 };
 
 function inspect_impl(app, source_id, options) {
@@ -703,7 +760,20 @@ function inspection_record(app, inspected_id) {
 	}
 	for (let name in safe_names(env.secure, staging, MAX_FILES + 8))
 		if (!expected_top[name]) errors.fail('CORRUPT_STATE');
-	return { env, root, staging, report, manifest: clone(manifest), contents };
+	let staged_archive = {
+		members: [ { name: 'manifest.json', size: staged_manifest.size,
+			content: staged_manifest.content } ],
+		by_name: { 'manifest.json': { name: 'manifest.json', size: staged_manifest.size,
+			content: staged_manifest.content } }
+	};
+	for (let file in manifest.files) {
+		let member = { name: file.path, size: length(contents[file.path]),
+			content: contents[file.path] };
+		push(staged_archive.members, member); staged_archive.by_name[file.path] = member;
+	}
+	try { manifest = validate_manifest(manifest, staged_archive, env.runtime.digest.sha256); }
+	catch (error) { errors.fail('CORRUPT_STATE'); }
+	return { env, root, staging, report, manifest, contents };
 };
 
 function validate_restore_app(app) {
@@ -729,14 +799,16 @@ function validate_restore_contents(app, ctx, inspected) {
 				errors.fail('VALIDATION_FAILED');
 		}
 		else if (file.path == 'settings/settings.json') {
-			try { settings_patch = json(content); }
-			catch (error) { errors.fail('VALIDATION_FAILED'); }
-			if (content != sprintf('%J\n', settings_patch)) errors.fail('VALIDATION_FAILED');
+			settings_patch = settings_document(content, file.secret);
 			try { settings_patch = app.settings.validate_patch(settings_patch); }
 			catch (error) { errors.fail('VALIDATION_FAILED'); }
+			if (file.secret === false &&
+			    settings_has_secret(settings_patch, { remaining: 4096 }, 0))
+				errors.fail('VALIDATION_FAILED');
 		}
 		else errors.fail('VALIDATION_FAILED');
 	}
+	if (settings_patch == null) errors.fail('VALIDATION_FAILED');
 	return settings_patch;
 };
 
@@ -765,7 +837,7 @@ export function restore(app, inspected_id, options, source) {
 						secure_write(inspected.env, rules, substr(file.path, 9),
 							inspected.contents[file.path], 0o600, false);
 				}
-				if (settings_patch != null) app.settings.save(app.runtime, settings_patch);
+				app.settings.save(app.runtime, settings_patch);
 				ctx.stage('reconcile', 90, 'Scheduling reconciliation');
 				let reconciliation = app.reconcile.run('backup_restore');
 				ctx.stage('complete', 100, 'Restore committed');

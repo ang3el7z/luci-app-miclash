@@ -410,3 +410,112 @@ for (let path in [ real_stage + '/escape', real_stage + '/hard',
 	real_settings + '/settings.json', real_stage + '/manifest.json', real_archive, real_links ])
 	real_fs.unlink(path);
 real_fs.rmdir(real_settings); real_fs.rmdir(real_stage); real_fs.rmdir(real_root);
+
+// Shared recursive secret vocabulary: default settings omit classified keys
+// and their entire containers, including camel/acronym spellings and arrays.
+let hostile_settings = {
+	public_key: 'allowed-public',
+	outer: {
+		clientSecret: 'nested-client-secret', APIKey: 'nested-api-key',
+		children: [
+			{ accessToken: 'nested-access-token', safe: 'kept' },
+			{ subscriptionURLConfigYaml: 'nested-subscription', public_value: 'kept-too' },
+			{ credentialBag: { value: 'nested-credential' } }
+		]
+	}
+};
+let recursive_public = make_app();
+recursive_public.app.settings = {
+	load: () => clone(hostile_settings), validate_patch: (value) => clone(value),
+	save: (runtime, value) => { runtime.uci.commit_calls++; return value; }
+};
+let recursive_created = backup.create(recursive_public.app);
+let recursive_bytes = recursive_public.filesystem.readfile('/etc/miclash/backups/' +
+	recursive_created.id + '.tar');
+for (let leaked in [ 'clientSecret', 'APIKey', 'accessToken',
+	'subscriptionURLConfigYaml', 'credentialBag', 'nested-client-secret',
+	'nested-api-key', 'nested-access-token', 'nested-subscription', 'nested-credential' ])
+	assert_true(index(recursive_bytes, leaked) < 0, 'recursive sanitizer leaked ' + leaked);
+assert_true(index(recursive_bytes, 'allowed-public') >= 0);
+
+let recursive_secret = make_app();
+recursive_secret.app.settings = recursive_public.app.settings;
+let recursive_secret_created = backup.create(recursive_secret.app,
+	{ include_secrets: true }, 'system');
+let recursive_secret_bytes = recursive_secret.filesystem.readfile('/etc/miclash/backups/' +
+	recursive_secret_created.id + '.tar');
+assert_true(index(recursive_secret_bytes, 'nested-client-secret') >= 0);
+assert_equal(recursive_secret.filesystem.lstat('/etc/miclash/backups/' +
+	recursive_secret_created.id + '.tar').mode, 0o600);
+let recursive_secret_preview = backup.inspect(recursive_secret.app, recursive_secret_created.id);
+let settings_secret_flag = null;
+for (let file in recursive_secret_preview.files)
+	if (file.path == 'settings/settings.json') settings_secret_flag = file.secret;
+assert_equal(settings_secret_flag, true);
+
+let hostile_inspect = make_app();
+hostile_inspect.app.settings = recursive_public.app.settings;
+let hostile_text = sprintf('%J\n', hostile_settings);
+let hostile_seed = seed_import(hostile_inspect, '00000000000000000000000000000090',
+	{ 'settings/settings.json': hostile_text });
+assert_throws(() => backup.inspect(hostile_inspect.app, hostile_seed.id), 'VALIDATION_FAILED');
+
+// Every v1 manifest requires settings/settings.json, even when the patch is empty.
+let missing_settings = make_app();
+let missing_seed = seed_import(missing_settings, '00000000000000000000000000000091',
+	{ 'rulesets/only.txt': 'DOMAIN,only.test\n' });
+assert_throws(() => backup.inspect(missing_settings.app, missing_seed.id), 'VALIDATION_FAILED');
+
+// Re-sign an inspected tree to emulate a privileged staged-state substitution;
+// restore still re-applies secret:false classification immediately before save.
+let revalidate = make_app();
+revalidate.app.settings = recursive_public.app.settings;
+let safe_seed = seed_import(revalidate, '00000000000000000000000000000092',
+	{ 'settings/settings.json': '{ }\n' });
+let safe_preview = backup.inspect(revalidate.app, safe_seed.id);
+let stage = '/tmp/miclash/backup-inspected/' + safe_preview.id;
+let substituted = sprintf('%J\n', { safe: 'ok', nested: { clientSecret: 'late-secret' } });
+let staged_settings = stage + '/settings/settings.json';
+revalidate.filesystem.files[staged_settings] = substituted;
+revalidate.filesystem.bump_inode(staged_settings); revalidate.filesystem.set_mode(staged_settings, 0o400);
+let manifest_path = stage + '/manifest.json';
+let staged_manifest = json(revalidate.filesystem.readfile(manifest_path));
+for (let file in staged_manifest.files)
+	if (file.path == 'settings/settings.json') {
+		file.size = length(substituted); file.sha256 = revalidate.runtime.digest.sha256(substituted);
+	}
+revalidate.filesystem.files[manifest_path] = sprintf('%J\n', staged_manifest);
+revalidate.filesystem.bump_inode(manifest_path); revalidate.filesystem.set_mode(manifest_path, 0o400);
+let report_path = stage + '/.inspection.json';
+let report = json(revalidate.filesystem.readfile(report_path));
+report.manifest = clone(staged_manifest);
+let manifest_stat = revalidate.filesystem.lstat(manifest_path);
+report.manifest_inode = manifest_stat.inode;
+report.manifest_dev_major = manifest_stat.dev.major; report.manifest_dev_minor = manifest_stat.dev.minor;
+let settings_stat = revalidate.filesystem.lstat(staged_settings);
+for (let captured in report.files)
+	if (captured.path == 'settings/settings.json') {
+		captured.size = length(substituted); captured.sha256 = revalidate.runtime.digest.sha256(substituted);
+		captured.inode = settings_stat.inode;
+		captured.dev_major = settings_stat.dev.major; captured.dev_minor = settings_stat.dev.minor;
+	}
+revalidate.filesystem.files[report_path] = sprintf('%J\n', report);
+revalidate.filesystem.bump_inode(report_path); revalidate.filesystem.set_mode(report_path, 0o600);
+assert_throws(() => backup.restore(revalidate.app, safe_preview.id), 'VALIDATION_FAILED');
+assert_equal(revalidate.runtime.uci.commit_calls, 0);
+
+// Default restore preserves the current secrets and commits the empty/sanitized patch once.
+let preserve = make_app(), preserve_created = backup.create(preserve.app);
+let preserve_preview = backup.inspect(preserve.app, preserve_created.id);
+let preserve_cursor = preserve.runtime.uci.cursor();
+assert_equal(preserve_cursor.set('miclash', 'telegram', 'token', 'new-current-token'), true);
+assert_equal(preserve_cursor.set('miclash', 'core', 'subscription_url',
+	'https://new-current.example/sub'), true);
+assert_equal(preserve_cursor.commit('miclash'), true);
+let commits_before = preserve.runtime.uci.commit_calls;
+backup.restore(preserve.app, preserve_preview.id);
+let preserved = settings.load(preserve.runtime);
+assert_equal(preserved.telegram.token, 'new-current-token');
+assert_equal(preserved.core.subscription_url, 'https://new-current.example/sub');
+assert_equal(preserve.runtime.uci.commit_calls, commits_before + 1);
+assert_equal(invalid_box.runtime.uci.commit_calls, 0, 'failed restore committed UCI');
