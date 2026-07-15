@@ -501,6 +501,29 @@ for (let captured in report.files)
 	}
 revalidate.filesystem.files[report_path] = sprintf('%J\n', report);
 revalidate.filesystem.bump_inode(report_path); revalidate.filesystem.set_mode(report_path, 0o600);
+let revalidate_journal_name = revalidate.filesystem.lsdir(
+	'/tmp/miclash/backup-transactions')[0];
+let revalidate_journal_path = '/tmp/miclash/backup-transactions/' + revalidate_journal_name;
+let revalidate_journal = json(revalidate.filesystem.readfile(revalidate_journal_path));
+let report_stat = revalidate.filesystem.lstat(report_path);
+for (let registered in revalidate_journal.files) {
+	let changed_path = null;
+	if (registered.path == 'settings/settings.json') changed_path = staged_settings;
+	else if (registered.path == 'manifest.json') changed_path = manifest_path;
+	else if (registered.path == '.inspection.json') changed_path = report_path;
+	if (changed_path != null) {
+		let changed = revalidate.filesystem.lstat(changed_path);
+		registered.size = changed.size;
+		registered.sha256 = revalidate.runtime.digest.sha256(
+			revalidate.filesystem.readfile(changed_path));
+		registered.identity = { type: 'file', inode: changed.inode,
+			dev_major: changed.dev.major, dev_minor: changed.dev.minor,
+			uid: changed.uid, mode: changed.mode, nlink: changed.nlink, size: changed.size };
+	}
+}
+revalidate.filesystem.files[revalidate_journal_path] = sprintf('%J\n', revalidate_journal);
+revalidate.filesystem.bump_inode(revalidate_journal_path);
+revalidate.filesystem.set_mode(revalidate_journal_path, 0o600);
 assert_throws(() => backup.restore(revalidate.app, safe_preview.id), 'VALIDATION_FAILED');
 assert_equal(revalidate.runtime.uci.commit_calls, 0);
 
@@ -519,3 +542,214 @@ assert_equal(preserved.telegram.token, 'new-current-token');
 assert_equal(preserved.core.subscription_url, 'https://new-current.example/sub');
 assert_equal(preserve.runtime.uci.commit_calls, commits_before + 1);
 assert_equal(invalid_box.runtime.uci.commit_calls, 0, 'failed restore committed UCI');
+
+function transaction_names(box) {
+	return box.filesystem.lsdir('/tmp/miclash/backup-transactions') ?? [];
+};
+
+// Journal registration is durable before every risky create phase.
+let marker_order = make_app(), marker_seen = false;
+marker_order.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (operation == 'write' && match(name, /\.tar\.tmp$/)) {
+		let names = transaction_names(marker_order);
+		marker_seen = length(names) == 1 &&
+			marker_order.filesystem.lstat('/tmp/miclash/backup-transactions/' + names[0]).mode == 0o600;
+	}
+};
+backup.create(marker_order.app);
+assert_equal(marker_seen, true, 'archive temp was exposed before durable transaction marker');
+assert_equal(length(transaction_names(marker_order)), 0, 'completed create retained journal');
+
+function create_crash(operation, predicate, suffix) {
+	let box = make_app(), fired = false;
+	box.app.secure_fs.after = (seen_operation, directory, name, extra) => {
+		if (!fired && seen_operation == operation && predicate(name, extra)) {
+			fired = true; die('simulated-process-crash-' + suffix);
+		}
+	};
+	assert_throws(() => backup.create(box.app), 'INTERNAL');
+	box.app.secure_fs.after = null;
+	backup.list(box.app); // fresh public entry/new domain instance recovery
+	assert_equal(length(box.filesystem.lsdir('/etc/miclash/backups')), 0,
+		'create crash residue survived ' + suffix);
+	assert_equal(length(transaction_names(box)), 0, 'journal survived recovery ' + suffix);
+};
+create_crash('write', (name) => match(name, /\.tar\.tmp$/), 'temp-write');
+create_crash('write', (name) => match(name, /^b-[0-9]{13}-[0-9a-f]{32}\.json$/),
+	'sidecar-write');
+create_crash('rename', (name) => match(name, /\.tar$/), 'archive-publish');
+
+// Inspection marker precedes staging writes; partial and never-ready previews
+// are recovered on a later public entry, while active previews survive.
+let inspect_order = make_app();
+let inspect_order_seed = seed_import(inspect_order,
+	'00000000000000000000000000000093', { 'settings/settings.json': '{ }\n' });
+let inspect_marker_seen = false;
+inspect_order.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (operation == 'write' && name == 'settings.json')
+		inspect_marker_seen = length(transaction_names(inspect_order)) == 1;
+};
+let inspect_order_preview = backup.inspect(inspect_order.app, inspect_order_seed.id);
+assert_equal(inspect_marker_seen, true, 'inspection wrote member before transaction marker');
+assert_equal(length(transaction_names(inspect_order)), 1,
+	'active preview must retain recovery authority');
+
+let partial_inspect = make_app();
+let partial_seed = seed_import(partial_inspect,
+	'00000000000000000000000000000094', { 'settings/settings.json': '{ }\n' });
+let partial_fired = false;
+partial_inspect.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!partial_fired && operation == 'write' && name == 'settings.json') {
+		partial_fired = true; die('simulated-inspect-crash');
+	}
+};
+assert_throws(() => backup.inspect(partial_inspect.app, partial_seed.id), 'CORRUPT_STATE');
+partial_inspect.app.secure_fs.after = null;
+backup.list(partial_inspect.app);
+assert_equal(length(partial_inspect.filesystem.lsdir('/tmp/miclash/backup-inspected')), 0);
+assert_equal(length(transaction_names(partial_inspect)), 0);
+
+inspect_order.runtime.clock.advance(900001);
+backup.list(inspect_order.app);
+assert_equal(inspect_order.filesystem.lstat('/tmp/miclash/backup-inspected/' +
+	inspect_order_preview.id), null, 'expired preview was not recovered on list');
+assert_equal(length(transaction_names(inspect_order)), 0);
+
+// Prune intent is journaled before the first rename.
+let prune_marker = make_app();
+backup.create(prune_marker.app); prune_marker.runtime.clock.advance(1);
+backup.create(prune_marker.app);
+let prune_marker_seen = false;
+prune_marker.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (operation == 'rename' && match(name, /\.json$/))
+		prune_marker_seen = length(transaction_names(prune_marker)) == 1;
+};
+backup.prune(prune_marker.app, { retain: 1 });
+assert_equal(prune_marker_seen, true, 'prune renamed before transaction marker');
+assert_equal(length(transaction_names(prune_marker)), 0);
+
+// Unknown or stale journal state is ambiguity: fail closed without mutation.
+let foreign_journal = make_app();
+mkdirs(foreign_journal.filesystem, [ '/tmp/miclash/backup-transactions' ]);
+let foreign_journal_path = '/tmp/miclash/backup-transactions/foreign';
+foreign_journal.filesystem.files[foreign_journal_path] = 'foreign';
+foreign_journal.filesystem.bump_inode(foreign_journal_path);
+foreign_journal.filesystem.set_mode(foreign_journal_path, 0o600);
+foreign_journal.filesystem.set_uid(foreign_journal_path, 0);
+assert_throws(() => backup.list(foreign_journal.app), 'INTERNAL');
+assert_equal(foreign_journal.filesystem.readfile(foreign_journal_path), 'foreign');
+
+let report_crash = make_app();
+let report_crash_seed = seed_import(report_crash,
+	'00000000000000000000000000000095', { 'settings/settings.json': '{ }\n' });
+let report_fired = false;
+report_crash.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!report_fired && operation == 'write' && name == '.inspection.json') {
+		report_fired = true; die('simulated-report-crash');
+	}
+};
+assert_throws(() => backup.inspect(report_crash.app, report_crash_seed.id), 'CORRUPT_STATE');
+report_crash.app.secure_fs.after = null;
+backup.list(report_crash.app);
+assert_equal(length(report_crash.filesystem.lsdir('/tmp/miclash/backup-inspected')), 0);
+assert_equal(length(transaction_names(report_crash)), 0);
+
+function prune_crash(operation, predicate, label) {
+	let box = make_app();
+	backup.create(box.app); box.runtime.clock.advance(1); backup.create(box.app);
+	let fired = false;
+	box.app.secure_fs.after = (seen, directory, name, extra) => {
+		if (!fired && seen == operation && predicate(name, extra)) {
+			fired = true; die('simulated-prune-crash-' + label);
+		}
+	};
+	assert_throws(() => backup.prune(box.app, { retain: 1 }), 'INTERNAL');
+	box.app.secure_fs.after = null;
+	let visible = backup.list(box.app);
+	assert_equal(length(visible), 1, 'prune did not converge after ' + label);
+	assert_equal(length(transaction_names(box)), 0, 'prune journal survived ' + label);
+};
+prune_crash('rename', (name) => match(name, /\.prune-.*\.json$/), 'side-rename');
+prune_crash('rename', (name) => match(name, /\.prune-.*\.tar$/), 'archive-rename');
+prune_crash('unlink', (name) => match(name, /\.prune-.*\.tar$/), 'archive-unlink');
+
+let stale = make_app(), stale_seed = seed_import(stale,
+	'00000000000000000000000000000096', { 'settings/settings.json': '{ }\n' });
+let stale_preview = backup.inspect(stale.app, stale_seed.id);
+let stale_name = transaction_names(stale)[0];
+let stale_path = '/tmp/miclash/backup-transactions/' + stale_name;
+let stale_record = json(stale.filesystem.readfile(stale_path));
+stale_record.created_at = 0; stale_record.expires_at = 900000;
+stale.filesystem.files[stale_path] = sprintf('%J\n', stale_record);
+stale.filesystem.bump_inode(stale_path); stale.filesystem.set_mode(stale_path, 0o600);
+assert_throws(() => backup.list(stale.app), 'INTERNAL');
+assert_true(stale.filesystem.lstat('/tmp/miclash/backup-inspected/' + stale_preview.id) != null,
+	'stale ambiguous journal mutated its registered stage');
+
+let too_many = make_app();
+mkdirs(too_many.filesystem, [ '/tmp/miclash/backup-transactions' ]);
+for (let i = 0; i < 65; i++) {
+	let name = sprintf('/tmp/miclash/backup-transactions/t-%013d-%032x.json',
+		1700000000000, i + 1);
+	too_many.filesystem.files[name] = 'foreign'; too_many.filesystem.bump_inode(name);
+	too_many.filesystem.set_mode(name, 0o600); too_many.filesystem.set_uid(name, 0);
+}
+assert_throws(() => backup.list(too_many.app), 'INTERNAL');
+assert_equal(length(transaction_names(too_many)), 65, 'journal count ambiguity mutated files');
+
+// A directory/inode replacement at cleanup is atomically refused; no link is
+// followed and the foreign target remains unchanged.
+let cleanup_race = make_app(), cleanup_seed = seed_import(cleanup_race,
+	'00000000000000000000000000000097', { 'settings/settings.json': '{ }\n' });
+cleanup_race.filesystem.files['/opt/clash/cleanup-foreign'] = 'foreign-cleanup';
+cleanup_race.filesystem.set_mode('/opt/clash/cleanup-foreign', 0o600);
+cleanup_race.filesystem.set_uid('/opt/clash/cleanup-foreign', 0);
+let cleanup_failed = false, cleanup_swapped = false;
+cleanup_race.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!cleanup_failed && operation == 'write' && name == 'settings.json') {
+		cleanup_failed = true; die('force-cleanup');
+	}
+};
+cleanup_race.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (!cleanup_swapped && operation == 'rmdir' && match(name, /^x-/)) {
+		cleanup_swapped = true;
+		cleanup_race.filesystem.set_symlink(directory.opaque + '/' + name,
+			'/opt/clash/cleanup-foreign');
+	}
+};
+assert_throws(() => backup.inspect(cleanup_race.app, cleanup_seed.id), 'CORRUPT_STATE');
+assert_equal(cleanup_race.filesystem.readfile('/opt/clash/cleanup-foreign'), 'foreign-cleanup');
+
+let unsafe_temp = make_app(), unsafe_temp_fired = false;
+unsafe_temp.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!unsafe_temp_fired && operation == 'write' && match(name, /\.tar\.tmp$/)) {
+		unsafe_temp_fired = true;
+		unsafe_temp.filesystem.set_mode(directory.opaque + '/' + name, 0o644);
+	}
+};
+assert_throws(() => backup.create(unsafe_temp.app,
+	{ include_secrets: true }, 'system'), 'INTERNAL');
+unsafe_temp.app.secure_fs.after = null;
+backup.list(unsafe_temp.app);
+assert_equal(length(unsafe_temp.filesystem.lsdir('/etc/miclash/backups')), 0,
+	'0644 secret archive temp survived recovery');
+assert_equal(length(transaction_names(unsafe_temp)), 0);
+
+let never_returned = make_app();
+let never_seed = seed_import(never_returned,
+	'00000000000000000000000000000098', { 'settings/settings.json': '{ }\n' });
+let ready_fired = false;
+never_returned.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!ready_fired && operation == 'write' && match(name, /^t-.*\.json$/)) {
+		let record = json(never_returned.filesystem.readfile(directory.opaque + '/' + name));
+		if (record.phase == 'ready') { ready_fired = true; die('never-returned-preview'); }
+	}
+};
+assert_throws(() => backup.inspect(never_returned.app, never_seed.id), 'CORRUPT_STATE');
+never_returned.app.secure_fs.after = null;
+backup.list(never_returned.app);
+assert_equal(length(never_returned.filesystem.lsdir('/tmp/miclash/backup-inspected')), 0);
+assert_equal(length(transaction_names(never_returned)), 0);
+cleanup_race.app.secure_fs.after = null; cleanup_race.app.secure_fs.before = null;
+assert_throws(() => backup.list(cleanup_race.app), 'INTERNAL');
+assert_equal(cleanup_race.filesystem.readfile('/opt/clash/cleanup-foreign'), 'foreign-cleanup');

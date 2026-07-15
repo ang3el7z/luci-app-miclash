@@ -28,7 +28,10 @@ import * as schema from 'miclash.schema';
 const BACKUP_ROOT = '/etc/miclash/backups';
 const IMPORT_ROOT = '/tmp/miclash/imports';
 const INSPECT_ROOT = '/tmp/miclash/backup-inspected';
+const TRANSACTION_ROOT = '/tmp/miclash/backup-transactions';
 const INSPECTION_TTL = 900000;
+const MAX_TRANSACTION_AGE = 86400000;
+const MAX_TRANSACTIONS = 64;
 const MAX_ARCHIVE = 16777216;
 const MAX_MEMBER = 4194304;
 const MAX_MANIFEST = 65536;
@@ -481,6 +484,282 @@ function remove_tree(env, parent, name, expected) {
 	catch (error) { return false; }
 };
 
+function identity_record(identity) {
+	if (identity == null) return null;
+	return {
+		type: identity.type, inode: identity.inode,
+		dev_major: identity.dev?.major, dev_minor: identity.dev?.minor,
+		uid: identity.uid, mode: identity.mode, nlink: identity.nlink, size: identity.size
+	};
+};
+
+function record_identity(record) {
+	if (record == null) return null;
+	return {
+		type: record.type, inode: record.inode,
+		dev: { major: record.dev_major, minor: record.dev_minor },
+		uid: record.uid, mode: record.mode, nlink: record.nlink, size: record.size
+	};
+};
+
+function valid_identity_record(record, kind) {
+	return record == null || (exact_fields(record, {
+		type: true, inode: true, dev_major: true, dev_minor: true,
+		uid: true, mode: true, nlink: true, size: true
+	}) && record.type == kind && type(record.inode) == 'int' &&
+		type(record.dev_major) == 'int' && type(record.dev_minor) == 'int' &&
+		record.uid == 0 && record.nlink == 1 && type(record.mode) == 'int' &&
+		type(record.size) == 'int' && record.size >= 0);
+};
+
+const JOURNAL_FIELDS = {
+	schema: true, id: true, kind: true, created_at: true, phase: true,
+	backup_id: true, temp_name: true, archive_name: true, sidecar_name: true,
+	archive_size: true, archive_sha256: true, sidecar_size: true, sidecar_sha256: true,
+	temp_identity: true, archive_identity: true, sidecar_identity: true,
+	inspection_id: true, expires_at: true, stage_identity: true, files: true, cursor: true,
+	prune_id: true, archive_tomb: true, sidecar_tomb: true
+};
+
+function journal_base(id, kind, created_at) {
+	return {
+		schema: 1, id, kind, created_at, phase: 'planned',
+		backup_id: null, temp_name: null, archive_name: null, sidecar_name: null,
+		archive_size: null, archive_sha256: null, sidecar_size: null, sidecar_sha256: null,
+		temp_identity: null, archive_identity: null, sidecar_identity: null,
+		inspection_id: null, expires_at: null, stage_identity: null, files: null, cursor: 0,
+		prune_id: null, archive_tomb: null, sidecar_tomb: null
+	};
+};
+
+function valid_journal_file(file) {
+	let maximum = file?.path == '.inspection.json' ? MAX_REPORT :
+		(file?.path == 'manifest.json' ? MAX_MANIFEST : MAX_MEMBER);
+	return exact_fields(file, { path: true, size: true, sha256: true, mode: true,
+		identity: true }) && canonical_member_name(file.path) &&
+		type(file.size) == 'int' && file.size >= 0 && file.size <= maximum &&
+		match(file.sha256, /^[0-9a-f]{64}$/) &&
+		(file.mode == 0o400 || file.mode == 0o600) &&
+		valid_identity_record(file.identity, 'file');
+};
+
+function valid_journal(record, name, now) {
+	if (!exact_fields(record, JOURNAL_FIELDS) || record.schema != 1 ||
+	    name != record.id + '.json' ||
+	    !match(record.id, /^t-[0-9]{13}-[0-9a-f]{32}$/) ||
+	    type(record.created_at) != 'int' || record.created_at < 0 ||
+	    now < record.created_at || now - record.created_at > MAX_TRANSACTION_AGE ||
+	    type(record.phase) != 'string' || type(record.cursor) != 'int' || record.cursor < 0)
+		return false;
+	if (!valid_identity_record(record.temp_identity, 'file') ||
+	    !valid_identity_record(record.archive_identity, 'file') ||
+	    !valid_identity_record(record.sidecar_identity, 'file') ||
+	    !valid_identity_record(record.stage_identity, 'directory')) return false;
+	if (record.kind == 'create')
+		return valid_id(record.backup_id, 'b') &&
+			match(record.temp_name, /^\.b-[0-9]{13}-[0-9a-f]{32}\.tar\.tmp$/) &&
+			record.archive_name == record.backup_id + '.tar' &&
+			record.sidecar_name == record.backup_id + '.json' &&
+			type(record.archive_size) == 'int' && record.archive_size > 0 &&
+			record.archive_size <= MAX_ARCHIVE && match(record.archive_sha256, /^[0-9a-f]{64}$/) &&
+			type(record.sidecar_size) == 'int' && record.sidecar_size > 0 &&
+			record.sidecar_size <= MAX_MANIFEST && match(record.sidecar_sha256, /^[0-9a-f]{64}$/) &&
+			exists({ planned: true, temp: true, side_planned: true, side: true,
+				publish_planned: true, published: true, complete: true }, record.phase) &&
+			record.inspection_id == null && record.expires_at == null &&
+			record.stage_identity == null && record.files == null && record.cursor == 0 &&
+			record.prune_id == null && record.archive_tomb == null && record.sidecar_tomb == null;
+	if (record.kind == 'inspect') {
+		if (!valid_id(record.inspection_id, 'x') || type(record.expires_at) != 'int' ||
+		    record.expires_at - record.created_at != INSPECTION_TTL ||
+		    type(record.files) != 'array' || length(record.files) < 2 ||
+		    length(record.files) > MAX_FILES + 2 || record.backup_id != null ||
+		    record.temp_name != null || record.archive_name != null || record.sidecar_name != null ||
+		    record.archive_size != null || record.archive_sha256 != null ||
+		    record.sidecar_size != null || record.sidecar_sha256 != null ||
+		    record.temp_identity != null || record.archive_identity != null ||
+		    record.sidecar_identity != null || record.prune_id != null ||
+		    record.archive_tomb != null || record.sidecar_tomb != null ||
+		    !exists({ planned: true, staging: true,
+			    report_planned: true, ready: true, preview: true }, record.phase)) return false;
+		let seen = {};
+		for (let file in record.files) {
+			if (!valid_journal_file(file) || seen[file.path]) return false;
+			seen[file.path] = true;
+		}
+		return record.cursor <= length(record.files);
+	}
+	if (record.kind == 'prune')
+		return valid_id(record.prune_id, 'b') && record.archive_name == record.prune_id + '.tar' &&
+			record.sidecar_name == record.prune_id + '.json' &&
+			record.archive_tomb == '.prune-' + record.prune_id + '.tar' &&
+			record.sidecar_tomb == '.prune-' + record.prune_id + '.json' &&
+			type(record.archive_size) == 'int' && record.archive_size > 0 &&
+			match(record.archive_sha256, /^[0-9a-f]{64}$/) &&
+			type(record.sidecar_size) == 'int' && record.sidecar_size > 0 &&
+			match(record.sidecar_sha256, /^[0-9a-f]{64}$/) &&
+			record.archive_identity != null && record.sidecar_identity != null &&
+			valid_identity_record(record.archive_identity, 'file') &&
+			valid_identity_record(record.sidecar_identity, 'file') &&
+			exists({ planned: true, side_moved: true, archive_moved: true,
+				deleting: true }, record.phase) && record.inspection_id == null &&
+			record.expires_at == null && record.stage_identity == null &&
+			record.files == null && record.cursor == 0 && record.backup_id == null &&
+			record.temp_name == null && record.temp_identity == null;
+	return false;
+};
+
+function journal_text(record) {
+	let content = sprintf('%J\n', record);
+	if (length(content) > MAX_REPORT) errors.fail('RESPONSE_TOO_LARGE');
+	return content;
+};
+
+function journal_begin(env, kind, created_at, initial) {
+	let root = open_dir(env.secure, TRANSACTION_ROOT), nonce = env.runtime.random.hex(16);
+	if (!match(nonce, /^[0-9a-f]{32}$/)) internal();
+	let id = sprintf('t-%013d-%s', created_at, nonce), record = journal_base(id, kind, created_at);
+	for (let name, value in initial ?? {}) {
+		if (!exists(JOURNAL_FIELDS, name)) internal();
+		record[name] = value;
+	}
+	let written = secure_write(env, root, id + '.json', journal_text(record), 0o600, true);
+	return { root, name: id + '.json', record, identity: written.identity };
+};
+
+function journal_store(env, transaction) {
+	let written = secure_write(env, transaction.root, transaction.name,
+		journal_text(transaction.record), 0o600, false);
+	transaction.identity = written.identity;
+	return true;
+};
+
+function journal_finish(env, transaction) {
+	if (env.secure.unlink(transaction.root, transaction.name, transaction.identity) !== true)
+		internal();
+	return true;
+};
+
+function registered_file(env, directory, name, size, digest, recorded) {
+	let current = env.secure.stat(directory, name);
+	if (current == null) return null;
+	if (current.type != 'file' || current.uid != 0 || current.nlink != 1 ||
+	    current.size != size || (recorded != null &&
+	    !same_node(record_identity(recorded), current))) internal();
+	let captured = secure_read(env, directory, name, size, current.mode, current);
+	if (captured.size != size || captured.sha256 != digest) internal();
+	return captured;
+};
+
+function recover_create(env, transaction) {
+	let record = transaction.record, root = open_dir(env.secure, BACKUP_ROOT);
+	let temp = registered_file(env, root, record.temp_name, record.archive_size,
+		record.archive_sha256, record.temp_identity);
+	let archive = registered_file(env, root, record.archive_name, record.archive_size,
+		record.archive_sha256, record.archive_identity ?? record.temp_identity);
+	let sidecar = registered_file(env, root, record.sidecar_name, record.sidecar_size,
+		record.sidecar_sha256, record.sidecar_identity);
+	if (temp != null && archive != null) internal();
+	if (record.phase == 'complete') {
+		if (temp != null || archive == null || sidecar == null ||
+		    archive.identity.mode != 0o600 || sidecar.identity.mode != 0o600) internal();
+		journal_finish(env, transaction); return true;
+	}
+	for (let item in [ [ record.temp_name, temp ], [ record.archive_name, archive ],
+		[ record.sidecar_name, sidecar ] ])
+		if (item[1] != null) env.secure.unlink(root, item[0], item[1].identity);
+	journal_finish(env, transaction);
+	return true;
+};
+
+function expected_prefix(files, path) {
+	for (let file in files)
+		if (file.path == path || substr(file.path, 0, length(path) + 1) == path + '/')
+			return true;
+	return false;
+};
+
+function authenticate_stage(env, directory, relative, files, seen) {
+	for (let name in safe_names(env.secure, directory, MAX_FILES + 8)) {
+		let path = length(relative) ? relative + '/' + name : name;
+		let identity = env.secure.stat(directory, name);
+		if (identity?.type == 'directory') {
+			if (!expected_prefix(files, path)) internal();
+			let child = open_child_dir(env.secure, directory, name, false, identity);
+			authenticate_stage(env, child, path, files, seen);
+		}
+		else if (identity?.type == 'file') {
+			let expected = null;
+			for (let file in files) if (file.path == path) expected = file;
+			if (expected == null) internal();
+			let captured = registered_file(env, directory, name, expected.size,
+				expected.sha256, expected.identity);
+			if (captured.identity.mode != expected.mode) internal();
+			seen[path] = true;
+		}
+		else internal();
+	}
+};
+
+function recover_inspect(env, transaction, now) {
+	let record = transaction.record, root = open_dir(env.secure, INSPECT_ROOT);
+	let stat = env.secure.stat(root, record.inspection_id);
+	if (stat == null) { journal_finish(env, transaction); return true; }
+	if (record.stage_identity != null &&
+	    !same_identity(record_identity(record.stage_identity), stat)) internal();
+	let stage = open_child_dir(env.secure, root, record.inspection_id, false, stat), seen = {};
+	authenticate_stage(env, stage, '', record.files, seen);
+	if (record.phase == 'preview' && now <= record.expires_at) return true;
+	if (!remove_tree(env, root, record.inspection_id, stage.identity)) internal();
+	journal_finish(env, transaction);
+	return true;
+};
+
+function prune_candidate(env, root, original, tomb, size, digest, recorded) {
+	let left = registered_file(env, root, original, size, digest, recorded);
+	let right = registered_file(env, root, tomb, size, digest, recorded);
+	if (left != null && right != null) internal();
+	return left != null ? { name: original, capture: left } :
+		(right != null ? { name: tomb, capture: right } : null);
+};
+
+function recover_prune(env, transaction) {
+	let record = transaction.record, root = open_dir(env.secure, BACKUP_ROOT);
+	let archive = prune_candidate(env, root, record.archive_name, record.archive_tomb,
+		record.archive_size, record.archive_sha256, record.archive_identity);
+	let sidecar = prune_candidate(env, root, record.sidecar_name, record.sidecar_tomb,
+		record.sidecar_size, record.sidecar_sha256, record.sidecar_identity);
+	if (archive != null) env.secure.unlink(root, archive.name, archive.capture.identity);
+	if (sidecar != null) env.secure.unlink(root, sidecar.name, sidecar.capture.identity);
+	journal_finish(env, transaction);
+	return true;
+};
+
+function recover_transactions(env) {
+	let root = open_dir(env.secure, TRANSACTION_ROOT);
+	let names = sorted(safe_names(env.secure, root, MAX_TRANSACTIONS + 1));
+	if (length(names) > MAX_TRANSACTIONS) internal();
+	let now = env.runtime.clock.now(), transactions = [];
+	if (type(now) != 'int' || now < 0) internal();
+	// Validate every journal before mutating anything.
+	for (let name in names) {
+		if (!match(name, /^t-[0-9]{13}-[0-9a-f]{32}\.json$/)) internal();
+		let captured = secure_read(env, root, name, MAX_REPORT, 0o600), record;
+		try { record = json(captured.content); }
+		catch (error) { internal(); }
+		if (captured.content != sprintf('%J\n', record) || !valid_journal(record, name, now))
+			internal();
+		push(transactions, { root, name, record, identity: captured.identity });
+	}
+	for (let transaction in transactions) {
+		if (transaction.record.kind == 'create') recover_create(env, transaction);
+		else if (transaction.record.kind == 'inspect')
+			recover_inspect(env, transaction, now);
+		else recover_prune(env, transaction);
+	}
+	return true;
+};
+
 function list_records(app) {
 	let env = validate_app(app), root = open_dir(env.secure, BACKUP_ROOT);
 	let names = safe_names(env.secure, root, MAX_FILES * 4 + 64), output = [];
@@ -502,7 +781,10 @@ function list_records(app) {
 
 export function list(app, options) {
 	validate_options(options, {});
-	try { return list_records(app); }
+	try {
+		let env = validate_app(app); recover_transactions(env);
+		return list_records(app);
+	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
@@ -520,6 +802,7 @@ function create_impl(app, options, source) {
 	let id = sprintf('b-%013d-%s', now, nonce), files = [], contents = {};
 	let temp_name = '.' + id + '.tar.tmp', temp_identity = null;
 	let side_name = id + '.json', side_identity = null, archive_identity = null;
+	let transaction = null;
 	try {
 		let clash = open_dir(env.secure, '/opt/clash');
 		if (include_secrets)
@@ -564,45 +847,54 @@ function create_impl(app, options, source) {
 		for (let file in files) push(members, { name: file.path, content: contents[file.path] });
 		push(members, { name: 'manifest.json', content: manifest_text });
 		let archive_bytes = ustar_write(members);
+		let archive_digest = env.runtime.digest.sha256(archive_bytes);
+		let sidecar = { schema: 1, id, created_at: now, app_version: app.app_version,
+			includes, file_count: length(files), size: length(archive_bytes),
+			sha256: archive_digest };
+		let sidecar_text = sprintf('%J\n', sidecar);
+		transaction = journal_begin(env, 'create', now, {
+			backup_id: id, temp_name, archive_name: id + '.tar', sidecar_name: side_name,
+			archive_size: length(archive_bytes), archive_sha256: archive_digest,
+			sidecar_size: length(sidecar_text), sidecar_sha256: env.runtime.digest.sha256(sidecar_text)
+		});
 		let temp = secure_write(env, root, temp_name, archive_bytes, 0o600, true);
 		temp_identity = temp.identity;
-		let sidecar = { schema: 1, id, created_at: now, app_version: app.app_version,
-			includes, file_count: length(files), size: temp.size, sha256: temp.sha256 };
-		let side = secure_write(env, root, side_name, sprintf('%J\n', sidecar), 0o600, true);
+		transaction.record.temp_identity = identity_record(temp.identity);
+		transaction.record.phase = 'temp'; journal_store(env, transaction);
+		transaction.record.phase = 'side_planned'; journal_store(env, transaction);
+		let side = secure_write(env, root, side_name, sidecar_text, 0o600, true);
 		side_identity = side.identity;
+		transaction.record.sidecar_identity = identity_record(side.identity);
+		transaction.record.phase = 'side'; journal_store(env, transaction);
+		transaction.record.phase = 'publish_planned'; journal_store(env, transaction);
 		archive_identity = env.secure.rename(root, temp_name, id + '.tar', temp_identity,
 			{ mode: 0o600, uid: 0, nlink: 1 });
 		if (!valid_identity(archive_identity, 'file', 0o600, length(archive_bytes))) internal();
 		temp_identity = null;
+		transaction.record.temp_identity = null;
+		transaction.record.archive_identity = identity_record(archive_identity);
+		transaction.record.phase = 'published'; journal_store(env, transaction);
 		let published = secure_read(env, root, id + '.tar', MAX_ARCHIVE, 0o600, archive_identity);
 		let published_side = secure_read(env, root, side_name, MAX_MANIFEST, 0o600, side_identity);
-		if (published.sha256 != sidecar.sha256 || published_side.content != sprintf('%J\n', sidecar))
+		if (published.sha256 != sidecar.sha256 || published_side.content != sidecar_text)
 			internal();
+		transaction.record.phase = 'complete'; journal_store(env, transaction);
+		journal_finish(env, transaction); transaction = null;
 		return clone(sidecar);
 	}
 	catch (error) {
-		if (temp_identity != null) {
-			try { env.secure.unlink(root, temp_name, temp_identity); }
-			catch (ignore) {
-				try {
-					let moved = env.secure.stat(root, id + '.tar');
-					if (same_node(temp_identity, moved))
-						env.secure.unlink(root, id + '.tar', moved);
-				}
-				catch (ignored) {}
-			}
-		}
-		if (archive_identity != null)
-			try { env.secure.unlink(root, id + '.tar', archive_identity); } catch (ignore) {}
-		if (side_identity != null)
-			try { env.secure.unlink(root, side_name, side_identity); } catch (ignore) {}
+		if (transaction != null)
+			try { recover_transactions(env); } catch (ignore) {}
 		let code = errors.normalize(error).code;
 		errors.fail(code == 'RESPONSE_TOO_LARGE' || code == 'INVALID_ARGUMENT' ? code : 'INTERNAL');
 	}
 };
 
 export function create(app, options, source) {
-	try { return create_impl(app, options, source); }
+	try {
+		let env = validate_app(app); recover_transactions(env);
+		return create_impl(app, options, source);
+	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
@@ -640,21 +932,41 @@ function inspect_impl(app, source_id, options) {
 	if (type(now) != 'int' || now < 0 || !match(nonce, /^[0-9a-f]{32}$/)) internal();
 	let id = sprintf('x-%013d-%s', now, nonce);
 	if (source.env.secure.stat(root, id) != null) internal();
-	let staging = open_child_dir(source.env.secure, root, id, true), keep = false;
+	let journal_files = [];
+	for (let file in manifest.files)
+		push(journal_files, { path: file.path, size: file.size, sha256: file.sha256,
+			mode: 0o400, identity: null });
+	let manifest_content = decoded.parsed.by_name['manifest.json'].content;
+	push(journal_files, { path: 'manifest.json', size: length(manifest_content),
+		sha256: source.env.runtime.digest.sha256(manifest_content), mode: 0o400, identity: null });
+	let transaction = journal_begin(source.env, 'inspect', now, {
+		inspection_id: id, expires_at: now + INSPECTION_TTL, files: journal_files
+	});
+	let staging = null;
 	try {
+		staging = open_child_dir(source.env.secure, root, id, true);
+		transaction.record.stage_identity = identity_record(staging.identity);
+		transaction.record.phase = 'staging'; journal_store(source.env, transaction);
 		let captured = [];
-		for (let file in manifest.files) {
+		for (let index, file in manifest.files) {
+			transaction.record.cursor = index; journal_store(source.env, transaction);
 			let parts = split(file.path, '/'), directory = staging;
 			let leaf = pop(parts);
 			for (let part in parts) directory = open_child_dir(source.env.secure, directory, part, true);
 			let written = secure_write(source.env, directory, leaf,
 				decoded.parsed.by_name[file.path].content, 0o400, true);
+			transaction.record.files[index].identity = identity_record(written.identity);
+			transaction.record.cursor = index + 1; journal_store(source.env, transaction);
 			push(captured, { path: file.path, size: file.size, sha256: file.sha256,
 				secret: file.secret, inode: written.identity.inode,
 				dev_major: written.identity.dev.major, dev_minor: written.identity.dev.minor });
 		}
+		let manifest_index = length(manifest.files);
+		transaction.record.cursor = manifest_index; journal_store(source.env, transaction);
 		let manifest_written = secure_write(source.env, staging, 'manifest.json',
-			decoded.parsed.by_name['manifest.json'].content, 0o400, true);
+			manifest_content, 0o400, true);
+		transaction.record.files[manifest_index].identity = identity_record(manifest_written.identity);
+		transaction.record.cursor = manifest_index + 1; journal_store(source.env, transaction);
 		let report = {
 			schema: 1, id, source_id, inspected_at: now, expires_at: now + INSPECTION_TTL,
 			archive_size: source.archive.size, archive_sha256: source.archive.sha256,
@@ -666,21 +978,35 @@ function inspect_impl(app, source_id, options) {
 			manifest_dev_minor: manifest_written.identity.dev.minor,
 			manifest, files: captured
 		};
-		secure_write(source.env, staging, '.inspection.json', sprintf('%J\n', report), 0o600, true);
-		keep = true;
+		let report_content = sprintf('%J\n', report);
+		push(transaction.record.files, { path: '.inspection.json', size: length(report_content),
+			sha256: source.env.runtime.digest.sha256(report_content), mode: 0o600, identity: null });
+		transaction.record.phase = 'report_planned';
+		transaction.record.cursor = length(transaction.record.files) - 1;
+		journal_store(source.env, transaction);
+		let report_written = secure_write(source.env, staging, '.inspection.json',
+			report_content, 0o600, true);
+		transaction.record.files[length(transaction.record.files) - 1].identity =
+			identity_record(report_written.identity);
+		transaction.record.cursor = length(transaction.record.files);
+		transaction.record.phase = 'ready'; journal_store(source.env, transaction);
+		transaction.record.phase = 'preview'; journal_store(source.env, transaction);
 		return { id, source_id, created_at: manifest.created_at, inspected_at: now,
 			expires_at: report.expires_at, app_version: manifest.app_version,
 			includes: clone(manifest.includes), files: clone(manifest.files) };
 	}
 	catch (error) {
-		if (!keep) remove_tree(source.env, root, id, staging.identity);
+		try { recover_transactions(source.env); } catch (ignore) {}
 		let code = errors.normalize(error).code;
 		errors.fail(code == 'RESPONSE_TOO_LARGE' || code == 'VALIDATION_FAILED' ? code : 'CORRUPT_STATE');
 	}
 };
 
 export function inspect(app, source_id, options) {
-	try { return inspect_impl(app, source_id, options); }
+	try {
+		let env = validate_app(app); recover_transactions(env);
+		return inspect_impl(app, source_id, options);
+	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
@@ -819,6 +1145,7 @@ export function restore(app, inspected_id, options, source) {
 	if (!exists({ luci: true, telegram: true, auto: true, system: true }, source)) invalid();
 	validate_restore_app(app);
 	try {
+		recover_transactions(validate_app(app));
 		return app.operations.submit('backup.restore', source, { inspection_id: inspected_id },
 			(ctx) => app.lock.with_lock(app.runtime, { barrier: 'normal', wait_ms: 0 }, () => {
 				ctx.stage('validating', 10, 'Validating backup');
@@ -861,20 +1188,30 @@ function prune_impl(app, options) {
 		let side_tomb = '.prune-' + item.id + '.json', archive_tomb = '.prune-' + item.id + '.tar';
 		if (env.secure.stat(root, side_tomb) != null || env.secure.stat(root, archive_tomb) != null)
 			internal();
-		let moved_side = env.secure.rename(root, item.id + '.json', side_tomb,
-			current.sidecar_capture.identity, { mode: 0o600, uid: 0, nlink: 1 });
-		let moved_archive;
+		let transaction = journal_begin(env, 'prune', env.runtime.clock.now(), {
+			prune_id: item.id, archive_name: item.id + '.tar', sidecar_name: item.id + '.json',
+			archive_tomb, sidecar_tomb: side_tomb, archive_size: current.archive.size,
+			archive_sha256: current.archive.sha256, sidecar_size: current.sidecar_capture.size,
+			sidecar_sha256: current.sidecar_capture.sha256,
+			archive_identity: identity_record(current.archive.identity),
+			sidecar_identity: identity_record(current.sidecar_capture.identity)
+		});
 		try {
-			moved_archive = env.secure.rename(root, item.id + '.tar', archive_tomb,
+			let moved_side = env.secure.rename(root, item.id + '.json', side_tomb,
+				current.sidecar_capture.identity, { mode: 0o600, uid: 0, nlink: 1 });
+			transaction.record.phase = 'side_moved'; journal_store(env, transaction);
+			let moved_archive = env.secure.rename(root, item.id + '.tar', archive_tomb,
 				current.archive.identity, { mode: 0o600, uid: 0, nlink: 1 });
+			transaction.record.phase = 'archive_moved'; journal_store(env, transaction);
+			transaction.record.phase = 'deleting'; journal_store(env, transaction);
+			if (env.secure.unlink(root, archive_tomb, moved_archive) !== true ||
+			    env.secure.unlink(root, side_tomb, moved_side) !== true) internal();
+			journal_finish(env, transaction);
 		}
 		catch (error) {
-			try { env.secure.rename(root, side_tomb, item.id + '.json', moved_side,
-				{ mode: 0o600, uid: 0, nlink: 1 }); } catch (ignore) {}
+			try { recover_transactions(env); } catch (ignore) {}
 			errors.fail(errors.normalize(error).code);
 		}
-		if (env.secure.unlink(root, archive_tomb, moved_archive) !== true ||
-		    env.secure.unlink(root, side_tomb, moved_side) !== true) internal();
 		push(removed, item.id);
 	}
 	let retained = [];
@@ -883,6 +1220,9 @@ function prune_impl(app, options) {
 };
 
 export function prune(app, options) {
-	try { return prune_impl(app, options); }
+	try {
+		let env = validate_app(app); recover_transactions(env);
+		return prune_impl(app, options);
+	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
