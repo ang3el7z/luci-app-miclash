@@ -172,11 +172,11 @@ export function create(app) {
 		timer = null;
 	};
 
-	function arm_retry(deadline) {
+	function prepare_retry_timer(deadline) {
 		invalidate_timer();
 		let token = timer_generation;
 		let delay = max(0, deadline - app.clock.now());
-		timer = app.clock.set_timeout(delay, () => {
+		let handle = app.clock.set_timeout(delay, () => {
 			if (token != timer_generation || state.phase != 'idle' ||
 			    state.circuit != 'open' || state.next_retry != deadline ||
 			    app.clock.now() < deadline)
@@ -184,6 +184,17 @@ export function create(app) {
 			timer = null;
 			run_internal('scheduled', null, 'scheduled', deadline, token);
 		});
+		return { handle, token };
+	};
+
+	function discard_retry_timer(candidate) {
+		timer = candidate.handle;
+		invalidate_timer();
+	};
+
+	function install_loaded_retry(deadline) {
+		let candidate = prepare_retry_timer(deadline);
+		timer = candidate.handle;
 	};
 
 	function assign_failure() {
@@ -204,16 +215,28 @@ export function create(app) {
 	};
 
 	function transition_failure(component, reason, result) {
+		let before = clone(state);
 		let assigned = assign_failure();
 		state.phase = 'idle';
 		state.circuit = 'open';
 		state.failure_count++;
 		state.last_result = result ?? 'failure';
 		state.next_retry = app.clock.now() + retry_delay(state.failure_count);
-		persist();
+		let candidate;
+		try { candidate = prepare_retry_timer(state.next_retry); }
+		catch (error) {
+			state = before;
+			fail(errors.normalize(error).code);
+		}
+		try { persist(); }
+		catch (error) {
+			discard_retry_timer(candidate);
+			state = before;
+			fail(errors.normalize(error).code);
+		}
+		timer = candidate.handle;
 		if (assigned)
 			emit('failure', { failure_id: state.failure_id, component: component ?? 'unknown', reason });
-		arm_retry(state.next_retry);
 		return false;
 	};
 
@@ -316,8 +339,7 @@ export function create(app) {
 	};
 
 	function complete_failure(ctx) {
-		try { ctx.complete(errors.new('HEALTH_FAILED', 'HEALTH_FAILED', null)); }
-		catch (error) {}
+		ctx.complete(errors.new('HEALTH_FAILED', 'HEALTH_FAILED', null));
 		return false;
 	};
 
@@ -407,7 +429,7 @@ export function create(app) {
 	if (state.phase == 'queued' || state.phase == 'inflight')
 		transition_failure(null, 'restart', 'interrupted');
 	else if (state.circuit == 'open')
-		arm_retry(state.next_retry);
+		install_loaded_retry(state.next_retry);
 
 	return reconciler;
 };

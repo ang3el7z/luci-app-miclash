@@ -19,15 +19,23 @@ function failed(code) {
 // durable operation failure.
 function production_operations(options) {
 	options ??= {};
-	let manager = { calls: [], deferred: [], fail_submit: options.fail_submit === true };
+	let manager = {
+		calls: [], deferred: [], fail_submit: options.fail_submit === true,
+		complete_throws: options.complete_throws ?? 0, ownership_releases: 0
+	};
 	manager.start = (record) => {
 		record.state = 'running';
 		let completed = false;
 		let ctx = { id: record.id, complete: (error) => {
 			if (completed) return false;
+			if (manager.complete_throws > 0) {
+				manager.complete_throws--;
+				die('HEALTH_FAILED');
+			}
 			completed = true;
 			record.state = error == null ? 'success' : 'failure';
 			record.error = error == null ? null : clone(error);
+			manager.ownership_releases++;
 			return true;
 		} };
 		let returned;
@@ -525,6 +533,74 @@ review_check(join(',', sort(keys(queued_snapshot))) ==
 	join(',', sort(fixture.persistent_fields)) &&
 	join(',', fixture.phases) == 'idle,queued,inflight',
 	'fixture-backed exact persistent schema');
+
+let complete_throw_ops = production_operations({ complete_throws: 1 });
+let complete_throw = make_app({ states: { telegram: failed() },
+	operations: complete_throw_ops });
+let complete_throw_reconciler = reconcile.create(complete_throw.app);
+complete_throw_reconciler.run('automatic');
+let complete_throw_status = complete_throw_reconciler.circuit_status();
+review_check(complete_throw_ops.calls[0].state == 'failure' &&
+	complete_throw_ops.calls[0].error?.code == 'HEALTH_FAILED' &&
+	complete_throw_ops.ownership_releases == 1 && complete_throw_status.phase == 'idle' &&
+	complete_throw_status.failure_count == 1 &&
+	length(filter(complete_throw.clock.timers, (item) => item.active)) == 1,
+	'ctx.complete error propagates to manager catch and releases ownership once');
+
+let transient_timer = fakes.clock(1000);
+let real_set_timeout = transient_timer.set_timeout;
+let timer_installs = 0;
+transient_timer.set_timeout = (milliseconds, callback) => {
+	timer_installs++;
+	if (timer_installs == 1) die('transient timer creation failure');
+	return real_set_timeout(milliseconds, callback);
+};
+let timer_throw_ops = production_operations();
+let timer_throw = make_app({ clock: transient_timer, states: { telegram: failed() },
+	operations: timer_throw_ops });
+let timer_throw_reconciler = reconcile.create(timer_throw.app);
+timer_throw_reconciler.run('automatic');
+let timer_throw_status = timer_throw_reconciler.circuit_status();
+let active_before_retry = length(filter(transient_timer.timers, (item) => item.active));
+transient_timer.advance(60000);
+review_check(timer_throw_ops.calls[0].state == 'failure' &&
+	timer_throw_status.phase == 'idle' && timer_throw_status.circuit == 'open' &&
+	timer_throw_status.failure_count == 1 && active_before_retry == 1 &&
+	length(timer_throw_ops.calls) == 2 &&
+	length(filter(timer_throw.actions, (item) => item == 'repair:telegram')) == 2,
+	'transient timer install rolls back then creates one effective retry');
+
+let startup_timer = fakes.clock(1000);
+startup_timer.set_timeout = (milliseconds, callback) => die('startup timer failure');
+let startup_open = make_app({ clock: startup_timer, persisted: {
+	version: 1, circuit: 'open', phase: 'idle', failure_count: 1,
+	next_retry: 61000, failure_id: 'failure-1-1000', failure_sequence: 1,
+	last_result: 'failure'
+} });
+let startup_failed = false;
+try { reconcile.create(startup_open.app); }
+catch (error) { startup_failed = true; }
+review_check(startup_failed && length(startup_open.app.operations.calls) == 0,
+	'startup open state fails creation when timer cannot be installed');
+
+let persist_timer_clock = fakes.clock(1000);
+let persist_timer_ops = production_operations();
+let persist_timer = make_app({ clock: persist_timer_clock, states: { telegram: failed() },
+	operations: persist_timer_ops });
+let persist_timer_write = persist_timer.app.store.write;
+let persist_timer_writes = 0;
+persist_timer.app.store.write = (value) => {
+	persist_timer_writes++;
+	if (persist_timer_writes == 4) die('transient final persistence failure');
+	return persist_timer_write(value);
+};
+let persist_timer_reconciler = reconcile.create(persist_timer.app);
+persist_timer_reconciler.run('automatic');
+let persist_timer_status = persist_timer_reconciler.circuit_status();
+review_check(persist_timer_ops.calls[0].state == 'failure' &&
+	persist_timer_status.failure_count == 1 && persist_timer_status.phase == 'idle' &&
+	length(filter(persist_timer_clock.timers, (item) => item.active)) == 1,
+	'candidate timer invalidates and retries after final persistence failure');
 
 if (length(review_failures))
 	die('review regressions: ' + join('; ', review_failures));
