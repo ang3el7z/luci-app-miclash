@@ -437,7 +437,8 @@ export function create(runtime, service, operations, notify) {
 			try { after = observe(); } catch (error) {}
 			let dropped = after != null && material_drop(latest.rss_kb, after.rss_kb);
 			safe_notify({
-				type: 'memory_recovery_stage', severity: 'info', action: stage.name,
+				type: 'memory_recovery_stage', severity: 'info',
+				recovery_id: current.recovery_id, action: stage.name,
 				before_rss_kb: latest.rss_kb, after_rss_kb: after?.rss_kb ?? null,
 				mem_available_kb: after?.mem_available_kb ?? latest.mem_available_kb,
 				reserve_kb: after?.reserve_kb ?? latest.reserve_kb,
@@ -454,7 +455,8 @@ export function create(runtime, service, operations, notify) {
 					current.cooldown_until = runtime.clock.now() + options.success_cooldown_ms;
 				});
 				recovery_pending = false;
-				safe_notify({ type: 'memory_recovery', severity: 'notice', result: 'success',
+				safe_notify({ type: 'memory_recovery', severity: 'notice',
+					recovery_id: current.recovery_id, result: 'success',
 					action: stage.name, before_rss_kb: initial.rss_kb,
 					after_rss_kb: after.rss_kb, preserve_guard: true });
 				ctx.complete(null);
@@ -463,7 +465,8 @@ export function create(runtime, service, operations, notify) {
 			if (after?.rss_kb != null) latest = after;
 		}
 		transition_failure();
-		safe_notify({ type: 'memory_recovery', severity: 'warning', result: 'failed',
+		safe_notify({ type: 'memory_recovery', severity: 'warning',
+			recovery_id: current.recovery_id, result: 'failed',
 			before_rss_kb: initial.rss_kb, after_rss_kb: latest.rss_kb,
 			preserve_guard: true });
 		ctx.complete({ code: 'HEALTH_FAILED', message: 'HEALTH_FAILED' });

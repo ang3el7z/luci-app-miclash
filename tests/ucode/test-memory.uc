@@ -304,6 +304,9 @@ for (let trace in fixture.recovery_cases) {
 	assert_equal(env.worker_returns[0], false, trace.name);
 	assert_equal(env.ownership_releases(), 1, trace.name);
 	assert_equal(env.ops.calls[0].context.preserve_guard, true, trace.name);
+	for (let event in env.notices)
+		assert_equal(event.recovery_id, env.ops.calls[0].context.recovery_id,
+			trace.name + ' notification recovery identity');
 	assert_equal(env.controller.status().cooldown_until - env.now(),
 		trace.result == 'success' ? fixture.defaults.success_cooldown_ms :
 		fixture.defaults.failure_cooldown_ms, trace.name);
