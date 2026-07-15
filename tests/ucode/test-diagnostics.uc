@@ -237,7 +237,14 @@ for (let scenario in route_scenarios) {
 				push(http_calls, request);
 				if (scenario.rules == null)
 					die('HEALTH_FAILED');
-				return { status: 200, body: sprintf('%J', { rules: scenario.rules }) };
+				let response_rules = scenario.rules;
+				if (response_rules == 'oversized') {
+					response_rules = [];
+					for (let index = 0; index < 513; index++)
+						push(response_rules, { type: 'DOMAIN', payload: 'miss-' + index + '.example',
+							proxy: 'ProxyGroup' });
+				}
+				return { status: 200, body: sprintf('%J', { rules: response_rules }) };
 			}
 		},
 		process: { run: (request) => {
@@ -247,14 +254,34 @@ for (let scenario in route_scenarios) {
 		paths: { tmp: '/tmp/miclash' },
 		random: fakes.entropy()
 	};
-	let observed = {
-		routing: {
-			rules: [ { family: 'ipv4', priority: 1000, mark: '0x1',
-				mask: '0xffffffff', table: 100 } ],
-			routes: [ { family: 'ipv4', table: 100, kind: 'local',
-				destination: 'default', device: 'lo' } ]
-		}
-	};
+	let observed = { routing: {
+		rules: [
+			{ family: 'ipv4', priority: 1000, mark: '0x1',
+				mask: '0xffffffff', table: 100 },
+			{ family: 'ipv6', priority: 1000, mark: '0x1',
+				mask: '0xffffffff', table: 100 }
+		],
+		routes: [
+			{ family: 'ipv4', table: 100, kind: 'local',
+				destination: 'default', device: 'lo' },
+			{ family: 'ipv6', table: 100, kind: 'local',
+				destination: 'default', device: 'lo' }
+		],
+		interfaces: { 'clash-tun': false }
+	} };
+	if (scenario.routing == 'missing') {
+		observed.routing.rules = [];
+		observed.routing.routes = [];
+	}
+	else if (scenario.routing == 'contradictory')
+		push(observed.routing.routes, { family: 'ipv4', table: 100,
+			kind: 'unicast', destination: 'default', device: 'clash-tun' });
+	else if (scenario.routing == 'malformed')
+		observed.routing.rules[0].mark = 1;
+	else if (scenario.routing == 'oversized')
+		for (let index = 0; index < 65; index++)
+			push(observed.routing.rules, { family: 'ipv4', priority: 2000 + index,
+				mark: '0x2', mask: '0xffffffff', table: 200 + index });
 	let engine = route_test.create({
 		runtime: route_runtime,
 		profile: 'config.yaml',
@@ -285,8 +312,15 @@ for (let scenario in route_scenarios) {
 	assert_true(index(order, 'routing') >= 0);
 	assert_equal(order[length(order) - 1], 'guard');
 	let routing_step = result.steps[index(order, 'routing')];
-	assert_equal(routing_step.evidence.mark_rules, 1);
-	assert_equal(routing_step.evidence.routes, 1);
+	assert_equal(type(routing_step.evidence.available), 'bool');
+	assert_equal(type(routing_step.evidence.valid), 'bool');
+	let route_expected = scenario.routing != 'missing' && scenario.routing != 'contradictory' &&
+		scenario.routing != 'malformed' && scenario.routing != 'oversized' &&
+		(length(scenario.answers) > 0 || match(scenario.input.target, /:|^[0-9.]+$/));
+	if (!route_expected)
+		assert_equal(routing_step.evidence.valid, false);
+	else
+		assert_equal(routing_step.evidence.valid, true);
 	assert_no_secrets(result, scenario.name);
 	assert_equal(length(process_calls), 0,
 		scenario.name + ' never emits probe/process traffic');

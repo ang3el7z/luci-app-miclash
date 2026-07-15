@@ -3,6 +3,10 @@ import * as mihomo from 'miclash.mihomo-api';
 import * as redact from 'miclash.redact';
 
 const DECISIONS = { DIRECT: true, PROXY: true, BLOCK: true };
+const RULE_TYPES = {
+	DOMAIN: true, 'DOMAIN-SUFFIX': true, 'DOMAIN-KEYWORD': true,
+	'IP-CIDR': true, 'IP-CIDR6': true, MATCH: true
+};
 const MAX_STEPS = 16;
 
 function invalid() { fail('INVALID_ARGUMENT'); };
@@ -88,22 +92,46 @@ function cidr4(target, value) {
 	let shift = 32 - bits;
 	return (ipv4_number(target) >> shift) == (ipv4_number(parts[0]) >> shift);
 };
-function rule_matches(rule, input, answers) {
+function valid_cidr4(value) {
+	let parts = split(value, '/');
+	return length(parts) == 2 && ipv4(parts[0]) && match(parts[1], /^[0-9]+$/) &&
+		int(parts[1]) >= 0 && int(parts[1]) <= 32;
+};
+function rule_match(rule, input, answers) {
 	let type = uc(rule.type), payload = lc(rule.payload);
-	if (type == 'MATCH') return true;
+	if (!RULE_TYPES[type]) return { known: false, matched: false };
+	if (type == 'MATCH')
+		return { known: !length(payload), matched: !length(payload) };
 	if (input.kind == 'domain') {
-		if (type == 'DOMAIN') return input.target == payload;
-		if (type == 'DOMAIN-SUFFIX') return suffix(input.target, payload);
-		if (type == 'DOMAIN-KEYWORD') return index(input.target, payload) >= 0;
+		if (type == 'DOMAIN')
+			return { known: domain(payload), matched: domain(payload) && input.target == payload };
+		if (type == 'DOMAIN-SUFFIX')
+			return { known: domain(payload), matched: domain(payload) && suffix(input.target, payload) };
+		if (type == 'DOMAIN-KEYWORD') {
+			let valid = length(payload) > 0 && length(payload) <= 253 &&
+				match(payload, /^[A-Za-z0-9_.-]+$/);
+			return { known: valid, matched: valid && index(input.target, payload) >= 0 };
+		}
 	}
 	let candidates = input.kind == 'domain' ? answers : [ input.target ];
-	if (type == 'IP-CIDR')
+	if (type == 'IP-CIDR') {
+		if (!valid_cidr4(payload)) return { known: false, matched: false };
 		for (let candidate in candidates)
-			if (ipv4(candidate) && cidr4(candidate, payload)) return true;
-	if (type == 'IP-CIDR6')
+			if (ipv4(candidate) && cidr4(candidate, payload))
+				return { known: true, matched: true };
+		return { known: true, matched: false };
+	}
+	if (type == 'IP-CIDR6') {
+		let parts = split(payload, '/');
+		if (length(parts) != 2 || !ipv6(parts[0]) || !match(parts[1], /^[0-9]+$/) ||
+			int(parts[1]) < 0 || int(parts[1]) > 128)
+			return { known: false, matched: false };
 		for (let candidate in candidates)
-			if (ipv6(candidate) && candidate == payload) return true;
-	return false;
+			if (ipv6(candidate) && candidate == parts[0])
+				return { known: true, matched: true };
+		return { known: true, matched: false };
+	}
+	return { known: true, matched: false };
 };
 function rule_decision(value) {
 	if (type(value) != 'string' || !length(value) || length(value) > 128)
@@ -120,21 +148,129 @@ function mihomo_reason(dependencies, input, answers) {
 			dependencies.profile, dependencies.config_content);
 		if (reply.ok !== true || type(reply.data?.rules) != 'array' ||
 			length(reply.data.rules) > 512)
-			return { available: false, matched: false, type: null, decision: 'unknown' };
+			return { available: false, matched: false, type: null, ordered: false,
+				code: type(reply.data?.rules) == 'array' ? 'OVERSIZED' : 'INVALID_RESPONSE',
+				decision: 'unknown' };
 		for (let rule in reply.data.rules) {
-			if (type(rule?.type) != 'string' || type(rule?.payload) != 'string' ||
-				type(rule?.proxy) != 'string' || length(rule.type) > 32 ||
-				length(rule.payload) > 512 || length(rule.proxy) > 128)
-				continue;
-			if (rule_matches(rule, input, answers))
+			if (type(rule) != 'object' || type(rule?.type) != 'string' ||
+				type(rule?.payload) != 'string' || type(rule?.proxy) != 'string' ||
+				length(rule.type) > 32 || length(rule.payload) > 512 ||
+				!length(rule.proxy) || length(rule.proxy) > 128)
+				return { available: true, matched: false, type: null,
+					ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
+			for (let name in rule)
+				if (name != 'type' && name != 'payload' && name != 'proxy' && name != 'size')
+					return { available: true, matched: false, type: null,
+						ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
+			if (rule.size != null && (type(rule.size) != 'int' || rule.size < 0))
+				return { available: true, matched: false, type: null,
+					ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
+			let outcome = rule_match(rule, input, answers);
+			if (!outcome.known)
+				return { available: true, matched: false, type: uc(rule.type),
+					ordered: false, code: RULE_TYPES[uc(rule.type)] ?
+						'MALFORMED_RULE' : 'UNSUPPORTED_RULE', decision: 'unknown' };
+			if (outcome.matched)
 				return { available: true, matched: true, type: uc(rule.type),
-					decision: rule_decision(rule.proxy) };
+					ordered: true, code: 'MATCHED', decision: rule_decision(rule.proxy) };
 		}
-		return { available: true, matched: false, type: null, decision: 'unknown' };
+		return { available: true, matched: false, type: null,
+			ordered: true, code: 'NO_MATCH', decision: 'unknown' };
 	}
 	catch (error) {
-		return { available: false, matched: false, type: null, decision: 'unknown' };
+		return { available: false, matched: false, type: null,
+			ordered: false, code: 'UNAVAILABLE', decision: 'unknown' };
 	}
+};
+
+function allowed(value, fields) {
+	if (type(value) != 'object') return false;
+	for (let name in value) if (!fields[name]) return false;
+	return true;
+};
+function routing_rule(value) {
+	return allowed(value, { family: true, priority: true, mark: true, mask: true,
+		table: true, protocol: true, owned: true, ambiguous: true, reason: true }) &&
+		(value.family == 'ipv4' || value.family == 'ipv6') &&
+		type(value.priority) == 'int' && type(value.table) == 'int' &&
+		type(value.mark) == 'string' && match(value.mark, /^0x[0-9A-Fa-f]+$/) &&
+		type(value.mask) == 'string' && match(value.mask, /^0x[0-9A-Fa-f]+$/) &&
+		(value.owned == null || type(value.owned) == 'bool') &&
+		(value.ambiguous == null || type(value.ambiguous) == 'bool') &&
+		(value.protocol == null || type(value.protocol) == 'int' ||
+		 type(value.protocol) == 'string') &&
+		(value.reason == null || (type(value.reason) == 'string' &&
+		 length(value.reason) <= 64 && !match(value.reason, /[[:cntrl:]]/)));
+};
+function routing_route(value) {
+	return allowed(value, { family: true, table: true, kind: true, destination: true,
+		device: true, protocol: true, owned: true, ambiguous: true, reason: true,
+		unreachable: true, metric: true }) &&
+		(value.family == 'ipv4' || value.family == 'ipv6') && type(value.table) == 'int' &&
+		(value.kind == 'local' || value.kind == 'unicast' || value.kind == 'unreachable') &&
+		value.destination == 'default' &&
+		(value.device == null || safe_interface(value.device)) &&
+		(value.owned == null || type(value.owned) == 'bool') &&
+		(value.ambiguous == null || type(value.ambiguous) == 'bool') &&
+		(value.protocol == null || type(value.protocol) == 'int' ||
+		 type(value.protocol) == 'string') &&
+		(value.reason == null || (type(value.reason) == 'string' &&
+		 length(value.reason) <= 64 && !match(value.reason, /[[:cntrl:]]/))) &&
+		(value.unreachable == null || type(value.unreachable) == 'bool') &&
+		(value.metric == null || (type(value.metric) == 'int' && value.metric >= 0));
+};
+function routing_reason(observed, input, answers) {
+	let routing = observed?.routing, rules = routing?.rules, routes = routing?.routes;
+	if (type(rules) != 'array' || type(routes) != 'array')
+		return { available: false, valid: false, code: 'UNAVAILABLE', families: [] };
+	if (length(rules) > 64 || length(routes) > 64)
+		return { available: true, valid: false, code: 'OVERSIZED', families: [] };
+	if (routing.interfaces != null) {
+		if (type(routing.interfaces) != 'object' || length(keys(routing.interfaces)) > 64)
+			return { available: true, valid: false, code: 'MALFORMED', families: [] };
+		for (let name, present in routing.interfaces)
+			if (!safe_interface(name) || type(present) != 'bool')
+				return { available: true, valid: false, code: 'MALFORMED', families: [] };
+	}
+	for (let item in rules)
+		if (!routing_rule(item))
+			return { available: true, valid: false, code: 'MALFORMED', families: [] };
+	for (let item in routes)
+		if (!routing_route(item))
+			return { available: true, valid: false, code: 'MALFORMED', families: [] };
+	let families = [];
+	function add_family(family) {
+		if (index(families, family) < 0) push(families, family);
+	};
+	if (input.kind == 'ipv4' || input.kind == 'ipv6') add_family(input.kind);
+	else
+		for (let answer in answers) add_family(ipv4(answer) ? 'ipv4' : 'ipv6');
+	if (!length(families))
+		return { available: true, valid: false, code: 'NO_ADDRESS', families };
+	let interfaces = [];
+	for (let family in families) {
+		let matched_rules = [], matched_routes = [];
+		for (let item in rules)
+			if (item.family == family && (item.priority == 1000 || item.table == 100))
+				push(matched_rules, item);
+		for (let item in routes)
+			if (item.family == family && item.table == 100)
+				push(matched_routes, item);
+		if (length(matched_rules) != 1 || length(matched_routes) != 1)
+			return { available: true, valid: false, code: 'CONTRADICTORY', families };
+		let rule = matched_rules[0], route = matched_routes[0];
+		if (rule.priority != 1000 || lc(rule.mark) != '0x1' ||
+			lc(rule.mask) != '0xffffffff' || rule.table != 100 || rule.ambiguous === true)
+			return { available: true, valid: false, code: 'MARK_MISMATCH', families };
+		let local = route.kind == 'local' && route.device == 'lo';
+		let tun = route.kind == 'unicast' && route.device == 'clash-tun' &&
+			routing.interfaces?.['clash-tun'] === true;
+		if ((!local && !tun) || route.ambiguous === true)
+			return { available: true, valid: false, code: 'ROUTE_MISMATCH', families };
+		push(interfaces, route.device);
+	}
+	return { available: true, valid: true, code: 'VERIFIED', families,
+		mark: '0x1', table: 100, interfaces };
 };
 function policy(values, field, wanted) {
 	if (type(values) != 'array' || length(values) > 128 || wanted == null)
@@ -216,12 +352,14 @@ export function create(dependencies) {
 				candidate = rule.decision; candidate_source = 'mihomo_rule';
 			}
 			step(steps, 'mihomo_rule', { available: rule.available,
-				matched: rule.matched, type: rule.type }, rule.decision);
-			let rules = observed.routing?.rules, routes = observed.routing?.routes;
-			step(steps, 'routing', {
-				mark_rules: type(rules) == 'array' ? min(length(rules), 64) : 0,
-				routes: type(routes) == 'array' ? min(length(routes), 64) : 0
-			}, candidate);
+				matched: rule.matched, type: rule.type, ordered: rule.ordered,
+				code: rule.code }, rule.decision);
+			let route = routing_reason(observed, input, answers);
+			if (!route.valid && candidate != 'BLOCK' &&
+				candidate_source != 'proxy_server_bypass') {
+				candidate = 'unknown'; candidate_source = null;
+			}
+			step(steps, 'routing', route, candidate);
 			let guard_on = desired.guard?.enabled === true, overridden = false;
 			if (guard_on && candidate_source != 'proxy_server_bypass' &&
 				(candidate == 'DIRECT' || candidate == 'unknown')) {

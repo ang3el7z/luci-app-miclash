@@ -117,6 +117,138 @@
     "expected": "PROXY"
   },
   {
+    "name": "unsupported Mihomo rule blocks later definitive match",
+    "input": { "target": "ordered.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.50"],
+    "rules": [
+      { "type": "GEOIP", "payload": "CN", "proxy": "DIRECT" },
+      { "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "malformed Mihomo rule blocks later definitive match",
+    "input": { "target": "malformed-order.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.51"],
+    "rules": [
+      { "type": "DOMAIN", "payload": "malformed-order.example" },
+      { "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "first exact supported Mihomo match wins",
+    "input": { "target": "precedence.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.52"],
+    "rules": [
+      { "type": "DOMAIN", "payload": "other.example", "proxy": "DIRECT" },
+      { "type": "DOMAIN", "payload": "precedence.example", "proxy": "ProxyGroup" },
+      { "type": "MATCH", "payload": "", "proxy": "DIRECT" }
+    ],
+    "expected": "PROXY"
+  },
+  {
+    "name": "missing route lowers proxy decision to unknown",
+    "input": { "target": "missing-route.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.53"],
+    "rules": [{ "type": "DOMAIN", "payload": "missing-route.example", "proxy": "ProxyGroup" }],
+    "routing": "missing",
+    "expected": "unknown"
+  },
+  {
+    "name": "contradictory route lowers direct decision to unknown",
+    "input": { "target": "contradictory-route.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.54"],
+    "rules": [{ "type": "DOMAIN", "payload": "contradictory-route.example", "proxy": "DIRECT" }],
+    "routing": "contradictory",
+    "expected": "unknown"
+  },
+  {
+    "name": "block remains justified when routing is missing",
+    "input": { "target": "blocked-without-route.example", "interface": "guest" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [{ "name": "guest", "decision": "BLOCK" }],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.55"],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "routing": "missing",
+    "expected": "BLOCK"
+  },
+  {
+    "name": "malformed kernel evidence lowers proxy to unknown",
+    "input": { "target": "malformed-kernel.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.56"],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "routing": "malformed",
+    "expected": "unknown"
+  },
+  {
+    "name": "oversized kernel evidence lowers proxy to unknown",
+    "input": { "target": "oversized-kernel.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.57"],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "routing": "oversized",
+    "expected": "unknown"
+  },
+  {
+    "name": "oversized Mihomo rule list is unknown",
+    "input": { "target": "oversized-rules.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.58"],
+    "rules": "oversized",
+    "expected": "unknown"
+  },
+  {
     "name": "unavailable Mihomo remains unknown without Guard",
     "input": { "target": "unknown.example" },
     "desired": {
