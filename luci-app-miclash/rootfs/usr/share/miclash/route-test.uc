@@ -250,6 +250,9 @@ function allowed(value, fields) {
 	for (let name in value) if (!fields[name]) return false;
 	return true;
 };
+function exact_allowed(value, fields) {
+	return allowed(value, fields) && length(keys(value)) == length(keys(fields));
+};
 function routing_rule(value) {
 	return allowed(value, { family: true, priority: true, mark: true, mask: true,
 		table: true, protocol: true, owned: true, ambiguous: true, reason: true }) &&
@@ -281,6 +284,53 @@ function routing_route(value) {
 		(value.unreachable == null || type(value.unreachable) == 'bool') &&
 		(value.metric == null || (type(value.metric) == 'int' && value.metric >= 0));
 };
+function manifest_rule(value) {
+	return exact_allowed(value, { family: true, priority: true, mark: true,
+		mask: true, table: true }) &&
+		(value.family == 'ipv4' || value.family == 'ipv6') &&
+		type(value.priority) == 'int' && type(value.table) == 'int' &&
+		type(value.mark) == 'string' && match(value.mark, /^0x[0-9A-Fa-f]+$/) &&
+		type(value.mask) == 'string' && match(value.mask, /^0x[0-9A-Fa-f]+$/);
+};
+function manifest_route(value) {
+	let fields = value?.kind == 'unreachable'
+		? { family: true, table: true, kind: true, destination: true, device: true,
+			unreachable: true, metric: true }
+		: { family: true, table: true, kind: true, destination: true, device: true };
+	if (!exact_allowed(value, fields) ||
+		(value.family != 'ipv4' && value.family != 'ipv6') ||
+		type(value.table) != 'int' || value.destination != 'default') return false;
+	if (value.kind == 'local' || value.kind == 'unicast') return safe_interface(value.device);
+	return value.kind == 'unreachable' && value.device == null &&
+		value.unreachable === true && value.metric == 42760;
+};
+function same_manifest_entry(left, right, kind) {
+	if (kind == 'rule')
+		return left.family == right.family && left.priority == right.priority &&
+			lc(left.mark) == lc(right.mark) && lc(left.mask) == lc(right.mask) &&
+			left.table == right.table;
+	return left.family == right.family && left.table == right.table &&
+		left.kind == right.kind && left.destination == right.destination &&
+		left.device == right.device;
+};
+function trusted_ownership(routing) {
+	let ownership = routing?.ownership, committed = ownership?.committed;
+	if (type(ownership) != 'object' || ownership.trusted !== true ||
+		ownership.status != 'trusted' || ownership.transition != null ||
+		type(committed) != 'object' || type(committed.rules) != 'array' ||
+		type(committed.routes) != 'array' || length(committed.rules) > 6 ||
+		length(committed.routes) > 6)
+		return null;
+	for (let item in committed.rules) if (!manifest_rule(item)) return null;
+	for (let item in committed.routes) if (!manifest_route(item)) return null;
+	return committed;
+};
+function owned_entry(item, committed, kind) {
+	if (item.owned !== true || item.protocol !== 242) return false;
+	for (let expected in committed[kind == 'rule' ? 'rules' : 'routes'])
+		if (same_manifest_entry(item, expected, kind)) return true;
+	return false;
+};
 function routing_reason(observed, input, answers) {
 	let routing = observed?.routing, rules = routing?.rules, routes = routing?.routes;
 	if (type(rules) != 'array' || type(routes) != 'array')
@@ -300,6 +350,9 @@ function routing_reason(observed, input, answers) {
 	for (let item in routes)
 		if (!routing_route(item))
 			return { available: true, valid: false, code: 'MALFORMED', families: [] };
+	let committed = trusted_ownership(routing);
+	if (committed == null)
+		return { available: true, valid: false, code: 'UNTRUSTED_OWNERSHIP', families: [] };
 	let families = [];
 	function add_family(family) {
 		if (index(families, family) < 0) push(families, family);
@@ -318,6 +371,12 @@ function routing_reason(observed, input, answers) {
 		for (let item in routes)
 			if (item.family == family && item.table == 100)
 				push(matched_routes, item);
+		for (let item in matched_rules)
+			if (!owned_entry(item, committed, 'rule'))
+				return { available: true, valid: false, code: 'FOREIGN_ENTRY', families };
+		for (let item in matched_routes)
+			if (!owned_entry(item, committed, 'route'))
+				return { available: true, valid: false, code: 'FOREIGN_ENTRY', families };
 		if (length(matched_rules) != 1 || length(matched_routes) != 1)
 			return { available: true, valid: false, code: 'CONTRADICTORY', families };
 		let rule = matched_rules[0], route = matched_routes[0];

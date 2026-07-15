@@ -315,17 +315,36 @@ for (let scenario in route_scenarios) {
 	let observed = { routing: {
 		rules: [
 			{ family: 'ipv4', priority: 1000, mark: '0x1',
-				mask: '0xffffffff', table: 100 },
+				mask: '0xffffffff', table: 100, protocol: 242, owned: true },
 			{ family: 'ipv6', priority: 1000, mark: '0x1',
-				mask: '0xffffffff', table: 100 }
+				mask: '0xffffffff', table: 100, protocol: 242, owned: true }
 		],
 		routes: [
 			{ family: 'ipv4', table: 100, kind: 'local',
-				destination: 'default', device: 'lo' },
+				destination: 'default', device: 'lo', protocol: 242, owned: true },
 			{ family: 'ipv6', table: 100, kind: 'local',
-				destination: 'default', device: 'lo' }
+				destination: 'default', device: 'lo', protocol: 242, owned: true }
 		],
-		interfaces: { 'clash-tun': false }
+		interfaces: { 'clash-tun': false },
+		ownership: {
+			trusted: true,
+			status: 'trusted',
+			committed: {
+				rules: [
+					{ family: 'ipv4', priority: 1000, mark: '0x1',
+						mask: '0xffffffff', table: 100 },
+					{ family: 'ipv6', priority: 1000, mark: '0x1',
+						mask: '0xffffffff', table: 100 }
+				],
+				routes: [
+					{ family: 'ipv4', table: 100, kind: 'local',
+						destination: 'default', device: 'lo' },
+					{ family: 'ipv6', table: 100, kind: 'local',
+						destination: 'default', device: 'lo' }
+				]
+			},
+			transition: null
+		}
 	} };
 	if (scenario.routing == 'missing') {
 		observed.routing.rules = [];
@@ -336,6 +355,16 @@ for (let scenario in route_scenarios) {
 			kind: 'unicast', destination: 'default', device: 'clash-tun' });
 	else if (scenario.routing == 'malformed')
 		observed.routing.rules[0].mark = 1;
+	else if (scenario.routing == 'foreign-owned') {
+		observed.routing.rules[0].owned = false;
+		observed.routing.routes[0].owned = false;
+	}
+	else if (scenario.routing == 'foreign-protocol') {
+		observed.routing.rules[0].protocol = 99;
+		observed.routing.routes[0].protocol = 99;
+	}
+	else if (scenario.routing == 'missing-ownership')
+		delete observed.routing.ownership;
 	else if (scenario.routing == 'long-interface')
 		observed.routing.routes[0].device = '1234567890123456';
 	else if (scenario.routing == 'oversized')
@@ -387,13 +416,17 @@ for (let scenario in route_scenarios) {
 	assert_equal(type(routing_step.evidence.available), 'bool');
 	assert_equal(type(routing_step.evidence.valid), 'bool');
 	let route_expected = scenario.routing != 'missing' && scenario.routing != 'contradictory' &&
-		scenario.routing != 'malformed' && scenario.routing != 'long-interface' &&
+		scenario.routing != 'malformed' && scenario.routing != 'foreign-owned' &&
+		scenario.routing != 'foreign-protocol' && scenario.routing != 'missing-ownership' &&
+		scenario.routing != 'long-interface' &&
 		scenario.routing != 'oversized' &&
 		(length(scenario.answers) > 0 || match(scenario.input.target, /:|^[0-9.]+$/));
 	if (!route_expected)
 		assert_equal(routing_step.evidence.valid, false);
 	else
 		assert_equal(routing_step.evidence.valid, true);
+	if (scenario.routing_code != null)
+		assert_equal(routing_step.evidence.code, scenario.routing_code, scenario.name);
 	let dns_step = result.steps[index(order, 'dns')];
 	if (scenario.dns != null) {
 		assert_equal(dns_step.evidence.available, false,

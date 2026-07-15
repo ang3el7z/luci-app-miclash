@@ -291,6 +291,51 @@
     "expected": "unknown"
   },
   {
+    "name": "foreign exact route and rule collision is untrusted",
+    "input": { "target": "192.0.2.62" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "routing": "foreign-owned",
+    "routing_code": "FOREIGN_ENTRY",
+    "expected": "unknown"
+  },
+  {
+    "name": "foreign routing protocol is untrusted",
+    "input": { "target": "192.0.2.63" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "routing": "foreign-protocol",
+    "routing_code": "FOREIGN_ENTRY",
+    "expected": "unknown"
+  },
+  {
+    "name": "missing routing ownership is untrusted",
+    "input": { "target": "192.0.2.64" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "routing": "missing-ownership",
+    "routing_code": "UNTRUSTED_OWNERSHIP",
+    "expected": "unknown"
+  },
+  {
     "name": "overlong kernel interface is malformed",
     "input": { "target": "192.0.2.59" },
     "desired": {
