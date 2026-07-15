@@ -505,7 +505,8 @@ export function create(runtime, options) {
 	};
 	api.mark_activation = (profile, revision, result) => {
 		if (type(result) != 'string' ||
-		    (result != 'success' && result != 'health_failed'))
+		    (result != 'success' && result != 'health_failed' &&
+		     result != 'validation_failed' && result != 'failed'))
 			errors.fail('INVALID_ARGUMENT');
 		let destination = revision_files(profile, revision);
 		let record = read_record(profile, revision);
@@ -519,7 +520,9 @@ export function create(runtime, options) {
 	api.bind_config = (operations, configuration) => {
 		if (type(operations?.submit) != 'function' || type(operations?.is_context) != 'function' ||
 		    type(configuration?.save_draft_in_operation) != 'function' ||
-		    type(configuration?.apply_in_operation) != 'function')
+		    type(configuration?.apply_in_operation) != 'function' ||
+		    type(configuration?.capture_active_in_operation) != 'function' ||
+		    type(configuration?.apply_restore_in_operation) != 'function')
 			errors.fail('INVALID_ARGUMENT');
 		if (bound_operations != null &&
 		    (bound_operations !== operations || bound_config !== configuration))
@@ -539,6 +542,64 @@ export function create(runtime, options) {
 				bound_config.save_draft_in_operation(ctx, profile, content);
 			});
 	};
+	api.restore_in_operation = (ctx, configuration, profile, revision) => {
+		if (bound_operations == null || bound_operations.is_context(ctx) !== true ||
+		    configuration !== bound_config)
+			errors.fail('INVALID_ARGUMENT');
+		profile = schema.profile_name(profile);
+		revision = revision_id(revision);
+		let selected_content = api.read(profile, revision);
+		let capture = configuration.capture_active_in_operation(ctx, profile);
+		let before = api.snapshot_bytes(profile, 'restore-before', capture.content, {
+			validation_result: 'success',
+			activation_result: 'pending',
+			operation_id: ctx.id,
+			restored_revision: revision
+		});
+		let selected = null;
+		let terminal_failure = null;
+		function terminalize(result) {
+			for (let record in [ selected, before ]) {
+				if (record == null)
+					continue;
+				try { api.mark_activation(profile, record.revision, result); }
+				catch (error) { terminal_failure = errors.normalize(error).code; }
+			}
+			if (terminal_failure != null)
+				errors.fail(terminal_failure);
+		};
+		try {
+			let result = configuration.apply_restore_in_operation(
+				ctx, profile, selected_content, capture, (candidate, candidate_hash) => {
+					if (runtime.digest.sha256(candidate) != candidate_hash)
+						errors.fail('INTERNAL');
+					selected = api.snapshot_bytes(profile, 'restore', candidate, {
+						validation_result: 'success',
+						activation_result: 'pending',
+						operation_id: ctx.id,
+						parent_revision: before.revision,
+						restored_revision: revision
+					});
+				});
+			if (result?.ok === false && result?.error?.code == 'VALIDATION_FAILED') {
+				terminalize('validation_failed');
+				return result;
+			}
+			if (result?.ok === false && result?.error?.code == 'HEALTH_FAILED') {
+				terminalize('health_failed');
+				return result;
+			}
+			if (result?.ok !== true)
+				errors.fail('INTERNAL');
+			terminalize('success');
+			return result;
+		}
+		catch (error) {
+			try { terminalize('failed'); }
+			catch (terminal_error) { errors.fail(errors.normalize(terminal_error).code); }
+			errors.fail(errors.normalize(error).code);
+		}
+	};
 	api.restore = (profile, revision, source) => {
 		profile = schema.profile_name(profile);
 		revision = revision_id(revision);
@@ -546,9 +607,7 @@ export function create(runtime, options) {
 			errors.fail('INVALID_ARGUMENT');
 		return bound_operations.submit('history.restore', source,
 			{ profile, revision }, (ctx) => complete_result(ctx,
-				bound_config.apply_in_operation(ctx, profile, api.read(profile, revision),
-					'restore-before', { restored_revision: revision },
-					{ snapshot_before_validation: true })));
+				api.restore_in_operation(ctx, bound_config, profile, revision)));
 	};
 	api.prune = (profile) => {
 		profile = schema.profile_name(profile);

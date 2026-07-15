@@ -53,6 +53,7 @@ export function create(runtime, operations, history) {
 	ensure_directory(runtime, '/opt/clash/history/drafts');
 	ensure_directory(runtime, runtime.paths.tmp + '/candidates');
 	let candidates = runtime.paths.tmp + '/candidates';
+	let restore_captures = {};
 	let stale_names = runtime.fs.lsdir(candidates);
 	if (type(stale_names) != 'array')
 		errors.fail('INTERNAL');
@@ -301,6 +302,38 @@ export function create(runtime, operations, history) {
 		operation_context(ctx);
 		return with_candidate(ctx, profile, content, () => ({ ok: true }));
 	};
+	api.capture_active_in_operation = (ctx, profile) => {
+		operation_context(ctx);
+		profile = schema.profile_name(profile);
+		if (restore_captures[ctx.id] != null)
+			errors.fail('BUSY');
+		let capture = read_active_state(profile);
+		restore_captures[ctx.id] = capture;
+		return capture;
+	};
+	api.apply_restore_in_operation = (ctx, profile, content, capture, on_validated) => {
+		operation_context(ctx);
+		profile = schema.profile_name(profile);
+		if (type(capture) != 'object' || restore_captures[ctx.id] !== capture ||
+		    type(on_validated) != 'function')
+			errors.fail('INVALID_ARGUMENT');
+		delete restore_captures[ctx.id];
+		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
+			assert_active_state(profile, capture);
+			on_validated(candidate, candidate_hash);
+			assert_active_state(profile, capture);
+			storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
+			record_active(profile, candidate_hash, ctx.id);
+			if (!healthy(runtime.service, profile, capture.content))
+				return {
+					ok: false,
+					activated: true,
+					reload_ok: false,
+					error: errors.new('HEALTH_FAILED', 'HEALTH_FAILED', { profile })
+				};
+			return { ok: true, activated: true, reload_ok: true };
+		});
+	};
 	api.apply_in_operation = (ctx, profile, content, source, extra, options) => {
 		operation_context(ctx);
 		return activation(ctx, profile, content, source, extra, options);
@@ -314,9 +347,7 @@ export function create(runtime, operations, history) {
 	api.restore = (profile, revision, source) => {
 		revision = schema.operation_id(revision);
 		return submit('history.restore', source, profile, (ctx) => complete_result(ctx,
-			activation(ctx, profile, history.read(profile, revision), 'restore', {
-				restored_revision: revision
-			})));
+			history.restore_in_operation(ctx, api, profile, revision)));
 	};
 	api.detect_external = (profile) => {
 		profile = schema.profile_name(profile);

@@ -307,9 +307,15 @@ let restored = env.cfg.restore('config.yaml', applied_history[0].revision, 'luci
 assert_equal(finish(env, restored).state, 'success');
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), before);
 let restored_history = env.revisions.list('config.yaml');
-assert_equal(length(restored_history), 2);
-assert_equal(restored_history[1].source, 'restore');
+assert_equal(length(restored_history), 3);
+assert_equal(restored_history[1].source, 'restore-before');
+assert_equal(restored_history[1].activation_result, 'success');
 assert_equal(env.revisions.read('config.yaml', restored_history[1].revision), fixture('valid.yaml'));
+assert_equal(restored_history[2].source, 'restore');
+assert_equal(restored_history[2].activation_result, 'success');
+assert_equal(restored_history[2].parent_revision, restored_history[1].revision);
+assert_equal(restored_history[2].restored_revision, applied_history[0].revision);
+assert_equal(env.revisions.read('config.yaml', restored_history[2].revision), before);
 
 // External edits are detected by persisted hash, validated, and snapshotted as
 // the external source; invalid external data is never overwritten.

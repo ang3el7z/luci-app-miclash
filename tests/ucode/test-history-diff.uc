@@ -121,6 +121,17 @@ function yaml_count(env) {
 	return count;
 };
 
+function added_records(before, after) {
+	let known = {};
+	for (let record in before)
+		known[record.revision] = true;
+	let output = [];
+	for (let record in after)
+		if (!known[record.revision])
+			push(output, record);
+	return output;
+};
+
 let env = environment();
 let source_cases = [
 	[ 'manual', 'manual' ], [ 'subscription', 'subscription' ], [ 'auto', 'auto' ],
@@ -193,8 +204,18 @@ assert_equal(env.fs.readfile('/opt/clash/config.yaml'), 'current-active\n');
 // failed validation leaves Active unchanged and retains that audit snapshot.
 let invalid_revision = env.revisions.snapshot_bytes('config.yaml', 'manual',
 	'invalid-selected\n', { validation_result: 'failure' });
-let history_before_invalid = length(env.revisions.list('config.yaml'));
+let history_before_invalid = env.revisions.list('config.yaml');
 operations_before = length(env.ops.list());
+let restore_worker_calls = 0;
+let restore_worker = env.revisions.restore_in_operation;
+assert_true(type(restore_worker) == 'function');
+env.revisions.restore_in_operation = (ctx, configuration, profile, revision) => {
+	restore_worker_calls++;
+	return restore_worker(ctx, configuration, profile, revision);
+};
+assert_throws(() => env.revisions.restore_in_operation(
+	{ id: 'forged' }, env.cfg, 'config.yaml', invalid_revision.revision),
+	'INVALID_ARGUMENT');
 let invalid_restore = env.revisions.restore(
 	'config.yaml', invalid_revision.revision, 'luci');
 env.process.replies[validation_key(invalid_restore)] = { code: 1 };
@@ -202,18 +223,76 @@ let invalid_done = finish(env, invalid_restore);
 assert_equal(invalid_done.state, 'failure');
 assert_equal(invalid_done.error.code, 'VALIDATION_FAILED');
 assert_equal(length(env.ops.list()), operations_before + 1);
+assert_equal(restore_worker_calls, 2);
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), 'current-active\n');
 let after_invalid = env.revisions.list('config.yaml');
-assert_equal(length(after_invalid), history_before_invalid + 1);
-assert_equal(after_invalid[length(after_invalid) - 1].source, 'restore-before');
-assert_equal(after_invalid[length(after_invalid) - 1].restored_revision,
-	invalid_revision.revision);
+let invalid_added = added_records(history_before_invalid, after_invalid);
+assert_equal(length(invalid_added), 1);
+assert_equal(invalid_added[0].source, 'restore-before');
+assert_equal(invalid_added[0].restored_revision, invalid_revision.revision);
+assert_equal(invalid_added[0].activation_result, 'validation_failed');
 
 operations_before = length(env.ops.list());
+let history_before_success = env.revisions.list('config.yaml');
 let restored = env.revisions.restore('config.yaml', first.revision, 'luci');
 assert_equal(finish(env, restored).state, 'success');
 assert_equal(length(env.ops.list()), operations_before + 1);
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), 'source-manual\n');
+let success_added = added_records(history_before_success,
+	env.revisions.list('config.yaml'));
+assert_equal(length(success_added), 2);
+assert_equal(success_added[0].source, 'restore-before');
+assert_equal(success_added[0].activation_result, 'success');
+assert_equal(success_added[1].source, 'restore');
+assert_equal(success_added[1].activation_result, 'success');
+assert_equal(success_added[1].restored_revision, first.revision);
+assert_equal(success_added[1].parent_revision, success_added[0].revision);
+
+// The compatibility config entrypoint has its own one-operation wrapper but
+// invokes the same authenticated history worker and produces the same audit.
+let compatibility = environment();
+let compatibility_selected = compatibility.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'compatibility-selected\n', {});
+let compatibility_calls = 0;
+let compatibility_worker = compatibility.revisions.restore_in_operation;
+compatibility.revisions.restore_in_operation = (ctx, configuration, profile, revision) => {
+	compatibility_calls++;
+	return compatibility_worker(ctx, configuration, profile, revision);
+};
+let compatibility_before = compatibility.revisions.list('config.yaml');
+let compatibility_operations = length(compatibility.ops.list());
+let compatibility_restore = compatibility.cfg.restore(
+	'config.yaml', compatibility_selected.revision, 'luci');
+assert_equal(finish(compatibility, compatibility_restore).state, 'success');
+assert_equal(compatibility_calls, 1);
+assert_equal(length(compatibility.ops.list()), compatibility_operations + 1);
+let compatibility_added = added_records(compatibility_before,
+	compatibility.revisions.list('config.yaml'));
+assert_equal(length(compatibility_added), 2);
+assert_equal(compatibility_added[0].source, 'restore-before');
+assert_equal(compatibility_added[0].activation_result, 'success');
+assert_equal(compatibility_added[1].source, 'restore');
+assert_equal(compatibility_added[1].activation_result, 'success');
+assert_equal(compatibility.fs.readfile('/opt/clash/config.yaml'),
+	'compatibility-selected\n');
+
+let compatibility_invalid = environment();
+let compatibility_invalid_selected = compatibility_invalid.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'compatibility-invalid\n', {});
+let compatibility_invalid_before = compatibility_invalid.revisions.list('config.yaml');
+let compatibility_invalid_restore = compatibility_invalid.cfg.restore(
+	'config.yaml', compatibility_invalid_selected.revision, 'luci');
+compatibility_invalid.process.replies[validation_key(compatibility_invalid_restore)] =
+	{ code: 1 };
+assert_equal(finish(compatibility_invalid, compatibility_invalid_restore).error.code,
+	'VALIDATION_FAILED');
+let compatibility_invalid_added = added_records(compatibility_invalid_before,
+	compatibility_invalid.revisions.list('config.yaml'));
+assert_equal(length(compatibility_invalid_added), 1);
+assert_equal(compatibility_invalid_added[0].source, 'restore-before');
+assert_equal(compatibility_invalid_added[0].activation_result, 'validation_failed');
+assert_equal(compatibility_invalid.fs.readfile('/opt/clash/config.yaml'),
+	'current-active\n');
 
 // Health failure follows the project-wide no-automatic-config-rollback rule.
 let unhealthy = environment({ reload: () => true, health: () => false });
@@ -221,10 +300,18 @@ let unhealthy_selected = unhealthy.revisions.snapshot_bytes('config.yaml', 'manu
 	'new-active\n', {});
 let unhealthy_restore = unhealthy.revisions.restore(
 	'config.yaml', unhealthy_selected.revision, 'luci');
+let unhealthy_before = unhealthy.revisions.list('config.yaml');
 let unhealthy_done = finish(unhealthy, unhealthy_restore);
 assert_equal(unhealthy_done.state, 'failure');
 assert_equal(unhealthy_done.error.code, 'HEALTH_FAILED');
 assert_equal(unhealthy.fs.readfile('/opt/clash/config.yaml'), 'new-active\n');
+let unhealthy_added = added_records(unhealthy_before,
+	unhealthy.revisions.list('config.yaml'));
+assert_equal(length(unhealthy_added), 2);
+assert_equal(unhealthy_added[0].source, 'restore-before');
+assert_equal(unhealthy_added[0].activation_result, 'health_failed');
+assert_equal(unhealthy_added[1].source, 'restore');
+assert_equal(unhealthy_added[1].activation_result, 'health_failed');
 
 function retention_environment() {
 	let current = environment();
