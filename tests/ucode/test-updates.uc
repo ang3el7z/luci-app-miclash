@@ -32,12 +32,23 @@ function environment(options) {
 		'/etc/openwrt_release': "DISTRIB_ARCH='" +
 			(options.arch ?? 'aarch64_cortex-a53') + "'\n",
 		'/opt/clash/bin/clash': old,
-		'/opt/clash/config.yaml': 'mixed-port: 7890\n'
+		'/opt/clash/config.yaml': 'mixed-port: 7890\n',
+		'/usr/libexec/miclash/decompress-gzip': 'trusted helper',
+		'/bin/busybox': 'trusted busybox'
 	});
 	for (let directory in [ '/tmp', '/tmp/miclash', '/var', '/var/run',
 		'/var/run/miclash', '/opt/clash/bin/previous' ])
 		if (filesystem.lstat(directory) == null)
 			filesystem.mkdir(directory);
+	filesystem.chmod('/opt/clash/bin/clash', 0o700);
+	filesystem.chmod('/usr/libexec/miclash/decompress-gzip', 0o755);
+	filesystem.chmod('/bin/busybox', 0o755);
+	if (options.foreign_bin_parent) filesystem.set_uid('/opt/clash/bin', 1000);
+	if (options.foreign_helper_parent)
+		filesystem.set_uid('/usr/libexec/miclash', 1000);
+	if (options.fail_binary_write) filesystem.fail_rename_once_to = '/opt/clash/bin/clash';
+	if (options.partial_binary_write)
+		filesystem.throw_after_rename_once_to = '/opt/clash/bin/clash';
 	let clock = fakes.clock(1700000000000);
 	let process = fakes.process();
 	if (options.stale_handoff) {
@@ -73,19 +84,34 @@ function environment(options) {
 		require('digest').sha256(gzip_body) +
 		'  mihomo-linux-arm64-v1.2.3.gz\n';
 	let service_calls = [], running = options.running === true, start_count = 0;
+	let stop_count = 0, stopped_wait_failed = false;
 	let readiness = [ ...(options.readiness ?? []) ], wait_count = 0;
 	let service = {
 		observe: () => ({ state: running ? 'running' : 'stopped', running }),
-		stop: () => { push(service_calls, 'stop'); running = false; },
+		stop: () => {
+			push(service_calls, 'stop'); running = false; stop_count++;
+			if (options.stop_throw_once && stop_count == 1) die('HEALTH_FAILED');
+		},
 		start: () => {
 			push(service_calls, 'start'); running = true; start_count++;
 			if (options.new_start_throw && start_count == 1) die('HEALTH_FAILED');
 		},
-		wait_ready: () => {
+		wait_ready: (deadline, profile, wait_options) => {
 			wait_count++;
+			if (options.wait_stopped_fail_once && wait_options?.stopped === true &&
+			    !stopped_wait_failed) {
+				stopped_wait_failed = true;
+				return { ok: false, timed_out: true, components: [] };
+			}
 			if (options.restore_write_fail && wait_count == 3)
 				filesystem.fail_rename_once = true;
 			let ok = length(readiness) ? shift(readiness) : true;
+			if (ok && options.tamper_binary_after_new_ready &&
+			    wait_options?.stopped !== true && start_count == 1)
+				filesystem.writefile('/opt/clash/bin/clash', 'tampered after readiness');
+			if (ok && options.fail_kernel_cleanup && wait_options?.stopped !== true &&
+			    start_count == 1)
+				filesystem.fail_unlink_once_matching = '/tmp/miclash/updates/';
 			return { ok, timed_out: !ok, components: [] };
 		}
 	};
@@ -112,22 +138,31 @@ function environment(options) {
 			let body = filesystem.readfile(compressed);
 			if (substr(body, 0, 5) == 'GZIP:') {
 				filesystem.writefile(output, substr(body, 5));
-				filesystem.unlink(compressed);
+				if (request.command == '/bin/gzip') filesystem.unlink(compressed);
+				if (options.replace_helper_during_unpack &&
+				    request.command == '/usr/libexec/miclash/decompress-gzip')
+					filesystem.bump_inode('/usr/libexec/miclash/decompress-gzip');
 			}
 			else
 				process.replies[request.command + ':' + join(' ', request.args)] = { code: 1 };
 		}
 		else if (substr(request.command, 0, length('/tmp/miclash/updates/')) ==
-		    '/tmp/miclash/updates/') {
+		    '/tmp/miclash/updates/' ||
+		    substr(request.command, 0, length('/opt/clash/bin/previous/')) ==
+		    '/opt/clash/bin/previous/') {
 			if (options.fail_version && request.args[0] == '-v' ||
-			    options.fail_config && request.args[0] == '-d')
+			    options.fail_config && request.args[0] == '-d' ||
+			    options.fail_rollback_version &&
+			      substr(request.command, 0, length('/opt/clash/bin/previous/')) ==
+			      '/opt/clash/bin/previous/' && request.args[0] == '-v')
 				process.replies[request.command + ':' + join(' ', request.args)] = { code: 1 };
 		}
-		else if (request.command == '/bin/ash') {
+		else if (request.command == '/bin/busybox') {
 			let key = request.command + ':' + join(' ', request.args);
-			if (request.args[0] == '-n') {
+			if (request.args[0] == 'ash' && request.args[1] == '-n') {
 				if (options.fail_installer_syntax)
 					process.replies[key] = { code: 2 };
+				if (options.replace_ash_during_syntax) filesystem.bump_inode('/bin/busybox');
 			}
 			else {
 				let status_path = request.args[index(request.args, '--status-file') + 1];
@@ -141,6 +176,10 @@ function environment(options) {
 					(options.stale_timestamp ? '1' : '1700000000') + '\n' +
 					(options.extra_handoff_field ? 'unexpected=value\n' : ''));
 				if (options.weak_handoff) filesystem.chmod(status_path, 0o644);
+				if (options.fail_handoff_cleanup)
+					filesystem.fail_unlink_once_matching = 'handoff-';
+				if (options.fail_installer_cleanup)
+					filesystem.fail_unlink_once_matching = '.sh';
 				if (options.fail_installer_run)
 					process.replies[key] = { code: 1 };
 			}
@@ -390,9 +429,9 @@ assert_true(index(sprintf('%J', app_update.updater.status()), 'github') < 0);
 assert_true(index(sprintf('%J', app_update.ops.get(app_op.id)), '--token') < 0);
 let ash_calls = [];
 for (let call in app_update.process.calls)
-	if (call.command == '/bin/ash') push(ash_calls, call);
+	if (call.command == '/bin/busybox') push(ash_calls, call);
 assert_equal(length(ash_calls), 2);
-assert_equal(ash_calls[0].args[0], '-n');
+assert_equal(ash_calls[0].args[1], '-n');
 assert_true(index(ash_calls[1].args, '--target-tag') >= 0);
 for (let name in app_update.filesystem.lsdir('/tmp/miclash/updates'))
 	assert_true(index(name, 'handoff') < 0, 'handoff is consumed and removed');
@@ -403,7 +442,7 @@ syntax_failed.clock.advance(0);
 assert_equal(syntax_failed.ops.get(syntax_op.id).state, 'failure');
 let syntax_ash = [];
 for (let call in syntax_failed.process.calls)
-	if (call.command == '/bin/ash') push(syntax_ash, call);
+	if (call.command == '/bin/busybox') push(syntax_ash, call);
 assert_equal(length(syntax_ash), 1, 'invalid syntax is never executed');
 let forged = environment({ forged_handoff: true });
 let forged_op = forged.updater.update_miclash({ version: 'v9.9.9' }, 'luci');
@@ -461,7 +500,7 @@ manifest_mismatch.clock.advance(0);
 assert_equal(manifest_mismatch.ops.get(manifest_mismatch_op.id).state, 'failure');
 let mismatch_ash = [];
 for (let call in manifest_mismatch.process.calls)
-	if (call.command == '/bin/ash') push(mismatch_ash, call);
+	if (call.command == '/bin/busybox') push(mismatch_ash, call);
 assert_equal(length(mismatch_ash), 0, 'manifest mismatch fails before syntax or execution');
 let wrong_manifest_release = json(sprintf('%J', manifest_release));
 wrong_manifest_release.assets[0].browser_download_url =
@@ -499,7 +538,122 @@ empty_installer.clock.advance(0);
 assert_equal(empty_installer.ops.get(empty_installer_op.id).state, 'failure');
 let empty_ash = [];
 for (let call in empty_installer.process.calls)
-	if (call.command == '/bin/ash') push(empty_ash, call);
+	if (call.command == '/bin/busybox') push(empty_ash, call);
 assert_equal(length(empty_ash), 0, 'empty installer is never syntax-checked or executed');
+
+// The recovery transaction starts at the first stop/write attempt. Even when
+// stop, stopped observation, or atomic replacement throws after mutation, the
+// exact old bytes are restored and the originally running service is proven.
+for (let recovery_case in [
+	{ stop_throw_once: true },
+	{ wait_stopped_fail_once: true },
+	{ fail_binary_write: true },
+	{ partial_binary_write: true }
+]) {
+	let recovered = environment({ ...recovery_case, running: true });
+	let recovered_op = recovered.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
+	recovered.clock.advance(0);
+	assert_equal(recovered.ops.get(recovered_op.id).state, 'failure');
+	assert_equal(recovered.filesystem.readfile('/opt/clash/bin/clash'),
+		'old mihomo binary');
+	assert_true(index(recovered.service_calls, 'start') >= 0,
+		'recovery restarts the previously running old kernel');
+	assert_equal(recovered.updater.status().applied, false);
+	assert_equal(recovered.updater.status().recovery_state, 'restored');
+}
+
+// Destination authority includes the root-owned parent hierarchy. Every
+// successful stopped update authenticates the final executable mode/hash; a
+// post-readiness substitution is recovered rather than reported as success.
+let foreign_bin = environment({ foreign_bin_parent: true, running: true });
+let foreign_bin_op = foreign_bin.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
+foreign_bin.clock.advance(0);
+assert_equal(foreign_bin.ops.get(foreign_bin_op.id).state, 'failure');
+assert_equal(length(foreign_bin.service_calls), 0);
+assert_equal(stopped.filesystem.lstat('/opt/clash/bin/clash').mode, 0o700);
+assert_equal(stopped.filesystem.realpath('/opt/clash/bin/clash'), '/opt/clash/bin/clash');
+let tampered_ready = environment({ running: true,
+	tamper_binary_after_new_ready: true });
+let tampered_ready_op = tampered_ready.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+tampered_ready.clock.advance(0);
+assert_equal(tampered_ready.ops.get(tampered_ready_op.id).state, 'failure');
+assert_equal(tampered_ready.filesystem.readfile('/opt/clash/bin/clash'),
+	'old mihomo binary');
+
+// Rollback runs the same candidate -v and Active -t pipeline before its first
+// stop, and its provenance is not falsely labelled as a published checksum.
+let validated_rollback = environment({ old: 'current binary', running: true });
+validated_rollback.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
+	'old mihomo binary');
+validated_rollback.filesystem.chmod('/opt/clash/bin/previous/' + previous_id, 0o700);
+let validated_rollback_op = validated_rollback.updater.rollback_mihomo(
+	{ id: previous_id }, 'luci');
+validated_rollback.clock.advance(0);
+let rollback_execs = [];
+for (let call in validated_rollback.process.calls)
+	if (substr(call.command, 0, length('/opt/clash/bin/previous/')) ==
+	    '/opt/clash/bin/previous/') push(rollback_execs, call);
+assert_equal(length(rollback_execs), 2);
+assert_equal(rollback_execs[0].args[0], '-v');
+assert_equal(rollback_execs[1].args[0], '-d');
+assert_equal(validated_rollback.updater.status().published_checksum_verified, null);
+let rejected_rollback = environment({ old: 'current binary', running: true,
+	fail_rollback_version: true });
+rejected_rollback.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
+	'old mihomo binary');
+rejected_rollback.filesystem.chmod('/opt/clash/bin/previous/' + previous_id, 0o700);
+let rejected_rollback_op = rejected_rollback.updater.rollback_mihomo(
+	{ id: previous_id }, 'luci');
+rejected_rollback.clock.advance(0);
+assert_equal(rejected_rollback.ops.get(rejected_rollback_op.id).state, 'failure');
+assert_equal(length(rejected_rollback.service_calls), 0);
+
+// Fixed helpers/interpreters and their root-owned parents are capabilities,
+// revalidated across process execution. Replacing either fails before stop or
+// before executing the installer body.
+for (let helper_case in [
+	{ foreign_helper_parent: true }, { replace_helper_during_unpack: true }
+]) {
+	let rejected_helper = environment({ ...helper_case, running: true });
+	let rejected_helper_op = rejected_helper.updater.update_mihomo(
+		{ version: 'v1.2.3' }, 'luci');
+	rejected_helper.clock.advance(0);
+	assert_equal(rejected_helper.ops.get(rejected_helper_op.id).state, 'failure');
+	assert_equal(length(rejected_helper.service_calls), 0);
+}
+let replaced_ash = environment({ replace_ash_during_syntax: true });
+let replaced_ash_op = replaced_ash.updater.update_miclash(
+	{ version: 'v9.9.9' }, 'luci');
+replaced_ash.clock.advance(0);
+assert_equal(replaced_ash.ops.get(replaced_ash_op.id).state, 'failure');
+let replaced_ash_calls = [];
+for (let call in replaced_ash.process.calls)
+	if (call.command == '/bin/busybox') push(replaced_ash_calls, call);
+assert_equal(length(replaced_ash_calls), 1);
+
+// Success is published only after cleanup. If cleanup fails after an applied
+// update, central operation and status both report cleanup failure plus the
+// truthful applied state.
+let kernel_cleanup = environment({ running: true, fail_kernel_cleanup: true });
+let kernel_cleanup_op = kernel_cleanup.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+kernel_cleanup.clock.advance(0);
+assert_equal(kernel_cleanup.ops.get(kernel_cleanup_op.id).state, 'failure');
+assert_equal(kernel_cleanup.updater.status().state, 'failure');
+assert_equal(kernel_cleanup.updater.status().stage, 'cleanup');
+assert_equal(kernel_cleanup.updater.status().applied, true);
+for (let cleanup_case in [
+	{ fail_handoff_cleanup: true }, { fail_installer_cleanup: true }
+]) {
+	let app_cleanup = environment(cleanup_case);
+	let app_cleanup_op = app_cleanup.updater.update_miclash(
+		{ version: 'v9.9.9' }, 'luci');
+	app_cleanup.clock.advance(0);
+	assert_equal(app_cleanup.ops.get(app_cleanup_op.id).state, 'failure');
+	assert_equal(app_cleanup.updater.status().state, 'failure');
+	assert_equal(app_cleanup.updater.status().stage, 'cleanup');
+	assert_equal(app_cleanup.updater.status().applied, true);
+}
 
 print('ok - verified update release contracts\n');

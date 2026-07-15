@@ -80,7 +80,10 @@ export function fs(initial) {
 		corrupt_on_close: false,
 		collide_next_open: false,
 		fail_unlink_once: false,
+		fail_unlink_once_matching: null,
 		fail_rename_once: false,
+		fail_rename_once_to: null,
+		throw_after_rename_once_to: null,
 		ignore_chmod: false,
 		on_lstat: null,
 		on_mkdir: null,
@@ -251,6 +254,11 @@ export function fs(initial) {
 	};
 	fake.unlink = (path) => {
 		push(fake.calls.unlink, path);
+		if (fake.fail_unlink_once_matching != null &&
+		    index(path, fake.fail_unlink_once_matching) >= 0) {
+			fake.fail_unlink_once_matching = null;
+			return null;
+		}
 		if (fake.fail_unlink_once) {
 			fake.fail_unlink_once = false;
 			return null;
@@ -275,6 +283,10 @@ export function fs(initial) {
 	};
 	fake.rename = (from, to) => {
 		push(fake.calls.rename, { from, to });
+		if (fake.fail_rename_once_to != null && to == fake.fail_rename_once_to) {
+			fake.fail_rename_once_to = null;
+			return null;
+		}
 		if (fake.fail_rename_once) {
 			fake.fail_rename_once = false;
 			return null;
@@ -306,6 +318,11 @@ export function fs(initial) {
 		delete modes[actual_from];
 		delete inodes[actual_from];
 		if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
+		if (fake.throw_after_rename_once_to != null &&
+		    to == fake.throw_after_rename_once_to) {
+			fake.throw_after_rename_once_to = null;
+			die('INTERNAL');
+		}
 		return true;
 	};
 	fake.stat = (path) => info(path, true);

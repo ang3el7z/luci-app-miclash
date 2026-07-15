@@ -38,7 +38,7 @@ function check(condition, message) {
 }
 
 function scriptWithoutMain(source) {
-	const dispatchStart = source.indexOf('\nif [ "${1:-}" = "app" ]; then');
+	const dispatchStart = source.indexOf('\nif [ "${1:-}" = "status-protocol-test" ]; then');
 	if (dispatchStart >= 0) return source.slice(0, dispatchStart);
 	return source.replace(/\nmain "\$@"\s*$/, '');
 }
@@ -249,6 +249,21 @@ check(/--force-reinstall/.test(updateResult.opkgLog) &&
 	'miclash-update curl helper must force-reinstall zlib/libcurl4/curl when the existing curl cannot run.');
 
 const installerAppResult = runShell(scriptWithoutMain(installer), `
+# This gate exercises package resolution and curl repair. The root-owned fixed
+# handoff path is covered by check-update-status-protocol.sh; use an isolated
+# sink here so this cross-platform Node fixture does not weaken that authority.
+validate_status_authority() { return 0; }
+write_status() {
+	[ -n "$STATUS_FILE" ] || return 0
+	{
+		printf 'protocol=miclash-update-status-v1\\n'
+		printf 'token=%s\\n' "$CURRENT_TOKEN"
+		printf 'state=%s\\n' "$1"
+		printf 'phase=%s\\n' "$2"
+		printf 'target_version=%s\\n' "$STATUS_TARGET_VERSION"
+		printf 'updated_at=1700000000\\n'
+	} > "$STATUS_FILE"
+}
 detect_openwrt() {
 	OW_RELEASE=24.10.2
 	OW_MAJOR=24
@@ -259,7 +274,7 @@ detect_openwrt() {
 openwrt_major() { echo 24; }
 detect_arch() { MIHOMO_ARCH=arm64; }
 detect_installed_miclash() { MICLASH_INSTALLED_VER=1.0.0; MICLASH_INSTALLED_NORM=1.0.0; }
-run_app_mode --target-tag v1.2.3 --mode update --status-file "$TEST_STATUS_FILE" --token test-token >/dev/null
+run_app_mode --target-tag v1.2.3 --mode update --status-file "$TEST_STATUS_FILE" --token 0123456789abcdef0123456789abcdef >/dev/null
 `, {
 	releaseJson: `{
 		"tag_name": "v1.2.3",
@@ -279,7 +294,7 @@ check(/luci-app-miclash_1\.2\.3_all\.ipk/.test(installerAppResult.curlLog),
 	'install-miclash app mode must download the package asset selected from the target release.');
 check(/state=success/.test(installerAppResult.status) &&
 	/phase=done/.test(installerAppResult.status) &&
-	/token=test-token/.test(installerAppResult.status),
+	/token=0123456789abcdef0123456789abcdef/.test(installerAppResult.status),
 	'install-miclash app mode must write success operation status with the provided token.');
 
 const updateAppResult = runShell(scriptWithoutDispatch(update), `

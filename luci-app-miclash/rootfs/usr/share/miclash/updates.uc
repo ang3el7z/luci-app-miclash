@@ -16,6 +16,8 @@ const BINARY = '/opt/clash/bin/clash';
 const ACTIVE = '/opt/clash/config.yaml';
 const UPDATE_ROOT = '/tmp/miclash/updates';
 const PREVIOUS_ROOT = '/opt/clash/bin/previous';
+const DECOMPRESS = '/usr/libexec/miclash/decompress-gzip';
+const BUSYBOX = '/bin/busybox';
 const KERNEL_DOWNLOAD_LIMIT = 16777216;
 const DEFAULT_KERNEL_LIMIT = 67108864;
 
@@ -50,6 +52,35 @@ function same_node(left, right) {
 	       left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
 };
 
+function same_object(left, right) {
+	return left?.type != null && left.type == right?.type &&
+	       left.inode == right?.inode && left.dev?.major == right.dev?.major &&
+	       left.dev?.minor == right.dev?.minor;
+};
+
+function verify_authority(runtime, authority) {
+	if (authority?.parent != null) verify_authority(runtime, authority.parent);
+	let current = runtime.fs.lstat(authority.path);
+	if (!same_object(authority.identity, current) || current?.type != 'directory' ||
+	    runtime.fs.realpath(authority.path) != authority.path ||
+	    (current.uid != null && current.uid != 0) ||
+	    (current.mode != 0o700 && current.mode != 0o750 && current.mode != 0o755))
+		errors.fail('INTERNAL');
+	return current;
+};
+
+function trusted_directory(runtime, path, parent) {
+	let identity = runtime.fs.lstat(path);
+	let authority = { path, identity, parent };
+	verify_authority(runtime, authority);
+	return authority;
+};
+
+function binary_authority(runtime) {
+	let root = trusted_directory(runtime, '/opt/clash', null);
+	return trusted_directory(runtime, '/opt/clash/bin', root);
+};
+
 function secure_directory(runtime, path) {
 	let before = runtime.fs.lstat(path);
 	if (before == null) {
@@ -66,12 +97,65 @@ function secure_directory(runtime, path) {
 	    after.mode != 0o700 || (after.uid != null && after.uid != 0) ||
 	    runtime.fs.realpath(path) != path)
 		errors.fail('INTERNAL');
-	return after;
+	return { path, identity: after };
 };
 
-function write_exclusive(runtime, path, data, mode) {
+function update_authority(runtime) {
+	let parent = secure_directory(runtime, '/tmp/miclash');
+	let root = secure_directory(runtime, UPDATE_ROOT);
+	root.parent = parent;
+	verify_authority(runtime, root);
+	return root;
+};
+
+function trusted_file(runtime, path, authority, modes) {
+	verify_authority(runtime, authority);
+	let before = runtime.fs.lstat(path), accepted = false;
+	for (let mode in modes)
+		if (before?.mode == mode) accepted = true;
+	if (before?.type != 'file' || before.nlink != 1 || !accepted ||
+	    (before.uid != null && before.uid != 0) || runtime.fs.realpath(path) != path)
+		errors.fail('INTERNAL');
+	let hash = runtime.digest.sha256_file(path);
+	let after = runtime.fs.lstat(path);
+	verify_authority(runtime, authority);
+	if (type(hash) != 'string' || !match(hash, /^[0-9a-f]{64}$/) ||
+	    !same_node(before, after) || runtime.fs.realpath(path) != path ||
+	    runtime.digest.sha256_file(path) != hash)
+		errors.fail('INTERNAL');
+	return { path, identity: after, hash, authority, mode: after.mode };
+};
+
+function helper_capability(runtime) {
+	let usr = trusted_directory(runtime, '/usr', null);
+	let libexec = trusted_directory(runtime, '/usr/libexec', usr);
+	let parent = trusted_directory(runtime, '/usr/libexec/miclash', libexec);
+	return trusted_file(runtime, DECOMPRESS, parent, [ 0o700, 0o755 ]);
+};
+
+function busybox_capability(runtime) {
+	let parent = trusted_directory(runtime, '/bin', null);
+	return trusted_file(runtime, BUSYBOX, parent, [ 0o700, 0o755 ]);
+};
+
+function verify_file(runtime, record, modes) {
+	verify_authority(runtime, record.authority);
+	let current = runtime.fs.lstat(record.path), accepted = false;
+	for (let mode in modes)
+		if (current?.mode == mode) accepted = true;
+	if (!same_node(record.identity, current) || !accepted ||
+	    (current.uid != null && current.uid != 0) ||
+	    runtime.fs.realpath(record.path) != record.path ||
+	    runtime.digest.sha256_file(record.path) != record.hash)
+		errors.fail('INTERNAL');
+	verify_authority(runtime, record.authority);
+	return true;
+};
+
+function write_exclusive(runtime, path, data, mode, authority) {
 	if (type(data) != 'string')
 		invalid();
+	verify_authority(runtime, authority);
 	let handle = runtime.fs.open(path, 'wx', 0o600);
 	if (handle == null)
 		errors.fail('INTERNAL');
@@ -86,12 +170,15 @@ function write_exclusive(runtime, path, data, mode) {
 		if (runtime.fs.flush(handle) != true)
 			errors.fail('INTERNAL');
 	}
-	catch (error) { failure = errors.normalize(error).code; }
+	catch (error) {
+		failure = errors.normalize(error).code;
+	}
 	if (runtime.fs.close(handle) != true)
 		failure = 'INTERNAL';
 	if (failure == null && runtime.fs.chmod(path, mode) != true)
 		failure = 'INTERNAL';
 	let current = runtime.fs.lstat(path);
+	verify_authority(runtime, authority);
 	if (failure == null && (!same_node(opened, current) ||
 	    runtime.fs.realpath(path) != path || current.mode != mode ||
 	    (current.uid != null && current.uid != 0) || current.size != length(data) ||
@@ -105,18 +192,47 @@ function write_exclusive(runtime, path, data, mode) {
 		catch (cleanup_error) {}
 		errors.fail(failure);
 	}
-	return { path, identity: current, hash: runtime.digest.sha256(data) };
+	return { path, identity: current, hash: runtime.digest.sha256(data), authority, mode };
+};
+
+function verify_owned(runtime, record) {
+	return verify_file(runtime, record, [ record.mode ]);
+};
+
+function verify_snapshot(runtime, snapshot) {
+	if (snapshot.authority != null) verify_authority(runtime, snapshot.authority);
+	let current = runtime.fs.lstat(snapshot.path);
+	return same_node(snapshot.identity, current) &&
+	       (snapshot.required_mode == null || current.mode == snapshot.required_mode) &&
+	       (current.uid == null || current.uid == 0) &&
+	       runtime.fs.realpath(snapshot.path) == snapshot.path &&
+	       runtime.digest.sha256_file(snapshot.path) == snapshot.hash;
+};
+
+function run_checked(runtime, executable, request, inputs) {
+	verify_file(runtime, executable, [ executable.mode ]);
+	for (let input in inputs ?? [])
+		if (input.mode != null) verify_owned(runtime, input);
+		else if (!verify_snapshot(runtime, input)) errors.fail('INTERNAL');
+	let reply = runtime.process.run(request);
+	verify_file(runtime, executable, [ executable.mode ]);
+	for (let input in inputs ?? [])
+		if (input.mode != null) verify_owned(runtime, input);
+		else if (!verify_snapshot(runtime, input)) errors.fail('INTERNAL');
+	return reply;
 };
 
 function remove_owned(runtime, record) {
 	if (record == null)
 		return;
+	verify_authority(runtime, record.authority);
 	let current = runtime.fs.lstat(record.path);
 	if (current == null)
 		return;
 	if (!same_node(record.identity, current) || runtime.fs.realpath(record.path) != record.path ||
 	    runtime.fs.unlink(record.path) != true)
 		errors.fail('INTERNAL');
+	verify_authority(runtime, record.authority);
 };
 
 function architecture(runtime) {
@@ -276,29 +392,43 @@ function published_hash(runtime, resolved, compressed, local_hash) {
 	return true;
 };
 
-function file_snapshot(runtime, path) {
+function file_snapshot(runtime, path, authority, required_mode) {
+	if (authority != null) verify_authority(runtime, authority);
 	let before = runtime.fs.lstat(path);
 	if (before?.type != 'file' || before.nlink != 1 ||
+	    (required_mode != null && before.mode != required_mode) ||
 	    (before.uid != null && before.uid != 0) || runtime.fs.realpath(path) != path)
 		errors.fail(before == null ? 'NOT_FOUND' : 'INTERNAL');
 	let content = runtime.fs.readfile(path);
 	let after = runtime.fs.lstat(path);
 	if (type(content) != 'string' || !same_node(before, after) ||
+	    (required_mode != null && after.mode != required_mode) ||
 	    runtime.fs.realpath(path) != path ||
 	    runtime.digest.sha256_file(path) != runtime.digest.sha256(content))
 		errors.fail('INTERNAL');
-	return { path, identity: after, content, hash: runtime.digest.sha256(content) };
+	if (authority != null) verify_authority(runtime, authority);
+	return { path, identity: after, content, hash: runtime.digest.sha256(content),
+		authority, required_mode };
 };
 
-function verify_snapshot(runtime, snapshot) {
-	let current = runtime.fs.lstat(snapshot.path);
-	return same_node(snapshot.identity, current) &&
-	       runtime.fs.realpath(snapshot.path) == snapshot.path &&
-	       runtime.digest.sha256_file(snapshot.path) == snapshot.hash;
+function validate_kernel_candidate(runtime, kernel) {
+	verify_owned(runtime, kernel);
+	if (!response_ok(run_checked(runtime, kernel, { command: kernel.path,
+		args: [ '-v' ], timeout_ms: 10000 }, [])))
+		errors.fail('VALIDATION_FAILED');
+	let active_authority = trusted_directory(runtime, '/opt/clash', null);
+	let active = file_snapshot(runtime, ACTIVE, active_authority, null);
+	if (!response_ok(run_checked(runtime, kernel, { command: kernel.path,
+		args: [ '-d', '/opt/clash', '-f', ACTIVE, '-t' ], timeout_ms: 30000 },
+		[ active ])))
+		errors.fail('VALIDATION_FAILED');
+	verify_owned(runtime, kernel);
+	if (!verify_snapshot(runtime, active)) errors.fail('INTERNAL');
+	return true;
 };
 
 function prepare_kernel(runtime, resolved) {
-	secure_directory(runtime, UPDATE_ROOT);
+	let authority = update_authority(runtime);
 	let compressed = download(runtime, resolved.asset_url, KERNEL_DOWNLOAD_LIMIT);
 	let compressed_hash = runtime.digest.sha256(compressed);
 	let verified = published_hash(runtime, resolved, compressed, compressed_hash);
@@ -308,15 +438,20 @@ function prepare_kernel(runtime, resolved) {
 	let token = runtime.random.hex(16);
 	if (type(token) != 'string' || !match(token, /^[0-9a-f]{32}$/))
 		errors.fail('INTERNAL');
-	let gz = write_exclusive(runtime, UPDATE_ROOT + '/' + token + '.gz', compressed, 0o600);
+	let gz = write_exclusive(runtime, UPDATE_ROOT + '/' + token + '.gz', compressed,
+		0o600, authority);
 	let kernel_path = substr(gz.path, 0, length(gz.path) - 3), kernel = null;
 	let failure = null;
 	try {
-		if (!response_ok(runtime.process.run({
-			command: '/usr/libexec/miclash/decompress-gzip',
+		let helper = helper_capability(runtime);
+		if (runtime.fs.lstat(kernel_path) != null)
+			errors.fail('INTERNAL');
+		if (!response_ok(run_checked(runtime, helper, {
+			command: DECOMPRESS,
 			args: [ gz.path, kernel_path, sprintf('%d', maximum) ], timeout_ms: 60000
-		})))
+		}, [ gz ])))
 			errors.fail('VALIDATION_FAILED');
+		verify_owned(runtime, gz);
 		let identity = runtime.fs.lstat(kernel_path);
 		if (identity?.type != 'file' || identity.nlink != 1 ||
 		    (identity.uid != null && identity.uid != 0) || identity.size < 1 ||
@@ -329,22 +464,9 @@ function prepare_kernel(runtime, resolved) {
 		    runtime.digest.sha256_file(kernel_path) != runtime.digest.sha256(content))
 			errors.fail('INTERNAL');
 		kernel = { path: kernel_path, identity, content,
-			hash: runtime.digest.sha256(content), published_checksum_verified: verified };
-		if (!response_ok(runtime.process.run({ command: kernel_path,
-			args: [ '-v' ], timeout_ms: 10000 })))
-			errors.fail('VALIDATION_FAILED');
-		if (!same_node(kernel.identity, runtime.fs.lstat(kernel.path)) ||
-		    runtime.fs.realpath(kernel.path) != kernel.path ||
-		    runtime.digest.sha256_file(kernel.path) != kernel.hash)
-			errors.fail('INTERNAL');
-		let active = file_snapshot(runtime, ACTIVE);
-		if (!response_ok(runtime.process.run({ command: kernel_path,
-			args: [ '-d', '/opt/clash', '-f', ACTIVE, '-t' ], timeout_ms: 30000 })))
-			errors.fail('VALIDATION_FAILED');
-		if (!verify_snapshot(runtime, active) ||
-		    !same_node(kernel.identity, runtime.fs.lstat(kernel.path)) ||
-		    runtime.digest.sha256_file(kernel.path) != kernel.hash)
-			errors.fail('INTERNAL');
+			hash: runtime.digest.sha256(content), published_checksum_verified: verified,
+			authority, mode: 0o700 };
+		validate_kernel_candidate(runtime, kernel);
 	}
 	catch (error) { failure = errors.normalize(error).code; }
 	try { remove_owned(runtime, gz); }
@@ -356,22 +478,30 @@ function prepare_kernel(runtime, resolved) {
 	return kernel;
 };
 
-function preserve(runtime, snapshot) {
-	secure_directory(runtime, PREVIOUS_ROOT);
+function previous_authority(runtime, bin_authority) {
+	let authority = secure_directory(runtime, PREVIOUS_ROOT);
+	authority.parent = bin_authority;
+	verify_authority(runtime, authority);
+	return authority;
+};
+
+function preserve(runtime, snapshot, bin_authority) {
+	let authority = previous_authority(runtime, bin_authority);
 	let id = 'mihomo-' + snapshot.hash;
 	let path = PREVIOUS_ROOT + '/' + id;
 	let current = runtime.fs.lstat(path);
 	if (current == null)
 		storage.atomic_write(runtime, path, snapshot.content, 0o700);
 	else {
-		let existing = file_snapshot(runtime, path);
+		let existing = file_snapshot(runtime, path, authority, 0o700);
 		if (existing.hash != snapshot.hash)
 			errors.fail('INTERNAL');
 	}
 	return id;
 };
 
-function prune_previous(runtime, protected_id) {
+function prune_previous(runtime, protected_id, bin_authority) {
+	let authority = previous_authority(runtime, bin_authority);
 	let maximum = runtime.update_options?.previous_retention ?? 3;
 	if (type(maximum) != 'int' || maximum < 1 || maximum > 10)
 		errors.fail('INTERNAL');
@@ -389,7 +519,8 @@ function prune_previous(runtime, protected_id) {
 			push(owned, victim);
 			continue;
 		}
-		let snapshot = file_snapshot(runtime, PREVIOUS_ROOT + '/' + victim);
+		let snapshot = file_snapshot(runtime, PREVIOUS_ROOT + '/' + victim,
+			authority, 0o700);
 		if ('mihomo-' + snapshot.hash != victim ||
 		    runtime.fs.unlink(snapshot.path) != true)
 			errors.fail('INTERNAL');
@@ -399,70 +530,124 @@ function prune_previous(runtime, protected_id) {
 function previous(runtime, id) {
 	if (type(id) != 'string' || !match(id, /^mihomo-[0-9a-f]{64}$/))
 		invalid();
-	let snapshot = file_snapshot(runtime, PREVIOUS_ROOT + '/' + id);
+	let authority = previous_authority(runtime, binary_authority(runtime));
+	let snapshot = file_snapshot(runtime, PREVIOUS_ROOT + '/' + id, authority, 0o700);
 	if ('mihomo-' + snapshot.hash != id)
 		errors.fail('CORRUPT_STATE');
+	snapshot.mode = 0o700;
 	return snapshot;
 };
 
-function install_kernel(app, candidate, resolved, ctx, set_status) {
-	let runtime = app.runtime, old = file_snapshot(runtime, BINARY);
-	ctx.stage('preserve', 50, 'preserve');
-	let previous_id = preserve(runtime, old);
-	ctx.stage('transition', 55, 'transition');
-	if (!verify_snapshot(runtime, old) ||
-	    !same_node(candidate.identity, runtime.fs.lstat(candidate.path)) ||
-	    runtime.digest.sha256_file(candidate.path) != candidate.hash)
+function binary_snapshot(runtime, authority) {
+	verify_authority(runtime, authority);
+	let current = runtime.fs.lstat(BINARY);
+	if (current?.type != 'file' || current.nlink != 1 ||
+	    (current.uid != null && current.uid != 0) || runtime.fs.realpath(BINARY) != BINARY ||
+	    runtime.fs.chmod(BINARY, 0o700) != true)
+		errors.fail(current == null ? 'NOT_FOUND' : 'INTERNAL');
+	return file_snapshot(runtime, BINARY, authority, 0o700);
+};
+
+function verify_binary(runtime, authority, expected_hash) {
+	verify_authority(runtime, authority);
+	let current = file_snapshot(runtime, BINARY, authority, 0o700);
+	if (current.hash != expected_hash)
 		errors.fail('INTERNAL');
+	verify_authority(runtime, authority);
+	return current;
+};
+
+function observed_service(app) {
 	let observed = app.service.observe('config.yaml');
-	if (type(observed) != 'object' || type(observed.running) != 'bool')
+	if (type(observed) != 'object' || type(observed.running) != 'bool' ||
+	    (observed.state != 'running' && observed.state != 'stopped'))
 		errors.fail('HEALTH_FAILED');
-	ctx.stage('install', 75, 'install');
+	return observed;
+};
+
+function recover_kernel(app, authority, old, was_running, transaction) {
+	let runtime = app.runtime;
+	transaction.stage = 'recovery';
+	let observed = observed_service(app);
 	if (observed.running) {
 		app.service.stop('config.yaml');
-		let stopped = app.service.wait_ready(runtime.clock.now() + 5000,
-			'config.yaml', { stopped: true });
-		if (stopped?.ok !== true)
-			errors.fail('HEALTH_FAILED');
+		if (app.service.wait_ready(runtime.clock.now() + 5000,
+		    'config.yaml', { stopped: true })?.ok !== true)
+			errors.fail('INTERNAL');
 	}
-	storage.atomic_write(runtime, BINARY, candidate.content, 0o700);
-	if (observed.running) {
-		let new_failure = null;
-		try {
+	let exact_old = false;
+	try { exact_old = verify_binary(runtime, authority, old.hash)?.hash == old.hash; }
+	catch (error) { exact_old = false; }
+	if (!exact_old) {
+		storage.atomic_write(runtime, BINARY, old.content, 0o700);
+		verify_binary(runtime, authority, old.hash);
+	}
+	if (was_running) {
+		app.service.start('config.yaml');
+		if (app.service.wait_ready(runtime.clock.now() + 15000,
+		    'config.yaml', {})?.ok !== true)
+			errors.fail('INTERNAL');
+		verify_binary(runtime, authority, old.hash);
+	}
+	else if (observed_service(app).running)
+		errors.fail('INTERNAL');
+	transaction.applied = false;
+	transaction.recovery_state = 'restored';
+};
+
+function install_kernel(app, candidate, resolved, ctx, transaction) {
+	let runtime = app.runtime, authority = binary_authority(runtime);
+	let old = binary_snapshot(runtime, authority);
+	ctx.stage('preserve', 50, 'preserve');
+	let previous_id = preserve(runtime, old, authority);
+	ctx.stage('transition', 55, 'transition');
+	verify_snapshot(runtime, old);
+	verify_owned(runtime, candidate);
+	let observed = observed_service(app), began = false;
+	transaction.stage = 'transition';
+	transaction.recovery_state = 'not_needed';
+	try {
+		ctx.stage('install', 75, 'install');
+		if (observed.running) {
+			began = true;
+			app.service.stop('config.yaml');
+			if (app.service.wait_ready(runtime.clock.now() + 5000,
+			    'config.yaml', { stopped: true })?.ok !== true)
+				errors.fail('HEALTH_FAILED');
+		}
+		began = true;
+		verify_authority(runtime, authority);
+		verify_owned(runtime, candidate);
+		storage.atomic_write(runtime, BINARY, candidate.content, 0o700);
+		transaction.applied = true;
+		verify_binary(runtime, authority, candidate.hash);
+		if (observed.running) {
+			verify_binary(runtime, authority, candidate.hash);
 			app.service.start('config.yaml');
-			let ready = app.service.wait_ready(runtime.clock.now() + 15000,
-				'config.yaml', {});
-			if (ready?.ok !== true)
-				new_failure = 'HEALTH_FAILED';
+			if (app.service.wait_ready(runtime.clock.now() + 15000,
+			    'config.yaml', {})?.ok !== true)
+				errors.fail('HEALTH_FAILED');
+			verify_binary(runtime, authority, candidate.hash);
 		}
-		catch (error) { new_failure = errors.normalize(error).code; }
-		if (new_failure != null) {
-			let restore_failed = false;
-			try {
-				let now = app.service.observe('config.yaml');
-				if (now?.running === true) {
-					app.service.stop('config.yaml');
-					if (app.service.wait_ready(runtime.clock.now() + 5000,
-					    'config.yaml', { stopped: true })?.ok !== true)
-						errors.fail('INTERNAL');
-				}
-				storage.atomic_write(runtime, BINARY, old.content, 0o700);
-				app.service.start('config.yaml');
-				if (app.service.wait_ready(runtime.clock.now() + 15000,
-				    'config.yaml', {})?.ok !== true)
-					errors.fail('INTERNAL');
-			}
-			catch (error) { restore_failed = true; }
-			if (restore_failed)
-				errors.fail('INTERNAL');
-			errors.fail(new_failure);
+		else {
+			if (observed_service(app).running)
+				errors.fail('HEALTH_FAILED');
+			verify_binary(runtime, authority, candidate.hash);
 		}
+		prune_previous(runtime, previous_id, authority);
+		return { previous_id, sha256: candidate.hash };
 	}
-	prune_previous(runtime, previous_id);
-	set_status({ state: 'success', kind: 'mihomo', stage: 'done',
-		operation_id: ctx.id, version: resolved.version, sha256: candidate.hash,
-		published_checksum_verified: candidate.published_checksum_verified,
-		previous_id, error_code: null, updated_at: runtime.clock.now() });
+	catch (error) {
+		let original = errors.normalize(error).code;
+		if (began) {
+			try { recover_kernel(app, authority, old, observed.running, transaction); }
+			catch (recovery_error) {
+				transaction.recovery_state = 'failed';
+				errors.fail('INTERNAL');
+			}
+		}
+		errors.fail(original);
+	}
 };
 
 function parse_installer_checksum(runtime, resolved, installer, local_hash) {
@@ -478,7 +663,7 @@ function parse_installer_checksum(runtime, resolved, installer, local_hash) {
 };
 
 function prepare_installer(runtime, resolved) {
-	secure_directory(runtime, UPDATE_ROOT);
+	let authority = update_authority(runtime);
 	let body = download(runtime, resolved.installer_url, 1048576);
 	if (type(body) != 'string' || length(body) < 10 ||
 	    substr(body, 0, 10) != '#!/bin/sh\n' || index(body, sprintf('%c', 0)) >= 0)
@@ -488,23 +673,23 @@ function prepare_installer(runtime, resolved) {
 	let token = runtime.random.hex(16);
 	if (type(token) != 'string' || !match(token, /^[0-9a-f]{32}$/))
 		errors.fail('INTERNAL');
-	let candidate = write_exclusive(runtime, UPDATE_ROOT + '/' + token + '.sh', body, 0o700);
+	let candidate = write_exclusive(runtime, UPDATE_ROOT + '/' + token + '.sh', body,
+		0o700, authority);
 	candidate.published_checksum_verified = published;
-	if (!response_ok(runtime.process.run({ command: '/bin/ash',
-		args: [ '-n', candidate.path ], timeout_ms: 30000 }))) {
+	let shell = busybox_capability(runtime);
+	if (!response_ok(run_checked(runtime, shell, { command: BUSYBOX,
+		args: [ 'ash', '-n', candidate.path ], timeout_ms: 30000 }, [ candidate ]))) {
 		remove_owned(runtime, candidate);
 		errors.fail('VALIDATION_FAILED');
 	}
-	if (!same_node(candidate.identity, runtime.fs.lstat(candidate.path)) ||
-	    runtime.fs.realpath(candidate.path) != candidate.path ||
-	    runtime.digest.sha256_file(candidate.path) != candidate.hash) {
-		try { remove_owned(runtime, candidate); } catch (cleanup_error) {}
-		errors.fail('INTERNAL');
-	}
+	verify_owned(runtime, candidate);
+	candidate.shell = shell;
 	return candidate;
 };
 
-function consume_handoff(runtime, path, token, expected_version, started_at) {
+
+function consume_handoff(runtime, authority, path, token, expected_version, started_at) {
+	verify_authority(runtime, authority);
 	let before = runtime.fs.lstat(path);
 	if (before?.type != 'file' || before.nlink != 1 ||
 	    before.mode != 0o600 || (before.uid != null && before.uid != 0) ||
@@ -526,7 +711,9 @@ function consume_handoff(runtime, path, token, expected_version, started_at) {
 	let now = int(runtime.clock.now() / 1000);
 	if (updated == null || updated < started_at || updated > now + 300)
 		errors.fail('INTERNAL');
-	return { path, identity: after };
+	verify_authority(runtime, authority);
+	return { path, identity: after, authority, mode: 0o600,
+		hash: runtime.digest.sha256(body) };
 };
 
 export function create(app) {
@@ -538,7 +725,8 @@ export function create(app) {
 		invalid();
 	let last = { state: 'idle', kind: null, stage: 'idle', operation_id: null,
 		version: null, sha256: null, published_checksum_verified: null,
-		previous_id: null, error_code: null, updated_at: app.runtime.clock.now() };
+		previous_id: null, error_code: null, applied: null, recovery_state: null,
+		updated_at: app.runtime.clock.now() };
 	function set_status(value) { last = value; };
 	function configured_channel(kind, requested) {
 		if (requested != null)
@@ -570,31 +758,46 @@ export function create(app) {
 		let selected_channel = configured_channel('mihomo', options.channel);
 		let requested = options.version == null ? null : version(options.version);
 		return app.operations.submit('updates.mihomo', source, {}, (ctx) => {
-			let candidate = null;
+			let candidate = null, resolved = null, installed = null;
+			let transaction = { applied: false, recovery_state: 'not_started',
+				stage: 'verification' };
 			try {
 				ctx.stage('release', 10, 'release');
-				let resolved = resolve_mihomo(app.runtime, selected_channel, requested);
+				resolved = resolve_mihomo(app.runtime, selected_channel, requested);
 				ctx.stage('verification', 45, 'verification');
 				candidate = prepare_kernel(app.runtime, resolved);
-				install_kernel(app, candidate, resolved, ctx, set_status);
+				installed = install_kernel(app, candidate, resolved, ctx, transaction);
+				transaction.stage = 'cleanup';
+				remove_owned(app.runtime, candidate);
+				candidate = null;
+				set_status({ state: 'success', kind: 'mihomo', stage: 'done',
+					operation_id: ctx.id, version: resolved.version,
+					sha256: installed.sha256,
+					published_checksum_verified: candidate?.published_checksum_verified ??
+						(resolved.checksum_url != null),
+					previous_id: installed.previous_id, error_code: null,
+					applied: true, recovery_state: 'not_needed',
+					updated_at: app.runtime.clock.now() });
 			}
 			catch (error) {
 				let normalized = errors.normalize(error);
 				if (candidate != null) {
 					try { remove_owned(app.runtime, candidate); }
-					catch (cleanup_error) { normalized = errors.new('INTERNAL'); }
+					catch (cleanup_error) {
+						normalized = errors.new('INTERNAL');
+						transaction.stage = 'cleanup';
+					}
 					candidate = null;
 				}
-				set_status({ state: 'failure', kind: 'mihomo', stage: 'error',
-					operation_id: ctx.id, version: requested, sha256: null,
-					published_checksum_verified: null, previous_id: null,
-					error_code: normalized.code, updated_at: app.runtime.clock.now() });
+				set_status({ state: 'failure', kind: 'mihomo', stage: transaction.stage,
+					operation_id: ctx.id, version: resolved?.version ?? requested,
+					sha256: transaction.applied ? installed?.sha256 : null,
+					published_checksum_verified: null,
+					previous_id: installed?.previous_id ?? null,
+					error_code: normalized.code, applied: transaction.applied,
+					recovery_state: transaction.recovery_state,
+					updated_at: app.runtime.clock.now() });
 				ctx.complete(normalized);
-				return false;
-			}
-			try { remove_owned(app.runtime, candidate); }
-			catch (cleanup_error) {
-				ctx.complete(errors.new('INTERNAL'));
 				return false;
 			}
 			return true;
@@ -610,18 +813,30 @@ export function create(app) {
 		if (type(id) != 'string' || !match(id, /^mihomo-[0-9a-f]{64}$/))
 			invalid();
 		return app.operations.submit('updates.mihomo.rollback', source, {}, (ctx) => {
+			let transaction = { applied: false, recovery_state: 'not_started',
+				stage: 'verification' }, installed = null;
 			try {
 				ctx.stage('verification', 45, 'verification');
 				let candidate = previous(app.runtime, id);
-				candidate.published_checksum_verified = true;
-				install_kernel(app, candidate, { version: null }, ctx, set_status);
+				candidate.published_checksum_verified = null;
+				validate_kernel_candidate(app.runtime, candidate);
+				installed = install_kernel(app, candidate, { version: null }, ctx, transaction);
+				set_status({ state: 'success', kind: 'mihomo', stage: 'done',
+					operation_id: ctx.id, version: null, sha256: installed.sha256,
+					published_checksum_verified: null,
+					previous_id: installed.previous_id, error_code: null,
+					applied: true, recovery_state: 'not_needed',
+					updated_at: app.runtime.clock.now() });
 			}
 			catch (error) {
 				let normalized = errors.normalize(error);
-				set_status({ state: 'failure', kind: 'mihomo', stage: 'error',
-					operation_id: ctx.id, version: null, sha256: null,
+				set_status({ state: 'failure', kind: 'mihomo', stage: transaction.stage,
+					operation_id: ctx.id, version: null,
+					sha256: transaction.applied ? installed?.sha256 : null,
 					published_checksum_verified: null, previous_id: id,
-					error_code: normalized.code, updated_at: app.runtime.clock.now() });
+					error_code: normalized.code, applied: transaction.applied,
+					recovery_state: transaction.recovery_state,
+					updated_at: app.runtime.clock.now() });
 				ctx.complete(normalized);
 				return false;
 			}
@@ -635,59 +850,86 @@ export function create(app) {
 		let selected_channel = configured_channel('miclash', options.channel);
 		let requested = options.version == null ? null : version(options.version);
 		return app.operations.submit('updates.miclash', source, {}, (ctx) => {
-			let candidate = null, handoff = null;
+			let candidate = null, handoff = null, resolved = null;
+			let applied_hash = null, published = null;
+			let transaction = { applied: false, recovery_state: 'not_started',
+				stage: 'verification' };
 			try {
 				ctx.stage('release', 10, 'release');
-				let resolved = choose_miclash(app.runtime, selected_channel, requested);
+				resolved = choose_miclash(app.runtime, selected_channel, requested);
 				ctx.stage('verification', 45, 'verification');
 				candidate = prepare_installer(app.runtime, resolved);
 				let token = app.runtime.random.hex(16);
 				if (type(token) != 'string' || !match(token, /^[0-9a-f]{32}$/))
 					errors.fail('INTERNAL');
 				let handoff_path = UPDATE_ROOT + '/handoff-' + ctx.id + '.status';
+				verify_authority(app.runtime, candidate.authority);
 				if (app.runtime.fs.lstat(handoff_path) != null)
 					errors.fail('INTERNAL');
 				ctx.stage('install', 75, 'install');
+				transaction.stage = 'install';
+				transaction.applied = null;
+				transaction.recovery_state = 'unavailable';
 				let handoff_started = int(app.runtime.clock.now() / 1000);
-				let reply = app.runtime.process.run({ command: '/bin/ash', args: [
-					candidate.path, 'app', '--target-tag', resolved.version,
+				let reply = run_checked(app.runtime, candidate.shell,
+					{ command: BUSYBOX, args: [
+					'ash', candidate.path, 'app', '--target-tag', resolved.version,
 					'--mode', 'update', '--status-file', handoff_path, '--token', token
-				], timeout_ms: 600000 });
-				if (!same_node(candidate.identity, app.runtime.fs.lstat(candidate.path)) ||
-				    app.runtime.fs.realpath(candidate.path) != candidate.path ||
-				    app.runtime.digest.sha256_file(candidate.path) != candidate.hash)
-					errors.fail('INTERNAL');
+				], timeout_ms: 600000 }, [ candidate ]);
 				if (!response_ok(reply))
 					errors.fail('HEALTH_FAILED');
-				handoff = consume_handoff(app.runtime, handoff_path, token,
+				handoff = consume_handoff(app.runtime, candidate.authority,
+					handoff_path, token,
 					resolved.version, handoff_started);
+				transaction.applied = true;
+				transaction.stage = 'cleanup';
+				applied_hash = candidate.hash;
+				published = candidate.published_checksum_verified;
 				remove_owned(app.runtime, handoff);
 				handoff = null;
+				remove_owned(app.runtime, candidate);
+				candidate = null;
 				set_status({ state: 'success', kind: 'miclash', stage: 'done',
-					operation_id: ctx.id, version: resolved.version, sha256: candidate.hash,
-					published_checksum_verified: candidate.published_checksum_verified,
-					previous_id: null, error_code: null,
+					operation_id: ctx.id, version: resolved.version, sha256: applied_hash,
+					published_checksum_verified: published,
+					previous_id: null, error_code: null, applied: true,
+					recovery_state: 'unavailable',
 					updated_at: app.runtime.clock.now() });
 			}
 			catch (error) {
 				let normalized = errors.normalize(error);
 				if (handoff == null) {
 					let candidate_path = UPDATE_ROOT + '/handoff-' + ctx.id + '.status';
-					let identity = app.runtime.fs.lstat(candidate_path);
-					if (identity?.type == 'file') handoff = { path: candidate_path, identity };
+					if (app.runtime.fs.lstat(candidate_path)?.type == 'file')
+						try {
+							handoff = file_snapshot(app.runtime, candidate_path,
+								candidate?.authority ?? update_authority(app.runtime), 0o600);
+							handoff.mode = 0o600;
+						}
+						catch (handoff_error) {
+							normalized = errors.new('INTERNAL');
+							transaction.stage = 'cleanup';
+						}
 				}
 				for (let owned in [ handoff, candidate ])
 					if (owned != null)
 						try { remove_owned(app.runtime, owned); }
-						catch (cleanup_error) { normalized = errors.new('INTERNAL'); }
-				set_status({ state: 'failure', kind: 'miclash', stage: 'error',
-					operation_id: ctx.id, version: requested, sha256: null,
-					published_checksum_verified: null, previous_id: null,
-					error_code: normalized.code, updated_at: app.runtime.clock.now() });
+						catch (cleanup_error) {
+							normalized = errors.new('INTERNAL');
+							transaction.stage = 'cleanup';
+						}
+				set_status({ state: 'failure', kind: 'miclash', stage: transaction.stage,
+					operation_id: ctx.id, version: resolved?.version ?? requested,
+					sha256: candidate?.hash ?? null,
+					published_checksum_verified:
+						candidate?.published_checksum_verified ?? null,
+					previous_id: null, error_code: normalized.code,
+					applied: transaction.applied,
+					recovery_state: transaction.recovery_state,
+					updated_at: app.runtime.clock.now() });
 				ctx.complete(normalized);
 				return false;
 			}
-			remove_owned(app.runtime, candidate);
 			return true;
 		});
 	};
