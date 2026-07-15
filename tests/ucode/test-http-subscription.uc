@@ -59,6 +59,104 @@ assert_true(index(direct.process.calls[0].args,
 	'https://subscriptions.example.test/config.yaml') >= 0);
 assert_true(index(direct.process.calls[0].args, 'Accept: application/yaml') >= 0);
 assert_equal(length(direct.filesystem.lsdir('/tmp/miclash/http')), 0);
+assert_equal(direct.filesystem.mode('/tmp/miclash'), 0o700);
+assert_equal(direct.filesystem.mode('/tmp/miclash/http'), 0o700);
+let existing_secure = http_environment();
+existing_secure.filesystem.set_mode('/tmp/miclash', 0o700);
+existing_secure.filesystem.mkdir('/tmp/miclash/http');
+existing_secure.filesystem.set_mode('/tmp/miclash/http', 0o700);
+assert_equal(http.request(existing_secure.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}).status, 200);
+
+// Both the runtime parent and HTTP child are root-owned private authorities.
+// Existing foreign directories, symlinks, ineffective chmod, and identity
+// replacement during hardening all fail before curl is invoked.
+let foreign_parent = http_environment();
+foreign_parent.filesystem.set_uid('/tmp/miclash', 1000);
+assert_throws(() => http.request(foreign_parent.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+assert_equal(length(foreign_parent.process.calls), 0);
+let linked_parent = http_environment();
+linked_parent.filesystem.set_symlink('/tmp/miclash', '/tmp');
+assert_throws(() => http.request(linked_parent.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+assert_equal(length(linked_parent.process.calls), 0);
+let foreign_child = http_environment();
+foreign_child.filesystem.mkdir('/tmp/miclash/http');
+foreign_child.filesystem.set_uid('/tmp/miclash/http', 1000);
+assert_throws(() => http.request(foreign_child.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+assert_equal(length(foreign_child.process.calls), 0);
+let linked_child = http_environment();
+linked_child.filesystem.set_symlink('/tmp/miclash/http', '/tmp');
+assert_throws(() => http.request(linked_child.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+assert_equal(length(linked_child.process.calls), 0);
+let unfixable_child = http_environment();
+unfixable_child.filesystem.set_mode('/tmp/miclash', 0o700);
+unfixable_child.filesystem.mkdir('/tmp/miclash/http');
+unfixable_child.filesystem.ignore_chmod = true;
+assert_throws(() => http.request(unfixable_child.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+assert_equal(length(unfixable_child.process.calls), 0);
+let replaced_child = http_environment();
+replaced_child.filesystem.set_mode('/tmp/miclash', 0o700);
+replaced_child.filesystem.mkdir('/tmp/miclash/http');
+replaced_child.filesystem.on_lstat = (path, count) => {
+	if (path == '/tmp/miclash/http' && count == 2)
+		replaced_child.filesystem.bump_inode(path);
+};
+assert_throws(() => http.request(replaced_child.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+assert_equal(length(replaced_child.process.calls), 0);
+let replaced_candidate_create = http_environment();
+replaced_candidate_create.filesystem.set_mode('/tmp/miclash', 0o700);
+replaced_candidate_create.filesystem.on_lstat = (path, count) => {
+	if (match(path, /-body$/) && count == 1)
+		replaced_candidate_create.filesystem.bump_inode(path);
+};
+assert_throws(() => http.request(replaced_candidate_create.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+assert_equal(length(replaced_candidate_create.process.calls), 0);
+
+// A replacement after the final pre-curl verification is detected immediately
+// after the adapter returns, before any response bytes are trusted.
+let replaced_during_curl = http_environment();
+replaced_during_curl.filesystem.set_mode('/tmp/miclash', 0o700);
+replaced_during_curl.process.on_run = (request) => {
+	let header_path = argument_after(request.args, '--dump-header');
+	let output_path = argument_after(request.args, '--output');
+	replaced_during_curl.filesystem.writefile(header_path,
+		'HTTP/1.1 200 OK\r\n\r\n');
+	replaced_during_curl.filesystem.writefile(output_path, 'proxies: []\n');
+	replaced_during_curl.filesystem.bump_inode('/tmp/miclash/http');
+};
+assert_throws(() => http.request(replaced_during_curl.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+let candidate_during_curl = http_environment();
+candidate_during_curl.filesystem.set_mode('/tmp/miclash', 0o700);
+candidate_during_curl.filesystem.writefile('/tmp/foreign-curl-target', 'foreign');
+candidate_during_curl.process.on_run = (request) => {
+	let header_path = argument_after(request.args, '--dump-header');
+	let output_path = argument_after(request.args, '--output');
+	candidate_during_curl.filesystem.writefile(header_path,
+		'HTTP/1.1 200 OK\r\n\r\n');
+	candidate_during_curl.filesystem.writefile(output_path, 'proxies: []\n');
+	candidate_during_curl.filesystem.set_symlink(output_path, '/tmp/foreign-curl-target');
+};
+assert_throws(() => http.request(candidate_during_curl.runtime, {
+	url: 'https://subscriptions.example.test/config.yaml'
+}), 'INTERNAL');
+assert_equal(candidate_during_curl.filesystem.readfile('/tmp/foreign-curl-target'), 'foreign');
 
 // HTTP is opt-in for an explicit user subscription and never accepted for a
 // managed endpoint. Credentials and header injection are rejected before the

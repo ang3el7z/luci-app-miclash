@@ -1,6 +1,7 @@
 import * as errors from 'miclash.errors';
 import * as schema from 'miclash.schema';
 
+const HTTP_PARENT = '/tmp/miclash';
 const HTTP_ROOT = '/tmp/miclash/http';
 const HEADER_LIMIT = 65536;
 const OPTION_FIELDS = {
@@ -26,16 +27,57 @@ function adapter_reply(reply) {
 function same_node(left, right) {
 	return left?.type == 'file' && right?.type == 'file' &&
 	       left.inode == right.inode && left.dev?.major == right.dev?.major &&
-	       left.dev?.minor == right.dev?.minor && left.nlink == 1 && right.nlink == 1;
+	       left.dev?.minor == right.dev?.minor && left.nlink == 1 && right.nlink == 1 &&
+	       left.mode == 0o600 && right.mode == 0o600 &&
+	       (left.uid == null || left.uid == 0) && (right.uid == null || right.uid == 0);
+};
+
+function same_object(left, right) {
+	return left?.type != null && left.type == right?.type && left.inode == right?.inode &&
+	       left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
+};
+
+function verify_directory(runtime, path, identity) {
+	let current = runtime.fs.lstat(path);
+	if (!same_object(identity, current) || current?.type != 'directory' ||
+	    runtime.fs.realpath(path) != path || current.mode != 0o700 ||
+	    (current.uid != null && current.uid != 0))
+		errors.fail('INTERNAL');
+	return current;
+};
+
+function secure_directory(runtime, path) {
+	let identity = runtime.fs.lstat(path);
+	if (identity == null) {
+		if (runtime.fs.mkdir(path) != true)
+			errors.fail('INTERNAL');
+		identity = runtime.fs.lstat(path);
+	}
+	if (identity?.type != 'directory' || runtime.fs.realpath(path) != path ||
+	    (identity.uid != null && identity.uid != 0) ||
+	    runtime.fs.chmod(path, 0o700) != true)
+		errors.fail('INTERNAL');
+	return verify_directory(runtime, path, identity);
 };
 
 function ensure_root(runtime) {
-	let stat = runtime.fs.lstat(HTTP_ROOT);
-	if (stat == null && runtime.fs.mkdir(HTTP_ROOT) != true)
-		errors.fail('INTERNAL');
-	stat = runtime.fs.lstat(HTTP_ROOT);
-	if (stat?.type != 'directory' || runtime.fs.realpath(HTTP_ROOT) != HTTP_ROOT ||
-	    runtime.fs.chmod(HTTP_ROOT, 0o700) != true)
+	let authority = {
+		parent: secure_directory(runtime, HTTP_PARENT),
+		root: secure_directory(runtime, HTTP_ROOT)
+	};
+	verify_directory(runtime, HTTP_PARENT, authority.parent);
+	verify_directory(runtime, HTTP_ROOT, authority.root);
+	return authority;
+};
+
+function verify_authority(runtime, authority) {
+	verify_directory(runtime, HTTP_PARENT, authority.parent);
+	verify_directory(runtime, HTTP_ROOT, authority.root);
+};
+
+function verify_candidate(runtime, owned) {
+	let current = runtime.fs.lstat(owned.path);
+	if (!same_node(owned.identity, current) || runtime.fs.realpath(owned.path) != owned.path)
 		errors.fail('INTERNAL');
 };
 
@@ -48,12 +90,20 @@ function candidate(runtime, suffix) {
 		let handle = runtime.fs.open(path, 'wx', 0o600);
 		if (handle == null)
 			continue;
-		if (runtime.fs.close(handle) != true) {
-			try { runtime.fs.unlink(path); } catch (error) {}
+		let opened = runtime.fs.fstat(handle);
+		if (runtime.fs.close(handle) != true || opened?.type != 'file' ||
+		    opened.nlink != 1 || opened.mode != 0o600 ||
+		    (opened.uid != null && opened.uid != 0)) {
+			try {
+				let current = runtime.fs.lstat(path);
+				if (same_node(opened, current) && runtime.fs.realpath(path) == path)
+					runtime.fs.unlink(path);
+			}
+			catch (error) {}
 			errors.fail('INTERNAL');
 		}
 		let identity = runtime.fs.lstat(path);
-		if (identity?.type != 'file' || identity.nlink != 1 ||
+		if (!same_node(opened, identity) ||
 		    runtime.fs.realpath(path) != path)
 			errors.fail('INTERNAL');
 		return { path, identity };
@@ -161,7 +211,8 @@ function parse_headers(input, original_url, maximum_redirects) {
 };
 
 function clean_options(runtime, options) {
-	if (type(runtime?.fs) != 'object' || type(runtime?.process?.run) != 'function' ||
+	if (type(runtime?.fs) != 'object' || type(runtime?.fs?.fstat) != 'function' ||
+	    type(runtime?.process?.run) != 'function' ||
 	    type(runtime?.clock?.now) != 'function' || type(runtime?.random?.hex) != 'function' ||
 	    runtime?.paths?.tmp != '/tmp/miclash' || type(options) != 'object')
 		invalid();
@@ -201,12 +252,14 @@ function clean_options(runtime, options) {
 
 export function request(runtime, options) {
 	let clean = clean_options(runtime, options);
-	ensure_root(runtime);
+	let authority = ensure_root(runtime);
 	let output = null, header = null;
 	let result = null;
 	let failure = null;
 	try {
+		verify_authority(runtime, authority);
 		output = candidate(runtime, 'body');
+		verify_authority(runtime, authority);
 		header = candidate(runtime, 'headers');
 		let args = [ '--silent', '--show-error', '--location', '--proto', '=http,https',
 			'--proto-redir', clean.insecure ? '=http,https' : '=https',
@@ -218,9 +271,18 @@ export function request(runtime, options) {
 		for (let name, value in clean.headers)
 			push(args, '--header', name + ': ' + value);
 		push(args, '--', clean.url);
+		// curl only accepts output pathnames. Root-owned 0700 parent/root
+		// authorities prevent unprivileged replacement in the remaining open
+		// window; exact identities are checked on both sides of process.run().
+		verify_authority(runtime, authority);
+		verify_candidate(runtime, output);
+		verify_candidate(runtime, header);
 		let reply = runtime.process.run({
 			command: '/usr/bin/curl', args, timeout_ms: clean.total
 		});
+		verify_authority(runtime, authority);
+		verify_candidate(runtime, output);
+		verify_candidate(runtime, header);
 		if (!adapter_reply(reply))
 			errors.fail('INTERNAL');
 		if (reply.code != 0)
@@ -236,6 +298,7 @@ export function request(runtime, options) {
 		if (owned == null)
 			continue;
 		try {
+			verify_authority(runtime, authority);
 			let current = runtime.fs.lstat(owned.path);
 			if (!same_node(owned.identity, current) || runtime.fs.realpath(owned.path) != owned.path ||
 			    runtime.fs.unlink(owned.path) != true)
