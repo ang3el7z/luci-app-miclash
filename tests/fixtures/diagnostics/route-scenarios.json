@@ -52,6 +52,45 @@
     "expected": "DIRECT"
   },
   {
+    "name": "exact proxy hostname bypass remains direct",
+    "input": { "target": "upstream.proxy.example" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": ["upstream.proxy.example"]
+    },
+    "answers": ["203.0.113.7"],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "PROXY" }],
+    "expected": "DIRECT"
+  },
+  {
+    "name": "shared DNS answer is not a proxy endpoint bypass",
+    "input": { "target": "shared-host.example" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": ["203.0.113.7"]
+    },
+    "answers": ["203.0.113.7"],
+    "rules": [{ "type": "DOMAIN", "payload": "shared-host.example", "proxy": "DIRECT" }],
+    "expected": "BLOCK"
+  },
+  {
+    "name": "stale proxy DNS answer is not a bypass",
+    "input": { "target": "stale-host.example" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": ["198.51.100.77"]
+    },
+    "answers": ["198.51.100.77"],
+    "rules": [{ "type": "DOMAIN", "payload": "stale-host.example", "proxy": "DIRECT" }],
+    "expected": "BLOCK"
+  },
+  {
     "name": "Mihomo direct is fail closed under Guard",
     "input": { "target": "direct.example" },
     "desired": {

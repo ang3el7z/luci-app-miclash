@@ -150,14 +150,14 @@ function policy(values, field, wanted) {
 	}
 	return { matched: false, decision: 'unknown' };
 };
-function bypass(values, input, answers) {
+function bypass(values, input) {
 	if (type(values) != 'array' || length(values) > 128)
 		return false;
 	for (let value in values) {
 		if (type(value) != 'string' || length(value) > 253) continue;
-		if (lc(value) == input.target) return true;
-		for (let answer in answers)
-			if (lc(value) == lc(answer)) return true;
+		let normalized = lc(value);
+		if (!(ipv4(normalized) || ipv6(normalized) || domain(normalized))) continue;
+		if (normalized == input.target) return true;
 	}
 	return false;
 };
@@ -205,7 +205,7 @@ export function create(dependencies) {
 			}
 			step(steps, 'interface_policy', { matched: interface_policy.matched },
 				interface_policy.decision);
-			let is_bypass = bypass(desired.proxy_servers, input, answers);
+			let is_bypass = bypass(desired.proxy_servers, input);
 			if (candidate == 'unknown' && is_bypass) {
 				candidate = 'DIRECT'; candidate_source = 'proxy_server_bypass';
 			}
