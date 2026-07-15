@@ -39,6 +39,10 @@ assert_true(type(guard.reset_baseline) == 'function');
 assert_throws(() => guard.settings({ sustained_samples: 1 }), 'INVALID_ARGUMENT');
 assert_equal(sprintf('%J', guard.settings(fixture.safe_settings)),
 	sprintf('%J', fixture.safe_settings));
+let waiting_settings_restart = memory.create(runtime, service, operations, () => {});
+assert_equal(waiting_settings_restart.status().phase, 'waiting_for_mihomo');
+assert_equal(waiting_settings_restart.status().baseline_started_at, null);
+assert_equal(waiting_settings_restart.status().last_sample_at, null);
 for (let invalid in [
 	{ sample_interval_ms: 9999 }, { warmup_ms: 59999 }, { baseline_samples: 2 },
 	{ anomaly_percent: 109 }, { anomaly_growth_kb: 4095 }, { reserve_percent: 4 },

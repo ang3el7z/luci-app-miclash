@@ -254,8 +254,9 @@ export function create(runtime, service, operations, notify) {
 			baseline_samples = [];
 			current.baseline_rss_kb = null;
 			current.pressure_samples = 0;
-			current.last_sample_at = current.pid == null ? null : runtime.clock.now();
-			current.baseline_started_at = runtime.clock.now();
+			let learning_started_at = current.pid == null ? null : runtime.clock.now();
+			current.last_sample_at = learning_started_at;
+			current.baseline_started_at = learning_started_at;
 			if (current.pid != null && current.phase == 'monitoring')
 				current.phase = 'warming_up';
 		});
