@@ -294,6 +294,9 @@ for (let scenario in route_scenarios) {
 	assert_equal(type(engine.run), 'function');
 	let result = engine.run(scenario.input);
 	assert_equal(result.decision, scenario.expected, scenario.name);
+	if (scenario.normalized != null)
+		assert_equal(result.input.target, scenario.normalized,
+			scenario.name + ' returns normalized target');
 	assert_true(type(result.steps) == 'array' && length(result.steps) >= 6,
 		scenario.name + ' returns ordered reasoning');
 	let order = [];
@@ -352,7 +355,10 @@ for (let input in [
 	{ target: 'example.com', device: 'not-a-mac' },
 	{ target: 'example.com', interface: '../wan' },
 	{ target: 'example.com', extra: true },
-	{ target: '999.1.1.1' }
+	{ target: '999.1.1.1' },
+	{ target: '2001:::1' },
+	{ target: '1:2:3:4:5:6:7:8:9' },
+	{ target: '2001:db8::gg' }
 ])
 	assert_throws(() => invalid_route.run(input), 'INVALID_ARGUMENT');
 

@@ -19,20 +19,71 @@ function ipv4(value) {
 			return false;
 	return true;
 };
-function ipv6(value) {
-	if (type(value) != 'string' || !match(value, /^[0-9A-Fa-f:]+$/) ||
+function ipv6_side(value, ipv4_allowed) {
+	let groups = [];
+	if (!length(value)) return groups;
+	let fields = split(value, ':');
+	for (let at, field in fields) {
+		if (index(field, '.') >= 0) {
+			if (!ipv4_allowed || at != length(fields) - 1 || !ipv4(field)) return null;
+			let octets = split(field, '.');
+			push(groups, int(octets[0]) * 256 + int(octets[1]));
+			push(groups, int(octets[2]) * 256 + int(octets[3]));
+		}
+		else {
+			if (!match(field, /^[0-9A-Fa-f]{1,4}$/)) return null;
+			push(groups, int(field, 16));
+		}
+	}
+	return groups;
+};
+function parse_ipv6(value) {
+	if (type(value) != 'string' || !match(value, /^[0-9A-Fa-f:.]+$/) ||
 		index(value, ':') < 0 || length(value) > 45)
-		return false;
-	let doubles = split(value, '::');
-	if (length(doubles) > 2) return false;
-	let groups = 0;
-	for (let side in doubles)
-		if (length(side))
-			for (let group in split(side, ':')) {
-				if (!match(group, /^[0-9A-Fa-f]{1,4}$/)) return false;
-				groups++;
-			}
-	return length(doubles) == 2 ? groups < 8 : groups == 8;
+		return null;
+	let halves = split(value, '::');
+	if (length(halves) > 2) return null;
+	let left = ipv6_side(halves[0], length(halves) == 1);
+	let right = length(halves) == 2 ? ipv6_side(halves[1], true) : [];
+	if (left == null || right == null) return null;
+	let used = length(left) + length(right), groups = [];
+	if ((length(halves) == 1 && used != 8) ||
+		(length(halves) == 2 && used >= 8))
+		return null;
+	for (let group in left) push(groups, group);
+	if (length(halves) == 2)
+		for (let count = used; count < 8; count++) push(groups, 0);
+	for (let group in right) push(groups, group);
+	return groups;
+};
+function normalize_ipv6(value) {
+	let groups = type(value) == 'array' ? value : parse_ipv6(value);
+	if (groups == null) return null;
+	let best_at = -1, best_length = 0;
+	for (let at = 0; at < 8;) {
+		if (groups[at] != 0) { at++; continue; }
+		let end = at;
+		while (end < 8 && groups[end] == 0) end++;
+		if (end - at > best_length) {
+			best_at = at;
+			best_length = end - at;
+		}
+		at = end;
+	}
+	if (best_length < 2) best_at = -1;
+	let fields = [];
+	if (best_at < 0) {
+		for (let group in groups) push(fields, sprintf('%x', group));
+		return join(':', fields);
+	}
+	let left = [], right = [];
+	for (let at = 0; at < best_at; at++) push(left, sprintf('%x', groups[at]));
+	for (let at = best_at + best_length; at < 8; at++)
+		push(right, sprintf('%x', groups[at]));
+	return join(':', left) + '::' + join(':', right);
+};
+function ipv6(value) {
+	return parse_ipv6(value) != null;
 };
 function domain(value) {
 	if (type(value) != 'string' || !length(value) || length(value) > 253 ||
@@ -70,7 +121,7 @@ function exact_input(value) {
 	let kind = classify(value.target);
 	if (value.device != null && !safe_mac(value.device)) invalid();
 	if (value.interface != null && !safe_interface(value.interface)) invalid();
-	return { target: lc(value.target), kind,
+	return { target: kind == 'ipv6' ? normalize_ipv6(value.target) : lc(value.target), kind,
 		device: value.device == null ? null : uc(value.device),
 		interface: value.interface ?? null };
 };
@@ -97,6 +148,18 @@ function valid_cidr4(value) {
 	return length(parts) == 2 && ipv4(parts[0]) && match(parts[1], /^[0-9]+$/) &&
 		int(parts[1]) >= 0 && int(parts[1]) <= 32;
 };
+function cidr6(target, value) {
+	let parts = split(value, '/');
+	if (length(parts) != 2 || !match(parts[1], /^[0-9]+$/)) return null;
+	let address = parse_ipv6(parts[0]), candidate = parse_ipv6(target), bits = int(parts[1]);
+	if (address == null || candidate == null || bits < 0 || bits > 128) return null;
+	let whole = int(bits / 16), partial = bits % 16;
+	for (let at = 0; at < whole; at++)
+		if (address[at] != candidate[at]) return false;
+	if (partial && (address[whole] >> (16 - partial)) !=
+		(candidate[whole] >> (16 - partial))) return false;
+	return true;
+};
 function rule_match(rule, input, answers) {
 	let type = uc(rule.type), payload = lc(rule.payload);
 	if (!RULE_TYPES[type]) return { known: false, matched: false };
@@ -122,13 +185,12 @@ function rule_match(rule, input, answers) {
 		return { known: true, matched: false };
 	}
 	if (type == 'IP-CIDR6') {
-		let parts = split(payload, '/');
-		if (length(parts) != 2 || !ipv6(parts[0]) || !match(parts[1], /^[0-9]+$/) ||
-			int(parts[1]) < 0 || int(parts[1]) > 128)
-			return { known: false, matched: false };
-		for (let candidate in candidates)
-			if (ipv6(candidate) && candidate == parts[0])
-				return { known: true, matched: true };
+		let valid = cidr6('::', payload);
+		if (valid == null) return { known: false, matched: false };
+		for (let candidate in candidates) {
+			let matched = cidr6(candidate, payload);
+			if (matched === true) return { known: true, matched: true };
+		}
 		return { known: true, matched: false };
 	}
 	return { known: true, matched: false };
@@ -291,7 +353,7 @@ function bypass(values, input) {
 		return false;
 	for (let value in values) {
 		if (type(value) != 'string' || length(value) > 253) continue;
-		let normalized = lc(value);
+		let normalized = ipv6(value) ? normalize_ipv6(value) : lc(value);
 		if (!(ipv4(normalized) || ipv6(normalized) || domain(normalized))) continue;
 		if (normalized == input.target) return true;
 	}
@@ -323,7 +385,7 @@ export function create(dependencies) {
 					if (type(values) == 'array' && length(values) <= 16)
 						for (let value in values)
 							if ((ipv4(value) || ipv6(value)) && length(answers) < 16)
-								push(answers, lc(value));
+								push(answers, ipv6(value) ? normalize_ipv6(value) : lc(value));
 				}
 				catch (error) {}
 			let steps = [], candidate = 'unknown', candidate_source = null;
