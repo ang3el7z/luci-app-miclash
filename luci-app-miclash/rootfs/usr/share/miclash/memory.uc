@@ -1,4 +1,5 @@
 import { fail } from 'miclash.errors';
+import * as storage from 'miclash.storage';
 
 const DEFAULTS = {
 	sample_interval_ms: 60000,
@@ -40,6 +41,7 @@ const RESULTS = {
 };
 
 const ACTIONS = { reload: true, restart_core: true, restart_service: true };
+const STATE_VERSION = 2;
 
 function invalid() { fail('INVALID_ARGUMENT'); };
 function corrupt() { fail('CORRUPT_STATE'); };
@@ -80,20 +82,39 @@ export function create(runtime, service, operations, notify) {
 		manual_generation: null, baseline_started_at: null,
 		baseline_rss_kb: null, current_rss_kb: null,
 		pressure_samples: 0, cooldown_until: 0, normal_since: null,
-		last_action: null, last_result: null
+		last_action: null, last_result: null, last_sample_at: null,
+		mem_total_kb: null, recovery_sequence: 0, recovery_id: null,
+		active_stage: null
 	};
 	let baseline_samples = [];
 	let recovery_pending = false;
 	let state_path = (runtime.paths?.run ?? '/var/run/miclash') + '/memory.json';
 
+	function disk_state() {
+		return { version: STATE_VERSION, settings: options, state: current, baseline_samples };
+	};
+
 	function persist_state() {
-		if (type(runtime.fs?.writefile) != 'function') return false;
+		storage.write_json(runtime, state_path, disk_state(), 0o600);
+		return true;
+	};
+
+	function transaction(change) {
+		let before = {
+			options: copy(options), current: copy(current),
+			baseline_samples: copy(baseline_samples), recovery_pending
+		};
 		try {
-			return runtime.fs.writefile(state_path, sprintf('%J', {
-				version: 1, settings: options, state: current, baseline_samples
-			})) !== false;
+			change();
+			persist_state();
 		}
-		catch (error) { return false; }
+		catch (error) {
+			options = before.options;
+			current = before.current;
+			baseline_samples = before.baseline_samples;
+			recovery_pending = before.recovery_pending;
+			fail(error?.code ?? error?.message ?? 'INTERNAL');
+		}
 	};
 
 	function valid_nullable(value, allowed_types) {
@@ -104,18 +125,17 @@ export function create(runtime, service, operations, notify) {
 	};
 
 	function restore_state() {
-		if (type(runtime.fs?.readfile) != 'function') return;
-		let raw;
-		try { raw = runtime.fs.readfile(state_path); }
-		catch (error) { fail('INTERNAL'); }
-		if (raw == null) return;
-		if (type(raw) != 'string') corrupt();
 		let saved;
-		try { saved = json(raw); } catch (error) { corrupt(); }
+		try { saved = storage.read_json(runtime, state_path); }
+		catch (error) {
+			let code = error?.code ?? error?.message;
+			if (code == 'NOT_FOUND') return;
+			fail(error?.code ?? error?.message ?? 'INTERNAL');
+		}
 		let top_fields = { version: true, settings: true, state: true, baseline_samples: true };
 		let state_fields = {};
 		for (let name in current) state_fields[name] = true;
-		if (!exact_fields(saved, top_fields) || saved.version != 1 ||
+		if (!exact_fields(saved, top_fields) || saved.version != STATE_VERSION ||
 		    !exact_fields(saved.state, state_fields) || type(saved.baseline_samples) != 'array')
 			corrupt();
 		try { validate_settings(saved.settings); } catch (error) { corrupt(); }
@@ -134,6 +154,14 @@ export function create(runtime, service, operations, notify) {
 		    type(state.cooldown_until) != 'int' || state.cooldown_until < 0 ||
 		    !valid_nullable(state.normal_since, [ 'int' ]) ||
 		    (state.normal_since != null && state.normal_since < 0) ||
+		    !valid_nullable(state.last_sample_at, [ 'int' ]) ||
+		    (state.last_sample_at != null && state.last_sample_at < 0) ||
+		    !valid_nullable(state.mem_total_kb, [ 'int' ]) ||
+		    (state.mem_total_kb != null && state.mem_total_kb < 1) ||
+		    type(state.recovery_sequence) != 'int' || state.recovery_sequence < 0 ||
+		    !valid_nullable(state.recovery_id, [ 'string' ]) ||
+		    (state.recovery_id != null && !match(state.recovery_id, /^memory-[0-9]+-[0-9]+$/)) ||
+		    (state.active_stage != null && !exists(ACTIONS, state.active_stage)) ||
 		    (state.last_action != null && !exists(ACTIONS, state.last_action)) ||
 		    (state.last_result != null && !exists(RESULTS, state.last_result)))
 			corrupt();
@@ -142,14 +170,43 @@ export function create(runtime, service, operations, notify) {
 		if (length(saved.baseline_samples) > saved.settings.baseline_samples ||
 		    state.pressure_samples > saved.settings.sustained_samples)
 			corrupt();
+		if ((state.phase == 'recovery_queued' || state.phase == 'recovering') &&
+		    state.recovery_id == null)
+			corrupt();
+		if (state.phase == 'recovering' && state.active_stage == null)
+			corrupt();
+		if (state.phase == 'recovery_queued' && state.active_stage != null)
+			corrupt();
+		if (state.phase == 'cooldown' &&
+		    (state.last_result != 'success' || state.recovery_id == null ||
+		     state.active_stage != null || state.baseline_rss_kb != null))
+			corrupt();
+		if ((state.phase == 'failure_cooldown' || state.phase == 'failure_rearm_wait') &&
+		    (state.last_result != 'failed' || state.recovery_id == null ||
+		     state.active_stage != null))
+			corrupt();
+		if (state.phase == 'recovery_deferred' &&
+		    (state.last_result != 'service_busy' || state.active_stage != null))
+			corrupt();
+		if ((state.phase == 'warming_up' || state.phase == 'learning_baseline') &&
+		    state.baseline_rss_kb != null)
+			corrupt();
+		if (state.phase == 'monitoring' && state.baseline_rss_kb == null)
+			corrupt();
+		if (state.phase == 'waiting_for_mihomo' &&
+		    (state.pid != null || state.start_time != null || state.current_rss_kb != null))
+			corrupt();
 		options = copy(saved.settings);
 		current = copy(state);
 		baseline_samples = copy(saved.baseline_samples);
 		if (current.phase == 'recovering' || current.phase == 'recovery_queued') {
-			current.phase = 'monitoring';
-			current.last_result = 'interrupted';
-			current.pressure_samples = 0;
-			persist_state();
+			transaction(() => {
+				current.phase = 'failure_cooldown';
+				current.last_result = 'failed';
+				current.active_stage = null;
+				current.pressure_samples = 0;
+				current.cooldown_until = runtime.clock.now() + options.failure_cooldown_ms;
+			});
 		}
 	};
 
@@ -170,8 +227,22 @@ export function create(runtime, service, operations, notify) {
 			merged[name] = value;
 		}
 		validate_settings(merged);
-		options = merged;
-		persist_state();
+		if (current.mem_total_kb != null &&
+		    max(merged.reserve_min_kb, min(merged.reserve_max_kb,
+		    int(current.mem_total_kb * merged.reserve_percent / 100))) >= current.mem_total_kb)
+			invalid();
+		if (current.phase == 'recovery_queued' || current.phase == 'recovering')
+			fail('BUSY');
+		transaction(() => {
+			options = merged;
+			baseline_samples = [];
+			current.baseline_rss_kb = null;
+			current.pressure_samples = 0;
+			current.last_sample_at = null;
+			current.baseline_started_at = runtime.clock.now();
+			if (current.pid != null && current.phase == 'monitoring')
+				current.phase = 'warming_up';
+		});
 		return copy(options);
 	};
 
@@ -217,17 +288,18 @@ export function create(runtime, service, operations, notify) {
 		return result;
 	};
 
-	function reset_baseline(snapshot) {
+	function reset_learning(snapshot) {
 		baseline_samples = [];
-		recovery_pending = false;
 		current.baseline_rss_kb = null;
 		current.pressure_samples = 0;
+		current.last_sample_at = null;
 		current.baseline_started_at = runtime.clock.now();
 		if (type(snapshot) == 'object') {
 			current.pid = snapshot.pid ?? null;
 			current.start_time = snapshot.start_time ?? null;
 			current.manual_generation = snapshot.manual_generation ?? null;
 			current.current_rss_kb = snapshot.rss_kb ?? null;
+			current.mem_total_kb = snapshot.mem_total_kb ?? null;
 			current.phase = 'warming_up';
 		}
 		else {
@@ -235,9 +307,15 @@ export function create(runtime, service, operations, notify) {
 			current.start_time = null;
 			current.manual_generation = null;
 			current.current_rss_kb = null;
+			current.mem_total_kb = null;
 			current.phase = 'waiting_for_mihomo';
 		}
-		persist_state();
+	};
+
+	function reset_baseline(snapshot) {
+		if (current.phase == 'recovery_queued' || current.phase == 'recovering')
+			fail('BUSY');
+		transaction(() => reset_learning(snapshot));
 		return copy(current);
 	};
 
@@ -255,9 +333,26 @@ export function create(runtime, service, operations, notify) {
 	};
 
 	function under_pressure(snapshot) {
-		return snapshot.mem_available_kb < snapshot.reserve_kb ||
-			((type(snapshot.psi_full_avg10) == 'int' ||
-			  type(snapshot.psi_full_avg10) == 'double') && snapshot.psi_full_avg10 > 0);
+		return snapshot.mem_available_kb < snapshot.reserve_kb;
+	};
+
+	function validate_snapshot(snapshot) {
+		let start_valid = (type(snapshot.start_time) == 'int' && snapshot.start_time > 0) ||
+			(type(snapshot.start_time) == 'string' && length(snapshot.start_time) <= 32 &&
+			 match(snapshot.start_time, /^[0-9]+$/));
+		if (snapshot.running !== true || type(snapshot.pid) != 'int' || snapshot.pid < 1 ||
+		    !start_valid || (snapshot.manual_generation != null &&
+		    (type(snapshot.manual_generation) != 'string' || length(snapshot.manual_generation) > 128)) ||
+		    type(snapshot.rss_kb) != 'int' || snapshot.rss_kb < 1 ||
+		    type(snapshot.mem_total_kb) != 'int' || snapshot.mem_total_kb < 1 ||
+		    snapshot.rss_kb > snapshot.mem_total_kb ||
+		    type(snapshot.mem_available_kb) != 'int' || snapshot.mem_available_kb < 0 ||
+		    snapshot.mem_available_kb > snapshot.mem_total_kb ||
+		    snapshot.reserve_kb >= snapshot.mem_total_kb ||
+		    (snapshot.psi_full_avg10 != null && type(snapshot.psi_full_avg10) != 'int' &&
+		     type(snapshot.psi_full_avg10) != 'double') || snapshot.psi_full_avg10 < 0)
+			invalid();
+		return snapshot;
 	};
 
 	function material_drop(before, after) {
@@ -278,6 +373,17 @@ export function create(runtime, service, operations, notify) {
 		catch (error) { return true; }
 	};
 
+	let transition_failure = () => {
+		transaction(() => {
+			current.phase = 'failure_cooldown';
+			current.active_stage = null;
+			current.last_result = 'failed';
+			current.pressure_samples = 0;
+			current.cooldown_until = runtime.clock.now() + options.failure_cooldown_ms;
+		});
+		recovery_pending = false;
+	};
+
 	function recover(ctx, initial) {
 		let latest = initial;
 		let stages = [
@@ -286,12 +392,18 @@ export function create(runtime, service, operations, notify) {
 			{ name: 'restart_service', progress: 80, run: () => service.restart_service('config.yaml') }
 		];
 		for (let stage in stages) {
-			current.phase = 'recovering';
-			current.last_action = stage.name;
+			transaction(() => {
+				current.phase = 'recovering';
+				current.active_stage = stage.name;
+				current.last_action = stage.name;
+			});
 			if (type(ctx.stage) == 'function')
 				ctx.stage(stage.name, stage.progress, 'Adaptive memory recovery');
-			let action_ok = true;
-			try { stage.run(); } catch (error) { action_ok = false; }
+			let action_result = null;
+			try { action_result = stage.run(); } catch (error) {}
+			let action_ok = stage.name == 'restart_service' ?
+				action_result?.changed === true && action_result?.state == 'restarting' :
+				action_result?.ok === true;
 			let ready = false;
 			if (action_ok) {
 				try {
@@ -311,13 +423,16 @@ export function create(runtime, service, operations, notify) {
 				ready, material_drop: dropped, preserve_guard: true
 			});
 			if (ready && dropped) {
-				reset_baseline(after);
-				current.current_rss_kb = after.rss_kb;
-				current.phase = 'cooldown';
-				current.last_action = stage.name;
-				current.last_result = 'success';
-				current.cooldown_until = runtime.clock.now() + options.success_cooldown_ms;
-				persist_state();
+				transaction(() => {
+					reset_learning(after);
+					current.current_rss_kb = after.rss_kb;
+					current.phase = 'cooldown';
+					current.active_stage = null;
+					current.last_action = stage.name;
+					current.last_result = 'success';
+					current.cooldown_until = runtime.clock.now() + options.success_cooldown_ms;
+				});
+				recovery_pending = false;
 				safe_notify({ type: 'memory_recovery', severity: 'notice', result: 'success',
 					action: stage.name, before_rss_kb: initial.rss_kb,
 					after_rss_kb: after.rss_kb, preserve_guard: true });
@@ -326,11 +441,7 @@ export function create(runtime, service, operations, notify) {
 			}
 			if (after?.rss_kb != null) latest = after;
 		}
-		recovery_pending = false;
-		current.phase = 'failure_cooldown';
-		current.last_result = 'failed';
-		current.cooldown_until = runtime.clock.now() + options.failure_cooldown_ms;
-		persist_state();
+		transition_failure();
 		safe_notify({ type: 'memory_recovery', severity: 'warning', result: 'failed',
 			before_rss_kb: initial.rss_kb, after_rss_kb: latest.rss_kb,
 			preserve_guard: true });
@@ -341,94 +452,142 @@ export function create(runtime, service, operations, notify) {
 	function submit_recovery(snapshot) {
 		if (recovery_pending) return;
 		if (busy()) {
-			current.phase = 'recovery_deferred';
-			current.last_result = 'service_busy';
-			current.pressure_samples = 0;
-			persist_state();
+			transaction(() => {
+				current.phase = 'recovery_deferred';
+				current.last_result = 'service_busy';
+				current.pressure_samples = 0;
+			});
 			return;
 		}
+		transaction(() => {
+			current.recovery_sequence++;
+			current.recovery_id = sprintf('memory-%d-%d', current.recovery_sequence,
+				runtime.clock.now());
+			current.phase = 'recovery_queued';
+			current.active_stage = null;
+			current.pressure_samples = 0;
+		});
 		recovery_pending = true;
-		current.phase = 'recovery_queued';
-		current.pressure_samples = 0;
-		persist_state();
 		try {
 			operations.submit('memory-recovery', 'auto', {
 				before_rss_kb: snapshot.rss_kb,
 				mem_available_kb: snapshot.mem_available_kb,
 				reserve_kb: snapshot.reserve_kb,
-				preserve_guard: true
-			}, (ctx) => recover(ctx, snapshot));
+				preserve_guard: true,
+				recovery_id: current.recovery_id
+			}, (ctx) => {
+				try { return recover(ctx, snapshot); }
+				catch (error) {
+					if (current.phase != 'failure_cooldown') transition_failure();
+					fail(error?.code ?? error?.message ?? 'INTERNAL');
+				}
+			});
 		}
 		catch (error) {
-			recovery_pending = false;
-			current.phase = 'monitoring';
-			current.last_result = 'operation_failed';
-			persist_state();
+			let accepted = null;
+			try {
+				accepted = false;
+				for (let record in operations.list({ kind: 'memory-recovery', source: 'auto' }))
+					if (record.state == 'queued' || record.state == 'running') accepted = true;
+			}
+			catch (list_error) { accepted = null; }
+			if (accepted === false) {
+				transaction(() => {
+					current.phase = 'monitoring';
+					current.recovery_id = null;
+					current.active_stage = null;
+					current.last_result = 'operation_failed';
+				});
+				recovery_pending = false;
+			}
 		}
-	};
-
-	function sampled() {
-		persist_state();
-		return copy(current);
 	};
 
 	function sample(snapshot) {
 		snapshot = observe(snapshot);
-		if (snapshot.running !== true || type(snapshot.pid) != 'int' ||
-		    (type(snapshot.start_time) != 'int' && type(snapshot.start_time) != 'string') ||
-		    type(snapshot.rss_kb) != 'int' || type(snapshot.mem_available_kb) != 'int') {
-			current.phase = 'waiting_for_mihomo';
-			return sampled();
+		if (snapshot.running !== true) {
+			transaction(() => { current.phase = 'waiting_for_mihomo'; });
+			return copy(current);
+		}
+		validate_snapshot(snapshot);
+		let now = runtime.clock.now();
+		if (current.last_sample_at != null) {
+			let elapsed = now - current.last_sample_at;
+			if (elapsed < 0) {
+				transaction(() => {
+					reset_learning(snapshot);
+					current.last_sample_at = now;
+				});
+				return copy(current);
+			}
+			if (elapsed < options.sample_interval_ms)
+				return copy(current);
+			if (elapsed > options.sample_interval_ms * 2)
+				transaction(() => { current.pressure_samples = 0; });
 		}
 		if (current.pid != snapshot.pid || current.start_time != snapshot.start_time ||
 		    current.manual_generation != snapshot.manual_generation) {
-			reset_baseline(snapshot);
-			return sampled();
+			transaction(() => {
+				reset_learning(snapshot);
+				current.last_sample_at = now;
+			});
+			return copy(current);
 		}
-		current.current_rss_kb = snapshot.rss_kb;
-		if (recovery_pending) return sampled();
-		let now = runtime.clock.now();
+		transaction(() => {
+			current.current_rss_kb = snapshot.rss_kb;
+			current.mem_total_kb = snapshot.mem_total_kb;
+			current.last_sample_at = now;
+		});
+		if (recovery_pending) return copy(current);
 		if (current.last_result == 'success' && current.cooldown_until > now) {
-			current.phase = 'cooldown';
-			return sampled();
+			transaction(() => { current.phase = 'cooldown'; });
+			return copy(current);
 		}
 		if (current.last_result == 'failed') {
 			if (current.cooldown_until > now) {
-				current.phase = 'failure_cooldown';
-				return sampled();
+				transaction(() => { current.phase = 'failure_cooldown'; });
+				return copy(current);
 			}
-			let psi_normal = snapshot.psi_full_avg10 == null || snapshot.psi_full_avg10 <= 0;
-			if (snapshot.mem_available_kb < snapshot.reserve_kb || !psi_normal) {
-				current.normal_since = null;
-				current.phase = 'failure_rearm_wait';
-				return sampled();
+			if (snapshot.mem_available_kb < snapshot.reserve_kb) {
+				transaction(() => {
+					current.normal_since = null;
+					current.phase = 'failure_rearm_wait';
+				});
+				return copy(current);
 			}
-			if (current.normal_since == null) current.normal_since = now;
+			if (current.normal_since == null)
+				transaction(() => { current.normal_since = now; });
 			if (now - current.normal_since < options.normal_rearm_ms) {
-				current.phase = 'failure_rearm_wait';
-				return sampled();
+				transaction(() => { current.phase = 'failure_rearm_wait'; });
+				return copy(current);
 			}
-			current.last_result = 'rearmed';
-			current.normal_since = null;
+			transaction(() => {
+				current.last_result = 'rearmed';
+				current.normal_since = null;
+			});
 		}
 		if (now - current.baseline_started_at < options.warmup_ms) {
-			current.phase = 'warming_up';
-			return sampled();
+			transaction(() => { current.phase = 'warming_up'; });
+			return copy(current);
 		}
 		if (current.baseline_rss_kb == null) {
-			current.phase = 'learning_baseline';
-			push(baseline_samples, snapshot.rss_kb);
-			if (length(baseline_samples) >= options.baseline_samples) {
-				current.baseline_rss_kb = median(baseline_samples);
-				current.phase = 'monitoring';
-			}
-			return sampled();
+			transaction(() => {
+				current.phase = 'learning_baseline';
+				push(baseline_samples, snapshot.rss_kb);
+				if (length(baseline_samples) >= options.baseline_samples) {
+					current.baseline_rss_kb = median(baseline_samples);
+					current.phase = 'monitoring';
+				}
+			});
+			return copy(current);
 		}
-		current.phase = 'monitoring';
-		current.pressure_samples = anomaly(snapshot) && under_pressure(snapshot) ?
-			current.pressure_samples + 1 : 0;
+		transaction(() => {
+			current.phase = 'monitoring';
+			current.pressure_samples = anomaly(snapshot) && under_pressure(snapshot) ?
+				current.pressure_samples + 1 : 0;
+		});
 		if (current.pressure_samples >= options.sustained_samples) submit_recovery(snapshot);
-		return sampled();
+		return copy(current);
 	};
 
 	return {
