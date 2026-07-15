@@ -1,0 +1,19 @@
+[
+  {
+    "tag_name": "v2.0.0-beta.1",
+    "draft": false,
+    "prerelease": true,
+    "assets": [
+      {
+        "name": "mihomo-linux-arm64-v2.0.0-beta.1.gz",
+        "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v2.0.0-beta.1/mihomo-linux-arm64-v2.0.0-beta.1.gz"
+      }
+    ]
+  },
+  {
+    "tag_name": "v1.2.3",
+    "draft": false,
+    "prerelease": false,
+    "assets": []
+  }
+]

@@ -80,6 +80,7 @@ export function fs(initial) {
 		corrupt_on_close: false,
 		collide_next_open: false,
 		fail_unlink_once: false,
+		fail_rename_once: false,
 		ignore_chmod: false,
 		on_lstat: null,
 		on_mkdir: null,
@@ -274,6 +275,10 @@ export function fs(initial) {
 	};
 	fake.rename = (from, to) => {
 		push(fake.calls.rename, { from, to });
+		if (fake.fail_rename_once) {
+			fake.fail_rename_once = false;
+			return null;
+		}
 		if (fake.fail_on == 'rename')
 			return null;
 		if (exists(directories, from)) {

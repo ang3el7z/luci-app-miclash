@@ -1,0 +1,35 @@
+#!/bin/sh
+
+# This helper is intentionally not installed until the one-jump Plan 4 daemon
+# cutover. It gives the future updates backend an argv-only, file-size-limited
+# gzip boundary instead of allowing an archive bomb to fill tmpfs first.
+set -efuC
+
+[ "$#" -eq 3 ] || exit 64
+source_path="$1"
+destination="$2"
+limit="$3"
+
+case "$source_path" in
+	/tmp/miclash/updates/*.gz) ;;
+	*) exit 64 ;;
+esac
+stem="${source_path%.gz}"
+token="${stem##*/}"
+[ "$destination" = "$stem" ] || exit 64
+[ "${#token}" -eq 32 ] || exit 64
+case "$token" in *[!0-9a-f]*) exit 64 ;; esac
+case "$limit" in ''|*[!0-9]*) exit 64 ;; esac
+[ "$limit" -ge 64 ] && [ "$limit" -le 67108864 ] || exit 64
+[ -f "$source_path" ] && [ ! -L "$source_path" ] || exit 65
+[ ! -e "$destination" ] && [ ! -L "$destination" ] || exit 65
+
+blocks=$(( (limit + 511) / 512 ))
+ulimit -f "$blocks" || exit 70
+umask 077
+cleanup=1
+trap '[ "$cleanup" -eq 0 ] || rm -f -- "$destination"' EXIT HUP INT TERM
+/bin/gzip -dc -- "$source_path" > "$destination"
+[ -f "$destination" ] && [ ! -L "$destination" ] || exit 70
+cleanup=0
+exit 0
