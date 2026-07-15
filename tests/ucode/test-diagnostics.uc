@@ -278,6 +278,8 @@ for (let scenario in route_scenarios) {
 			kind: 'unicast', destination: 'default', device: 'clash-tun' });
 	else if (scenario.routing == 'malformed')
 		observed.routing.rules[0].mark = 1;
+	else if (scenario.routing == 'long-interface')
+		observed.routing.routes[0].device = '1234567890123456';
 	else if (scenario.routing == 'oversized')
 		for (let index = 0; index < 65; index++)
 			push(observed.routing.rules, { family: 'ipv4', priority: 2000 + index,
@@ -327,7 +329,8 @@ for (let scenario in route_scenarios) {
 	assert_equal(type(routing_step.evidence.available), 'bool');
 	assert_equal(type(routing_step.evidence.valid), 'bool');
 	let route_expected = scenario.routing != 'missing' && scenario.routing != 'contradictory' &&
-		scenario.routing != 'malformed' && scenario.routing != 'oversized' &&
+		scenario.routing != 'malformed' && scenario.routing != 'long-interface' &&
+		scenario.routing != 'oversized' &&
 		(length(scenario.answers) > 0 || match(scenario.input.target, /:|^[0-9.]+$/));
 	if (!route_expected)
 		assert_equal(routing_step.evidence.valid, false);
@@ -377,6 +380,7 @@ for (let input in [
 	{ target: 'bad host name' },
 	{ target: 'example.com', device: 'not-a-mac' },
 	{ target: 'example.com', interface: '../wan' },
+	{ target: 'example.com', interface: '1234567890123456' },
 	{ target: 'example.com', extra: true },
 	{ target: '999.1.1.1' },
 	{ target: '2001:::1' },

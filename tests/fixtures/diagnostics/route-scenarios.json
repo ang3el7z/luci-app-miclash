@@ -291,6 +291,20 @@
     "expected": "unknown"
   },
   {
+    "name": "overlong kernel interface is malformed",
+    "input": { "target": "192.0.2.59" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "routing": "long-interface",
+    "expected": "unknown"
+  },
+  {
     "name": "oversized kernel evidence lowers proxy to unknown",
     "input": { "target": "oversized-kernel.example" },
     "desired": {

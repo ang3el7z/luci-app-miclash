@@ -107,7 +107,7 @@ function safe_mac(value) {
 		/^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/);
 };
 function safe_interface(value) {
-	return type(value) == 'string' && length(value) >= 1 && length(value) <= 64 &&
+	return type(value) == 'string' && length(value) >= 1 && length(value) <= 15 &&
 		match(value, /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/);
 };
 function exact_input(value) {
