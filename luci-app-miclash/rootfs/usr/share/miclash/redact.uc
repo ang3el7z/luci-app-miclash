@@ -5,6 +5,7 @@ const SANITIZE_MAX_INPUT = 131072;
 const SANITIZE_MAX_STRING = 16384;
 const SANITIZE_MAX_RAW_SECRETS = 64;
 const SANITIZE_MAX_VARIANTS = 256;
+const SANITIZE_MIN_URL_ALIAS = 4;
 
 function normalized_name(input) {
 	let output = '';
@@ -99,6 +100,14 @@ function query_redacted(url) {
 	       substr(url, query_end);
 };
 
+function last_character(input, wanted) {
+	let result = -1;
+	for (let offset = 0; offset < length(input); offset++)
+		if (substr(input, offset, 1) == wanted)
+			result = offset;
+	return result;
+};
+
 function url_redacted(url) {
 	let scheme_end = index(url, '://');
 	if (scheme_end < 0)
@@ -114,7 +123,7 @@ function url_redacted(url) {
 	}
 
 	let authority = substr(url, authority_start, authority_end - authority_start);
-	let userinfo_end = index(authority, '@');
+	let userinfo_end = last_character(authority, '@');
 	if (userinfo_end >= 0)
 		url = substr(url, 0, authority_start) + '***:***@' +
 		      substr(authority, userinfo_end + 1) + substr(url, authority_end);
@@ -217,7 +226,76 @@ function discover_marker(secrets, input, marker) {
 	}
 };
 
+function percent_decoded(input) {
+	let output = '';
+	for (let offset = 0; offset < length(input); offset++) {
+		if (substr(input, offset, 1) == '%' && offset + 2 < length(input)) {
+			let hex = substr(input, offset + 1, 2);
+			if (match(hex, /^[0-9A-Fa-f]{2}$/)) {
+				output += chr(int(hex, 16));
+				offset += 2;
+				continue;
+			}
+		}
+		output += substr(input, offset, 1);
+	}
+	return output;
+};
+
+function discover_url_component(secrets, input) {
+	if (!length(input))
+		return;
+	let decoded = percent_decoded(input);
+	if (length(input) < SANITIZE_MIN_URL_ALIAS ||
+	    length(decoded) < SANITIZE_MIN_URL_ALIAS)
+		die('INVALID_ARGUMENT');
+	add_secret(secrets, input);
+	if (decoded != input)
+		add_secret(secrets, decoded);
+};
+
+function discover_url_userinfo(secrets, input) {
+	let remaining = input;
+	while (length(remaining)) {
+		let start = next_url_start(remaining);
+		if (start < 0)
+			return;
+		let candidate = substr(remaining, start), end = length(candidate);
+		for (let offset = 0; offset < length(candidate); offset++)
+			if (match(substr(candidate, offset, 1), /[[:space:][:cntrl:]]/)) {
+				end = offset;
+				break;
+			}
+		let first_scheme_end = index(candidate, '://') + 3;
+		let next_url = next_url_start(substr(candidate, first_scheme_end));
+		if (next_url >= 0 && first_scheme_end + next_url < end)
+			end = first_scheme_end + next_url;
+		let url = substr(candidate, 0, end);
+		let scheme_end = index(url, '://'), authority_start = scheme_end + 3;
+		let authority_end = length(url), authority_tail = substr(url, authority_start);
+		for (let delimiter in [ '/', '?', '#' ]) {
+			let position = index(authority_tail, delimiter);
+			if (position >= 0 && authority_start + position < authority_end)
+				authority_end = authority_start + position;
+		}
+		let authority = substr(url, authority_start, authority_end - authority_start);
+		let userinfo_end = last_character(authority, '@');
+		if (userinfo_end >= 0) {
+			let userinfo = substr(authority, 0, userinfo_end);
+			let separator = index(userinfo, ':');
+			if (separator < 0)
+				discover_url_component(secrets, userinfo);
+			else {
+				discover_url_component(secrets, substr(userinfo, 0, separator));
+				discover_url_component(secrets, substr(userinfo, separator + 1));
+			}
+		}
+		remaining = substr(candidate, max(end, 1));
+	}
+};
+
 function discover_text(secrets, input) {
+	discover_url_userinfo(secrets, input);
 	for (let marker in [
 		'bearer ', 'basic ', 'auth=', 'auth:', 'authorization=', 'authorization:',
 		'cookie=', 'cookie:', 'credential=', 'credential:', 'password=', 'password:',
@@ -282,9 +360,13 @@ function discover(input) {
 		else if (kind == 'object')
 			for (let name, child in item.value)
 				push(stack, { value: child, key: name, depth: item.depth + 1, sensitive });
-		else if (kind != null && kind != 'null' && kind != 'bool' &&
-		         kind != 'int' && kind != 'double')
-			die('INVALID_ARGUMENT');
+		else {
+			if (sensitive)
+				die('INVALID_ARGUMENT');
+			if (kind != null && kind != 'null' && kind != 'bool' &&
+			    kind != 'int' && kind != 'double')
+				die('INVALID_ARGUMENT');
+		}
 		if (aggregate > SANITIZE_MAX_INPUT)
 			die('RESPONSE_TOO_LARGE');
 	}
@@ -402,7 +484,7 @@ function scrub(input, secrets, depth) {
 		for (let name, item in input) {
 			let scrubbed_name = scrub_text(name, secrets);
 			let sensitive = sanitize_secret_key(name, depth);
-			if (scrubbed_name != name && !sensitive)
+			if (scrubbed_name != name)
 				die('INVALID_ARGUMENT');
 			if (exists(output, name))
 				die('INVALID_ARGUMENT');

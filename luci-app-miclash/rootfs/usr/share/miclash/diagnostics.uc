@@ -22,15 +22,6 @@ function same_node(left, right) {
 	return left?.type == right?.type && left?.inode == right?.inode &&
 		left?.dev?.major == right?.dev?.major && left?.dev?.minor == right?.dev?.minor;
 };
-function secret_key(name) {
-	name = replace(lc(name ?? ''), /[^a-z0-9]+/g, '_');
-	return match(name, /^(auth|authorization|bearer|cookie|credential|password|passwd|secret|session|token)$/) ||
-		match(name, /^(api|private|access)_?key$/) ||
-		match(name, /^(access|refresh)_?token$/) ||
-		match(name, /^client_?secret$/) ||
-		match(name, /^telegram_?token$/) ||
-		match(name, /^subscription_?url/);
-};
 function add_secret(secrets, value) {
 	if (type(value) != 'string' || !length(value) || length(value) > MAX_STRING ||
 		value == redact.MASK || value == '***')
@@ -94,7 +85,7 @@ function validate_and_discover(value) {
 			if (length(item.key) > MAX_STRING) errors.fail('RESPONSE_TOO_LARGE');
 			aggregate += length(item.key);
 			discover_text(secrets, item.key);
-			sensitive = sensitive || secret_key(item.key);
+			sensitive = sensitive || redact.secret_name(item.key);
 		}
 		if (kind == 'string') {
 			if (length(item.value) > MAX_STRING) errors.fail('RESPONSE_TOO_LARGE');
@@ -178,7 +169,7 @@ function scrub(value, secrets, depth) {
 		for (let name, item in value) {
 			let safe_name = scrub_string(name, secrets);
 			if (exists(output, safe_name)) errors.fail('INVALID_RESPONSE');
-			output[safe_name] = secret_key(name) ? redact.MASK :
+			output[safe_name] = redact.secret_name(name) ? redact.MASK :
 				scrub(item, secrets, depth + 1);
 		}
 		return output;

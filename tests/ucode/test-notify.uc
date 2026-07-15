@@ -190,6 +190,121 @@ for (let i = 0; i < 32; i++)
 assert_throws(() => invalid_center.subscribe({ name: 'channel32', send: (event) => true,
 	minimum_severity: 'info', types: [], components: [] }), 'INVALID_ARGUMENT');
 
+// URL userinfo contributes raw and percent-decoded aliases before any sink.
+let url_alias_env = make_runtime(900);
+let url_alias_center = notify.create(url_alias_env.runtime, settings());
+let url_alias_optional = [];
+url_alias_center.subscribe({
+	name: 'url-alias-capture', minimum_severity: 'debug', types: [], components: [],
+	send: (event) => { push(url_alias_optional, clone(event)); return true; }
+});
+assert_throws(() => url_alias_center.emit(make_event({
+	dedupe_key: 'failure/pass',
+	message: 'Probe failed at https://user:pass@example.test/path'
+})), 'INVALID_ARGUMENT');
+assert_equal(length(url_alias_center.history()), 0);
+assert_equal(length(url_alias_env.process.calls), 0);
+assert_equal(length(url_alias_env.published), 0);
+assert_equal(length(url_alias_optional), 0);
+
+assert_equal(url_alias_center.emit(make_event({
+	dedupe_key: 'failure/url-alias-safe',
+	title: 'Credentials user pass were rejected',
+	message: 'Probe failed at https://u%73er:p%61ss@example.test/path',
+	context: { aliases: 'user pass u%73er p%61ss' }
+})), true);
+let url_alias_serialized = sprintf('%J', {
+	history: url_alias_center.history(), calls: url_alias_env.process.calls,
+	published: url_alias_env.published, optional: url_alias_optional
+});
+for (let alias in [ 'user', 'pass', 'u%73er', 'p%61ss' ])
+	assert_true(index(url_alias_serialized, alias) < 0,
+		'URL credential alias leaked ' + alias);
+assert_equal(length(url_alias_center.history()), 1);
+assert_equal(length(url_alias_env.process.calls), 1);
+assert_equal(length(url_alias_env.published), 1);
+assert_equal(length(url_alias_optional), 1);
+
+assert_equal(url_alias_center.emit(make_event({
+	dedupe_key: 'failure/url-alias-adjacent',
+	title: 'Adjacent credential aliases were rejected',
+	message: 'https://alpha:bravo@one.test,https://charlie:delta@two.test',
+	context: { aliases: 'alpha bravo charlie delta' }
+})), true);
+let adjacent_url_serialized = sprintf('%J', {
+	history: url_alias_center.history(), calls: url_alias_env.process.calls,
+	published: url_alias_env.published, optional: url_alias_optional
+});
+for (let alias in [ 'alpha', 'bravo', 'charlie', 'delta' ])
+	assert_true(index(adjacent_url_serialized, alias) < 0,
+		'adjacent URL credential alias leaked ' + alias);
+assert_equal(length(url_alias_center.history()), 2);
+assert_equal(length(url_alias_env.process.calls), 2);
+assert_equal(length(url_alias_env.published), 2);
+assert_equal(length(url_alias_optional), 2);
+
+assert_equal(url_alias_center.emit(make_event({
+	dedupe_key: 'failure/url-alias-multiple-at',
+	title: 'Malformed authority credential aliases were rejected',
+	message: 'Probe failed at https://user@proxy:pass@host.test/path',
+	context: { alias: 'pass' }
+})), true);
+let multiple_at_serialized = sprintf('%J', {
+	history: url_alias_center.history(), calls: url_alias_env.process.calls,
+	published: url_alias_env.published, optional: url_alias_optional
+});
+assert_true(index(multiple_at_serialized, 'pass') < 0,
+	'multiple-at URL password alias leaked');
+assert_equal(length(url_alias_center.history()), 3);
+assert_equal(length(url_alias_env.process.calls), 3);
+assert_equal(length(url_alias_env.published), 3);
+assert_equal(length(url_alias_optional), 3);
+
+assert_throws(() => url_alias_center.emit(make_event({
+	dedupe_key: 'failure/url-alias-short',
+	message: 'Short credentials https://u:p@short.test/path',
+	context: { aliases: 'u p' }
+})), 'INVALID_ARGUMENT');
+assert_equal(length(url_alias_center.history()), 3);
+assert_equal(length(url_alias_env.process.calls), 3);
+assert_equal(length(url_alias_env.published), 3);
+assert_equal(length(url_alias_optional), 3);
+
+assert_throws(() => url_alias_center.emit(make_event({
+	dedupe_key: 'failure/alias-case',
+	context: {
+		password: 'authorizationHeader',
+		authorizationHeader: 'other-sensitive-value'
+	}
+})), 'INVALID_ARGUMENT');
+assert_equal(length(url_alias_center.history()), 3);
+assert_equal(length(url_alias_env.process.calls), 3);
+assert_equal(length(url_alias_env.published), 3);
+assert_equal(length(url_alias_optional), 3);
+
+// Sensitive values are strings or fail closed before history and every sink.
+let scalar_secret_env = make_runtime(950);
+let scalar_secret_center = notify.create(scalar_secret_env.runtime, settings());
+let scalar_secret_optional = [];
+scalar_secret_center.subscribe({
+	name: 'scalar-capture', minimum_severity: 'debug', types: [], components: [],
+	send: (event) => { push(scalar_secret_optional, clone(event)); return true; }
+});
+for (let scalar_case in [
+	{ value: 123456, suffix: '123456' },
+	{ value: true, suffix: 'bool' },
+	{ value: null, suffix: 'null' }
+])
+	assert_throws(() => scalar_secret_center.emit(make_event({
+		dedupe_key: 'failure/' + scalar_case.suffix,
+		message: 'Sensitive scalar alias ' + scalar_case.suffix,
+		context: { token: scalar_case.value }
+	})), 'INVALID_ARGUMENT');
+assert_equal(length(scalar_secret_center.history()), 0);
+assert_equal(length(scalar_secret_env.process.calls), 0);
+assert_equal(length(scalar_secret_env.published), 0);
+assert_equal(length(scalar_secret_optional), 0);
+
 // Syslog is argv-only/data-safe, LuCI publishes the same detached redacted event.
 let routed = make_runtime();
 let center = notify.create(routed.runtime, settings());
@@ -204,13 +319,13 @@ let encoded_percent = percent_all(encoded_secret);
 let encoded_mixed = percent_mixed(encoded_secret);
 let source = make_event({
 	title: 'Failure proxy_password=title-password-secret -- $(touch /tmp/pwned)',
-	message: 'Authorization: Bearer message-bearer-secret password=plain-password-secret ' +
+	message: 'Bearer message-bearer-secret password=plain-password-secret ' +
 		'encoded=' + encoded_base64 + ' percent=' + encoded_percent +
 		' mixed=' + encoded_mixed +
-		' See https://user:pass@example.test/path?token=query-secret&safe=yes',
+		' See https://url-user:url-credential@example.test/path?token=query-secret&safe=yes',
 	context: {
 		auth: 'auth-secret',
-		bearer: 'bearer-secret',
+		credential: 'bearer-secret',
 		session: 'session-secret',
 		private_key: 'private-secret',
 		access_key: 'access-secret',
@@ -236,7 +351,7 @@ let source = make_event({
 		nested: [
 			{ authorization: 'Basic header-secret',
 				cookie: 'sid=cookie-secret; csrf="cookie-second-secret"' },
-			{ safe: 'visible', url: 'https://u:p@example.test/a?access_token=url-secret' }
+			{ safe: 'visible', url: 'https://nested-user:nested-pass@example.test/a?access_token=url-secret' }
 		]
 	}
 });
@@ -254,7 +369,7 @@ let logged = logger_event(log_call);
 let luci_event = routed.published[0].event;
 assert_equal(sprintf('%J', logged), sprintf('%J', luci_event));
 assert_equal(logged.context.auth, '[REDACTED]');
-assert_equal(logged.context.bearer, '[REDACTED]');
+assert_equal(logged.context.credential, '[REDACTED]');
 assert_equal(logged.context.session, '[REDACTED]');
 assert_equal(logged.context.private_key, '[REDACTED]');
 assert_equal(logged.context.access_key, '[REDACTED]');
@@ -279,7 +394,7 @@ assert_equal(logged.context.nested[0].authorization, '[REDACTED]');
 assert_equal(logged.context.nested[0].cookie, '[REDACTED]');
 assert_equal(logged.context.nested[1].safe, 'visible');
 assert_equal(logged.message,
-	'Authorization: [REDACTED] [REDACTED] password=[REDACTED] ' +
+	'Bearer [REDACTED] password=[REDACTED] ' +
 	'encoded=[REDACTED] percent=[REDACTED] mixed=[REDACTED] ' +
 	'See https://***:***@example.test/path?token=***&safe=yes');
 assert_equal(logged.context.nested[1].url,
@@ -295,7 +410,9 @@ for (let secret in [ 'auth-secret', 'bearer-secret', 'session-secret', 'private-
 	'camel-api-secret', 'camel-proxy-password', 'camel-authorization-header',
 	'camel-session-id', 'camel-cookie-value', 'camel-bearer-token', 'acronym-api-key',
 	'title-password-secret', 'message-bearer-secret', 'plain-password-secret',
-	encoded_secret, encoded_base64, encoded_percent, encoded_mixed, 'user:pass', 'u:p' ])
+	encoded_secret, encoded_base64, encoded_percent, encoded_mixed,
+	'url-user:url-credential',
+	'nested-user:nested-pass' ])
 	assert_true(index(serialized, secret) < 0, 'notification boundary leaked ' + secret);
 assert_equal(length(optional_events), 1);
 assert_equal(length(routed.process.calls), 1, 'event data never becomes an executable command');

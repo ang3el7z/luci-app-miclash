@@ -173,6 +173,10 @@ let cookie_first = 'cookie-first-secret';
 let cookie_second = 'cookie-second-secret';
 let percent_secret = 'fully-percent-secret';
 let urlsafe_secret = 'url-safe-secret-??>>';
+let camel_api_secret = 'camel-api-secret';
+let camel_proxy_password = 'camel-proxy-password';
+let acronym_api_key = 'acronym-api-key';
+let compound_authorization = 'compound-authorization-header';
 let boundary_sources = { ...sources,
 	settings: () => ({ core: { subscription_url: '' }, telegram: {
 		enabled: false, token: '', user_id: '' } }),
@@ -182,6 +186,10 @@ let boundary_sources = { ...sources,
 		session: session_secret,
 		private_key: private_key_secret,
 		access_key: access_key_secret,
+		apiSecret: camel_api_secret,
+		proxyPassword: camel_proxy_password,
+		xAPIKey: acronym_api_key,
+		authorizationHeader: compound_authorization,
 		credential: { nested: [ nested_secret ] },
 		token: [ percent_secret, urlsafe_secret ]
 	} }),
@@ -190,7 +198,8 @@ let boundary_sources = { ...sources,
 		'Cookie: sid=' + cookie_first + '; csrf="' + cookie_second + '"' }),
 	logs: () => [
 		'aliases=' + join(',', [ auth_secret, bearer_key_secret, session_secret,
-			private_key_secret, access_key_secret, nested_secret ]),
+			private_key_secret, access_key_secret, nested_secret, camel_api_secret,
+			camel_proxy_password, acronym_api_key, compound_authorization ]),
 		'basic-alias=' + basic_secret,
 		'cookie-aliases=' + cookie_first + ',' + cookie_second,
 		'fully-percent=' + full_percent_lower(percent_secret),
@@ -203,6 +212,7 @@ let boundary_report = boundary_center.read_report({
 });
 for (let secret in [ auth_secret, bearer_key_secret, session_secret,
 	private_key_secret, access_key_secret, nested_secret, basic_secret,
+	camel_api_secret, camel_proxy_password, acronym_api_key, compound_authorization,
 	cookie_first, cookie_second, full_percent_lower(percent_secret),
 	urlsafe_unpadded_base64(urlsafe_secret) ])
 	assert_true(index(boundary_report.content, secret) < 0,
