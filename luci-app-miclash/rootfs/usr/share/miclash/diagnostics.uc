@@ -6,6 +6,12 @@ const TTL = 900000;
 const MAX_REPORT = 131072;
 const RETENTION = 5;
 const MAX_ROOT_ENTRIES = 32;
+const MAX_DEPTH = 16;
+const MAX_NODES = 4096;
+const MAX_INPUT = 131072;
+const MAX_STRING = 16384;
+const MAX_RAW_SECRETS = 64;
+const MAX_SECRET_VARIANTS = 256;
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
 function clone(value) {
@@ -21,27 +27,94 @@ function secret_key(name) {
 	return match(name, /(password|passwd|secret|token|authorization|cookie|credential|api_key|subscription_url)$/);
 };
 function add_secret(secrets, value) {
-	if (type(value) != 'string' || !length(value) || length(value) > 4096)
+	if (type(value) != 'string' || !length(value) || length(value) > MAX_STRING ||
+		value == redact.MASK || value == '***')
 		return;
 	for (let existing in secrets)
 		if (existing == value)
 			return;
+	if (length(secrets) >= MAX_RAW_SECRETS) errors.fail('RESPONSE_TOO_LARGE');
 	push(secrets, value);
 };
-function discover(secrets, value, key) {
-	if (secret_key(key))
-		add_secret(secrets, value);
-	if (type(value) == 'array')
-		for (let item in value) discover(secrets, item, null);
-	else if (type(value) == 'object')
-		for (let name, item in value) discover(secrets, item, name);
-	else if (type(value) == 'string') {
-		let named = match(value,
-			/(password|passwd|secret|token|api[-_]?key|authorization|cookie)[=:][ \t]*([^ \t\r\n,;]+)/i);
-		if (named != null) add_secret(secrets, named[2]);
-		let bearer = match(value, /Bearer[ \t]+([^ \t\r\n,;]+)/i);
-		if (bearer != null) add_secret(secrets, bearer[1]);
+function discover_marker(secrets, input, marker) {
+	let lowered = lc(input), offset = 0;
+	while (offset < length(input)) {
+		let relative = index(substr(lowered, offset), marker);
+		if (relative < 0) return;
+		let start = offset + relative + length(marker);
+		while (start < length(input) && match(substr(input, start, 1), /[ \t]/)) start++;
+		let end = start;
+		while (end < length(input) &&
+		       !match(substr(input, end, 1), /[[:space:],;'"<>]/)) end++;
+		if (end > start) add_secret(secrets, substr(input, start, end - start));
+		offset = max(end, offset + relative + length(marker));
 	}
+};
+function discover_text(secrets, input) {
+	for (let marker in [ 'bearer ', 'password=', 'password:', 'passwd=', 'passwd:',
+		'secret=', 'secret:', 'token=', 'token:', 'api_key=', 'api_key:',
+		'api-key=', 'api-key:', 'authorization=', 'authorization:',
+		'cookie=', 'cookie:' ])
+		discover_marker(secrets, input, marker);
+};
+function validate_and_discover(value) {
+	let secrets = [], stack = [ { value, key: null, depth: 0 } ];
+	let nodes = 0, aggregate = 0;
+	while (length(stack)) {
+		let item = pop(stack), kind = type(item.value);
+		if (item.depth > MAX_DEPTH || ++nodes > MAX_NODES)
+			errors.fail('RESPONSE_TOO_LARGE');
+		if (type(item.key) == 'string') {
+			if (length(item.key) > MAX_STRING) errors.fail('RESPONSE_TOO_LARGE');
+			aggregate += length(item.key);
+			discover_text(secrets, item.key);
+			if (secret_key(item.key) && type(item.value) == 'string')
+				add_secret(secrets, item.value);
+		}
+		if (kind == 'string') {
+			if (length(item.value) > MAX_STRING) errors.fail('RESPONSE_TOO_LARGE');
+			aggregate += length(item.value);
+			discover_text(secrets, item.value);
+		}
+		else if (kind == 'array')
+			for (let child in item.value)
+				push(stack, { value: child, key: null, depth: item.depth + 1 });
+		else if (kind == 'object')
+			for (let name, child in item.value)
+				push(stack, { value: child, key: name, depth: item.depth + 1 });
+		else if (kind != 'null' && kind != 'bool' && kind != 'int' && kind != 'double')
+			errors.fail('INVALID_RESPONSE');
+		if (aggregate > MAX_INPUT) errors.fail('RESPONSE_TOO_LARGE');
+	}
+	return secrets;
+};
+function percent_variant(value, encode_all) {
+	let output = '';
+	for (let offset = 0; offset < length(value); offset++) {
+		let character = substr(value, offset, 1);
+		output += !encode_all && match(character, /^[A-Za-z0-9_.~-]$/) ?
+			character : sprintf('%%%02X', ord(value, offset));
+	}
+	return output;
+};
+function variants(raw) {
+	let output = [];
+	function add(value) {
+		if (type(value) != 'string' || !length(value) || length(value) > MAX_INPUT)
+			return;
+		for (let existing in output) if (existing == value) return;
+		if (length(output) >= MAX_SECRET_VARIANTS) errors.fail('RESPONSE_TOO_LARGE');
+		push(output, value);
+	};
+	for (let secret in raw) {
+		add(secret);
+		add(percent_variant(secret, false));
+		add(lc(percent_variant(secret, false)));
+		add(percent_variant(secret, true));
+		try { add(b64enc(secret)); } catch (error) {}
+	}
+	sort(output, (left, right) => length(right) - length(left));
+	return output;
 };
 function replace_all(input, wanted, replacement) {
 	if (!length(wanted)) return input;
@@ -53,27 +126,34 @@ function replace_all(input, wanted, replacement) {
 		rest = substr(rest, position + length(wanted));
 	}
 };
-function scrub(value, secrets) {
-	if (type(value) == 'array') {
-		let output = [];
-		for (let item in value) push(output, scrub(item, secrets));
-		return output;
-	}
-	if (type(value) == 'object') {
-		let output = {};
-		for (let name, item in value) output[name] = scrub(item, secrets);
-		return output;
-	}
-	if (type(value) != 'string') return value;
+function scrub_string(value, secrets) {
 	let output = redact.text(value);
 	for (let secret in secrets)
 		output = replace_all(output, secret, redact.MASK);
 	return output;
 };
+function scrub(value, secrets, depth) {
+	if (type(value) == 'array') {
+		let output = [];
+		for (let item in value) push(output, scrub(item, secrets, depth + 1));
+		return output;
+	}
+	if (type(value) == 'object') {
+		let output = {};
+		for (let name, item in value) {
+			let safe_name = scrub_string(name, secrets);
+			if (exists(output, safe_name)) errors.fail('INVALID_RESPONSE');
+			output[safe_name] = secret_key(name) ? redact.MASK :
+				scrub(item, secrets, depth + 1);
+		}
+		return output;
+	}
+	if (type(value) != 'string') return value;
+	return scrub_string(value, secrets);
+};
 function sanitize(value) {
-	let secrets = [];
-	discover(secrets, value, null);
-	let safe = scrub(redact.value('diagnostics', value), secrets);
+	let secrets = variants(validate_and_discover(value));
+	let safe = scrub(value, secrets, 0);
 	if (length(sprintf('%J', safe)) > MAX_REPORT)
 		errors.fail('RESPONSE_TOO_LARGE');
 	return safe;

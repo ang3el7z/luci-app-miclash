@@ -6,6 +6,20 @@ import * as fakes from 'fakes';
 function fixture(name) {
 	return json(require('fs').readfile('tests/fixtures/diagnostics/' + name));
 };
+function repeated(value, count) {
+	let output = '';
+	for (let index = 0; index < count; index++) output += value;
+	return output;
+};
+function percent_encoded(value) {
+	let output = '';
+	for (let offset = 0; offset < length(value); offset++) {
+		let byte = ord(value, offset);
+		let character = substr(value, offset, 1);
+		output += match(character, /^[A-Za-z0-9_.~-]$/) ? character : sprintf('%%%02X', byte);
+	}
+	return output;
+};
 
 let secrets = fixture('secret-corpus.json');
 let filesystem = fakes.fs({});
@@ -99,6 +113,69 @@ assert_equal(status_summary.telegram.configured, false);
 assert_equal(status_summary.subscription.configured, true);
 assert_equal(status_summary.subscription.transport, 'http');
 assert_equal(status_summary.subscription.insecure, true);
+
+// Redaction is a closed, bounded boundary: all secret occurrences and safe
+// encodings disappear from both keys and values before serialization.
+let encoded_secret = 'encoded/secret+value=';
+let overlap_short = 'overlap-secret';
+let overlap_long = 'overlap-secret-tail';
+let bearer_first = 'first-bearer-secret';
+let bearer_late = 'late-bearer-secret';
+let long_secret = repeated('long-secret-', 500) + 'end';
+let adversarial_sources = { ...sources,
+	settings: () => ({ core: { subscription_url: '' }, telegram: {
+		enabled: true, token: encoded_secret, user_id: '42' } }),
+	uci: () => ({ auth: { password: long_secret, api_key: overlap_short,
+		access_token: overlap_long } }),
+	state: () => ({ desired: { [encoded_secret]: 'key-value' }, observed: {} }),
+	logs: () => [
+		'Bearer ' + bearer_first + ' ignored Bearer ' + bearer_late,
+		'percent=' + percent_encoded(encoded_secret),
+		'base64=' + b64enc(encoded_secret),
+		'overlap=' + overlap_long + ' and ' + overlap_short,
+		'long=' + long_secret
+	],
+	process: () => ({ stderr: 'Bearer ' + bearer_first }),
+	operations: () => [ { authorization: 'Bearer ' + bearer_first } ]
+};
+let adversarial_center = diagnostics.create({ runtime, sources: adversarial_sources });
+let adversarial_report = adversarial_center.read_report({
+	id: adversarial_center.create_report().id, format: 'json'
+});
+for (let secret in [ encoded_secret, percent_encoded(encoded_secret),
+	b64enc(encoded_secret), bearer_first, bearer_late, long_secret,
+	overlap_short, overlap_long, '-tail' ])
+	assert_true(index(adversarial_report.content, secret) < 0,
+		'adversarial report leaked ' + substr(secret, 0, 32));
+assert_true(index(adversarial_report.content, encoded_secret) < 0,
+	'object key secret is scrubbed');
+
+let collision_sources = { ...sources,
+	settings: () => ({ core: { subscription_url: '' }, telegram: {
+		enabled: true, token: encoded_secret, user_id: '42' } }),
+	state: () => ({ desired: {
+		[encoded_secret]: 'one',
+		'[REDACTED]': 'two'
+	}, observed: {} })
+};
+let collision_center_redaction = diagnostics.create({
+	runtime, sources: collision_sources
+});
+assert_throws(() => collision_center_redaction.summary(), 'INVALID_RESPONSE');
+
+let deep = { leaf: true };
+for (let depth = 0; depth < 20; depth++) deep = { child: deep };
+let deep_center = diagnostics.create({ runtime,
+	sources: { ...sources, state: () => deep } });
+assert_throws(() => deep_center.summary(), 'RESPONSE_TOO_LARGE');
+let many = [];
+for (let index = 0; index < 4200; index++) push(many, index);
+let many_center = diagnostics.create({ runtime,
+	sources: { ...sources, state: () => many } });
+assert_throws(() => many_center.summary(), 'RESPONSE_TOO_LARGE');
+let huge_center = diagnostics.create({ runtime,
+	sources: { ...sources, logs: () => [ repeated('x', 20000) ] } });
+assert_throws(() => huge_center.summary(), 'RESPONSE_TOO_LARGE');
 
 let created = center.create_report();
 assert_true(match(created.id, /^rpt_[0-9a-f]{32}$/));
