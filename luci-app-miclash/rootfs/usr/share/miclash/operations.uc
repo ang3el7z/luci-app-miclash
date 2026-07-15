@@ -11,9 +11,16 @@ const STATES = {
 const FILTERS = { state: true, kind: true, source: true };
 const RECORD_FIELDS = {
 	id: true, kind: true, source: true, state: true, stage: true, progress: true,
+	message: true, error: true, created_at: true, updated_at: true, finished_at: true,
+	timeline: true, result: true
+};
+const LEGACY_RECORD_FIELDS = {
+	id: true, kind: true, source: true, state: true, stage: true, progress: true,
 	message: true, error: true, created_at: true, updated_at: true, finished_at: true
 };
 const ERROR_FIELDS = { code: true, message: true, detail: true };
+const TIMELINE_FIELDS = { stage: true, at: true };
+const RESULT_FIELDS = { interval_hours: true };
 const ERROR_CODES = {};
 for (let code in errors.CODES)
 	ERROR_CODES[code] = true;
@@ -83,7 +90,8 @@ function exact_fields(value, allowed, required_count) {
 };
 
 function valid_disk_record(record, filename) {
-	if (!exact_fields(record, RECORD_FIELDS, 11) ||
+	let legacy = exact_fields(record, LEGACY_RECORD_FIELDS, 11);
+	if ((!legacy && !exact_fields(record, RECORD_FIELDS, 13)) ||
 	    type(record.id) != 'string' ||
 	    !match(record.id, /^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$/) ||
 	    filename != record.id + '.json' ||
@@ -99,6 +107,31 @@ function valid_disk_record(record, filename) {
 	    type(record.created_at) != 'int' || record.created_at < 0 ||
 	    type(record.updated_at) != 'int' || record.updated_at < record.created_at)
 		return false;
+	if (!legacy) {
+		if (type(record.timeline) != 'array' || length(record.timeline) < 1 ||
+		    length(record.timeline) > 32 || record.result != null &&
+		    (record.kind != 'subscription.update' ||
+		     !exact_fields(record.result, RESULT_FIELDS, 1) ||
+		     (record.result.interval_hours != null &&
+		      (type(record.result.interval_hours) != 'int' ||
+		       record.result.interval_hours < 1 || record.result.interval_hours > 8760))))
+			return false;
+		let previous = record.created_at;
+		for (let index, item in record.timeline) {
+			if (!exact_fields(item, TIMELINE_FIELDS, 2) ||
+			    type(item.stage) != 'string' || !length(item.stage) ||
+			    length(item.stage) > 64 || unsafe_text(item.stage) ||
+			    !match(item.stage, /^[A-Za-z0-9][A-Za-z0-9._-]*$/) ||
+			    type(item.at) != 'int' || item.at < previous || item.at > record.updated_at ||
+			    (index == 0 && (item.stage != 'queued' || item.at != record.created_at)))
+				return false;
+			previous = item.at;
+		}
+		if (record.timeline[length(record.timeline) - 1].stage != record.stage ||
+		    (record.state == 'success' && record.kind == 'subscription.update' &&
+		     record.result == null))
+			return false;
+	}
 
 	let error_valid = record.error == null;
 	if (record.error != null) {
@@ -314,6 +347,11 @@ export function create(runtime) {
 		// A failed finish remains fail-closed and cannot replay its old context.
 		delete live_contexts[entry.id];
 		let record = clone(records[entry.id]);
+		if (state == 'success' && record.kind == 'subscription.update' &&
+		    record.result == null) {
+			state = 'failure';
+			error = errors.new('INTERNAL', 'Internal error');
+		}
 		record.state = state;
 		record.updated_at = runtime.clock.now();
 		record.finished_at = record.updated_at;
@@ -360,9 +398,27 @@ export function create(runtime) {
 				staged.progress = progress;
 				staged.message = safe_message(message);
 				staged.updated_at = runtime.clock.now();
+				if (length(staged.timeline) >= 32)
+					invalid();
+				push(staged.timeline, { stage: staged.stage, at: staged.updated_at });
 				persist(staged);
 				publish(records[entry.id]);
 				return public_record(records[entry.id]);
+			},
+			result: (value) => {
+				let current = records[entry.id];
+				if (entry.finished || current.state != 'running' ||
+				    current.kind != 'subscription.update' || current.result != null ||
+				    !exact_fields(value, RESULT_FIELDS, 1) ||
+				    (value.interval_hours != null &&
+				     (type(value.interval_hours) != 'int' ||
+				      value.interval_hours < 1 || value.interval_hours > 8760)))
+					invalid();
+				let staged = clone(current);
+				staged.result = { interval_hours: value.interval_hours };
+				staged.updated_at = runtime.clock.now();
+				persist(staged);
+				return clone(staged.result);
 			},
 			complete: (error) => finish(entry, error == null ? 'success' : 'failure', error)
 		};
@@ -388,10 +444,11 @@ export function create(runtime) {
 			return false;
 		return live_contexts[ctx.id] === ctx && records[ctx.id]?.state == 'running';
 	};
-	manager.submit = (kind, source, context, worker) => {
+	manager.submit = (kind, source, context, worker, pre_enqueue) => {
 		kind = safe_kind(kind);
 		source = safe_source(source);
-		if (type(context) != 'object' || type(worker) != 'function')
+		if (type(context) != 'object' || type(worker) != 'function' ||
+		    (pre_enqueue != null && type(pre_enqueue) != 'function'))
 			invalid();
 		let id = operation_id(runtime, records);
 		let now = runtime.clock.now();
@@ -406,7 +463,9 @@ export function create(runtime) {
 			error: null,
 			created_at: now,
 			updated_at: now,
-			finished_at: null
+			finished_at: null,
+			timeline: [ { stage: 'queued', at: now } ],
+			result: null
 		};
 		// Persist before making the operation runnable. A failed initial journal
 		// write leaves no in-memory operation and never invokes the worker.
@@ -414,6 +473,13 @@ export function create(runtime) {
 		live_started = true;
 		let entry = { id, worker, finished: false };
 		publish(records[id]);
+		if (pre_enqueue != null) {
+			try { pre_enqueue(public_record(records[id])); }
+			catch (error) {
+				finish(entry, 'failure', error);
+				return public_record(records[id]);
+			}
+		}
 		push(mutation_queue, entry);
 		schedule_mutation();
 		return public_record(records[id]);
@@ -490,6 +556,14 @@ export function create(runtime) {
 			let record = storage.read_json(runtime, journal + '/' + name);
 			if (!valid_disk_record(record, name))
 				corrupt();
+			if (record.timeline == null) {
+				record.timeline = [
+					{ stage: 'queued', at: record.created_at },
+					...(record.stage == 'queued' ? [] :
+						[ { stage: record.stage, at: record.updated_at } ])
+				];
+				record.result = null;
+			}
 			let prepared = clone(redact.value('operation', record));
 			if (record.state == 'running' || record.state == 'queued') {
 				let finished = runtime.clock.now();
@@ -501,6 +575,7 @@ export function create(runtime) {
 				prepared.error = errors.new('INTERRUPTED', 'INTERRUPTED', null);
 				prepared.updated_at = finished;
 				prepared.finished_at = finished;
+				push(prepared.timeline, { stage: 'interrupted', at: finished });
 				recovered++;
 			}
 			push(staged, { record: prepared, changed: record.state == 'running' || record.state == 'queued' });

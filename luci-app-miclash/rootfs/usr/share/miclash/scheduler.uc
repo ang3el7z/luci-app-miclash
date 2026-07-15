@@ -3,9 +3,11 @@ import * as schema from 'miclash.schema';
 import * as storage from 'miclash.storage';
 
 const STATE_PATH = '/opt/clash/subscription-scheduler.json';
+const STATE_PARENT = '/opt/clash';
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const MAX_INTERVAL_HOURS = 8760;
+const MAX_TIMESTAMP = 253402300799999;
 const STATE_FIELDS = {
 	version: true,
 	last_attempt: true,
@@ -19,11 +21,20 @@ const STATE_FIELDS = {
 	last_failure_code: true,
 	interval_hours: true,
 	pending_operation_id: true,
-	observed_at: true
+	observed_at: true,
+	clock_ceiling: true
+};
+const STAGE_INDEX = {
+	queued: 0, attempt: 1, download: 2, validation: 3,
+	activation: 4, reload: 5, interrupted: 6
 };
 
 function invalid() {
 	errors.fail('INVALID_ARGUMENT');
+};
+
+function corrupt() {
+	errors.fail('CORRUPT_STATE');
 };
 
 function clone(value) {
@@ -32,7 +43,8 @@ function clone(value) {
 };
 
 function timestamp(value) {
-	return value == null || (type(value) == 'int' && value >= 0);
+	return value == null || (type(value) == 'int' && value >= 0 &&
+		value <= MAX_TIMESTAMP);
 };
 
 function interval(value) {
@@ -46,8 +58,6 @@ function operation_id(value) {
 };
 
 function safe_error_code(value) {
-	if (value == null)
-		return null;
 	if (type(value) == 'string')
 		for (let candidate in errors.CODES)
 			if (candidate == value)
@@ -64,6 +74,54 @@ function known_error_code(value) {
 	return false;
 };
 
+function same_node(left, right) {
+	return left?.type != null && left.type == right?.type && left.inode == right?.inode &&
+		left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
+};
+
+function same_identity(left, right) {
+	return same_node(left, right) && left.nlink == right.nlink &&
+		left.size == right.size && left.mode == right.mode && left.uid == right.uid;
+};
+
+function secure_parent(runtime) {
+	let value = runtime.fs.lstat(STATE_PARENT);
+	if (value?.type != 'directory' || runtime.fs.realpath(STATE_PARENT) != STATE_PARENT ||
+	    type(value.mode) != 'int' || (value.mode & 0o022) != 0 ||
+	    (value.uid != null && value.uid != 0))
+		corrupt();
+	return value;
+};
+
+function secure_read(runtime) {
+	let parent_before = secure_parent(runtime);
+	let before = runtime.fs.lstat(STATE_PATH);
+	if (before == null) {
+		let parent_after = secure_parent(runtime);
+		if (!same_identity(parent_before, parent_after))
+			corrupt();
+		return null;
+	}
+	if (before.type != 'file' || before.nlink != 1 || before.mode != 0o600 ||
+	    (before.uid != null && before.uid != 0) ||
+	    runtime.fs.realpath(STATE_PATH) != STATE_PATH)
+		corrupt();
+	let content = runtime.fs.readfile(STATE_PATH);
+	let after = runtime.fs.lstat(STATE_PATH);
+	let content_hash = type(content) == 'string' ? runtime.digest.sha256(content) : null;
+	let file_hash = runtime.digest.sha256_file(STATE_PATH);
+	let final = runtime.fs.lstat(STATE_PATH);
+	let parent_after = secure_parent(runtime);
+	if (type(content) != 'string' || length(content) != before.size ||
+	    content_hash == null || content_hash != file_hash ||
+	    !same_identity(before, after) || !same_identity(after, final) ||
+	    !same_identity(parent_before, parent_after) ||
+	    runtime.fs.realpath(STATE_PATH) != STATE_PATH)
+		corrupt();
+	try { return json(content); }
+	catch (error) { corrupt(); }
+};
+
 function initial_state(now) {
 	return {
 		version: 1,
@@ -78,32 +136,57 @@ function initial_state(now) {
 		last_failure_code: null,
 		interval_hours: null,
 		pending_operation_id: null,
-		observed_at: now
+		observed_at: now,
+		clock_ceiling: now
 	};
 };
 
 function validate_state(value) {
 	if (type(value) != 'object')
-		errors.fail('CORRUPT_STATE');
+		corrupt();
 	let fields = 0;
 	for (let name in value) {
 		if (!exists(STATE_FIELDS, name))
-			errors.fail('CORRUPT_STATE');
+			corrupt();
 		fields++;
 	}
-	if (fields != 13 || value.version != 1 ||
+	if (fields != 14 || value.version != 1 ||
 	    !timestamp(value.last_attempt) || !timestamp(value.last_download) ||
 	    !timestamp(value.last_validation) || !timestamp(value.last_activation) ||
 	    !timestamp(value.last_reload) || !timestamp(value.last_success) ||
 	    !timestamp(value.next_attempt) || !timestamp(value.observed_at) ||
+	    !timestamp(value.clock_ceiling) || value.observed_at == null ||
+	    value.clock_ceiling == null || value.observed_at > value.clock_ceiling ||
 	    type(value.failure_count) != 'int' || value.failure_count < 0 ||
 	    value.failure_count > 1000000 ||
-	    (value.last_failure_code != null &&
-	     !known_error_code(value.last_failure_code)) ||
-	    (value.interval_hours != null && !interval(value.interval_hours)))
-		errors.fail('CORRUPT_STATE');
+	    (value.failure_count == 0) != (value.last_failure_code == null) ||
+	    (value.last_failure_code != null && !known_error_code(value.last_failure_code)) ||
+	    (value.interval_hours != null && !interval(value.interval_hours)) ||
+	    (value.last_success == null) != (value.interval_hours == null))
+		corrupt();
 	try { operation_id(value.pending_operation_id); }
-	catch (error) { errors.fail('CORRUPT_STATE'); }
+	catch (error) { corrupt(); }
+	if (value.pending_operation_id != null && value.next_attempt == null)
+		corrupt();
+
+	let previous = null, missing = false;
+	for (let stamp in [ value.last_attempt, value.last_download,
+		value.last_validation, value.last_activation, value.last_reload ]) {
+		if (stamp == null)
+			missing = true;
+		else if (missing || (previous != null && stamp < previous) ||
+		         stamp > value.clock_ceiling)
+			corrupt();
+		else
+			previous = stamp;
+	}
+	if (value.last_success != null) {
+		if (value.last_attempt == null || value.last_success > value.clock_ceiling)
+			corrupt();
+		if (value.failure_count == 0 && value.pending_operation_id == null &&
+		    (value.last_reload == null || value.last_success < value.last_reload))
+			corrupt();
+	}
 	return value;
 };
 
@@ -115,40 +198,60 @@ function retry_minutes(failure_count) {
 	return 60;
 };
 
+function timeline(record) {
+	if (type(record?.timeline) != 'array' || length(record.timeline) < 1 ||
+	    length(record.timeline) > 32)
+		corrupt();
+	let previous_index = -1, previous_at = null, values = {};
+	for (let position, item in record.timeline) {
+		let index = STAGE_INDEX[item?.stage];
+		if (index == null || type(item.at) != 'int' || !timestamp(item.at) ||
+		    (position == 0 && item.stage != 'queued') ||
+		    (previous_at != null && item.at < previous_at) ||
+		    index <= previous_index || (item.stage == 'interrupted' &&
+		    position != length(record.timeline) - 1))
+			corrupt();
+		previous_index = index;
+		previous_at = item.at;
+		values[item.stage] = item.at;
+	}
+	return values;
+};
+
 export function create(app) {
 	if (type(app?.runtime?.fs) != 'object' ||
 	    type(app?.runtime?.clock?.now) != 'function' ||
 	    type(app?.runtime?.clock?.set_timeout) != 'function' ||
 	    type(app?.runtime?.digest?.sha256) != 'function' ||
 	    type(app?.runtime?.digest?.sha256_file) != 'function' ||
-	    type(app?.operations?.submit) != 'function' ||
 	    type(app?.operations?.get) != 'function' ||
 	    type(app?.operations?.list) != 'function' ||
 	    type(app?.operations?.subscribe) != 'function' ||
 	    type(app?.settings?.get) != 'function' ||
-	    type(app?.subscription?.update) != 'function' ||
-	    type(app?.subscription?.consume_scheduler_outcome) != 'function')
+	    type(app?.subscription?.update_scheduled) != 'function')
 		invalid();
 
 	let runtime = app.runtime;
 	let now = runtime.clock.now();
-	if (type(now) != 'int' || now < 0)
+	if (!timestamp(now) || now == null)
 		errors.fail('INTERNAL');
-	let state;
-	try { state = validate_state(storage.read_json(runtime, STATE_PATH)); }
-	catch (error) {
-		if (errors.normalize(error).code != 'NOT_FOUND')
-			errors.fail(errors.normalize(error).code);
-		state = initial_state(now);
-	}
-
+	let stored = secure_read(runtime);
+	let state = stored == null ? initial_state(now) : validate_state(stored);
 	let started = false;
 	let timer = null;
 	let unsubscribe = null;
+	let api = {};
 
 	function persist() {
 		validate_state(state);
+		// Refuse to overwrite a path whose authority changed after construction.
+		let existing = secure_read(runtime);
+		if (existing != null)
+			validate_state(existing);
 		storage.write_json(runtime, STATE_PATH, state, 0o600);
+		let verified = validate_state(secure_read(runtime));
+		if (sprintf('%J', verified) != sprintf('%J', state))
+			errors.fail('INTERNAL');
 	};
 
 	function settings_state() {
@@ -171,17 +274,17 @@ export function create(app) {
 
 	function observe_clock() {
 		let current = runtime.clock.now();
-		if (type(current) != 'int' || current < 0)
+		if (!timestamp(current) || current == null)
 			errors.fail('INTERNAL');
-		if (state.observed_at != null && current < state.observed_at) {
-			if (state.next_attempt != null) {
-				let remaining = state.next_attempt - state.observed_at;
-				if (remaining < MINUTE)
-					remaining = MINUTE;
-				state.next_attempt = current + remaining;
-			}
+		if (current < state.observed_at && state.next_attempt != null) {
+			let remaining = state.next_attempt - state.observed_at;
+			if (remaining < MINUTE)
+				remaining = MINUTE;
+			state.next_attempt = current + remaining;
 		}
 		state.observed_at = current;
+		if (current > state.clock_ceiling)
+			state.clock_ceiling = current;
 		return current;
 	};
 
@@ -208,38 +311,50 @@ export function create(app) {
 	};
 
 	function mark_failure(code, finished_at) {
-		code = safe_error_code(code);
 		state.failure_count++;
 		if (state.failure_count > 1000000)
 			state.failure_count = 1000000;
-		state.last_failure_code = code;
+		state.last_failure_code = safe_error_code(code);
 		state.pending_operation_id = null;
 		state.next_attempt = finished_at + retry_minutes(state.failure_count) * MINUTE;
 		state.observed_at = finished_at;
+		if (finished_at > state.clock_ceiling)
+			state.clock_ceiling = finished_at;
 	};
 
-	function outcome_for(id) {
-		try { return app.subscription.consume_scheduler_outcome(id); }
-		catch (error) { return null; }
+	function apply_timeline(record) {
+		let stages = timeline(record);
+		if (stages.attempt == null)
+			return stages;
+		state.last_attempt = stages.attempt;
+		state.last_download = stages.download ?? null;
+		state.last_validation = stages.validation ?? null;
+		state.last_activation = stages.activation ?? null;
+		state.last_reload = stages.reload ?? null;
+		for (let name in [ 'attempt', 'download', 'validation', 'activation', 'reload' ])
+			if (stages[name] != null && stages[name] > state.clock_ceiling)
+				state.clock_ceiling = stages[name];
+		return stages;
 	};
 
 	function finish(record) {
+		let stages = apply_timeline(record);
 		let finished = record?.finished_at;
 		if (!timestamp(finished) || finished == null)
-			finished = observe_clock();
-		let outcome = outcome_for(record.id);
+			corrupt();
 		state.pending_operation_id = null;
+		if (finished > state.clock_ceiling)
+			state.clock_ceiling = finished;
 		if (record.state == 'success') {
-			let trusted = outcome == null ? record.stage == 'reload' :
-				outcome.downloaded === true && outcome.validated === true &&
-				outcome.activated === true && outcome.reload_ok === true;
-			if (!trusted) {
-				mark_failure('INTERNAL', finished);
-				return;
-			}
+			if (stages.attempt == null || stages.download == null ||
+			    stages.validation == null || stages.activation == null ||
+			    stages.reload == null || record.stage != 'reload' ||
+			    type(record.result) != 'object' ||
+			    (record.result.interval_hours != null &&
+			     !interval(record.result.interval_hours)))
+				corrupt();
 			let configured = settings_state();
-			let hours = interval(outcome?.interval_hours) ? outcome.interval_hours :
-				(configured.hours ?? state.interval_hours);
+			let hours = record.result.interval_hours ?? configured.hours;
 			if (!interval(hours)) {
 				mark_failure('INTERNAL', finished);
 				return;
@@ -254,13 +369,6 @@ export function create(app) {
 		}
 		let code = record?.error?.code ??
 			(record.state == 'interrupted' ? 'INTERRUPTED' : 'INTERNAL');
-		if (code == 'VALIDATION_FAILED' && state.last_validation == null)
-			state.last_validation = finished;
-		if (code == 'HEALTH_FAILED') {
-			if (state.last_activation == null)
-				state.last_activation = finished;
-			state.last_reload = finished;
-		}
 		mark_failure(code, finished);
 	};
 
@@ -269,19 +377,17 @@ export function create(app) {
 		    record?.id != state.pending_operation_id ||
 		    record.kind != 'subscription.update' || record.source != 'auto')
 			return;
+		apply_timeline(record);
 		let at = record.updated_at;
 		if (!timestamp(at) || at == null)
-			return;
-		if (record.stage == 'attempt') state.last_attempt = at;
-		else if (record.stage == 'download') state.last_download = at;
-		else if (record.stage == 'validation') state.last_validation = at;
-		else if (record.stage == 'activation') state.last_activation = at;
-		else if (record.stage == 'reload') state.last_reload = at;
+			corrupt();
 		if (record.state == 'success' || record.state == 'failure' ||
 		    record.state == 'interrupted')
 			finish(record);
 		state.observed_at = at;
-	persist();
+		if (at > state.clock_ceiling)
+			state.clock_ceiling = at;
+		persist();
 		schedule_timer();
 	};
 
@@ -298,25 +404,30 @@ export function create(app) {
 		let record = null;
 		try { record = app.operations.get(state.pending_operation_id); }
 		catch (error) {}
+		if (record != null && (!timestamp(record.created_at) || record.created_at == null ||
+		    record.created_at > state.clock_ceiling ||
+		    state.next_attempt < record.created_at))
+			corrupt();
 		if (record?.kind == 'subscription.update' && record.source == 'auto' &&
-		    (record.state == 'queued' || record.state == 'running'))
+		    (record.state == 'queued' || record.state == 'running')) {
+			apply_timeline(record);
+			persist();
 			return;
+		}
 		if (record?.kind == 'subscription.update' && record.source == 'auto' &&
 		    (record.state == 'success' || record.state == 'failure' ||
 		     record.state == 'interrupted'))
 			finish(record);
-		else {
-			outcome_for(state.pending_operation_id);
+		else
 			mark_failure('INTERRUPTED', recovered_at);
-		}
 		persist();
 	};
 
 	attach();
 	recover_pending(now);
 
-	let api = {};
-	api.start = () => {
+	api.start = (...args) => {
+		if (length(args)) invalid();
 		if (started)
 			return false;
 		started = true;
@@ -325,7 +436,8 @@ export function create(app) {
 		schedule_timer();
 		return true;
 	};
-	api.stop = () => {
+	api.stop = (...args) => {
+		if (length(args)) invalid();
 		if (!started && timer == null && unsubscribe == null)
 			return false;
 		started = false;
@@ -339,7 +451,8 @@ export function create(app) {
 		}
 		return true;
 	};
-	api.tick = () => {
+	api.tick = (...args) => {
+		if (length(args)) invalid();
 		let current = observe_clock();
 		recover_pending(current);
 		let configured = settings_state();
@@ -368,23 +481,40 @@ export function create(app) {
 			schedule_timer();
 			return api.status();
 		}
-		let record;
+		let before = clone(state), hooked = false;
 		try {
-			record = app.subscription.update({ profile: 'config.yaml', url: null }, 'auto');
-			state.pending_operation_id = operation_id(record?.id);
-			if (state.pending_operation_id == null)
-				errors.fail('INTERNAL');
-			state.last_attempt = current;
-			state.next_attempt = current + MINUTE;
+			let record = app.subscription.update_scheduled(
+				{ profile: 'config.yaml', url: null }, 'auto', (queued) => {
+					let id = operation_id(queued?.id);
+					if (id == null || queued.state != 'queued' ||
+					    queued.kind != 'subscription.update' || queued.source != 'auto')
+						corrupt();
+					state.pending_operation_id = id;
+					state.next_attempt = current + MINUTE;
+					state.observed_at = current;
+					try { persist(); }
+					catch (error) {
+						state = before;
+						errors.fail(errors.normalize(error).code);
+					}
+					hooked = true;
+				});
+			if (!hooked) {
+				state = before;
+				mark_failure(record?.error?.code ?? 'INTERNAL', current);
+				persist();
+			}
 		}
 		catch (error) {
+			state = before;
 			mark_failure(errors.normalize(error).code, current);
+			persist();
 		}
-		persist();
 		schedule_timer();
 		return api.status();
 	};
-	api.status = () => {
+	api.status = (...args) => {
+		if (length(args)) invalid();
 		let configured = settings_state();
 		return {
 			running: started,
@@ -403,7 +533,8 @@ export function create(app) {
 			pending_operation_id: state.pending_operation_id
 		};
 	};
-	api.run_now = () => {
+	api.run_now = (...args) => {
+		if (length(args)) invalid();
 		let current = observe_clock();
 		state.next_attempt = current;
 		persist();

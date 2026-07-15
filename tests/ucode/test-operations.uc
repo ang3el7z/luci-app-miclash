@@ -515,6 +515,74 @@ assert_equal(unsubscribe_first(), true);
 subscription_manager.submit('status', 'system', {}, () => null);
 subscription_env.clock.advance(0);
 assert_equal(subscription_calls, 3);
+
+// A pre-enqueue durability hook runs only after the queued journal record is
+// readable, but before the worker can become runnable. Hook failure terminally
+// fails the operation and the worker is never invoked.
+let hook_env = environment();
+let hook_manager = operations.create(hook_env.rt);
+let hook_called = 0, hook_worker_called = 0;
+let hook_failure = hook_manager.submit('subscription.update', 'auto', {}, () => {
+	hook_worker_called++;
+}, (record) => {
+	hook_called++;
+	assert_equal(hook_manager.get(record.id).state, 'queued');
+	errors.fail('INTERNAL');
+});
+hook_env.clock.advance(0);
+assert_equal(hook_called, 1);
+assert_equal(hook_worker_called, 0);
+assert_equal(hook_manager.get(hook_failure.id).state, 'failure');
+assert_equal(hook_manager.get(hook_failure.id).error.code, 'INTERNAL');
+
+// The journal owns a bounded monotonic stage timeline and a subscription-only
+// safe terminal result. Both survive a brand-new manager recovering shared
+// disk; arbitrary result keys and non-subscription results are rejected.
+let result_env = environment();
+let result_manager = operations.create(result_env.rt);
+let result_op = result_manager.submit('subscription.update', 'auto', {}, (ctx) => {
+	ctx.stage('attempt', 10, 'attempt');
+	ctx.stage('download', 35, 'download');
+	ctx.result({ interval_hours: 12 });
+	ctx.stage('validation', 55, 'validation');
+	ctx.stage('activation', 75, 'activation');
+	ctx.stage('reload', 95, 'reload');
+});
+result_env.clock.advance(0);
+let result_record = result_manager.get(result_op.id);
+assert_equal(result_record.result.interval_hours, 12);
+assert_equal(join(',', map(result_record.timeline, (item) => item.stage)),
+	'queued,attempt,download,validation,activation,reload');
+let recovered_results = operations.create(result_env.rt);
+assert_equal(recovered_results.recover_interrupted(), 0);
+assert_equal(recovered_results.get(result_op.id).result.interval_hours, 12);
+assert_equal(length(recovered_results.get(result_op.id).timeline), 6);
+
+let hostile_result = result_manager.submit('subscription.update', 'auto', {}, (ctx) => {
+	ctx.result({ interval_hours: 12, url: 'https://secret.test/?token=secret' });
+});
+let wrong_kind_result = result_manager.submit('config.apply', 'auto', {}, (ctx) => {
+	ctx.result({ interval_hours: 12 });
+});
+result_env.clock.advance(0);
+assert_equal(result_manager.get(hostile_result.id).error.code, 'INVALID_ARGUMENT');
+assert_equal(result_manager.get(wrong_kind_result.id).error.code, 'INVALID_ARGUMENT');
+assert_true(index(sprintf('%J', result_manager.list()), 'secret') < 0);
+for (let bad_interval in [ 0, 8761, '12' ]) {
+	let bounded = result_manager.submit('subscription.update', 'auto', {}, (ctx) => {
+		ctx.result({ interval_hours: bad_interval });
+	});
+	result_env.clock.advance(0);
+	assert_equal(result_manager.get(bounded.id).error.code, 'INVALID_ARGUMENT');
+}
+let result_capability = null;
+let capability_op = result_manager.submit('subscription.update', 'auto', {}, (ctx) => {
+	result_capability = ctx.result;
+	ctx.result({ interval_hours: null });
+});
+result_env.clock.advance(0);
+assert_equal(result_manager.get(capability_op.id).state, 'success');
+assert_throws(() => result_capability({ interval_hours: 12 }), 'INVALID_ARGUMENT');
 assert_equal(unsubscribe_second(), true);
 subscription_manager.submit('status', 'system', {}, () => null);
 subscription_env.clock.advance(0);

@@ -12,7 +12,7 @@ assert_equal(type(scheduler.create), 'function', 'scheduler exports create()');
 
 function environment(options) {
 	options ??= {};
-	let filesystem = fakes.fs(options.files ?? {
+	let filesystem = options.filesystem ?? fakes.fs(options.files ?? {
 		'/opt/clash/config.yaml': 'active\n'
 	});
 	filesystem.mkdir('/tmp');
@@ -38,51 +38,42 @@ function environment(options) {
 	let settings = { get: () => value };
 	let scenarios = options.scenarios ?? [ {} ];
 	let calls = [];
-	let outcomes = {};
+	let worker_calls = 0;
 	let subscription = {};
-	subscription.update = (request, source) => {
+	function submit_update(request, source, before_run) {
 		push(calls, { request, source });
 		let scenario = length(scenarios) ? shift(scenarios) : {};
 		return ops.submit('subscription.update', source,
 			{ profile: request.profile }, (ctx) => {
-				let outcome = {
-					downloaded: false, validated: false, activated: false,
-					reload_ok: false, interval_hours: null
-				};
-				outcomes[ctx.id] = outcome;
+				worker_calls++;
 				ctx.stage('attempt', 10, 'attempt');
 				if (scenario.error == 'DOWNLOAD_FAILED') {
 					ctx.complete(errors.new('DOWNLOAD_FAILED'));
 					return false;
 				}
-				outcome.downloaded = true;
-				outcome.interval_hours = scenario.interval_hours ?? null;
+				ctx.result({ interval_hours: scenario.interval_hours ?? null });
 				ctx.stage('download', 35, 'download');
 				ctx.stage('validation', 55, 'validation');
 				if (scenario.error == 'VALIDATION_FAILED') {
 					ctx.complete(errors.new('VALIDATION_FAILED'));
 					return false;
 				}
-				outcome.validated = true;
 				ctx.stage('activation', 75, 'activation');
-				outcome.activated = true;
 				ctx.stage('reload', 95, 'reload');
 				if (scenario.error == 'HEALTH_FAILED') {
 					ctx.complete(errors.new('HEALTH_FAILED'));
 					return false;
 				}
-				outcome.reload_ok = true;
 				return true;
-			});
+			}, before_run);
 	};
-	subscription.consume_scheduler_outcome = (id) => {
-		let value = outcomes[id];
-		delete outcomes[id];
-		return value;
-	};
+	subscription.update = (request, source) => submit_update(request, source, null);
+	subscription.update_scheduled = (request, source, before_run) =>
+		submit_update(request, source, before_run);
 	let app = { runtime, operations: ops, settings, subscription };
 	return { filesystem, clock, runtime, ops, settings, scenarios, calls,
-		outcomes, app, machine: scheduler.create(app) };
+		worker_calls: () => worker_calls,
+		app, machine: scheduler.create(app) };
 };
 
 function drain(env) {
@@ -137,6 +128,62 @@ assert_true(normal.filesystem.mode(STATE_PATH) == 0o600);
 assert_true(index(normal.filesystem.readfile(STATE_PATH),
 	'subscriptions.example.test') < 0);
 
+// Scheduler state is a root-owned, exact-path 0600 authority under a stable,
+// non-writable /opt/clash parent. Path substitution and contradictory but
+// syntactically valid records fail closed as CORRUPT_STATE.
+let trusted_state_bytes = normal.filesystem.readfile(STATE_PATH);
+function state_environment(mutator) {
+	let filesystem = fakes.fs({
+		'/opt/clash/config.yaml': 'active\n',
+		[STATE_PATH]: trusted_state_bytes,
+		'/opt/clash/foreign-state.json': trusted_state_bytes
+	});
+	if (type(mutator) == 'function')
+		mutator(filesystem);
+	return { filesystem, create: () => environment({ filesystem }).machine };
+};
+let linked_state = state_environment((filesystem) =>
+	filesystem.set_symlink(STATE_PATH, '/opt/clash/foreign-state.json'));
+assert_throws(linked_state.create, 'CORRUPT_STATE');
+let weak_state = state_environment((filesystem) => filesystem.set_mode(STATE_PATH, 0o644));
+assert_throws(weak_state.create, 'CORRUPT_STATE');
+let foreign_state = state_environment((filesystem) => filesystem.set_uid(STATE_PATH, 1000));
+assert_throws(foreign_state.create, 'CORRUPT_STATE');
+let weak_parent = state_environment((filesystem) => filesystem.set_mode('/opt/clash', 0o777));
+assert_throws(weak_parent.create, 'CORRUPT_STATE');
+let foreign_parent = state_environment((filesystem) => filesystem.set_uid('/opt/clash', 1000));
+assert_throws(foreign_parent.create, 'CORRUPT_STATE');
+let replaced_state = state_environment((filesystem) => {
+	filesystem.on_lstat = (path, count) => {
+		if (path == STATE_PATH && count == 2)
+			filesystem.bump_inode(path);
+	};
+});
+assert_throws(replaced_state.create, 'CORRUPT_STATE');
+let replaced_parent = state_environment((filesystem) => {
+	filesystem.on_lstat = (path, count) => {
+		if (path == '/opt/clash' && count == 2)
+			filesystem.bump_inode(path);
+	};
+});
+assert_throws(replaced_parent.create, 'CORRUPT_STATE');
+
+for (let contradiction in [
+	(state) => { state.failure_count = 1; state.last_failure_code = null; },
+	(state) => { state.last_attempt = null; state.last_download = state.observed_at; },
+	(state) => { state.last_success = state.observed_at + 1; },
+	(state) => { state.last_reload = null; },
+	(state) => { state.pending_operation_id =
+		'0000000000001-00000001-0123456789abcdef'; state.next_attempt = null; }
+]) {
+	let corrupt_relation = state_environment((filesystem) => {
+		let value = json(filesystem.readfile(STATE_PATH));
+		contradiction(value);
+		filesystem.writefile(STATE_PATH, sprintf('%J\n', value));
+	});
+	assert_throws(corrupt_relation.create, 'CORRUPT_STATE');
+}
+
 // A trusted profile interval overrides the configured interval for this next
 // schedule and survives daemon reconstruction from durable state.
 let provided = environment({ scenarios: [ { interval_hours: 12 } ] });
@@ -163,6 +210,87 @@ let resumed = scheduler.create(pending_restart.app);
 assert_equal(resumed.status().pending_operation_id, null);
 assert_equal(resumed.status().last_success, pending_restart.clock.now());
 assert_equal(pending_restart.ops.get(durable_id).state, 'success');
+
+// A queued operation has not attempted network work. last_attempt is stamped
+// only by the durable `attempt` timeline stage, never by submission itself.
+let queued_before_attempt = environment();
+queued_before_attempt.machine.tick();
+assert_equal(queued_before_attempt.machine.status().last_attempt, null);
+queued_before_attempt.machine.stop();
+let queued_restart_clock = fakes.clock(queued_before_attempt.clock.now());
+let queued_restart_runtime = { fs: queued_before_attempt.filesystem,
+	clock: queued_restart_clock, digest: fakes.digest(queued_before_attempt.filesystem),
+	random: fakes.entropy(), paths: { tmp: '/tmp/miclash' } };
+let queued_restart_operations = operations.create(queued_restart_runtime);
+assert_equal(queued_restart_operations.recover_interrupted(), 1);
+let queued_restart_scheduler = scheduler.create({ runtime: queued_restart_runtime,
+	operations: queued_restart_operations, settings: queued_before_attempt.settings,
+	subscription: {
+		update: () => errors.fail('INTERNAL'),
+		update_scheduled: () => errors.fail('INTERNAL')
+	} });
+assert_equal(queued_restart_scheduler.status().last_attempt, null);
+assert_equal(queued_restart_scheduler.status().last_failure_code, 'INTERRUPTED');
+
+// Recreate the operation manager, subscription object, runtime, and scheduler
+// from shared disk after the worker completed without a scheduler observer.
+// The terminal journal alone restores every current-attempt stage and the
+// profile-provided interval.
+let process_loss = environment({ scenarios: [ { interval_hours: 12 } ] });
+process_loss.machine.tick();
+process_loss.machine.stop();
+drain(process_loss);
+let restart_clock = fakes.clock(process_loss.clock.now());
+let restart_runtime = {
+	fs: process_loss.filesystem, clock: restart_clock,
+	digest: fakes.digest(process_loss.filesystem), random: fakes.entropy(),
+	paths: { tmp: '/tmp/miclash' }
+};
+let restart_operations = operations.create(restart_runtime);
+assert_equal(restart_operations.recover_interrupted(), 0);
+let restart_subscription = {
+	update: () => errors.fail('INTERNAL'),
+	update_scheduled: () => errors.fail('INTERNAL')
+};
+let restarted = scheduler.create({ runtime: restart_runtime,
+	operations: restart_operations, settings: process_loss.settings,
+	subscription: restart_subscription });
+let restart_status = restarted.status();
+assert_equal(restart_status.last_attempt, restart_clock.now());
+assert_equal(restart_status.last_download, restart_clock.now());
+assert_equal(restart_status.last_validation, restart_clock.now());
+assert_equal(restart_status.last_activation, restart_clock.now());
+assert_equal(restart_status.last_reload, restart_clock.now());
+assert_equal(restart_status.last_success, restart_clock.now());
+assert_equal(restart_status.interval_hours, 12);
+assert_equal(restart_status.next_attempt, restart_clock.now() + 12 * HOUR);
+
+// A failed newer attempt reconstructed from disk overwrites stale stage values
+// from the prior success and clears stages the new attempt never reached.
+let stale = environment({ scenarios: [ {}, { error: 'VALIDATION_FAILED' } ] });
+stale.machine.tick();
+drain(stale);
+let old_success = stale.machine.status().last_success;
+stale.clock.advance(4 * HOUR);
+stale.machine.stop();
+stale.machine.tick();
+drain(stale);
+let stale_clock = fakes.clock(stale.clock.now());
+let stale_runtime = { fs: stale.filesystem, clock: stale_clock,
+	digest: fakes.digest(stale.filesystem), random: fakes.entropy(),
+	paths: { tmp: '/tmp/miclash' } };
+let stale_operations = operations.create(stale_runtime);
+assert_equal(stale_operations.recover_interrupted(), 0);
+let stale_scheduler = scheduler.create({ runtime: stale_runtime,
+	operations: stale_operations, settings: stale.settings,
+	subscription: restart_subscription });
+let stale_status = stale_scheduler.status();
+assert_equal(stale_status.last_attempt, stale_clock.now());
+assert_equal(stale_status.last_download, stale_clock.now());
+assert_equal(stale_status.last_validation, stale_clock.now());
+assert_equal(stale_status.last_activation, null);
+assert_equal(stale_status.last_reload, null);
+assert_equal(stale_status.last_success, old_success);
 
 let stopped_pending = environment();
 stopped_pending.machine.tick();
@@ -227,6 +355,23 @@ assert_equal(length(busy.calls), 0);
 assert_equal(busy.machine.status().failure_count, 0);
 assert_equal(busy.machine.status().next_attempt, busy.clock.now() + MINUTE);
 
+// If scheduler durability fails after the queued operation journal exists, the
+// pre-enqueue barrier terminally fails that operation before its worker can
+// touch Active. A later tick retries once without an uncorrelated duplicate.
+let persist_crash = environment({ scenarios: [ {}, {} ] });
+persist_crash.filesystem.fail_open_once_matching = 'subscription-scheduler.json.miclash';
+persist_crash.filesystem.fail_open_matching_count = 16;
+persist_crash.machine.tick();
+drain(persist_crash);
+assert_equal(persist_crash.worker_calls(), 0);
+assert_equal(length(persist_crash.ops.list({ state: 'failure' })), 1);
+assert_equal(persist_crash.machine.status().pending_operation_id, null);
+persist_crash.machine.run_now();
+persist_crash.machine.tick();
+drain(persist_crash);
+assert_equal(persist_crash.worker_calls(), 1);
+assert_equal(persist_crash.machine.status().last_success, persist_crash.clock.now());
+
 // Manual run resets only waiting: existing audit and failure counters remain,
 // but the operation becomes immediately due.
 let manual = environment({ scenarios: [ { error: 'DOWNLOAD_FAILED' } ] });
@@ -241,14 +386,20 @@ assert_equal(manual.machine.status().next_attempt, manual.clock.now());
 
 // If the wall clock moves backwards, the remaining delay is shifted with it
 // and is never converted into an immediate retry storm.
-let rollback = environment();
+let rollback = environment({ scenarios: [ {}, { error: 'VALIDATION_FAILED' } ] });
 rollback.machine.tick();
 drain(rollback);
+let rollback_success = rollback.machine.status().last_success;
 rollback.clock.advance(-HOUR);
 rollback.machine.tick();
 assert_equal(length(rollback.calls), 1);
 assert_equal(rollback.machine.status().next_attempt,
 	rollback.clock.now() + 4 * HOUR);
+rollback.machine.run_now();
+rollback.machine.tick();
+drain(rollback);
+assert_equal(rollback.machine.status().last_failure_code, 'VALIDATION_FAILED');
+assert_equal(rollback.machine.status().last_success, rollback_success);
 
 // A daemon restart with an unresolved durable operation id cannot leave the
 // scheduler waiting forever: a missing/interrupted record becomes a bounded
@@ -274,6 +425,8 @@ assert_throws(() => scheduler.create(corrupt.app), 'CORRUPT_STATE');
 // start/stop are idempotent and the wake-up timer is capped at one minute even
 // for a distant due time.
 let lifecycle = environment();
+for (let method in [ 'start', 'stop', 'tick', 'status', 'run_now' ])
+	assert_throws(() => lifecycle.machine[method]('unexpected'), 'INVALID_ARGUMENT');
 assert_equal(lifecycle.machine.start(), true);
 assert_equal(lifecycle.machine.start(), false);
 assert_true(lifecycle.clock.timers[0].due <= lifecycle.clock.now() + MINUTE);

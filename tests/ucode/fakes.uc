@@ -75,6 +75,8 @@ export function fs(initial) {
 	let fake = {
 		files,
 		fail_on: null,
+		fail_open_once_matching: null,
+		fail_open_matching_count: 0,
 		corrupt_on_close: false,
 		collide_next_open: false,
 		fail_unlink_once: false,
@@ -156,6 +158,16 @@ export function fs(initial) {
 	};
 
 	fake.open = (path, mode, perm) => {
+		if (fake.fail_open_matching_count > 0 &&
+		    index(path, fake.fail_open_once_matching) >= 0) {
+			fake.fail_open_matching_count--;
+			return null;
+		}
+		if (fake.fail_open_once_matching != null &&
+		    index(path, fake.fail_open_once_matching) >= 0) {
+			fake.fail_open_once_matching = null;
+			return null;
+		}
 		if (fake.collide_next_open) {
 			fake.collide_next_open = false;
 			return null;

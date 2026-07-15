@@ -78,6 +78,7 @@ let internal = internal_env.ops.submit('subscription.update', 'auto', {}, (ctx) 
 	});
 	if (internal_result?.ok !== true)
 		return ctx.complete(internal_result?.error);
+	ctx.result({ interval_hours: null });
 	return true;
 });
 assert_equal(finish(internal_env, internal).state, 'success');
