@@ -628,6 +628,7 @@ export function create(runtime, options) {
 		    type(configuration?.save_draft_in_operation) != 'function' ||
 		    type(configuration?.apply_in_operation) != 'function' ||
 		    type(configuration?.capture_active_in_operation) != 'function' ||
+		    type(configuration?.release_restore_capture_in_operation) != 'function' ||
 		    type(configuration?.apply_restore_in_operation) != 'function')
 			errors.fail('INVALID_ARGUMENT');
 		if (bound_operations != null &&
@@ -655,14 +656,11 @@ export function create(runtime, options) {
 		profile = schema.profile_name(profile);
 		revision = revision_id(revision);
 		let selected_content = api.read(profile, revision);
-		let capture = configuration.capture_active_in_operation(ctx, profile);
-		let before = api.snapshot_bytes(profile, 'restore-before', capture.content, {
-			validation_result: 'success',
-			activation_result: 'pending',
-			operation_id: ctx.id,
-			restored_revision: revision
-		});
+		let capture = null;
+		let before = null;
 		let selected = null;
+		let outcome = null;
+		let failure = null;
 		let terminal_failure = null;
 		function terminalize(result) {
 			for (let record in [ selected, before ]) {
@@ -675,6 +673,13 @@ export function create(runtime, options) {
 				errors.fail(terminal_failure);
 		};
 		try {
+			capture = configuration.capture_active_in_operation(ctx, profile);
+			before = api.snapshot_bytes(profile, 'restore-before', capture.content, {
+				validation_result: 'success',
+				activation_result: 'pending',
+				operation_id: ctx.id,
+				restored_revision: revision
+			});
 			let result = configuration.apply_restore_in_operation(
 				ctx, profile, selected_content, capture, (candidate, candidate_hash) => {
 					if (runtime.digest.sha256(candidate) != candidate_hash)
@@ -689,22 +694,30 @@ export function create(runtime, options) {
 				});
 			if (result?.ok === false && result?.error?.code == 'VALIDATION_FAILED') {
 				terminalize('validation_failed');
-				return result;
+				outcome = result;
 			}
-			if (result?.ok === false && result?.error?.code == 'HEALTH_FAILED') {
+			else if (result?.ok === false && result?.error?.code == 'HEALTH_FAILED') {
 				terminalize('health_failed');
-				return result;
+				outcome = result;
 			}
-			if (result?.ok !== true)
+			else if (result?.ok !== true)
 				errors.fail('INTERNAL');
-			terminalize('success');
-			return result;
+			else {
+				terminalize('success');
+				outcome = result;
+			}
 		}
 		catch (error) {
+			failure = errors.normalize(error).code;
 			try { terminalize('failed'); }
-			catch (terminal_error) { errors.fail(errors.normalize(terminal_error).code); }
-			errors.fail(errors.normalize(error).code);
+			catch (terminal_error) { failure = errors.normalize(terminal_error).code; }
 		}
+		if (capture != null)
+			try { configuration.release_restore_capture_in_operation(ctx, capture); }
+			catch (release_error) { errors.fail(errors.normalize(release_error).code); }
+		if (failure != null)
+			errors.fail(failure);
+		return outcome;
 	};
 	api.restore = (profile, revision, source) => {
 		profile = schema.profile_name(profile);

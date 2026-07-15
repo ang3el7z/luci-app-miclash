@@ -308,16 +308,27 @@ export function create(runtime, operations, history) {
 		if (restore_captures[ctx.id] != null)
 			errors.fail('BUSY');
 		let capture = read_active_state(profile);
-		restore_captures[ctx.id] = capture;
+		restore_captures[ctx.id] = { capture, profile, state: 'captured' };
 		return capture;
+	};
+	api.release_restore_capture_in_operation = (ctx, capture) => {
+		operation_context(ctx);
+		let slot = restore_captures[ctx.id];
+		if (type(capture) != 'object' || type(slot) != 'object' ||
+		    slot.capture !== capture)
+			errors.fail('INVALID_ARGUMENT');
+		delete restore_captures[ctx.id];
+		return true;
 	};
 	api.apply_restore_in_operation = (ctx, profile, content, capture, on_validated) => {
 		operation_context(ctx);
 		profile = schema.profile_name(profile);
-		if (type(capture) != 'object' || restore_captures[ctx.id] !== capture ||
-		    type(on_validated) != 'function')
+		let slot = restore_captures[ctx.id];
+		if (type(capture) != 'object' || type(slot) != 'object' ||
+		    slot.capture !== capture || slot.profile != profile ||
+		    slot.state != 'captured' || type(on_validated) != 'function')
 			errors.fail('INVALID_ARGUMENT');
-		delete restore_captures[ctx.id];
+		slot.state = 'applying';
 		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
 			assert_active_state(profile, capture);
 			on_validated(candidate, candidate_hash);

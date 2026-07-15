@@ -441,6 +441,37 @@ assert_equal(env.fs.readfile('/opt/clash/config.yaml'), 'current-active\n');
 
 // Restore is one outer operation. It snapshots current Active before validation;
 // failed validation leaves Active unchanged and retains that audit snapshot.
+let release = environment();
+let release_selected = release.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'release-selected\n', {});
+assert_true(type(release.cfg.release_restore_capture_in_operation) == 'function');
+assert_throws(() => release.cfg.release_restore_capture_in_operation(
+	{ id: 'forged' }, {}), 'INVALID_ARGUMENT');
+let release_snapshot = release.revisions.snapshot_bytes;
+release.revisions.snapshot_bytes = (profile, source, content, metadata) => {
+	if (source == 'restore-before')
+		die('INTERNAL');
+	return release_snapshot(profile, source, content, metadata);
+};
+let release_probes = 0;
+let release_operation = release.ops.submit('history.restore', 'luci',
+	{ profile: 'config.yaml' }, (ctx) => {
+		for (let attempt = 0; attempt < 3; attempt++) {
+			assert_throws(() => release.revisions.restore_in_operation(
+				ctx, release.cfg, 'config.yaml', release_selected.revision), 'INTERNAL');
+			let probe = release.cfg.capture_active_in_operation(ctx, 'config.yaml');
+			assert_throws(() => release.cfg.release_restore_capture_in_operation(
+				ctx, {}), 'INVALID_ARGUMENT');
+			assert_equal(release.cfg.release_restore_capture_in_operation(
+				ctx, probe), true);
+			assert_throws(() => release.cfg.release_restore_capture_in_operation(
+				ctx, probe), 'INVALID_ARGUMENT');
+			release_probes++;
+		}
+	});
+assert_equal(finish(release, release_operation).state, 'success');
+assert_equal(release_probes, 3);
+
 let invalid_revision = env.revisions.snapshot_bytes('config.yaml', 'manual',
 	'invalid-selected\n', { validation_result: 'failure' });
 let history_before_invalid = env.revisions.list('config.yaml');
