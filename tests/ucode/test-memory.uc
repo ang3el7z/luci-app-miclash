@@ -426,6 +426,40 @@ assert_equal(queued_restart.status().phase, 'failure_cooldown');
 assert_equal(queued_restart.status().cooldown_until - atomic.now(),
 	fixture.defaults.failure_cooldown_ms);
 
+// Owned queued/running recovery is authoritative over stopped and identity
+// observations until the worker releases it.
+let queued_stopped = recovery_env(fixture.recovery_cases[0], { defer_submit: true });
+queued_stopped.trigger();
+queued_stopped.advance(fixture.defaults.sample_interval_ms);
+queued_stopped.controller.sample({ running: false });
+assert_equal(queued_stopped.controller.status().phase, 'recovery_queued');
+queued_stopped.controller.sample(snapshot(93000, 10000,
+	{ pid: 99, manual_generation: 'manual-new' }));
+assert_equal(queued_stopped.controller.status().phase, 'recovery_queued');
+let running_owned = recovery_env(fixture.recovery_cases[0], { defer_submit: true });
+running_owned.trigger();
+assert_throws(() => running_owned.ops.calls[0].worker({
+	id: 'op-running',
+	stage: () => {
+		running_owned.controller.sample({ running: false });
+		assert_equal(running_owned.controller.status().phase, 'recovering');
+		die('INTERNAL');
+	},
+	complete: () => true
+}), 'INTERNAL');
+
+// Without ownership, stopped Mihomo clears live learning identity and the
+// waiting state round-trips through the strict disk schema.
+let stopped = recovery_env(fixture.recovery_cases[0]);
+stopped.learn();
+stopped.advance(fixture.defaults.sample_interval_ms);
+stopped.controller.sample({ running: false });
+assert_equal(stopped.controller.status().phase, 'waiting_for_mihomo');
+for (let field in [ 'pid', 'start_time', 'current_rss_kb', 'mem_total_kb',
+	'baseline_rss_kb', 'last_sample_at' ])
+	assert_equal(stopped.controller.status()[field], null, field);
+assert_equal(stopped.recreate().status().phase, 'waiting_for_mihomo');
+
 for (let failure in [ 'open', 'write', 'rename' ]) {
 	let failed_write = recovery_env(fixture.recovery_cases[0]);
 	let before_settings = sprintf('%J', failed_write.controller.settings());
@@ -478,12 +512,12 @@ assert_equal(no_durable_action.controller.status().phase, 'recovery_queued');
 let settings_reset = recovery_env(fixture.recovery_cases[0]);
 settings_reset.learn();
 assert_true(settings_reset.controller.status().baseline_rss_kb != null);
+let monitoring_disk = json(settings_reset.persisted());
 settings_reset.controller.settings({ baseline_samples: 7, sustained_samples: 6 });
 assert_equal(settings_reset.controller.status().baseline_rss_kb, null);
 assert_equal(settings_reset.controller.status().pressure_samples, 0);
-assert_throws(() => settings_reset.controller.settings({
-	reserve_min_kb: 262144, reserve_max_kb: 262144
-}), 'INVALID_ARGUMENT');
+settings_reset.controller.settings({ reserve_min_kb: 262144, reserve_max_kb: 262144 });
+assert_true(settings_reset.controller.observe(snapshot(60000, 100000)).reserve_kb <= 131072);
 let settings_restart = settings_reset.recreate();
 assert_equal(settings_restart.settings().baseline_samples, 7);
 
@@ -495,6 +529,46 @@ for (let invalid_snapshot in [
 	snapshot(60000, 10000, { manual_generation: sprintf('%0300s', 'x') })
 ])
 	assert_throws(() => settings_reset.controller.sample(invalid_snapshot), 'INVALID_ARGUMENT');
+
+// Public reset uses the same normalized snapshot and safe identity contract.
+for (let invalid_reset in [
+	snapshot(0, 10000), snapshot(60000, 10000, { start_time: 'not-digits' }),
+	snapshot(60000, 10000, { start_time: sprintf('%033d', 1) }),
+	snapshot(60000, 10000, { manual_generation: 'bad\ncontrol' }),
+	snapshot(60000, 10000, { manual_generation: sprintf('%0129s', 'x') })
+])
+	assert_throws(() => settings_reset.controller.reset_baseline(invalid_reset),
+		'INVALID_ARGUMENT');
+
+// Expert reserve configured before the first observation is device-capped.
+let reserve_fresh = recovery_env(fixture.recovery_cases[0]);
+reserve_fresh.controller.settings({ reserve_min_kb: 262144, reserve_max_kb: 262144 });
+let small_router = snapshot(20000, 40000);
+small_router.mem_total_kb = 65536;
+let capped = reserve_fresh.controller.observe(small_router);
+assert_true(capped.reserve_kb <= 32768);
+reserve_fresh.controller.sample(small_router);
+
+// Version-2 disk state applies the same live identity constraints.
+function corrupt_v2(mutator) {
+	let value = json(sprintf('%J', monitoring_disk));
+	mutator(value.state);
+	let disk = fakes.fs({
+		'/var/run/miclash/.keep': '',
+		'/var/run/miclash/memory.json': sprintf('%J\n', value)
+	});
+	let rt = {
+		clock: { now: () => settings_reset.now() }, fs: disk,
+		digest: fakes.digest(disk), paths: { run: '/var/run/miclash' }
+	};
+	assert_throws(() => memory.create(rt, service, operations, () => {}), 'CORRUPT_STATE');
+};
+corrupt_v2((state) => state.start_time = null);
+corrupt_v2((state) => state.current_rss_kb = null);
+corrupt_v2((state) => state.mem_total_kb = null);
+corrupt_v2((state) => state.last_sample_at = null);
+corrupt_v2((state) => state.manual_generation = 'bad\ncontrol');
+corrupt_v2((state) => state.manual_generation = sprintf('%0129s', 'x'));
 
 // Persisted state is an exact versioned contract; corruption is never treated
 // as permission to forget a failure cooldown.

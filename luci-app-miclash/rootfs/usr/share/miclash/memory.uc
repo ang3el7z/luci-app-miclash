@@ -124,6 +124,17 @@ export function create(runtime, service, operations, notify) {
 		return false;
 	};
 
+	function valid_start_time(value) {
+		return (type(value) == 'int' && value > 0) ||
+			(type(value) == 'string' && length(value) >= 1 && length(value) <= 32 &&
+			 match(value, /^[0-9]+$/));
+	};
+
+	function valid_manual_generation(value) {
+		return value == null || (type(value) == 'string' && length(value) >= 1 &&
+			length(value) <= 128 && match(value, /^[A-Za-z0-9][A-Za-z0-9._:-]*$/));
+	};
+
 	function restore_state() {
 		let saved;
 		try { saved = storage.read_json(runtime, state_path); }
@@ -142,8 +153,8 @@ export function create(runtime, service, operations, notify) {
 		let state = saved.state;
 		if (!exists(PHASES, state.phase) ||
 		    !valid_nullable(state.pid, [ 'int' ]) || (state.pid != null && state.pid < 1) ||
-		    !valid_nullable(state.start_time, [ 'int', 'string' ]) ||
-		    !valid_nullable(state.manual_generation, [ 'string' ]) ||
+		    (state.start_time != null && !valid_start_time(state.start_time)) ||
+		    !valid_manual_generation(state.manual_generation) ||
 		    !valid_nullable(state.baseline_started_at, [ 'int' ]) ||
 		    (state.baseline_started_at != null && state.baseline_started_at < 0) ||
 		    !valid_nullable(state.baseline_rss_kb, [ 'int' ]) ||
@@ -194,7 +205,15 @@ export function create(runtime, service, operations, notify) {
 		if (state.phase == 'monitoring' && state.baseline_rss_kb == null)
 			corrupt();
 		if (state.phase == 'waiting_for_mihomo' &&
-		    (state.pid != null || state.start_time != null || state.current_rss_kb != null))
+		    (state.pid != null || state.start_time != null || state.current_rss_kb != null ||
+		     state.mem_total_kb != null || state.baseline_started_at != null ||
+		     state.last_sample_at != null || state.baseline_rss_kb != null ||
+		     state.pressure_samples != 0 || length(saved.baseline_samples) != 0))
+			corrupt();
+		if (state.phase != 'waiting_for_mihomo' &&
+		    (state.pid == null || !valid_start_time(state.start_time) ||
+		     state.current_rss_kb == null || state.mem_total_kb == null ||
+		     state.baseline_started_at == null || state.last_sample_at == null))
 			corrupt();
 		options = copy(saved.settings);
 		current = copy(state);
@@ -214,8 +233,9 @@ export function create(runtime, service, operations, notify) {
 
 	function reserve(total) {
 		if (type(total) != 'int' || total < 1) invalid();
-		return max(options.reserve_min_kb,
+		let configured = max(options.reserve_min_kb,
 			min(options.reserve_max_kb, int(total * options.reserve_percent / 100)));
+		return min(configured, max(1, int(total / 2)));
 	};
 
 	function settings(next) {
@@ -227,18 +247,14 @@ export function create(runtime, service, operations, notify) {
 			merged[name] = value;
 		}
 		validate_settings(merged);
-		if (current.mem_total_kb != null &&
-		    max(merged.reserve_min_kb, min(merged.reserve_max_kb,
-		    int(current.mem_total_kb * merged.reserve_percent / 100))) >= current.mem_total_kb)
-			invalid();
-		if (current.phase == 'recovery_queued' || current.phase == 'recovering')
+		if (recovery_pending || current.phase == 'recovery_queued' || current.phase == 'recovering')
 			fail('BUSY');
 		transaction(() => {
 			options = merged;
 			baseline_samples = [];
 			current.baseline_rss_kb = null;
 			current.pressure_samples = 0;
-			current.last_sample_at = null;
+			current.last_sample_at = current.pid == null ? null : runtime.clock.now();
 			current.baseline_started_at = runtime.clock.now();
 			if (current.pid != null && current.phase == 'monitoring')
 				current.phase = 'warming_up';
@@ -277,7 +293,8 @@ export function create(runtime, service, operations, notify) {
 					let generation = null;
 					try { generation = runtime.fs.readfile('/tmp/miclash-service/manual-operation'); }
 					catch (error) {}
-					snapshot.manual_generation = type(generation) == 'string' ? trim(generation) : null;
+					generation = type(generation) == 'string' ? trim(generation) : null;
+					snapshot.manual_generation = length(generation ?? '') ? generation : null;
 				}
 				catch (error) { return { running: false, state: 'metrics_unavailable' }; }
 			}
@@ -292,8 +309,8 @@ export function create(runtime, service, operations, notify) {
 		baseline_samples = [];
 		current.baseline_rss_kb = null;
 		current.pressure_samples = 0;
-		current.last_sample_at = null;
-		current.baseline_started_at = runtime.clock.now();
+		current.last_sample_at = type(snapshot) == 'object' ? runtime.clock.now() : null;
+		current.baseline_started_at = type(snapshot) == 'object' ? runtime.clock.now() : null;
 		if (type(snapshot) == 'object') {
 			current.pid = snapshot.pid ?? null;
 			current.start_time = snapshot.start_time ?? null;
@@ -312,9 +329,15 @@ export function create(runtime, service, operations, notify) {
 		}
 	};
 
+	let validate_snapshot;
+
 	function reset_baseline(snapshot) {
-		if (current.phase == 'recovery_queued' || current.phase == 'recovering')
+		if (recovery_pending || current.phase == 'recovery_queued' || current.phase == 'recovering')
 			fail('BUSY');
+		if (snapshot != null) {
+			snapshot = observe(snapshot);
+			validate_snapshot(snapshot);
+		}
 		transaction(() => reset_learning(snapshot));
 		return copy(current);
 	};
@@ -336,13 +359,10 @@ export function create(runtime, service, operations, notify) {
 		return snapshot.mem_available_kb < snapshot.reserve_kb;
 	};
 
-	function validate_snapshot(snapshot) {
-		let start_valid = (type(snapshot.start_time) == 'int' && snapshot.start_time > 0) ||
-			(type(snapshot.start_time) == 'string' && length(snapshot.start_time) <= 32 &&
-			 match(snapshot.start_time, /^[0-9]+$/));
+	validate_snapshot = (snapshot) => {
 		if (snapshot.running !== true || type(snapshot.pid) != 'int' || snapshot.pid < 1 ||
-		    !start_valid || (snapshot.manual_generation != null &&
-		    (type(snapshot.manual_generation) != 'string' || length(snapshot.manual_generation) > 128)) ||
+		    !valid_start_time(snapshot.start_time) ||
+		    !valid_manual_generation(snapshot.manual_generation) ||
 		    type(snapshot.rss_kb) != 'int' || snapshot.rss_kb < 1 ||
 		    type(snapshot.mem_total_kb) != 'int' || snapshot.mem_total_kb < 1 ||
 		    snapshot.rss_kb > snapshot.mem_total_kb ||
@@ -504,9 +524,12 @@ export function create(runtime, service, operations, notify) {
 	};
 
 	function sample(snapshot) {
+		if (recovery_pending || current.phase == 'recovery_queued' ||
+		    current.phase == 'recovering')
+			return copy(current);
 		snapshot = observe(snapshot);
 		if (snapshot.running !== true) {
-			transaction(() => { current.phase = 'waiting_for_mihomo'; });
+			transaction(() => reset_learning(null));
 			return copy(current);
 		}
 		validate_snapshot(snapshot);
