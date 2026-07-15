@@ -54,14 +54,14 @@ function control(value) {
 
 function identifier(value, maximum) {
 	if (type(value) != 'string' || !length(value) || length(value) > maximum ||
-	    !match(value, /^[a-z][a-z0-9_.-]*$/))
+	    !match(value, /^[a-z][a-z0-9_.-]*$/) || redact.secret_name(value))
 		invalid();
 	return value;
 };
 
 function key(value) {
 	if (type(value) != 'string' || !length(value) || length(value) > 128 ||
-	    !match(value, /^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/))
+	    !match(value, /^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/) || redact.secret_name(value))
 		invalid();
 	return value;
 };
@@ -126,7 +126,7 @@ function validate_context(value, depth, state) {
 function clean_text(value, maximum) {
 	if (type(value) != 'string' || !length(value) || length(value) > maximum || control(value))
 		invalid();
-	return redact.text(value);
+	return value;
 };
 
 function clean_event(input) {
@@ -153,8 +153,12 @@ function clean_event(input) {
 	if (value.recovery_of == null && SEVERITIES[value.severity] >= SEVERITIES.warning &&
 	    exists(value.context, 'occurrences'))
 		invalid();
-	value.context = redact.value('context', value.context);
-	return value;
+	let safe = redact.sanitize(value);
+	if (safe.type != value.type || safe.severity != value.severity ||
+	    safe.component != value.component || safe.dedupe_key != value.dedupe_key ||
+	    safe.occurred_at != value.occurred_at || safe.recovery_of != value.recovery_of)
+		invalid();
+	return safe;
 };
 
 function failure_id(value) {
@@ -282,7 +286,10 @@ function producer_event(runtime, input) {
 			title: 'Internet restored',
 			message: 'Fresh DNS and network observations confirm access',
 			dedupe_key: 'internet-restored/' + id, occurred_at: now,
-			recovery_of: target, context: data
+			recovery_of: target,
+			context: {
+				failure_id: id, guard: data.guard, dns: data.dns, network: data.network
+			}
 		};
 	}
 
@@ -290,10 +297,23 @@ function producer_event(runtime, input) {
 };
 
 function normalized_event(runtime, input) {
-	if (type(input) == 'object' && length(keys(input)) == 2 &&
-	    exists(input, 'type') && exists(input, 'data'))
-		return clean_event(producer_event(runtime, input));
 	return clean_event(input);
+};
+
+export function producer(runtime) {
+	if (type(runtime?.clock?.now) != 'function')
+		invalid();
+	return {
+		reconcile: (type_name, data) => producer_event(runtime,
+			{ type: type_name, data }),
+		memory: (event) => {
+			if (type(event) != 'object' || type(event.type) != 'string')
+				invalid();
+			return producer_event(runtime, { type: event.type, data: event });
+		},
+		operation: (record) => producer_event(runtime, { type: 'operation', data: record }),
+		internet: (data) => producer_event(runtime, { type: 'internet_restored', data })
+	};
 };
 
 function clean_filter(value, luci) {
@@ -375,6 +395,28 @@ function validate_restoration(runtime, event) {
 			invalid();
 	if (context.guard.enabled && context.network.path == 'direct')
 		invalid();
+	if (!context.guard.enabled && context.network.path == 'guarded')
+		invalid();
+};
+
+function validate_restoration_target(event, target) {
+	if (event.type != 'internet_restored')
+		return;
+	let enabled = event.context.guard.enabled;
+	let path = event.context.network.path;
+	if (target.type == 'direct_fallback' && (enabled || path != 'direct'))
+		invalid();
+	if ((target.type == 'fail_closed' || target.type == 'guard_outage') &&
+	    (!enabled || (path != 'proxy' && path != 'guarded')))
+		invalid();
+};
+
+function validate_final_event(event) {
+	let encoded;
+	try { encoded = sprintf('%J', event.context); }
+	catch (error) { invalid(); }
+	if (length(encoded) > MAX_CONTEXT_BYTES)
+		fail('RESPONSE_TOO_LARGE');
 };
 
 export function create(runtime, settings) {
@@ -421,9 +463,20 @@ export function create(runtime, settings) {
 		if (dedupe[key_value] != null)
 			return dedupe[key_value];
 		if (length(dedupe_order) >= DEDUPE_LIMIT) {
-			let oldest = shift(dedupe_order);
-			delete dedupe[oldest];
-			delete active[oldest];
+			let evict_at = null;
+			for (let i = 0; i < length(dedupe_order); i++)
+				if (active[dedupe_order[i]] == null) {
+					evict_at = i;
+					break;
+				}
+			if (evict_at == null && event.recovery_of != null &&
+			    active[event.recovery_of] != null)
+				evict_at = index(dedupe_order, event.recovery_of);
+			if (evict_at == null || evict_at < 0)
+				fail('BUSY');
+			let evicted = dedupe_order[evict_at];
+			splice(dedupe_order, evict_at, 1);
+			delete dedupe[evicted];
 		}
 		let record = {
 			type: event.type, component: event.component,
@@ -459,7 +512,7 @@ export function create(runtime, settings) {
 		    record.severity != event.severity || record.title != event.title ||
 		    record.message != event.message || record.recovery_of != event.recovery_of))
 			invalid();
-		if (record != null && record.last_at != null &&
+		if (record != null && record.last_at != null && now >= record.last_at &&
 		    now - record.last_at < configured.dedupe_window_ms)
 			return false;
 		let target = event.recovery_of == null ? null : active[event.recovery_of];
@@ -475,17 +528,26 @@ export function create(runtime, settings) {
 		    target.type != 'failure' && target.type != 'guard_outage' &&
 		    target.type != 'direct_fallback' && target.type != 'fail_closed')
 			invalid();
+		if (target != null)
+			validate_restoration_target(event, target);
 
-		record = remember(event.dedupe_key, event);
-		record.last_at = now;
+		let next_occurrences = null;
 		if (event.recovery_of == null && SEVERITIES[event.severity] >= SEVERITIES.warning) {
-			record.occurrences++;
+			next_occurrences = (record?.occurrences ?? 0) + 1;
+			let base_severity = record?.severity ?? event.severity;
 			let escalated = min(SEVERITIES.critical,
-				SEVERITIES[record.severity] + record.occurrences - 1);
+				SEVERITIES[base_severity] + next_occurrences - 1);
 			for (let name, rank in SEVERITIES)
 				if (rank == escalated)
 					event.severity = name;
-			event.context.occurrences = record.occurrences;
+			event.context.occurrences = next_occurrences;
+		}
+		validate_final_event(event);
+
+		record = remember(event.dedupe_key, event);
+		record.last_at = now;
+		if (next_occurrences != null) {
+			record.occurrences = next_occurrences;
 			active[event.dedupe_key] = { type: event.type, component: event.component };
 		}
 		if (event.recovery_of != null) {

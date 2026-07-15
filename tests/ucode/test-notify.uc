@@ -64,6 +64,48 @@ function logger_event(call) {
 	return json(call.args[length(call.args) - 1]);
 };
 
+function percent_all(value) {
+	let output = '';
+	for (let offset = 0; offset < length(value); offset++)
+		output += sprintf('%%%02X', ord(value, offset));
+	return output;
+};
+
+function percent_mixed(value) {
+	let output = '';
+	for (let offset = 0; offset < length(value); offset++)
+		output += offset % 2 ? substr(value, offset, 1) :
+			sprintf('%%%02x', ord(value, offset));
+	return output;
+};
+
+function text_of_length(count) {
+	let output = '';
+	for (let i = 0; i < count; i++)
+		output += 'x';
+	return output;
+};
+
+function context_of_bytes(target) {
+	let output = {};
+	for (let i = 0; i < 8; i++)
+		output['padding' + i] = '';
+	let remaining = target - length(sprintf('%J', output));
+	for (let i = 0; i < 8; i++) {
+		let size = min(4096, remaining);
+		output['padding' + i] = text_of_length(size);
+		remaining -= size;
+	}
+	assert_equal(remaining, 0);
+	assert_equal(length(sprintf('%J', output)), target);
+	return output;
+};
+
+function assert_exact_event(value) {
+	assert_equal(join(',', sort(keys(value))),
+		'component,context,dedupe_key,message,occurred_at,recovery_of,severity,title,type');
+};
+
 // Creation and public input boundaries are exact and bounded.
 assert_throws(() => notify.create({}, settings()), 'INVALID_ARGUMENT');
 assert_throws(() => notify.create(make_runtime().runtime, []), 'INVALID_ARGUMENT');
@@ -100,6 +142,28 @@ assert_throws(() => invalid_center.subscribe(null), 'INVALID_ARGUMENT');
 assert_throws(() => invalid_center.subscribe({ name: 'bad channel', send: () => true,
 	minimum_severity: 'info', types: [], components: [] }), 'INVALID_ARGUMENT');
 assert_throws(() => invalid_center.test('bad channel'), 'INVALID_ARGUMENT');
+assert_throws(() => invalid_center.emit(make_event({ component: 'api_secret' })),
+	'INVALID_ARGUMENT');
+assert_throws(() => invalid_center.emit(make_event({ type: 'token_event' })),
+	'INVALID_ARGUMENT');
+assert_throws(() => invalid_center.emit(make_event({ component: 'apikey' })),
+	'INVALID_ARGUMENT');
+assert_throws(() => invalid_center.emit(make_event({ type: 'clientsecret' })),
+	'INVALID_ARGUMENT');
+assert_throws(() => invalid_center.emit(make_event({
+	dedupe_key: 'failure/apiSecret-deadbeef'
+})), 'INVALID_ARGUMENT');
+assert_throws(() => invalid_center.emit(make_event({
+	dedupe_key: 'failure/deadbeef42', context: { token: 'deadbeef42' }
+})), 'INVALID_ARGUMENT');
+let secret_identity = notify.create(make_runtime().runtime, settings());
+assert_throws(() => {
+	secret_identity.emit(make_event({ dedupe_key: 'failure/api_secret-deadbeef' }));
+	secret_identity.emit(make_event({
+		type: 'recovery', severity: 'notice', title: 'Recovered', message: 'Recovered',
+		dedupe_key: 'recovery/safe-id', recovery_of: 'failure/api_secret-deadbeef'
+	}));
+}, 'INVALID_ARGUMENT');
 
 let too_many_types = [];
 for (let i = 0; i < 65; i++) push(too_many_types, 'event' + i);
@@ -129,17 +193,49 @@ assert_throws(() => invalid_center.subscribe({ name: 'channel32', send: (event) 
 // Syslog is argv-only/data-safe, LuCI publishes the same detached redacted event.
 let routed = make_runtime();
 let center = notify.create(routed.runtime, settings());
+let optional_events = [];
+center.subscribe({
+	name: 'capture', minimum_severity: 'debug', types: [], components: [],
+	send: (event) => { push(optional_events, clone(event)); return true; }
+});
+let encoded_secret = 'encoded-secret-value';
+let encoded_base64 = b64enc(encoded_secret);
+let encoded_percent = percent_all(encoded_secret);
+let encoded_mixed = percent_mixed(encoded_secret);
 let source = make_event({
-	title: 'Failure -- $(touch /tmp/pwned)',
-	message: 'See https://user:pass@example.test/path?token=query-secret&safe=yes',
+	title: 'Failure proxy_password=title-password-secret -- $(touch /tmp/pwned)',
+	message: 'Authorization: Bearer message-bearer-secret password=plain-password-secret ' +
+		'encoded=' + encoded_base64 + ' percent=' + encoded_percent +
+		' mixed=' + encoded_mixed +
+		' See https://user:pass@example.test/path?token=query-secret&safe=yes',
 	context: {
 		auth: 'auth-secret',
 		bearer: 'bearer-secret',
 		session: 'session-secret',
 		private_key: 'private-secret',
 		access_key: 'access-secret',
+		proxy_password: 'proxy-password-secret',
+		api_secret: 'api-secret-value',
+		secret_key: 'root-secret-key-value',
+		x_api_key: 'x-api-key-value',
+		signing_key: 'signing-key-value',
+		ssh_key: 'ssh-key-value',
+		token_value: 'token-value-secret',
+		apiSecret: 'camel-api-secret',
+		proxyPassword: 'camel-proxy-password',
+		authorizationHeader: 'camel-authorization-header',
+		sessionId: 'camel-session-id',
+		cookieValue: 'camel-cookie-value',
+		bearerToken: 'camel-bearer-token',
+		xAPIKey: 'acronym-api-key',
+		encoded_token: encoded_secret,
+		nested_meta: {
+			dedupe_key: 'nested-dedupe-secret',
+			recovery_of: 'nested-recovery-secret'
+		},
 		nested: [
-			{ authorization: 'Basic header-secret', cookie: 'cookie-secret' },
+			{ authorization: 'Basic header-secret',
+				cookie: 'sid=cookie-secret; csrf="cookie-second-secret"' },
 			{ safe: 'visible', url: 'https://u:p@example.test/a?access_token=url-secret' }
 		]
 	}
@@ -162,20 +258,46 @@ assert_equal(logged.context.bearer, '[REDACTED]');
 assert_equal(logged.context.session, '[REDACTED]');
 assert_equal(logged.context.private_key, '[REDACTED]');
 assert_equal(logged.context.access_key, '[REDACTED]');
+assert_equal(logged.context.proxy_password, '[REDACTED]');
+assert_equal(logged.context.api_secret, '[REDACTED]');
+assert_equal(logged.context.secret_key, '[REDACTED]');
+assert_equal(logged.context.x_api_key, '[REDACTED]');
+assert_equal(logged.context.signing_key, '[REDACTED]');
+assert_equal(logged.context.ssh_key, '[REDACTED]');
+assert_equal(logged.context.token_value, '[REDACTED]');
+assert_equal(logged.context.apiSecret, '[REDACTED]');
+assert_equal(logged.context.proxyPassword, '[REDACTED]');
+assert_equal(logged.context.authorizationHeader, '[REDACTED]');
+assert_equal(logged.context.sessionId, '[REDACTED]');
+assert_equal(logged.context.cookieValue, '[REDACTED]');
+assert_equal(logged.context.bearerToken, '[REDACTED]');
+assert_equal(logged.context.xAPIKey, '[REDACTED]');
+assert_equal(logged.context.nested_meta.dedupe_key, '[REDACTED]');
+assert_equal(logged.context.nested_meta.recovery_of, '[REDACTED]');
+assert_equal(logged.context.encoded_token, '[REDACTED]');
 assert_equal(logged.context.nested[0].authorization, '[REDACTED]');
 assert_equal(logged.context.nested[0].cookie, '[REDACTED]');
 assert_equal(logged.context.nested[1].safe, 'visible');
 assert_equal(logged.message,
+	'Authorization: [REDACTED] [REDACTED] password=[REDACTED] ' +
+	'encoded=[REDACTED] percent=[REDACTED] mixed=[REDACTED] ' +
 	'See https://***:***@example.test/path?token=***&safe=yes');
 assert_equal(logged.context.nested[1].url,
 	'https://***:***@example.test/a?access_token=***');
 assert_equal(center.history()[0].context.safe, null);
 let serialized = sprintf('%J', { history: center.history(), calls: routed.process.calls,
-	published: routed.published });
+	published: routed.published, optional: optional_events });
 for (let secret in [ 'auth-secret', 'bearer-secret', 'session-secret', 'private-secret',
 	'access-secret', 'header-secret', 'cookie-secret', 'query-secret', 'url-secret',
-	'user:pass', 'u:p' ])
+	'cookie-second-secret', 'proxy-password-secret', 'api-secret-value',
+	'root-secret-key-value', 'x-api-key-value', 'signing-key-value', 'ssh-key-value',
+	'token-value-secret', 'nested-dedupe-secret', 'nested-recovery-secret',
+	'camel-api-secret', 'camel-proxy-password', 'camel-authorization-header',
+	'camel-session-id', 'camel-cookie-value', 'camel-bearer-token', 'acronym-api-key',
+	'title-password-secret', 'message-bearer-secret', 'plain-password-secret',
+	encoded_secret, encoded_base64, encoded_percent, encoded_mixed, 'user:pass', 'u:p' ])
 	assert_true(index(serialized, secret) < 0, 'notification boundary leaked ' + secret);
+assert_equal(length(optional_events), 1);
 assert_equal(length(routed.process.calls), 1, 'event data never becomes an executable command');
 let history_snapshot = center.history();
 history_snapshot[0].context.auth = 'injected-secret';
@@ -261,6 +383,24 @@ dedupe_env.clock.advance(1000);
 assert_equal(dedupe_center.emit({ ...failure, occurred_at: 2000 }), true);
 assert_equal(dedupe_center.history()[1].severity, 'error');
 assert_equal(dedupe_center.history()[1].context.occurrences, 2);
+
+// Internal occurrence enrichment is included in the final context byte bound.
+let context_bound_env = make_runtime(3500);
+let context_bound = notify.create(context_bound_env.runtime, settings({
+	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+	luci: { enabled: false, channel: 'miclash.notification', minimum_severity: 'debug',
+		types: [], components: [] }
+}));
+assert_throws(() => context_bound.emit(make_event({
+	dedupe_key: 'failure/context-bound', occurred_at: 3500,
+	context: context_of_bytes(32768)
+})), 'RESPONSE_TOO_LARGE');
+assert_equal(length(context_bound.history()), 0);
+	assert_equal(context_bound.emit(make_event({
+	dedupe_key: 'failure/context-bound', occurred_at: 3500,
+	context: context_of_bytes(32750)
+})), true);
+assert_equal(context_bound.history()[0].context.occurrences, 1);
 dedupe_env.clock.advance(1000);
 dedupe_center.emit({ ...failure, occurred_at: 3000 });
 assert_equal(dedupe_center.history()[2].severity, 'critical');
@@ -292,6 +432,30 @@ dedupe_env.clock.advance(1000);
 assert_equal(dedupe_center.emit({ ...recovery, occurred_at: 6000 }), false);
 assert_equal(dedupe_center.emit({ ...failure, occurred_at: 6000 }), true);
 assert_equal(dedupe_center.history()[length(dedupe_center.history()) - 1].severity, 'warning');
+
+let window_env = make_runtime(7000);
+let window_center = notify.create(window_env.runtime, settings({
+	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+	luci: { enabled: false, channel: 'miclash.notification', minimum_severity: 'debug',
+		types: [], components: [] }
+}));
+let window_event = make_event({ dedupe_key: 'failure/window-boundary', occurred_at: 7000 });
+assert_equal(window_center.emit(window_event), true);
+window_env.clock.advance(999);
+assert_equal(window_center.emit({ ...window_event, occurred_at: 7999 }), false);
+window_env.clock.advance(1);
+assert_equal(window_center.emit({ ...window_event, occurred_at: 8000 }), true);
+
+let rollback_env = make_runtime(9000);
+let rollback_center = notify.create(rollback_env.runtime, settings({
+	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+	luci: { enabled: false, channel: 'miclash.notification', minimum_severity: 'debug',
+		types: [], components: [] }
+}));
+let rollback_event = make_event({ dedupe_key: 'failure/clock-rollback', occurred_at: 9000 });
+assert_equal(rollback_center.emit(rollback_event), true);
+rollback_env.clock.advance(-2000);
+assert_equal(rollback_center.emit({ ...rollback_event, occurred_at: 7000 }), true);
 
 // Reconciler-domain events preserve durable failure identity and distinguish Guard behavior.
 let lifecycle = make_runtime(10000);
@@ -410,6 +574,70 @@ assert_equal(lifecycle_center.emit(restored({
 	}
 })), true);
 
+function guard_matrix_case(index_value, outage_type, guard_enabled, path, expected) {
+	let env = make_runtime(12000);
+	let center_value = notify.create(env.runtime, settings({
+		syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+		luci: { enabled: false, channel: 'miclash.notification', minimum_severity: 'debug',
+			types: [], components: [] }
+	}));
+	let id = 'failure-' + (100 + index_value) + '-12000';
+	let target = (outage_type == 'direct_fallback' ? 'direct-fallback/' :
+		(outage_type == 'fail_closed' ? 'fail-closed/' : 'failure/')) + id;
+	let component = outage_type == 'guard_outage' ? 'guard' :
+		(outage_type == 'failure' ? 'dns' : 'mihomo');
+	center_value.emit(make_event({
+		type: outage_type,
+		severity: outage_type == 'guard_outage' || outage_type == 'fail_closed' ?
+			'critical' : 'warning',
+		component, title: 'Outage active', message: 'Outage requires a fresh recovery proof',
+		dedupe_key: target, occurred_at: 12000,
+		context: { failure_id: id }
+	}));
+	let restoration = make_event({
+		type: 'internet_restored', severity: 'notice', component: 'network',
+		title: 'Internet restored', message: 'Coherent observations confirm reachability',
+		dedupe_key: 'internet-restored/' + id, occurred_at: 12000,
+		recovery_of: target,
+		context: {
+			failure_id: id,
+			guard: { state: 'ok', enabled: guard_enabled, observed_at: 12000,
+				generation: 100 + index_value },
+			dns: { state: 'ok', observed_at: 12000 },
+			network: { state: 'ok', observed_at: 12000, path,
+				guard_generation: 100 + index_value }
+		}
+	});
+	if (expected)
+		assert_equal(center_value.emit(restoration), true,
+			outage_type + '/' + guard_enabled + '/' + path);
+	else {
+		assert_throws(() => center_value.emit(restoration), 'INVALID_ARGUMENT');
+		assert_equal(length(center_value.history()), 1,
+			'failed-closed restoration must not enter history');
+	}
+};
+
+let guard_matrix = [
+	[ 'direct_fallback', false, 'direct', true ],
+	[ 'direct_fallback', false, 'proxy', false ],
+	[ 'direct_fallback', false, 'guarded', false ],
+	[ 'direct_fallback', true, 'proxy', false ],
+	[ 'fail_closed', true, 'proxy', true ],
+	[ 'fail_closed', true, 'guarded', true ],
+	[ 'fail_closed', false, 'direct', false ],
+	[ 'guard_outage', true, 'proxy', true ],
+	[ 'guard_outage', false, 'direct', false ],
+	[ 'failure', false, 'direct', true ],
+	[ 'failure', false, 'proxy', true ],
+	[ 'failure', false, 'guarded', false ],
+	[ 'failure', true, 'direct', false ],
+	[ 'failure', true, 'proxy', true ],
+	[ 'failure', true, 'guarded', true ]
+];
+for (let index_value, item in guard_matrix)
+	guard_matrix_case(index_value, item[0], item[1], item[2], item[3]);
+
 // Memory, subscription and update outcomes use the same structured route.
 for (let event in [
 	make_event({
@@ -439,88 +667,103 @@ for (let event in [
 ])
 	assert_equal(lifecycle_center.emit(event), true);
 
-// Existing producer envelopes normalize before entering history or any sink.
+// Public emit is exact; an explicit unwired adapter converts legacy producers.
 let producer_env = make_runtime(30000);
 let producer_center = notify.create(producer_env.runtime, settings({
 	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
 	luci: { enabled: false, channel: 'miclash.notification', minimum_severity: 'debug',
-		types: [], components: [] }
+		 types: [], components: [] }
 }));
-assert_equal(producer_center.emit({ type: 'failure', data: {
+assert_throws(() => producer_center.emit({ type: 'failure', data: {
 	failure_id: 'failure-21-30000', component: 'guard', reason: 'automatic'
-} }), true);
+} }), 'INVALID_ARGUMENT');
+let producer_adapter = notify.producer(producer_env.runtime);
+let guard_failure_event = producer_adapter.reconcile('failure', {
+	failure_id: 'failure-21-30000', component: 'guard', reason: 'automatic'
+});
+assert_exact_event(guard_failure_event);
+assert_equal(producer_center.emit(guard_failure_event), true);
 assert_equal(producer_center.history()[0].type, 'guard_outage');
 assert_equal(producer_center.history()[0].dedupe_key, 'failure/failure-21-30000');
 assert_equal(producer_center.history()[0].context.failure_id, 'failure-21-30000');
-assert_equal(producer_center.emit({ type: 'failure', data: {
+assert_equal(producer_center.emit(producer_adapter.reconcile('failure', {
 	failure_id: 'failure-21-30000', component: 'guard', reason: 'automatic'
-} }), false);
-assert_equal(producer_center.emit({ type: 'recovery', data: {
+})), false);
+let guard_recovery_event = producer_adapter.reconcile('recovery', {
 	failure_id: 'failure-21-30000', component: 'guard', reason: 'scheduled'
-} }), true);
+});
+assert_exact_event(guard_recovery_event);
+assert_equal(producer_center.emit(guard_recovery_event), true);
 assert_equal(producer_center.history()[1].type, 'recovery');
 assert_equal(producer_center.history()[1].recovery_of, 'failure/failure-21-30000');
 
-for (let producer in [
-	{ input: { type: 'fail_closed', data: {
+for (let produced in [
+	{ event: producer_adapter.reconcile('fail_closed', {
 		failure_id: 'failure-22-30000', component: 'mihomo', reason: 'automatic'
-	} }, expected: 'fail_closed' },
-	{ input: { type: 'direct_fallback', data: {
+	}), expected: 'fail_closed' },
+	{ event: producer_adapter.reconcile('direct_fallback', {
 		failure_id: 'failure-23-30000', component: 'mihomo', reason: 'automatic'
-	} }, expected: 'direct_fallback' },
-	{ input: { type: 'memory_recovery_stage', data: {
+	}), expected: 'direct_fallback' },
+	{ event: producer_adapter.memory({ type: 'memory_recovery_stage',
 		recovery_id: 'memory-1-30000', action: 'reload', ready: false,
 		material_drop: false, preserve_guard: true
-	} }, expected: 'memory_action' },
-	{ input: { type: 'memory_recovery', data: {
+	}), expected: 'memory_action' },
+	{ event: producer_adapter.memory({ type: 'memory_recovery',
 		recovery_id: 'memory-1-30000', result: 'failed', preserve_guard: true
-	} }, expected: 'memory_outcome' },
-	{ input: { type: 'operation', data: {
+	}), expected: 'memory_outcome' },
+	{ event: producer_adapter.operation({
 		id: 'operation-31', kind: 'subscription.update', state: 'success',
 		source: 'auto', context: { profile: 'config.yaml', token: 'operation-secret' }
-	} }, expected: 'subscription_outcome' },
-	{ input: { type: 'operation', data: {
+	}), expected: 'subscription_outcome' },
+	{ event: producer_adapter.operation({
 		id: 'operation-32', kind: 'updates.mihomo', state: 'failure',
 		source: 'luci', context: { private_key: 'update-secret' }
-	} }, expected: 'update_outcome' },
-	{ input: { type: 'operation', data: {
+	}), expected: 'update_outcome' },
+	{ event: producer_adapter.operation({
 		id: 'operation-33', kind: 'updates.miclash', state: 'interrupted',
 		source: 'system', error: { code: 'INTERRUPTED' }
-	} }, expected: 'update_outcome' }
+	}), expected: 'update_outcome' }
 ]) {
-	assert_equal(producer_center.emit(producer.input), true);
+	assert_exact_event(produced.event);
+	assert_equal(producer_center.emit(produced.event), true);
 	assert_equal(producer_center.history()[length(producer_center.history()) - 1].type,
-		producer.expected);
+		produced.expected);
 };
 let producer_serialized = sprintf('%J', producer_center.history());
 assert_true(index(producer_serialized, 'operation-secret') < 0);
 assert_true(index(producer_serialized, 'update-secret') < 0);
 
-assert_throws(() => producer_center.emit({ type: 'internet_restored', data: {
+let unknown_restoration = producer_adapter.internet({
 	failure_id: 'failure-23-30000', recovery_of: 'direct-fallback/failure-23-30000',
 	guard: { state: 'unknown', enabled: null, observed_at: 30000, generation: 11 },
 	dns: { state: 'ok', observed_at: 30000 },
 	network: { state: 'ok', observed_at: 30000, path: 'direct', guard_generation: 11 }
-} }), 'INVALID_ARGUMENT');
-assert_equal(producer_center.emit({ type: 'internet_restored', data: {
+});
+assert_exact_event(unknown_restoration);
+assert_throws(() => producer_center.emit(unknown_restoration), 'INVALID_ARGUMENT');
+let producer_restoration = producer_adapter.internet({
 	failure_id: 'failure-23-30000', recovery_of: 'direct-fallback/failure-23-30000',
 	guard: { state: 'ok', enabled: false, observed_at: 30000, generation: 11 },
 	dns: { state: 'ok', observed_at: 30000 },
 	network: { state: 'ok', observed_at: 30000, path: 'direct', guard_generation: 11 }
-} }), true);
+});
+assert_exact_event(producer_restoration);
+assert_equal(producer_center.emit(producer_restoration), true);
 assert_equal(producer_center.history()[length(producer_center.history()) - 1].type,
 	'internet_restored');
 assert_equal(producer_center.history()[length(producer_center.history()) - 1].recovery_of,
 	'direct-fallback/failure-23-30000');
 
-for (let malformed in [
-	{ type: 'unknown_producer', data: {} },
-	{ type: 'failure', data: { failure_id: '../collision', component: 'dns', reason: 'auto' } },
-	{ type: 'operation', data: { id: 'operation-34', kind: 'service.restart', state: 'success' } },
-	{ type: 'failure', data: { failure_id: 'failure-33-30000', component: 'dns', reason: 'auto' },
-		extra: true }
-])
-	assert_throws(() => producer_center.emit(malformed), 'INVALID_ARGUMENT');
+assert_throws(() => producer_adapter.reconcile('unknown_producer', {}), 'INVALID_ARGUMENT');
+assert_throws(() => producer_adapter.reconcile('failure', {
+	failure_id: '../collision', component: 'dns', reason: 'auto'
+}), 'INVALID_ARGUMENT');
+assert_throws(() => producer_adapter.operation({
+	id: 'operation-34', kind: 'service.restart', state: 'success'
+}), 'INVALID_ARGUMENT');
+assert_throws(() => producer_center.emit({
+	...make_event(), data: { failure_id: 'failure-33-30000' }
+}), 'INVALID_ARGUMENT');
 
 // Explicit channel tests bypass filters/dedupe/history but still use safe redacted payloads.
 let tested = make_runtime(20000);
@@ -539,26 +782,70 @@ assert_equal(tested_center.test('syslog'), true);
 assert_equal(tested_center.test('luci'), true);
 assert_throws(() => tested_center.test('missing'), 'INVALID_ARGUMENT');
 
-// Dedupe state has a deterministic 512-key ceiling and evicts the oldest identity.
+// Dedupe state evicts the oldest inactive identity without orphaning active failures.
 let dedupe_bound_env = make_runtime(40000);
 let dedupe_bound = notify.create(dedupe_bound_env.runtime, settings({
 	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
 	luci: { enabled: false, channel: 'miclash.notification', minimum_severity: 'debug',
 		types: [], components: [] }
 }));
-for (let i = 0; i < 513; i++)
+for (let i = 0; i < 512; i++)
 	assert_equal(dedupe_bound.emit(make_event({
-		dedupe_key: 'failure/bounded-' + i,
-		context: { failure_id: 'bounded-' + i }
+		type: 'update_outcome', severity: 'info', component: 'updates',
+		title: 'Bounded update outcome', message: 'Outcome ' + i,
+		dedupe_key: 'updates/bounded-' + i,
+		context: { operation_id: 'bounded-' + i, outcome: 'success' }
 	})), true);
-assert_equal(dedupe_bound.emit(make_event({ dedupe_key: 'failure/bounded-512',
-	context: { failure_id: 'bounded-512' } })), false);
-assert_throws(() => dedupe_bound.emit(make_event({
+assert_equal(dedupe_bound.emit(make_event({
+	type: 'update_outcome', severity: 'info', component: 'updates',
+	title: 'Bounded update outcome', message: 'Outcome 512',
+	dedupe_key: 'updates/bounded-512',
+	context: { operation_id: 'bounded-512', outcome: 'success' }
+})), true);
+assert_equal(dedupe_bound.emit(make_event({
+	type: 'update_outcome', severity: 'info', component: 'updates',
+	title: 'Bounded update outcome', message: 'Outcome 1',
+	dedupe_key: 'updates/bounded-1',
+	context: { operation_id: 'bounded-1', outcome: 'success' }
+})), false);
+assert_equal(dedupe_bound.emit(make_event({
+	type: 'update_outcome', severity: 'info', component: 'updates',
+	title: 'Bounded update outcome', message: 'Outcome 0',
+	dedupe_key: 'updates/bounded-0',
+	context: { operation_id: 'bounded-0', outcome: 'success' }
+})), true);
+
+let active_bound_env = make_runtime(41000);
+let active_bound = notify.create(active_bound_env.runtime, settings({
+	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+	luci: { enabled: false, channel: 'miclash.notification', minimum_severity: 'debug',
+		types: [], components: [] }
+}));
+for (let i = 0; i < 512; i++)
+	assert_equal(active_bound.emit(make_event({
+		dedupe_key: 'failure/active-' + i,
+		context: { failure_id: 'active-' + i }
+	})), true);
+assert_throws(() => active_bound.emit(make_event({
+	dedupe_key: 'failure/active-overflow',
+	context: { failure_id: 'active-overflow' }
+})), 'BUSY');
+assert_equal(active_bound.emit(make_event({
 	type: 'recovery', severity: 'notice', title: 'Old failure recovered',
-	message: 'Old failure recovery arrived after eviction',
-	dedupe_key: 'recovery/bounded-0', recovery_of: 'failure/bounded-0',
-	context: { failure_id: 'bounded-0' }
-})), 'INVALID_ARGUMENT');
+	message: 'Oldest active failure recovered safely',
+	dedupe_key: 'recovery/active-0', recovery_of: 'failure/active-0',
+	context: { failure_id: 'active-0' }
+})), true);
+assert_equal(active_bound.emit(make_event({
+	dedupe_key: 'failure/active-overflow',
+	context: { failure_id: 'active-overflow' }
+})), true);
+assert_equal(active_bound.emit(make_event({
+	type: 'recovery', severity: 'notice', title: 'Another failure recovered',
+	message: 'Another original active failure is still recoverable',
+	dedupe_key: 'recovery/active-1', recovery_of: 'failure/active-1',
+	context: { failure_id: 'active-1' }
+})), true);
 
 // Latest history is fixed at 200 and the 201st accepted event evicts the oldest.
 let bounded = make_runtime(50000);
