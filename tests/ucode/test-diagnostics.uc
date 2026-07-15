@@ -20,6 +20,16 @@ function percent_encoded(value) {
 	}
 	return output;
 };
+function full_percent_lower(value) {
+	let output = '';
+	for (let offset = 0; offset < length(value); offset++)
+		output += lc(sprintf('%%%02X', ord(value, offset)));
+	return output;
+};
+function urlsafe_unpadded_base64(value) {
+	let output = replace(replace(b64enc(value), /\+/g, '-'), /\//g, '_');
+	return replace(output, /=+$/, '');
+};
 
 let secrets = fixture('secret-corpus.json');
 let filesystem = fakes.fs({});
@@ -149,6 +159,54 @@ for (let secret in [ encoded_secret, percent_encoded(encoded_secret),
 		'adversarial report leaked ' + substr(secret, 0, 32));
 assert_true(index(adversarial_report.content, encoded_secret) < 0,
 	'object key secret is scrubbed');
+
+// Every project-sensitive key and HTTP text form contributes aliases to the
+// same closed redaction set, including values nested below secret containers.
+let auth_secret = 'direct-auth-secret';
+let bearer_key_secret = 'direct-bearer-secret';
+let session_secret = 'direct-session-secret';
+let private_key_secret = 'private-key-secret';
+let access_key_secret = 'access-key-secret';
+let nested_secret = 'nested-container-secret';
+let basic_secret = 'basic-header-secret';
+let cookie_first = 'cookie-first-secret';
+let cookie_second = 'cookie-second-secret';
+let percent_secret = 'fully-percent-secret';
+let urlsafe_secret = 'url-safe-secret-??>>';
+let boundary_sources = { ...sources,
+	settings: () => ({ core: { subscription_url: '' }, telegram: {
+		enabled: false, token: '', user_id: '' } }),
+	uci: () => ({ direct: {
+		auth: auth_secret,
+		bearer: bearer_key_secret,
+		session: session_secret,
+		private_key: private_key_secret,
+		access_key: access_key_secret,
+		credential: { nested: [ nested_secret ] },
+		token: [ percent_secret, urlsafe_secret ]
+	} }),
+	health: () => ({ headers:
+		'Authorization: Basic ' + basic_secret + '\n' +
+		'Cookie: sid=' + cookie_first + '; csrf="' + cookie_second + '"' }),
+	logs: () => [
+		'aliases=' + join(',', [ auth_secret, bearer_key_secret, session_secret,
+			private_key_secret, access_key_secret, nested_secret ]),
+		'basic-alias=' + basic_secret,
+		'cookie-aliases=' + cookie_first + ',' + cookie_second,
+		'fully-percent=' + full_percent_lower(percent_secret),
+		'urlsafe-unpadded=' + urlsafe_unpadded_base64(urlsafe_secret)
+	]
+};
+let boundary_center = diagnostics.create({ runtime, sources: boundary_sources });
+let boundary_report = boundary_center.read_report({
+	id: boundary_center.create_report().id, format: 'json'
+});
+for (let secret in [ auth_secret, bearer_key_secret, session_secret,
+	private_key_secret, access_key_secret, nested_secret, basic_secret,
+	cookie_first, cookie_second, full_percent_lower(percent_secret),
+	urlsafe_unpadded_base64(urlsafe_secret) ])
+	assert_true(index(boundary_report.content, secret) < 0,
+		'redaction boundary leaked ' + secret);
 
 let collision_sources = { ...sources,
 	settings: () => ({ core: { subscription_url: '' }, telegram: {

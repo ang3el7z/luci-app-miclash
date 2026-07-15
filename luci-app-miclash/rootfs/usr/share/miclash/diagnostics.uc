@@ -24,7 +24,12 @@ function same_node(left, right) {
 };
 function secret_key(name) {
 	name = replace(lc(name ?? ''), /[^a-z0-9]+/g, '_');
-	return match(name, /(password|passwd|secret|token|authorization|cookie|credential|api_key|subscription_url)$/);
+	return match(name, /^(auth|authorization|bearer|cookie|credential|password|passwd|secret|session|token)$/) ||
+		match(name, /^(api|private|access)_?key$/) ||
+		match(name, /^(access|refresh)_?token$/) ||
+		match(name, /^client_?secret$/) ||
+		match(name, /^telegram_?token$/) ||
+		match(name, /^subscription_?url/);
 };
 function add_secret(secrets, value) {
 	if (type(value) != 'string' || !length(value) || length(value) > MAX_STRING ||
@@ -54,34 +59,55 @@ function discover_text(secrets, input) {
 	for (let marker in [ 'bearer ', 'password=', 'password:', 'passwd=', 'passwd:',
 		'secret=', 'secret:', 'token=', 'token:', 'api_key=', 'api_key:',
 		'api-key=', 'api-key:', 'authorization=', 'authorization:',
-		'cookie=', 'cookie:' ])
+		'basic ', 'cookie=', 'cookie:' ])
 		discover_marker(secrets, input, marker);
+	let lowered = lc(input), offset = 0;
+	while (offset < length(input)) {
+		let relative = index(substr(lowered, offset), 'cookie:');
+		if (relative < 0) break;
+		let start = offset + relative + 7, end = start;
+		while (end < length(input) && substr(input, end, 1) != '\n' &&
+			substr(input, end, 1) != '\r') end++;
+		for (let pair in split(substr(input, start, end - start), ';')) {
+			let separator = index(pair, '=');
+			if (separator >= 0) {
+				let value = trim(substr(pair, separator + 1));
+				if (length(value) >= 2 &&
+					((substr(value, 0, 1) == '"' && substr(value, -1) == '"') ||
+					 (substr(value, 0, 1) == "'" && substr(value, -1) == "'")))
+					value = substr(value, 1, length(value) - 2);
+				add_secret(secrets, value);
+			}
+		}
+		offset = max(end + 1, start);
+	}
 };
 function validate_and_discover(value) {
-	let secrets = [], stack = [ { value, key: null, depth: 0 } ];
+	let secrets = [], stack = [ { value, key: null, depth: 0, sensitive: false } ];
 	let nodes = 0, aggregate = 0;
 	while (length(stack)) {
 		let item = pop(stack), kind = type(item.value);
 		if (item.depth > MAX_DEPTH || ++nodes > MAX_NODES)
 			errors.fail('RESPONSE_TOO_LARGE');
+		let sensitive = item.sensitive;
 		if (type(item.key) == 'string') {
 			if (length(item.key) > MAX_STRING) errors.fail('RESPONSE_TOO_LARGE');
 			aggregate += length(item.key);
 			discover_text(secrets, item.key);
-			if (secret_key(item.key) && type(item.value) == 'string')
-				add_secret(secrets, item.value);
+			sensitive = sensitive || secret_key(item.key);
 		}
 		if (kind == 'string') {
 			if (length(item.value) > MAX_STRING) errors.fail('RESPONSE_TOO_LARGE');
 			aggregate += length(item.value);
 			discover_text(secrets, item.value);
+			if (sensitive) add_secret(secrets, item.value);
 		}
 		else if (kind == 'array')
 			for (let child in item.value)
-				push(stack, { value: child, key: null, depth: item.depth + 1 });
+				push(stack, { value: child, key: null, depth: item.depth + 1, sensitive });
 		else if (kind == 'object')
 			for (let name, child in item.value)
-				push(stack, { value: child, key: name, depth: item.depth + 1 });
+				push(stack, { value: child, key: name, depth: item.depth + 1, sensitive });
 		else if (kind != 'null' && kind != 'bool' && kind != 'int' && kind != 'double')
 			errors.fail('INVALID_RESPONSE');
 		if (aggregate > MAX_INPUT) errors.fail('RESPONSE_TOO_LARGE');
@@ -111,7 +137,16 @@ function variants(raw) {
 		add(percent_variant(secret, false));
 		add(lc(percent_variant(secret, false)));
 		add(percent_variant(secret, true));
-		try { add(b64enc(secret)); } catch (error) {}
+		add(lc(percent_variant(secret, true)));
+		try {
+			let base64 = b64enc(secret);
+			let urlsafe = replace(replace(base64, /\+/g, '-'), /\//g, '_');
+			add(base64);
+			add(urlsafe);
+			add(replace(base64, /=+$/, ''));
+			add(replace(urlsafe, /=+$/, ''));
+		}
+		catch (error) {}
 	}
 	sort(output, (left, right) => length(right) - length(left));
 	return output;
