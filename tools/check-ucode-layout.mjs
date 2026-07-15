@@ -49,14 +49,18 @@ function expandedBasenames(label) {
 	return line.slice(label.length + 1).trim().split(/\s+/).filter(Boolean)
 		.map((path) => basename(path)).sort();
 }
-const experimental = [ 'health.uc', 'memory.uc', 'reconcile.uc' ];
+const experimental = [
+	'backup.uc', 'devices.uc', 'diagnostics.uc', 'diff.uc', 'health.uc', 'http.uc',
+	'memory.uc', 'notify.uc', 'reconcile.uc', 'route-test.uc', 'schedule.uc',
+	'scheduler.uc', 'subscription.uc', 'updates.uc'
+].sort();
 assert.deepEqual(expandedBasenames('UNSHIPPED'), experimental,
-	'the explicit unshipped list must contain exactly the three experimental modules');
+	'the explicit unshipped list must contain every Plan 2/3 module held for final cutover');
 const allModules = readdirSync('luci-app-miclash/rootfs/usr/share/miclash')
 	.filter((name) => name.endsWith('.uc')).sort();
 assert.deepEqual(expandedBasenames('PACKAGE'),
 	allModules.filter((name) => !experimental.includes(name)),
-	'the package make expression must retain every approved ucode module and exclude experiments');
+	'the package make expression must retain every approved ucode module and exclude held features');
 assert.match(makefile, /\$\(INSTALL_DATA\)\s+\$\(MICLASH_PACKAGE_UCODE\)\s+\$\(1\)\/usr\/share\/miclash\//,
 	'the package install recipe must consume the filtered ucode expansion');
 

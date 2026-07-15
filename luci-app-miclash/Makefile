@@ -22,7 +22,18 @@ PKG_BUILD_DEPENDS:=luci-base/host
 MICLASH_UNSHIPPED_UCODE:= \
 	./rootfs/usr/share/miclash/health.uc \
 	./rootfs/usr/share/miclash/reconcile.uc \
-	./rootfs/usr/share/miclash/memory.uc
+	./rootfs/usr/share/miclash/memory.uc \
+	./rootfs/usr/share/miclash/http.uc \
+	./rootfs/usr/share/miclash/subscription.uc \
+	./rootfs/usr/share/miclash/scheduler.uc \
+	./rootfs/usr/share/miclash/updates.uc \
+	./rootfs/usr/share/miclash/diff.uc \
+	./rootfs/usr/share/miclash/diagnostics.uc \
+	./rootfs/usr/share/miclash/route-test.uc \
+	./rootfs/usr/share/miclash/notify.uc \
+	./rootfs/usr/share/miclash/backup.uc \
+	./rootfs/usr/share/miclash/devices.uc \
+	./rootfs/usr/share/miclash/schedule.uc
 MICLASH_PACKAGE_UCODE:=$(filter-out $(MICLASH_UNSHIPPED_UCODE),$(wildcard ./rootfs/usr/share/miclash/*.uc))
 
 include $(INCLUDE_DIR)/package.mk

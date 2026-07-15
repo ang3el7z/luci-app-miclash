@@ -52,6 +52,34 @@ function finish(env, record) {
 	return env.ops.get(record.id);
 };
 
+// Internal worker primitives reuse the public Candidate and activation paths
+// inside one already-running central mutation. They create no nested operation
+// records and reject contexts which do not belong to a live operation.
+let internal_env = environment();
+let internal_result = null;
+let internal = internal_env.ops.submit('subscription.update', 'auto', {}, (ctx) => {
+	internal_result = internal_env.cfg.validate_in_operation(
+		ctx, 'config.yaml', fixture('valid.yaml'));
+	if (internal_result?.ok !== true)
+		return ctx.complete(internal_result?.error);
+	internal_result = internal_env.cfg.apply_in_operation(
+		ctx, 'config.yaml', fixture('valid.yaml'), 'auto', {
+		attempt_result: 'success'
+	});
+	if (internal_result?.ok !== true)
+		return ctx.complete(internal_result?.error);
+	return true;
+});
+assert_equal(finish(internal_env, internal).state, 'success');
+assert_equal(internal_result?.ok, true);
+assert_equal(length(internal_env.ops.list()), 1);
+assert_equal(internal_env.fs.readfile('/opt/clash/config.yaml'), fixture('valid.yaml'));
+assert_throws(() => internal_env.cfg.validate_in_operation(
+	{ id: 'fake-operation' }, 'config.yaml', fixture('valid.yaml')), 'INVALID_ARGUMENT');
+assert_throws(() => internal_env.cfg.apply_in_operation(
+	{ id: internal.id }, 'config.yaml', fixture('valid.yaml'), 'auto'),
+	'INVALID_ARGUMENT');
+
 // Only the three on-disk profile names are accepted.
 for (let profile in [ 'config.yaml', 'config2.yaml', 'config3.yaml' ])
 	assert_equal(schema.profile_name(profile), profile);

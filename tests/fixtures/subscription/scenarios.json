@@ -1,0 +1,4 @@
+{
+  "direct_https": "https://subscriptions.example.test/config.yaml",
+  "explicit_insecure_http": "http://subscriptions.example.test/config.yaml"
+}

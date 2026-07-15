@@ -44,6 +44,7 @@ export function create(runtime, operations, history) {
 	    type(runtime?.digest?.sha256_file) != 'function' ||
 	    type(runtime?.service?.reload) != 'function' ||
 	    type(runtime?.service?.health) != 'function' || type(operations?.submit) != 'function' ||
+	    type(operations?.get) != 'function' ||
 	    type(history?.snapshot) != 'function' || type(history?.snapshot_bytes) != 'function' ||
 	    type(history?.list) != 'function')
 		errors.fail('INVALID_ARGUMENT');
@@ -250,6 +251,18 @@ export function create(runtime, operations, history) {
 		}
 		return true;
 	};
+	function operation_context(ctx) {
+		if (type(ctx) != 'object' || type(ctx?.id) != 'string' ||
+		    type(ctx?.stage) != 'function' || type(ctx?.complete) != 'function' ||
+		    ctx?.runtime !== runtime)
+			errors.fail('INVALID_ARGUMENT');
+		try { schema.operation_id(ctx.id); }
+		catch (error) { errors.fail('INVALID_ARGUMENT'); }
+		let record = operations.get(ctx.id);
+		if (record?.state != 'running')
+			errors.fail('INVALID_ARGUMENT');
+		return ctx;
+	};
 
 	let api = {};
 	api.list_profiles = () => [ ...PROFILES ];
@@ -264,12 +277,20 @@ export function create(runtime, operations, history) {
 				errors.fail('INVALID_ARGUMENT');
 			storage.atomic_write(runtime, draft_path(profile), content, 0o600);
 		});
+	api.validate_in_operation = (ctx, profile, content) => {
+		operation_context(ctx);
+		return with_candidate(ctx, profile, content, () => ({ ok: true }));
+	};
+	api.apply_in_operation = (ctx, profile, content, source, extra) => {
+		operation_context(ctx);
+		return activation(ctx, profile, content, source, extra);
+	};
 	api.validate = (profile, content, source) => submit(
 		'config.validate', source, profile, (ctx) => complete_result(ctx,
-			with_candidate(ctx, profile, content, () => ({ ok: true }))));
+			api.validate_in_operation(ctx, profile, content)));
 	api.apply = (profile, content, source) => submit(
 		'config.apply', source, profile, (ctx) => complete_result(ctx,
-			activation(ctx, profile, content, source)));
+			api.apply_in_operation(ctx, profile, content, source)));
 	api.restore = (profile, revision, source) => {
 		revision = schema.operation_id(revision);
 		return submit('history.restore', source, profile, (ctx) => complete_result(ctx,
