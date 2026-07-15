@@ -408,6 +408,50 @@ export function create(runtime, options) {
 		return target;
 	};
 
+	function ancestry_references(record) {
+		let found = {};
+		let output = [];
+		let references = [ record.parent_revision, record.restored_revision ];
+		if (record.content_revision != record.revision)
+			push(references, record.content_revision);
+		if (record.duplicate_of != record.revision)
+			push(references, record.duplicate_of);
+		for (let revision in references) {
+			if (revision == null || found[revision])
+				continue;
+			found[revision] = true;
+			push(output, revision);
+		}
+		return output;
+	};
+
+	function references_revision(record, revision) {
+		for (let ancestor in ancestry_references(record))
+			if (ancestor == revision)
+				return true;
+		return false;
+	};
+
+	function validate_ancestry(profile, record, visiting, validated) {
+		if (validated[record.revision])
+			return true;
+		if (visiting[record.revision])
+			errors.fail('CORRUPT_STATE');
+		visiting[record.revision] = true;
+		for (let revision in ancestry_references(record)) {
+			let target;
+			try {
+				target = read_record(profile, revision);
+				canonical_record(profile, target);
+			}
+			catch (error) { errors.fail('CORRUPT_STATE'); }
+			validate_ancestry(profile, target, visiting, validated);
+		}
+		delete visiting[record.revision];
+		validated[record.revision] = true;
+		return true;
+	};
+
 	function all_records(profile) {
 		profile = schema.profile_name(profile);
 		recover_profile(profile);
@@ -426,6 +470,7 @@ export function create(runtime, options) {
 			try {
 				let record = read_record(profile, revision);
 				canonical_record(profile, record);
+				validate_ancestry(profile, record, {}, {});
 				push(output, public_record(record));
 			}
 			catch (error) {
@@ -440,6 +485,7 @@ export function create(runtime, options) {
 		recover_profile(profile);
 		let record = read_record(profile, revision);
 		let content_record = canonical_record(profile, record);
+		validate_ancestry(profile, record, {}, {});
 		let files = revision_files(profile, content_record.revision);
 		let content = secure_read(files.yaml,
 			0o600, MAX_CONTENT_BYTES, 'CORRUPT_STATE');
@@ -458,6 +504,23 @@ export function create(runtime, options) {
 		let hash = runtime.digest.sha256(content);
 		if (type(hash) != 'string' || !match(hash, /^[0-9a-f]{64}$/))
 			errors.fail('INTERNAL');
+		let restored_revision = metadata?.restored_revision ?? null;
+		if (restored_revision != null)
+			restored_revision = revision_id(restored_revision);
+		let parent_revision = metadata?.parent_revision ?? null;
+		if (parent_revision != null)
+			parent_revision = revision_id(parent_revision);
+		for (let ancestor in [ parent_revision, restored_revision ]) {
+			if (ancestor == null)
+				continue;
+			let target;
+			try {
+				target = read_record(profile, ancestor);
+				canonical_record(profile, target);
+				validate_ancestry(profile, target, {}, {});
+			}
+			catch (error) { errors.fail('CORRUPT_STATE'); }
+		}
 		let duplicate = null;
 		let existing_records = all_records(profile);
 		let latest_timestamp = -1;
@@ -514,12 +577,6 @@ export function create(runtime, options) {
 		if (revision == null)
 			errors.fail('INTERNAL');
 		let content_revision = duplicate?.content_revision ?? revision;
-		let restored_revision = metadata?.restored_revision ?? null;
-		if (restored_revision != null)
-			restored_revision = revision_id(restored_revision);
-		let parent_revision = metadata?.parent_revision ?? null;
-		if (parent_revision != null)
-			parent_revision = revision_id(parent_revision);
 		let record = {
 			revision,
 			filename: 'config.yaml',
@@ -738,6 +795,9 @@ export function create(runtime, options) {
 			push(valid, record);
 		}
 		let protected_ids = {};
+		for (let record in valid)
+			if (revision_files(profile, record.revision).legacy)
+				protected_ids[record.revision] = true;
 		let first_kept = length(valid) - retention;
 		if (first_kept < 0)
 			first_kept = 0;
@@ -790,22 +850,39 @@ export function create(runtime, options) {
 				continue;
 			else if (!revision_files(profile, record.revision).legacy)
 				push(candidates, record);
-		sort(candidates, (left, right) => {
-			let left_alias = left.duplicate_of != null;
-			let right_alias = right.duplicate_of != null;
-			if (left_alias != right_alias)
-				return left_alias ? -1 : 1;
-			return compare_revision(left, right);
-		});
+		let remaining = {};
+		for (let record in candidates)
+			remaining[record.revision] = record;
+		let ordered = [];
+		while (length(ordered) < length(candidates)) {
+			let ready = [];
+			for (let revision, record in remaining) {
+				let has_dependent = false;
+				for (let dependent_revision, dependent in remaining)
+					if (dependent_revision != revision &&
+					    references_revision(dependent, revision)) {
+						has_dependent = true;
+						break;
+					}
+				if (!has_dependent)
+					push(ready, record);
+			}
+			if (!length(ready))
+				errors.fail('CORRUPT_STATE');
+			sort(ready, compare_revision);
+			push(ordered, ready[0]);
+			delete remaining[ready[0].revision];
+		}
+		candidates = ordered;
 		let removed_visible = {};
 		let removed = 0;
 		for (let record in candidates) {
-			if (record.duplicate_of == null)
-				for (let dependent in valid)
-					if (dependent.duplicate_of == record.revision &&
-					    !protected_ids[dependent.revision] &&
-					    !removed_visible[dependent.revision])
-						errors.fail('CORRUPT_STATE');
+			for (let dependent in valid)
+				if (dependent.revision != record.revision &&
+				    references_revision(dependent, record.revision) &&
+				    !protected_ids[dependent.revision] &&
+				    !removed_visible[dependent.revision])
+					errors.fail('CORRUPT_STATE');
 			let destination = revision_files(profile, record.revision);
 			if (destination.legacy)
 				continue;

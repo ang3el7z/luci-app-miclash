@@ -277,6 +277,62 @@ assert_equal(cycle_by_id[cycle_canonical.revision].corrupt, false);
 assert_equal(cycle_by_id[cycle_left.revision].corrupt, true);
 assert_equal(cycle_by_id[cycle_right.revision].corrupt, true);
 
+// Parent and restore ancestry is part of revision authentication. References
+// must resolve directly in the same profile, and the graph must be acyclic.
+let missing_ancestry = environment();
+let missing_root = missing_ancestry.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'missing-root\n', {});
+let missing_dependent = missing_ancestry.revisions.snapshot_bytes(
+	'config.yaml', 'restore', 'missing-dependent\n', {});
+let missing_metadata = read_revision_metadata(missing_ancestry, missing_dependent);
+missing_metadata.parent_revision =
+	'1700000000999-0123456789ab-0123456789abcdef';
+write_revision_metadata(missing_ancestry, missing_dependent, missing_metadata);
+let missing_by_id = {};
+for (let record in missing_ancestry.revisions.list('config.yaml'))
+	missing_by_id[record.revision] = record;
+assert_equal(missing_by_id[missing_root.revision].corrupt, false);
+assert_equal(missing_by_id[missing_dependent.revision].corrupt, true);
+assert_throws(() => missing_ancestry.revisions.read(
+	'config.yaml', missing_dependent.revision), 'CORRUPT_STATE');
+
+let rejected_ancestry = environment();
+assert_throws(() => rejected_ancestry.revisions.snapshot_bytes(
+	'config.yaml', 'restore', 'must-not-publish\n', {
+		parent_revision: '1700000000999-0123456789ab-0123456789abcdef'
+	}), 'CORRUPT_STATE');
+assert_equal(length(rejected_ancestry.revisions.list('config.yaml')), 0);
+
+let cross_profile_ancestry = environment();
+let other_profile = cross_profile_ancestry.revisions.snapshot_bytes(
+	'config2.yaml', 'manual', 'other-profile\n', {});
+let cross_profile_dependent = cross_profile_ancestry.revisions.snapshot_bytes(
+	'config.yaml', 'restore', 'cross-profile-dependent\n', {});
+let cross_profile_metadata = read_revision_metadata(
+	cross_profile_ancestry, cross_profile_dependent);
+cross_profile_metadata.restored_revision = other_profile.revision;
+write_revision_metadata(cross_profile_ancestry, cross_profile_dependent,
+	cross_profile_metadata);
+assert_equal(cross_profile_ancestry.revisions.list(
+	'config.yaml')[0].corrupt, true);
+
+let ancestry_cycle = environment();
+let ancestry_left = ancestry_cycle.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'ancestry-left\n', {});
+let ancestry_right = ancestry_cycle.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'ancestry-right\n', {});
+let ancestry_left_metadata = read_revision_metadata(ancestry_cycle, ancestry_left);
+let ancestry_right_metadata = read_revision_metadata(ancestry_cycle, ancestry_right);
+ancestry_left_metadata.parent_revision = ancestry_right.revision;
+ancestry_right_metadata.restored_revision = ancestry_left.revision;
+write_revision_metadata(ancestry_cycle, ancestry_left, ancestry_left_metadata);
+write_revision_metadata(ancestry_cycle, ancestry_right, ancestry_right_metadata);
+let ancestry_cycle_by_id = {};
+for (let record in ancestry_cycle.revisions.list('config.yaml'))
+	ancestry_cycle_by_id[record.revision] = record;
+assert_equal(ancestry_cycle_by_id[ancestry_left.revision].corrupt, true);
+assert_equal(ancestry_cycle_by_id[ancestry_right.revision].corrupt, true);
+
 let unauthenticated_coalesce = environment();
 let unauthenticated_original = unauthenticated_coalesce.revisions.snapshot_bytes(
 	'config.yaml', 'manual', 'same-content\n', {});
@@ -652,6 +708,71 @@ for (let record in dependency_visible)
 assert_true(canonical_still_visible);
 dependency.revisions.prune('config.yaml');
 assert_equal(length(auxiliary_entries(dependency)), 0);
+
+// Restore from an alias creates both an aliased restore audit and an aliased
+// restore-before audit. Repeated crashes after every tombstone rename must leave
+// a healthy visible graph, and retry must converge to the retention limit.
+let graph_prune = environment();
+graph_prune.clock.advance(1);
+let graph_current = graph_prune.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'current-active\n', {});
+graph_prune.clock.advance(1);
+let graph_selected = graph_prune.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'graph-selected\n', {});
+graph_prune.clock.advance(1);
+let graph_selected_alias = graph_prune.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'graph-selected\n', {});
+assert_equal(graph_selected_alias.duplicate_of, graph_selected.revision);
+let graph_restore = graph_prune.revisions.restore(
+	'config.yaml', graph_selected_alias.revision, 'luci');
+assert_equal(finish(graph_prune, graph_restore).state, 'success');
+let graph_restore_before = null;
+let graph_restore_audit = null;
+for (let record in graph_prune.revisions.list('config.yaml')) {
+	if (record.source == 'restore-before')
+		graph_restore_before = record;
+	else if (record.source == 'restore')
+		graph_restore_audit = record;
+}
+assert_equal(graph_restore_before.duplicate_of, graph_current.revision);
+assert_equal(graph_restore_audit.duplicate_of, graph_selected.revision);
+assert_equal(graph_restore_audit.parent_revision, graph_restore_before.revision);
+assert_equal(graph_restore_audit.restored_revision, graph_selected_alias.revision);
+let newest_graph_content = null;
+for (let index = 0; index < 12; index++) {
+	graph_prune.clock.advance(1);
+	newest_graph_content = 'graph-new-' + index + '\n';
+	graph_prune.revisions.snapshot_bytes(
+		'config.yaml', 'auto', newest_graph_content, {});
+}
+graph_prune.fs.writefile('/opt/clash/config.yaml', newest_graph_content);
+graph_prune.fs.set_mode('/opt/clash/config.yaml', 0o600);
+graph_prune.fs.writefile('/opt/clash/history/active-config.yaml.json', sprintf('%J\n', {
+	profile: 'config.yaml', hash: graph_prune.runtime.digest.sha256(newest_graph_content),
+	operation_id: 'graph-active', updated_at: graph_prune.clock.now()
+}));
+graph_prune.fs.set_mode('/opt/clash/history/active-config.yaml.json', 0o600);
+let graph_initial_count = length(graph_prune.revisions.list('config.yaml'));
+let graph_remove_count = graph_initial_count - 10;
+assert_true(graph_remove_count > 3);
+for (let removed = 0; removed < graph_remove_count; removed++) {
+	graph_prune.fs.throw_after_rename_once_matching = '/.prune-';
+	let prune_failure = null;
+	let prune_result = null;
+	try { prune_result = graph_prune.revisions.prune('config.yaml'); }
+	catch (error) { prune_failure = error; }
+	assert_true(prune_failure != null,
+		sprintf('expected prune crash after rename %d/%d, result=%J',
+			removed + 1, graph_remove_count, prune_result));
+	assert_equal(prune_failure.code ?? prune_failure.message, 'INTERNAL');
+	let visible = graph_prune.revisions.list('config.yaml');
+	assert_equal(length(visible), graph_initial_count - removed - 1);
+	for (let record in visible)
+		assert_equal(record.corrupt, false);
+}
+assert_equal(graph_prune.revisions.prune('config.yaml'), 0);
+assert_equal(length(graph_prune.revisions.list('config.yaml')), 10);
+assert_equal(length(auxiliary_entries(graph_prune)), 0);
 
 // Exact owned staging/tombstone directories are recovered; foreign names and
 // unsafe lookalikes are never followed or deleted.
