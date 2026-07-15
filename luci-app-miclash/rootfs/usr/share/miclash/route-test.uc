@@ -378,20 +378,31 @@ export function create(dependencies) {
 			catch (error) { fail('HEALTH_FAILED'); }
 			if (type(desired) != 'object' || type(observed) != 'object')
 				fail('HEALTH_FAILED');
-			let answers = [];
+			let answers = [], dns_available = input.kind != 'domain',
+				dns_cached = false;
 			if (input.kind == 'domain')
 				try {
 					let values = dependencies.dns_answers(input.target);
-					if (type(values) == 'array' && length(values) <= 16)
-						for (let value in values)
-							if ((ipv4(value) || ipv6(value)) && length(answers) < 16)
-								push(answers, ipv6(value) ? normalize_ipv6(value) : lc(value));
+					if (type(values) == 'array' && length(values) <= 16) {
+						dns_available = true;
+						dns_cached = true;
+						for (let value in values) {
+							if (!(ipv4(value) || ipv6(value))) {
+								dns_available = false;
+								dns_cached = false;
+								answers = [];
+								break;
+							}
+							push(answers, ipv6(value) ? normalize_ipv6(value) : lc(value));
+						}
+					}
 				}
 				catch (error) {}
 			let steps = [], candidate = 'unknown', candidate_source = null;
 			step(steps, 'input', { kind: input.kind, target: input.target,
 				device: input.device, interface: input.interface }, 'unknown');
-			step(steps, 'dns', { cached: true, answers }, 'unknown');
+			step(steps, 'dns', { available: dns_available, cached: dns_cached, answers },
+				'unknown');
 			let device = policy(desired.devices, 'mac', input.device);
 			if (candidate == 'unknown' && device.matched) {
 				candidate = device.decision; candidate_source = 'device_policy';
@@ -422,12 +433,20 @@ export function create(dependencies) {
 				candidate = 'unknown'; candidate_source = null;
 			}
 			step(steps, 'routing', route, candidate);
-			let guard_on = desired.guard?.enabled === true, overridden = false;
-			if (guard_on && candidate_source != 'proxy_server_bypass' &&
+			let guard_value = desired.guard?.enabled,
+				guard_known = type(guard_value) == 'bool',
+				guard_on = guard_known && guard_value === true,
+				overridden = false;
+			if (!guard_known && candidate != 'BLOCK') {
+				candidate = 'BLOCK'; overridden = true;
+			}
+			else if (guard_on && candidate_source != 'proxy_server_bypass' &&
 				(candidate == 'DIRECT' || candidate == 'unknown')) {
 				candidate = 'BLOCK'; overridden = true;
 			}
-			step(steps, 'guard', { enabled: guard_on, fail_closed: overridden,
+			step(steps, 'guard', { known: guard_known,
+				state: guard_known ? (guard_on ? 'enabled' : 'disabled') : 'unknown',
+				enabled: guard_known ? guard_on : null, fail_closed: overridden,
 				proxy_server_exception: candidate_source == 'proxy_server_bypass' }, candidate);
 			let result = redact.value('route_test', { input, decision: candidate, steps });
 			if (length(sprintf('%J', result)) > 32768) fail('RESPONSE_TOO_LARGE');

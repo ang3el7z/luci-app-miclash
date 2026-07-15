@@ -289,7 +289,16 @@ for (let scenario in route_scenarios) {
 			'secret: controller-secret-value\n',
 		desired: () => scenario.desired,
 		observed: () => observed,
-		dns_answers: (target) => scenario.answers
+		dns_answers: (target) => {
+			if (scenario.dns == 'unavailable') die('DNS_UNAVAILABLE');
+			if (scenario.dns == 'invalid') return [ 'not-an-address' ];
+			if (scenario.dns == 'oversized') {
+				let values = [];
+				for (let index = 0; index < 17; index++) push(values, '192.0.2.' + index);
+				return values;
+			}
+			return scenario.answers;
+		}
 	});
 	assert_equal(type(engine.run), 'function');
 	let result = engine.run(scenario.input);
@@ -324,6 +333,20 @@ for (let scenario in route_scenarios) {
 		assert_equal(routing_step.evidence.valid, false);
 	else
 		assert_equal(routing_step.evidence.valid, true);
+	let dns_step = result.steps[index(order, 'dns')];
+	if (scenario.dns != null) {
+		assert_equal(dns_step.evidence.available, false,
+			scenario.name + ' marks DNS unavailable');
+		assert_equal(dns_step.evidence.cached, false,
+			scenario.name + ' does not claim cached evidence');
+		assert_equal(length(dns_step.evidence.answers), 0);
+	}
+	let guard_step = result.steps[index(order, 'guard')];
+	if (scenario.guard_unknown === true) {
+		assert_equal(guard_step.evidence.known, false,
+			scenario.name + ' reports unknown Guard state');
+		assert_equal(guard_step.evidence.state, 'unknown');
+	}
 	assert_no_secrets(result, scenario.name);
 	assert_equal(length(process_calls), 0,
 		scenario.name + ' never emits probe/process traffic');

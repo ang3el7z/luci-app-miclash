@@ -318,6 +318,76 @@
     "expected": "unknown"
   },
   {
+    "name": "missing Guard state fails closed",
+    "input": { "target": "192.0.2.60" },
+    "desired": {
+      "guard": {},
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "DIRECT" }],
+    "guard_unknown": true,
+    "expected": "BLOCK"
+  },
+  {
+    "name": "invalid Guard state fails closed",
+    "input": { "target": "192.0.2.61" },
+    "desired": {
+      "guard": { "enabled": "true" },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "DIRECT" }],
+    "guard_unknown": true,
+    "expected": "BLOCK"
+  },
+  {
+    "name": "unavailable DNS cache is explicit",
+    "input": { "target": "dns-unavailable.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "dns": "unavailable",
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "expected": "unknown"
+  },
+  {
+    "name": "invalid DNS cache is explicit",
+    "input": { "target": "dns-invalid.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "dns": "invalid",
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "expected": "unknown"
+  },
+  {
+    "name": "oversized DNS cache is explicit",
+    "input": { "target": "dns-oversized.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "dns": "oversized",
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "expected": "unknown"
+  },
+  {
     "name": "unavailable Mihomo remains unknown without Guard",
     "input": { "target": "unknown.example" },
     "desired": {
