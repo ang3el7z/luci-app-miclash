@@ -57,7 +57,17 @@ function finish(env, record) {
 // records and reject contexts which do not belong to a live operation.
 let internal_env = environment();
 let internal_result = null;
+let issued_ctx = null;
 let internal = internal_env.ops.submit('subscription.update', 'auto', {}, (ctx) => {
+	issued_ctx = ctx;
+	let forged = {
+		id: ctx.id, runtime: ctx.runtime,
+		stage: ctx.stage, complete: ctx.complete
+	};
+	assert_throws(() => internal_env.cfg.validate_in_operation(
+		forged, 'config.yaml', fixture('valid.yaml')), 'INVALID_ARGUMENT');
+	assert_throws(() => internal_env.cfg.apply_in_operation(
+		forged, 'config.yaml', fixture('valid.yaml'), 'auto'), 'INVALID_ARGUMENT');
 	internal_result = internal_env.cfg.validate_in_operation(
 		ctx, 'config.yaml', fixture('valid.yaml'));
 	if (internal_result?.ok !== true)
@@ -79,6 +89,10 @@ assert_throws(() => internal_env.cfg.validate_in_operation(
 assert_throws(() => internal_env.cfg.apply_in_operation(
 	{ id: internal.id }, 'config.yaml', fixture('valid.yaml'), 'auto'),
 	'INVALID_ARGUMENT');
+assert_throws(() => internal_env.cfg.validate_in_operation(
+	issued_ctx, 'config.yaml', fixture('valid.yaml')), 'INVALID_ARGUMENT');
+assert_throws(() => internal_env.cfg.apply_in_operation(
+	issued_ctx, 'config.yaml', fixture('valid.yaml'), 'auto'), 'INVALID_ARGUMENT');
 
 // Only the three on-disk profile names are accepted.
 for (let profile in [ 'config.yaml', 'config2.yaml', 'config3.yaml' ])

@@ -29,6 +29,42 @@ let manager = operations.create(env.rt);
 assert_equal(env.fs.mode('/tmp/miclash'), 0o700);
 assert_equal(env.fs.mode('/tmp/miclash/operations'), 0o700);
 
+// A live mutation context is an identity-bearing daemon authority, not a
+// capability which can be reconstructed from its public-looking fields.
+let authority_env = environment();
+let authority = operations.create(authority_env.rt);
+assert_equal(type(authority.is_context), 'function');
+let first_ctx = null, second_ctx = null;
+let authority_first = authority.submit('config.apply', 'system', {}, (ctx) => {
+	first_ctx = ctx;
+	return false;
+});
+let authority_second = authority.submit('config.apply', 'system', {}, (ctx) => {
+	second_ctx = ctx;
+	return false;
+});
+authority_env.clock.advance(0);
+assert_equal(authority.is_context(first_ctx), true);
+let forged_first = {
+	id: first_ctx.id, runtime: first_ctx.runtime,
+	stage: first_ctx.stage, complete: first_ctx.complete
+};
+assert_equal(authority.is_context(forged_first), false);
+assert_equal(first_ctx.complete(), true);
+assert_equal(authority.is_context(first_ctx), false);
+assert_equal(first_ctx.complete(), false);
+authority_env.clock.advance(0);
+assert_equal(authority.is_context(second_ctx), true);
+assert_equal(authority.is_context(first_ctx), false);
+assert_equal(authority.is_context({
+	id: second_ctx.id, runtime: second_ctx.runtime,
+	stage: second_ctx.stage, complete: second_ctx.complete
+}), false);
+assert_equal(second_ctx.complete(), true);
+assert_equal(authority.is_context(second_ctx), false);
+assert_equal(authority.get(authority_first.id).state, 'success');
+assert_equal(authority.get(authority_second.id).state, 'success');
+
 // Journal roots are exact root-owned private directories before any access.
 let linked_root = environment();
 linked_root.fs.set_symlink('/tmp/miclash', '/tmp');

@@ -44,7 +44,7 @@ export function create(runtime, operations, history) {
 	    type(runtime?.digest?.sha256_file) != 'function' ||
 	    type(runtime?.service?.reload) != 'function' ||
 	    type(runtime?.service?.health) != 'function' || type(operations?.submit) != 'function' ||
-	    type(operations?.get) != 'function' ||
+	    type(operations?.is_context) != 'function' ||
 	    type(history?.snapshot) != 'function' || type(history?.snapshot_bytes) != 'function' ||
 	    type(history?.list) != 'function')
 		errors.fail('INVALID_ARGUMENT');
@@ -252,14 +252,7 @@ export function create(runtime, operations, history) {
 		return true;
 	};
 	function operation_context(ctx) {
-		if (type(ctx) != 'object' || type(ctx?.id) != 'string' ||
-		    type(ctx?.stage) != 'function' || type(ctx?.complete) != 'function' ||
-		    ctx?.runtime !== runtime)
-			errors.fail('INVALID_ARGUMENT');
-		try { schema.operation_id(ctx.id); }
-		catch (error) { errors.fail('INVALID_ARGUMENT'); }
-		let record = operations.get(ctx.id);
-		if (record?.state != 'running')
+		if (operations.is_context(ctx) !== true)
 			errors.fail('INVALID_ARGUMENT');
 		return ctx;
 	};

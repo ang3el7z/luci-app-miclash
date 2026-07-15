@@ -230,6 +230,7 @@ export function create(runtime) {
 	ensure_directory(runtime, journal);
 
 	let records = {};
+	let live_contexts = {};
 	let mutation_queue = [];
 	let active_mutation = null;
 	let mutation_timer_pending = false;
@@ -309,6 +310,9 @@ export function create(runtime) {
 	function finish(entry, state, error) {
 		if (entry.finished)
 			return false;
+		// Revoke the daemon-issued capability before any fallible terminal write.
+		// A failed finish remains fail-closed and cannot replay its old context.
+		delete live_contexts[entry.id];
 		let record = clone(records[entry.id]);
 		record.state = state;
 		record.updated_at = runtime.clock.now();
@@ -362,6 +366,7 @@ export function create(runtime) {
 			},
 			complete: (error) => finish(entry, error == null ? 'success' : 'failure', error)
 		};
+		live_contexts[entry.id] = ctx;
 
 		try {
 			let result = entry.worker(ctx);
@@ -377,6 +382,12 @@ export function create(runtime) {
 	};
 
 	let manager = {};
+	manager.is_context = (ctx) => {
+		if (type(ctx) != 'object' || type(ctx?.id) != 'string' ||
+		    !match(ctx.id, /^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$/))
+			return false;
+		return live_contexts[ctx.id] === ctx && records[ctx.id]?.state == 'running';
+	};
 	manager.submit = (kind, source, context, worker) => {
 		kind = safe_kind(kind);
 		source = safe_source(source);
