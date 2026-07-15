@@ -84,6 +84,8 @@ export function fs(initial) {
 		fail_rename_once: false,
 		fail_rename_once_to: null,
 		throw_after_rename_once_to: null,
+		throw_after_rename_once_matching: null,
+		fail_rmdir_once: false,
 		ignore_chmod: false,
 		on_lstat: null,
 		on_mkdir: null,
@@ -273,6 +275,12 @@ export function fs(initial) {
 	};
 	fake.rmdir = (path) => {
 		push(fake.calls.rmdir, path);
+		if (fake.fail_rmdir_once) {
+			fake.fail_rmdir_once = false;
+			return null;
+		}
+		if (fake.fail_on == 'rmdir')
+			return null;
 		if (!exists(directories, path) || length(fake.lsdir(path)))
 			return null;
 		delete directories[path];
@@ -307,6 +315,11 @@ export function fs(initial) {
 				for (let path, value in moved) values[path] = value;
 			}
 			if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
+			if (fake.throw_after_rename_once_matching != null &&
+			    index(to, fake.throw_after_rename_once_matching) >= 0) {
+				fake.throw_after_rename_once_matching = null;
+				die('INTERNAL');
+			}
 			return true;
 		}
 		let actual_from = resolve(from);
@@ -318,6 +331,11 @@ export function fs(initial) {
 		delete modes[actual_from];
 		delete inodes[actual_from];
 		if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
+		if (fake.throw_after_rename_once_matching != null &&
+		    index(to, fake.throw_after_rename_once_matching) >= 0) {
+			fake.throw_after_rename_once_matching = null;
+			die('INTERNAL');
+		}
 		if (fake.throw_after_rename_once_to != null &&
 		    to == fake.throw_after_rename_once_to) {
 			fake.throw_after_rename_once_to = null;

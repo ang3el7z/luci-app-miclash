@@ -6,6 +6,9 @@ import * as storage from 'miclash.storage';
 const DEFAULT_RETENTION = 10;
 const MAX_CONTENT_BYTES = 1048576;
 const MAX_METADATA_BYTES = 65536;
+const MAX_ROOT_ENTRIES = 64;
+const MAX_PROFILE_ENTRIES = 256;
+const PROFILES = [ 'config.yaml', 'config2.yaml', 'config3.yaml' ];
 const SOURCE_MAP = {
 	manual: 'manual', luci: 'luci', subscription: 'subscription', auto: 'auto',
 	Telegram: 'telegram', telegram: 'telegram', system: 'system', external: 'external',
@@ -160,6 +163,81 @@ export function create(runtime, options) {
 			legacy_yaml: base + '.yaml',
 			legacy_json: base + '.json'
 		};
+	};
+
+	function auxiliary(name) {
+		if (type(name) != 'string')
+			return null;
+		let found = match(name,
+			/^[.](stage|prune)-([0-9]{13}-[0-9a-f]{12}-[0-9a-f]{16})-([0-9a-f]{16})$/);
+		return found == null ? null : {
+			kind: found[1], revision: found[2], suffix: found[3]
+		};
+	};
+
+	function cleanup_auxiliary(profile, name) {
+		if (auxiliary(name) == null)
+			errors.fail('INVALID_ARGUMENT');
+		let path = directory(profile) + '/' + name;
+		let identity = runtime.fs.lstat(path);
+		if (identity?.type != 'directory' || runtime.fs.realpath(path) != path ||
+		    (identity.uid != null && identity.uid != 0) ||
+		    (identity.mode != null && (identity.mode & 0o777) != 0o700))
+			errors.fail('CORRUPT_STATE');
+		let entries = runtime.fs.lsdir(path);
+		if (type(entries) != 'array' || length(entries) > 2)
+			errors.fail('CORRUPT_STATE');
+		sort(entries);
+		let prepared = [];
+		for (let entry in entries) {
+			if (entry != 'config.yaml' && entry != 'metadata.json')
+				errors.fail('CORRUPT_STATE');
+			let file = path + '/' + entry;
+			let stat = runtime.fs.lstat(file);
+			if (!owned_file(stat, 0o600) || runtime.fs.realpath(file) != file)
+				errors.fail('CORRUPT_STATE');
+			push(prepared, { path: file, identity: stat });
+		}
+		for (let item in prepared) {
+			let current_directory = runtime.fs.lstat(path);
+			let current = runtime.fs.lstat(item.path);
+			if (!same_node(identity, current_directory) ||
+			    runtime.fs.realpath(path) != path || !same_node(item.identity, current) ||
+			    runtime.fs.realpath(item.path) != item.path ||
+			    runtime.fs.unlink(item.path) != true)
+				errors.fail('INTERNAL');
+		}
+		let current = runtime.fs.lstat(path);
+		entries = runtime.fs.lsdir(path);
+		if (!same_node(identity, current) || runtime.fs.realpath(path) != path ||
+		    type(entries) != 'array' || length(entries) != 0 ||
+		    runtime.fs.rmdir(path) != true)
+			errors.fail('INTERNAL');
+		return true;
+	};
+
+	function recover_profile(profile) {
+		profile = schema.profile_name(profile);
+		let names = runtime.fs.lsdir(directory(profile));
+		if (type(names) != 'array')
+			errors.fail('INTERNAL');
+		if (length(names) > MAX_PROFILE_ENTRIES)
+			errors.fail('RESPONSE_TOO_LARGE');
+		sort(names);
+		for (let name in names)
+			if (auxiliary(name) != null)
+				cleanup_auxiliary(profile, name);
+	};
+
+	function recover_existing() {
+		let names = runtime.fs.lsdir('/opt/clash/history');
+		if (type(names) != 'array')
+			errors.fail('INTERNAL');
+		if (length(names) > MAX_ROOT_ENTRIES)
+			errors.fail('RESPONSE_TOO_LARGE');
+		for (let profile in PROFILES)
+			if (runtime.fs.lstat('/opt/clash/history/' + profile) != null)
+				recover_profile(profile);
 	};
 
 	function revision_files(profile, revision) {
@@ -321,6 +399,7 @@ export function create(runtime, options) {
 
 	function all_records(profile) {
 		profile = schema.profile_name(profile);
+		recover_profile(profile);
 		let output = [];
 		let names = runtime.fs.lsdir(directory(profile));
 		if (type(names) != 'array')
@@ -347,6 +426,7 @@ export function create(runtime, options) {
 	};
 
 	function read_content(profile, revision) {
+		recover_profile(profile);
 		let record = read_record(profile, revision);
 		let content_record = canonical_record(profile, record);
 		let files = revision_files(profile, content_record.revision);
@@ -383,6 +463,7 @@ export function create(runtime, options) {
 		let revision = null;
 		let destination = null;
 		let staging = null;
+		let staging_name = null;
 		let revision_time = runtime.clock.now();
 		if (type(revision_time) != 'int' || revision_time < 0 ||
 		    revision_time > 9999999999999)
@@ -404,7 +485,8 @@ export function create(runtime, options) {
 			let stage_suffix = runtime.random.hex(8);
 			if (type(stage_suffix) != 'string' || !match(stage_suffix, /^[0-9a-f]{16}$/))
 				errors.fail('INTERNAL');
-			staging = directory(profile) + '/.' + revision + '.tmp-' + stage_suffix;
+			staging_name = '.stage-' + revision + '-' + stage_suffix;
+			staging = directory(profile) + '/' + staging_name;
 			if (runtime.fs.lstat(destination.base) == null &&
 			    runtime.fs.lstat(destination.legacy_yaml) == null &&
 			    runtime.fs.lstat(destination.legacy_json) == null &&
@@ -474,9 +556,9 @@ export function create(runtime, options) {
 		}
 		catch (error) { failure = errors.normalize(error).code; }
 		if (failure != null) {
-			try { runtime.fs.unlink(staging + '/config.yaml'); } catch (unlink_error) {}
-			try { runtime.fs.unlink(staging + '/metadata.json'); } catch (unlink_error) {}
-			try { runtime.fs.rmdir(staging); } catch (rmdir_error) {}
+			if (staging_name != null && runtime.fs.lstat(staging) != null)
+				try { cleanup_auxiliary(profile, staging_name); }
+				catch (cleanup_error) { failure = errors.normalize(cleanup_error).code; }
 			errors.fail(failure);
 		}
 		return clone(record);
@@ -488,20 +570,6 @@ export function create(runtime, options) {
 			return false;
 		}
 		return true;
-	};
-
-	function unlink_verified(path, mode, maximum, expected, hash_content) {
-		let content = secure_read(path, mode, maximum, 'CORRUPT_STATE');
-		if ((hash_content && runtime.digest.sha256(content) != expected) ||
-		    (!hash_content && content != expected))
-			errors.fail('CORRUPT_STATE');
-		let before = runtime.fs.lstat(path);
-		if (!owned_file(before, mode) || runtime.fs.realpath(path) != path)
-			errors.fail('CORRUPT_STATE');
-		let after = runtime.fs.lstat(path);
-		if (!same_node(before, after) || runtime.fs.realpath(path) != path ||
-		    runtime.fs.unlink(path) != true)
-			errors.fail('CORRUPT_STATE');
 	};
 
 	let api = {};
@@ -526,6 +594,7 @@ export function create(runtime, options) {
 			api.read(profile, next_revision), limits);
 	};
 	api.mark_activation = (profile, revision, result) => {
+		recover_profile(profile);
 		if (type(result) != 'string' ||
 		    (result != 'success' && result != 'health_failed' &&
 		     result != 'validation_failed' && result != 'failed'))
@@ -635,9 +704,11 @@ export function create(runtime, options) {
 		profile = schema.profile_name(profile);
 		let records = all_records(profile);
 		let valid = [];
-		for (let record in records)
-			if (record.corrupt === false)
-				push(valid, record);
+		for (let record in records) {
+			if (record.corrupt !== false)
+				return 0;
+			push(valid, record);
+		}
 		let protected_ids = {};
 		let first_kept = length(valid) - retention;
 		if (first_kept < 0)
@@ -685,10 +756,28 @@ export function create(runtime, options) {
 					}
 			}
 		}
-		let removed = 0;
-		for (let record in valid) {
+		let candidates = [];
+		for (let record in valid)
 			if (protected_ids[record.revision])
 				continue;
+			else if (!revision_files(profile, record.revision).legacy)
+				push(candidates, record);
+		sort(candidates, (left, right) => {
+			let left_alias = left.duplicate_of != null;
+			let right_alias = right.duplicate_of != null;
+			if (left_alias != right_alias)
+				return left_alias ? -1 : 1;
+			return compare_revision(left, right);
+		});
+		let removed_visible = {};
+		let removed = 0;
+		for (let record in candidates) {
+			if (record.duplicate_of == null)
+				for (let dependent in valid)
+					if (dependent.duplicate_of == record.revision &&
+					    !protected_ids[dependent.revision] &&
+					    !removed_visible[dependent.revision])
+						errors.fail('CORRUPT_STATE');
 			let destination = revision_files(profile, record.revision);
 			if (destination.legacy)
 				continue;
@@ -697,25 +786,37 @@ export function create(runtime, options) {
 			let current_record = read_record(profile, record.revision);
 			if (sprintf('%J', current_record) != sprintf('%J', expected_record))
 				errors.fail('CORRUPT_STATE');
+			let verified = read_content(profile, record.revision);
+			if (verified.content == null ||
+			    sprintf('%J', verified.record) != sprintf('%J', current_record))
+				errors.fail('CORRUPT_STATE');
 			assert_revision_directory(destination);
-			if (record.content_revision == record.revision) {
-				unlink_verified(destination.yaml, 0o600, MAX_CONTENT_BYTES,
-					record.hash, true);
-				assert_revision_directory(destination);
+			let tombstone_name = null;
+			let tombstone = null;
+			for (let attempt = 0; attempt < 16; attempt++) {
+				let suffix = runtime.random.hex(8);
+				if (type(suffix) != 'string' || !match(suffix, /^[0-9a-f]{16}$/))
+					errors.fail('INTERNAL');
+				tombstone_name = '.prune-' + record.revision + '-' + suffix;
+				tombstone = directory(profile) + '/' + tombstone_name;
+				if (runtime.fs.lstat(tombstone) == null)
+					break;
+				tombstone_name = null;
 			}
-			unlink_verified(destination.json, 0o600, MAX_METADATA_BYTES,
-				sprintf('%J\n', current_record), false);
-			if (!destination.legacy) {
-				assert_revision_directory(destination);
-				let entries = runtime.fs.lsdir(destination.base);
-				if (type(entries) != 'array' || length(entries) != 0 ||
-				    runtime.fs.rmdir(destination.base) != true)
-					errors.fail('CORRUPT_STATE');
-			}
+			if (tombstone_name == null ||
+			    runtime.fs.rename(destination.base, tombstone) != true)
+				errors.fail('INTERNAL');
+			let moved = runtime.fs.lstat(tombstone);
+			if (!same_node(destination.identity, moved) ||
+			    runtime.fs.realpath(tombstone) != tombstone)
+				errors.fail('CORRUPT_STATE');
+			removed_visible[record.revision] = true;
+			cleanup_auxiliary(profile, tombstone_name);
 			removed++;
 		}
 		return removed;
 	};
 
+	recover_existing();
 	return api;
 };

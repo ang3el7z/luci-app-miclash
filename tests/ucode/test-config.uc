@@ -227,7 +227,7 @@ let history_rename = -1;
 let active_rename = -1;
 for (let index, call in env.fs.calls.rename) {
 	if (history_rename < 0 && match(call.to,
-	    /^\/opt\/clash\/history\/config\.yaml\/\..+\.tmp-[0-9a-f]+\/config\.yaml$/))
+	    /^\/opt\/clash\/history\/config\.yaml\/\.stage-.+\/config\.yaml$/))
 		history_rename = index;
 	if (call.to == '/opt/clash/config.yaml')
 		active_rename = index;

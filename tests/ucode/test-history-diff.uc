@@ -187,7 +187,7 @@ assert_equal(env.fs.mode(first_directory + '/metadata.json'), 0o600);
 let published = false;
 for (let call in env.fs.calls.rename)
 	if (call.to == first_directory &&
-	    match(call.from, /^\/opt\/clash\/history\/config\.yaml\/\..+\.tmp-[0-9a-f]{16}$/))
+	    match(call.from, /^\/opt\/clash\/history\/config\.yaml\/\.stage-.+-[0-9a-f]{16}$/))
 		published = true;
 assert_true(published);
 
@@ -478,6 +478,101 @@ function retention_environment() {
 let retained = retention_environment();
 assert_equal(retained.revisions.prune('config.yaml'), 2);
 assert_equal(length(retained.revisions.list('config.yaml')), 10);
+
+function auxiliary_entries(env) {
+	let output = [];
+	for (let name in env.fs.lsdir('/opt/clash/history/config.yaml'))
+		if (match(name, /^\.(stage|prune)-/))
+			push(output, name);
+	return output;
+};
+
+function retry_prune_after_failure(kind) {
+	let current = retention_environment();
+	if (kind == 'rename')
+		current.fs.throw_after_rename_once_matching = '/.prune-';
+	else if (kind == 'content-unlink')
+		current.fs.fail_unlink_once_matching = '/config.yaml';
+	else if (kind == 'metadata-unlink')
+		current.fs.fail_unlink_once_matching = '/metadata.json';
+	else if (kind == 'rmdir')
+		current.fs.fail_rmdir_once = true;
+	assert_throws(() => current.revisions.prune('config.yaml'), 'INTERNAL');
+	assert_true(length(auxiliary_entries(current)) >= 1);
+	// Both create-time and prune-time recovery are idempotent. A fresh store may
+	// clean the exact tombstone, and the original store can safely finish prune.
+	history.create(current.runtime, { diff });
+	current.revisions.prune('config.yaml');
+	assert_equal(length(current.revisions.list('config.yaml')), 10);
+	assert_equal(length(auxiliary_entries(current)), 0);
+};
+
+for (let boundary in [ 'rename', 'content-unlink', 'metadata-unlink', 'rmdir' ])
+	retry_prune_after_failure(boundary);
+
+// Aliases leave the visible namespace before their canonical content. A crash
+// after the first tombstone rename cannot expose a dangling visible alias.
+let dependency = environment();
+let dependency_canonical = dependency.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'dependency\n', {});
+dependency.revisions.snapshot_bytes('config.yaml', 'manual', 'dependency\n', {});
+for (let index = 0; index < 11; index++) {
+	dependency.clock.advance(1);
+	dependency.revisions.snapshot_bytes('config.yaml', 'auto',
+		'dependency-new-' + index + '\n', {});
+}
+dependency.fs.throw_after_rename_once_matching = '/.prune-';
+assert_throws(() => dependency.revisions.prune('config.yaml'), 'INTERNAL');
+let dependency_visible = dependency.revisions.list('config.yaml');
+for (let record in dependency_visible)
+	assert_equal(record.corrupt, false);
+let canonical_still_visible = false;
+for (let record in dependency_visible)
+	if (record.revision == dependency_canonical.revision)
+		canonical_still_visible = true;
+assert_true(canonical_still_visible);
+dependency.revisions.prune('config.yaml');
+assert_equal(length(auxiliary_entries(dependency)), 0);
+
+// Exact owned staging/tombstone directories are recovered; foreign names and
+// unsafe lookalikes are never followed or deleted.
+let recovery = environment();
+let recovery_revision = '1700000000999-0123456789ab-0123456789abcdef';
+let stage_name = '.stage-' + recovery_revision + '-aaaaaaaaaaaaaaaa';
+let prune_name = '.prune-' + recovery_revision + '-bbbbbbbbbbbbbbbb';
+let profile_directory = '/opt/clash/history/config.yaml';
+if (recovery.fs.lstat(profile_directory) == null) {
+	recovery.fs.mkdir(profile_directory);
+	recovery.fs.chmod(profile_directory, 0o700);
+}
+for (let name in [ stage_name, prune_name ]) {
+	recovery.fs.mkdir(profile_directory + '/' + name);
+	recovery.fs.chmod(profile_directory + '/' + name, 0o700);
+	recovery.fs.writefile(profile_directory + '/' + name + '/metadata.json', '{}\n');
+	recovery.fs.set_mode(profile_directory + '/' + name + '/metadata.json', 0o600);
+}
+recovery.fs.writefile(profile_directory + '/foreign-entry', 'foreign');
+history.create(recovery.runtime, { diff });
+assert_equal(recovery.fs.lstat(profile_directory + '/' + stage_name), null);
+assert_equal(recovery.fs.lstat(profile_directory + '/' + prune_name), null);
+assert_equal(recovery.fs.readfile(profile_directory + '/foreign-entry'), 'foreign');
+
+let unsafe_recovery = environment();
+let unsafe_name = '.stage-' + recovery_revision + '-cccccccccccccccc';
+unsafe_recovery.fs.set_symlink(
+	'/opt/clash/history/config.yaml/' + unsafe_name, '/opt/clash');
+assert_throws(() => history.create(unsafe_recovery.runtime, { diff }),
+	'CORRUPT_STATE');
+assert_equal(unsafe_recovery.fs.lstat(
+	'/opt/clash/history/config.yaml/' + unsafe_name)?.type, 'link');
+
+let recovery_bound = environment();
+recovery_bound.fs.mkdir('/opt/clash/history/config.yaml');
+recovery_bound.fs.chmod('/opt/clash/history/config.yaml', 0o700);
+for (let index = 0; index < 257; index++)
+	recovery_bound.fs.writefile('/opt/clash/history/config.yaml/foreign-' + index, 'x');
+assert_throws(() => history.create(recovery_bound.runtime, { diff }),
+	'RESPONSE_TOO_LARGE');
 
 let protected_current = retention_environment();
 protected_current.fs.writefile('/opt/clash/history/active-config.yaml.json',
