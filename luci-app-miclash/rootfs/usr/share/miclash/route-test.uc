@@ -394,29 +394,58 @@ function routing_reason(observed, input, answers) {
 		mark: '0x1', table: 100, interfaces };
 };
 function policy(values, field, wanted) {
-	if (type(values) != 'array' || length(values) > 128 || wanted == null)
-		return { matched: false, decision: 'unknown' };
+	if (values == null)
+		return { available: false, valid: false, code: 'UNAVAILABLE',
+			matched: false, decision: 'unknown' };
+	if (type(values) != 'array')
+		return { available: true, valid: false, code: 'MALFORMED',
+			matched: false, decision: 'unknown' };
+	if (length(values) > 128)
+		return { available: true, valid: false, code: 'OVERSIZED',
+			matched: false, decision: 'unknown' };
+	let selected = 'unknown', matched = false, seen = {};
 	for (let item in values) {
-		let candidate = item?.[field];
-		if (type(candidate) != 'string' || type(item?.decision) != 'string') continue;
-		if (lc(candidate) == lc(wanted)) {
-			let decision = uc(item.decision);
-			return { matched: exists(DECISIONS, decision),
-				decision: exists(DECISIONS, decision) ? decision : 'unknown' };
+		if (!exact_allowed(item, { [field]: true, decision: true }))
+			return { available: true, valid: false, code: 'MALFORMED',
+				matched: false, decision: 'unknown' };
+		let candidate = item[field];
+		if ((field == 'mac' && !safe_mac(candidate)) ||
+			(field == 'name' && !safe_interface(candidate)))
+			return { available: true, valid: false, code: 'MALFORMED',
+				matched: false, decision: 'unknown' };
+		if (type(item.decision) != 'string' || !exists(DECISIONS, uc(item.decision)))
+			return { available: true, valid: false, code: 'INVALID_DECISION',
+				matched: false, decision: 'unknown' };
+		let normalized = lc(candidate);
+		if (seen[normalized])
+			return { available: true, valid: false, code: 'MALFORMED',
+				matched: false, decision: 'unknown' };
+		seen[normalized] = true;
+		if (wanted != null && normalized == lc(wanted)) {
+			matched = true;
+			selected = uc(item.decision);
 		}
 	}
-	return { matched: false, decision: 'unknown' };
+	return { available: true, valid: true, code: length(values) ? 'VALID' : 'EMPTY',
+		matched, decision: selected };
 };
 function bypass(values, input) {
-	if (type(values) != 'array' || length(values) > 128)
-		return false;
+	if (values == null)
+		return { available: false, valid: false, code: 'UNAVAILABLE', matched: false };
+	if (type(values) != 'array')
+		return { available: true, valid: false, code: 'MALFORMED', matched: false };
+	if (length(values) > 128)
+		return { available: true, valid: false, code: 'OVERSIZED', matched: false };
+	let matched = false;
 	for (let value in values) {
-		if (type(value) != 'string' || length(value) > 253) continue;
+		if (type(value) != 'string' || length(value) > 253)
+			return { available: true, valid: false, code: 'MALFORMED', matched: false };
 		let normalized = ipv6(value) ? normalize_ipv6(value) : lc(value);
-		if (!(ipv4(normalized) || ipv6(normalized) || domain(normalized))) continue;
-		if (normalized == input.target) return true;
+		if (!(ipv4(normalized) || ipv6(normalized) || domain(normalized)))
+			return { available: true, valid: false, code: 'MALFORMED', matched: false };
+		if (normalized == input.target) matched = true;
 	}
-	return false;
+	return { available: true, valid: true, code: length(values) ? 'VALID' : 'EMPTY', matched };
 };
 function step(steps, source, evidence, decision) {
 	if (length(steps) >= MAX_STEPS) fail('RESPONSE_TOO_LARGE');
@@ -466,19 +495,24 @@ export function create(dependencies) {
 			if (candidate == 'unknown' && device.matched) {
 				candidate = device.decision; candidate_source = 'device_policy';
 			}
-			step(steps, 'device_policy', { matched: device.matched }, device.decision);
+			step(steps, 'device_policy', { available: device.available, valid: device.valid,
+				code: device.code, matched: device.matched }, device.decision);
 			let interface_policy = policy(desired.interfaces, 'name', input.interface);
 			if (candidate == 'unknown' && interface_policy.matched) {
 				candidate = interface_policy.decision; candidate_source = 'interface_policy';
 			}
-			step(steps, 'interface_policy', { matched: interface_policy.matched },
+			step(steps, 'interface_policy', { available: interface_policy.available,
+				valid: interface_policy.valid, code: interface_policy.code,
+				matched: interface_policy.matched },
 				interface_policy.decision);
-			let is_bypass = bypass(desired.proxy_servers, input);
-			if (candidate == 'unknown' && is_bypass) {
+			let proxy_servers = bypass(desired.proxy_servers, input);
+			if (candidate == 'unknown' && proxy_servers.matched) {
 				candidate = 'DIRECT'; candidate_source = 'proxy_server_bypass';
 			}
-			step(steps, 'proxy_server_bypass', { matched: is_bypass },
-				is_bypass ? 'DIRECT' : 'unknown');
+			step(steps, 'proxy_server_bypass', { available: proxy_servers.available,
+				valid: proxy_servers.valid, code: proxy_servers.code,
+				matched: proxy_servers.matched },
+				proxy_servers.matched ? 'DIRECT' : 'unknown');
 			let rule = mihomo_reason(dependencies, input, answers);
 			if (candidate == 'unknown' && rule.matched) {
 				candidate = rule.decision; candidate_source = 'mihomo_rule';
@@ -489,6 +523,10 @@ export function create(dependencies) {
 			let route = routing_reason(observed, input, answers);
 			if (!route.valid && candidate != 'BLOCK' &&
 				candidate_source != 'proxy_server_bypass') {
+				candidate = 'unknown'; candidate_source = null;
+			}
+			let desired_valid = device.valid && interface_policy.valid && proxy_servers.valid;
+			if (!desired_valid && candidate != 'BLOCK') {
 				candidate = 'unknown'; candidate_source = null;
 			}
 			step(steps, 'routing', route, candidate);

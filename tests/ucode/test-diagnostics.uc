@@ -371,12 +371,38 @@ for (let scenario in route_scenarios) {
 		for (let index = 0; index < 65; index++)
 			push(observed.routing.rules, { family: 'ipv4', priority: 2000 + index,
 				mark: '0x2', mask: '0xffffffff', table: 200 + index });
+	let desired = scenario.desired;
+	if (scenario.desired_fault == 'devices-missing')
+		delete desired.devices;
+	else if (scenario.desired_fault == 'devices-oversized')
+		for (let index = 0; index < 129; index++)
+			push(desired.devices, { mac: sprintf('02:00:00:00:00:%02x', index), decision: 'DIRECT' });
+	else if (scenario.desired_fault == 'devices-malformed')
+		desired.devices = [ { mac: 'not-a-mac', decision: 'DIRECT' } ];
+	else if (scenario.desired_fault == 'devices-decision')
+		desired.devices = [ { mac: '02:00:00:00:00:01', decision: 'ALLOW' } ];
+	else if (scenario.desired_fault == 'interfaces-missing')
+		delete desired.interfaces;
+	else if (scenario.desired_fault == 'interfaces-oversized')
+		for (let index = 0; index < 129; index++)
+			push(desired.interfaces, { name: 'if' + index, decision: 'DIRECT' });
+	else if (scenario.desired_fault == 'interfaces-malformed')
+		desired.interfaces = [ { name: '../wan', decision: 'DIRECT' } ];
+	else if (scenario.desired_fault == 'interfaces-decision')
+		desired.interfaces = [ { name: 'guest', decision: 'ALLOW' } ];
+	else if (scenario.desired_fault == 'proxy-missing')
+		delete desired.proxy_servers;
+	else if (scenario.desired_fault == 'proxy-oversized')
+		for (let index = 0; index < 129; index++)
+			push(desired.proxy_servers, '198.18.0.' + index);
+	else if (scenario.desired_fault == 'proxy-malformed')
+		desired.proxy_servers = [ 'bad host name' ];
 	let engine = route_test.create({
 		runtime: route_runtime,
 		profile: 'config.yaml',
 		config_content: 'external-controller: 127.0.0.1:9090\n' +
 			'secret: controller-secret-value\n',
-		desired: () => scenario.desired,
+		desired: () => desired,
 		observed: () => observed,
 		dns_answers: (target) => {
 			if (scenario.dns == 'unavailable') die('DNS_UNAVAILABLE');
@@ -440,6 +466,29 @@ for (let scenario in route_scenarios) {
 		assert_equal(guard_step.evidence.known, false,
 			scenario.name + ' reports unknown Guard state');
 		assert_equal(guard_step.evidence.state, 'unknown');
+	}
+	for (let source in [ 'device_policy', 'interface_policy', 'proxy_server_bypass' ]) {
+		let evidence = result.steps[index(order, source)].evidence;
+		assert_equal(type(evidence.available), 'bool', source + ' availability evidence');
+		assert_equal(type(evidence.valid), 'bool', source + ' validity evidence');
+		assert_equal(type(evidence.code), 'string', source + ' status code');
+	}
+	if (scenario.desired_fault == null) {
+		for (let field, source in { devices: 'device_policy', interfaces: 'interface_policy',
+			proxy_servers: 'proxy_server_bypass' })
+			if (type(desired[field]) == 'array' && !length(desired[field])) {
+				let evidence = result.steps[index(order, source)].evidence;
+				assert_equal(evidence.available, true, source + ' empty collection is available');
+				assert_equal(evidence.valid, true, source + ' empty collection is valid');
+				assert_equal(evidence.code, 'EMPTY', source + ' empty collection is explicit');
+			}
+	}
+	if (scenario.policy_evidence != null) {
+		let expected = scenario.policy_evidence;
+		let policy_step = result.steps[index(order, expected.source)];
+		assert_equal(policy_step.evidence.available, expected.available, scenario.name);
+		assert_equal(policy_step.evidence.valid, expected.valid, scenario.name);
+		assert_equal(policy_step.evidence.code, expected.code, scenario.name);
 	}
 	assert_no_secrets(result, scenario.name);
 	assert_equal(length(process_calls), 0,

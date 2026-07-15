@@ -447,6 +447,94 @@
     "expected": "unknown"
   },
   {
+    "name": "missing device policies are unavailable",
+    "input": { "target": "192.0.2.70" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "devices-missing",
+    "policy_evidence": { "source": "device_policy", "available": false, "valid": false, "code": "UNAVAILABLE" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "oversized device policies are rejected",
+    "input": { "target": "192.0.2.71" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "devices-oversized",
+    "policy_evidence": { "source": "device_policy", "available": true, "valid": false, "code": "OVERSIZED" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "malformed device policies are rejected",
+    "input": { "target": "192.0.2.72" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "devices-malformed",
+    "policy_evidence": { "source": "device_policy", "available": true, "valid": false, "code": "MALFORMED" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "invalid device decision is rejected",
+    "input": { "target": "192.0.2.73", "device": "02:00:00:00:00:01" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "devices-decision",
+    "policy_evidence": { "source": "device_policy", "available": true, "valid": false, "code": "INVALID_DECISION" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "missing interface policies are unavailable",
+    "input": { "target": "192.0.2.74" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "interfaces-missing",
+    "policy_evidence": { "source": "interface_policy", "available": false, "valid": false, "code": "UNAVAILABLE" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "oversized interface policies are rejected",
+    "input": { "target": "192.0.2.75" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "interfaces-oversized",
+    "policy_evidence": { "source": "interface_policy", "available": true, "valid": false, "code": "OVERSIZED" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "malformed interface policies are rejected",
+    "input": { "target": "192.0.2.76" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "interfaces-malformed",
+    "policy_evidence": { "source": "interface_policy", "available": true, "valid": false, "code": "MALFORMED" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "invalid interface decision is rejected",
+    "input": { "target": "192.0.2.77", "interface": "guest" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "interfaces-decision",
+    "policy_evidence": { "source": "interface_policy", "available": true, "valid": false, "code": "INVALID_DECISION" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "missing proxy servers are unavailable",
+    "input": { "target": "192.0.2.78" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "proxy-missing",
+    "policy_evidence": { "source": "proxy_server_bypass", "available": false, "valid": false, "code": "UNAVAILABLE" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "oversized proxy servers are rejected",
+    "input": { "target": "192.0.2.79" },
+    "desired": { "guard": { "enabled": false }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "proxy-oversized",
+    "policy_evidence": { "source": "proxy_server_bypass", "available": true, "valid": false, "code": "OVERSIZED" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "unknown"
+  },
+  {
+    "name": "malformed proxy servers are rejected and Guard closes",
+    "input": { "target": "192.0.2.80" },
+    "desired": { "guard": { "enabled": true }, "devices": [], "interfaces": [], "proxy_servers": [] },
+    "desired_fault": "proxy-malformed",
+    "policy_evidence": { "source": "proxy_server_bypass", "available": true, "valid": false, "code": "MALFORMED" },
+    "answers": [], "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }], "expected": "BLOCK"
+  },
+  {
     "name": "unavailable Mihomo remains unknown without Guard",
     "input": { "target": "unknown.example" },
     "desired": {
