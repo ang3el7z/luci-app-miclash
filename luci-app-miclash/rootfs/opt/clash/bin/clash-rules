@@ -1535,7 +1535,8 @@ guard_emergency_release() {
 }
 
 guard_bootstrap_disable() {
-	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc disable
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc disable || return 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc disable
 }
 
 remove_nft_guard_rules() {

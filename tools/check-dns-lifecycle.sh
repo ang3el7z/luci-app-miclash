@@ -271,6 +271,7 @@ cat > "$fixture/ucode" <<'EOF'
 #!/bin/sh
 for argument in "$@"; do
 	[ "$argument" != /usr/share/miclash/guard-runtime.uc ] || guard_runtime=1
+	[ "$argument" != /usr/share/miclash/guard-bootstrap.uc ] || guard_bootstrap=1
 done
 if [ "${guard_runtime:-0}" = 1 ]; then
 	while [ "${1:-}" != /usr/share/miclash/guard-runtime.uc ]; do shift; done
@@ -301,6 +302,33 @@ if [ "${guard_runtime:-0}" = 1 ]; then
 		verify-iptables4|verify-iptables6)
 			cat >/dev/null
 			exit 1
+			;;
+		*) exit 1 ;;
+	esac
+	exit $?
+fi
+if [ "${guard_bootstrap:-0}" = 1 ]; then
+	while [ "${1:-}" != /usr/share/miclash/guard-bootstrap.uc ]; do shift; done
+	shift
+	command="${1:-}"
+	printf '%s\n' "guard-bootstrap-$command" >> "$MICLASH_DNS_GATE_NFT_LOG"
+	case "$command" in
+		install)
+			if grep -Eq '"enabled"[[:space:]]*:[[:space:]]*false' \
+				/etc/miclash/guard-bootstrap.json 2>/dev/null; then
+				rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+			else
+				printf '%s\n' '{"schema_version":1,"enabled":true}' \
+					> /etc/miclash/guard-bootstrap.json
+				: > "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+			fi
+			;;
+		disable)
+			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-bootstrap-disable" ] || exit 1
+			printf '%s\n' '{"schema_version":1,"enabled":false}' \
+				> /etc/miclash/guard-bootstrap.json
+			printf '%s\n' '{"enabled":false,"installed":false}' \
+				> /var/run/miclash/guard-bootstrap.json
 			;;
 		*) exit 1 ;;
 	esac
@@ -511,6 +539,46 @@ fi
 }
 [ "$(grep -c '^guard-runtime-protect$' "$MICLASH_DNS_GATE_NFT_LOG")" -ge 2 ]
 rm -f "$MICLASH_DNS_GATE_FAIL-guard-disable"
+
+# A successful explicit disable commits durable OFF only after the terminal
+# runtime bootstrap deletion. A later Guard service start must observe OFF and
+# must not recreate protection.
+rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json
+: > "$MICLASH_DNS_GATE_NFT_STATE"
+rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc install
+grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' /etc/miclash/guard-bootstrap.json
+run_actual_rules guard_finalize
+grep -Eq '"enabled"[[:space:]]*:[[:space:]]*false' /etc/miclash/guard-bootstrap.json
+grep -Eq '"enabled"[[:space:]]*:[[:space:]]*false' /var/run/miclash/guard-bootstrap.json
+/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc install
+[ ! -e "$MICLASH_DNS_GATE_EMERGENCY_STATE" ]
+awk '
+	/^guard-runtime-disable$/ { runtime_disabled = NR }
+	/^guard-bootstrap-disable$/ { persisted_off = NR }
+	END { exit(!(runtime_disabled && persisted_off > runtime_disabled)) }
+' "$MICLASH_DNS_GATE_NFT_LOG"
+
+# If durable OFF/status commit fails after terminal runtime deletion, failure
+# must return through finalization and freshly restore emergency protection.
+: > "$MICLASH_DNS_GATE_NFT_STATE"
+rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
+: > "$MICLASH_DNS_GATE_NFT_LOG"
+: > "$MICLASH_DNS_GATE_FAIL-guard-bootstrap-disable"
+if run_actual_rules guard_finalize; then
+	echo 'shipped clash-rules ignored Guard OFF persistence failure' >&2; exit 1
+fi
+[ -e "$MICLASH_DNS_GATE_EMERGENCY_STATE" ] || {
+	echo 'Guard OFF persistence failure was not freshly re-protected' >&2; exit 1
+}
+awk '
+	/^guard-runtime-disable$/ { runtime_disabled = NR }
+	/^guard-bootstrap-disable$/ { persisted_off = NR }
+	/^guard-runtime-protect$/ { protected = NR }
+	END { exit(!(runtime_disabled && persisted_off > runtime_disabled && protected > persisted_off)) }
+' "$MICLASH_DNS_GATE_NFT_LOG"
+rm -f "$MICLASH_DNS_GATE_FAIL-guard-bootstrap-disable"
 
 : > "$MICLASH_DNS_GATE_NFT_STATE"
 rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"

@@ -76,6 +76,11 @@ const strictRemove = body(rules, 'remove_guard_rules_strict');
 check(strictRemove.includes('remove_iptables_guard_rules || result=1'),
 	'strict runtime removal must propagate every iptables family mutation failure');
 
+const bootstrapDisable = body(rules, 'guard_bootstrap_disable');
+ordered(bootstrapDisable, [ '/usr/share/miclash/guard-runtime.uc disable',
+	'/usr/share/miclash/guard-bootstrap.uc disable' ],
+	'explicit disable must delete the runtime bootstrap before persisting verified OFF');
+
 const finalize = body(rules, 'finalize_guard_rules');
 ordered(finalize, [ 'guard_emergency_protect ||', 'remove_guard_rules_strict',
 	'verify_guard_absent', 'guard_bootstrap_disable' ],
