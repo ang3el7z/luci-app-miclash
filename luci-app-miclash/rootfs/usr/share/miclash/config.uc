@@ -218,8 +218,13 @@ export function create(runtime, operations, history) {
 			errors.fail(failure);
 		return outcome;
 	};
-	function activation(ctx, profile, content, source, extra) {
-		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
+	function activation(ctx, profile, content, source, extra, options) {
+		if (options != null &&
+		    (type(options) != 'object' ||
+		     length(keys(options)) != 1 || options.snapshot_before_validation !== true))
+			errors.fail('INVALID_ARGUMENT');
+		let prepared = null;
+		if (options?.snapshot_before_validation === true) {
 			let previous = read_active_state(profile);
 			let snapshot = history.snapshot_bytes(profile, source, previous.content, {
 				validation_result: 'success',
@@ -227,6 +232,18 @@ export function create(runtime, operations, history) {
 				operation_id: ctx.id,
 				...(extra ?? {})
 			});
+			assert_active_state(profile, previous);
+			prepared = { previous, snapshot };
+		}
+		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
+			let previous = prepared?.previous ?? read_active_state(profile);
+			let snapshot = prepared?.snapshot ?? history.snapshot_bytes(
+				profile, source, previous.content, {
+					validation_result: 'success',
+					activation_result: 'pending',
+					operation_id: ctx.id,
+					...(extra ?? {})
+				});
 			assert_active_state(profile, previous);
 			storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
 			record_active(profile, candidate_hash, ctx.id);
@@ -271,17 +288,22 @@ export function create(runtime, operations, history) {
 	};
 	api.save_draft = (profile, content, source) => submit(
 		'config.save_draft', source, profile, (ctx) => {
-			if (type(content) != 'string')
-				errors.fail('INVALID_ARGUMENT');
-			storage.atomic_write(runtime, draft_path(profile), content, 0o600);
+			api.save_draft_in_operation(ctx, profile, content);
 		});
+	api.save_draft_in_operation = (ctx, profile, content) => {
+		operation_context(ctx);
+		if (type(content) != 'string')
+			errors.fail('INVALID_ARGUMENT');
+		storage.atomic_write(runtime, draft_path(profile), content, 0o600);
+		return true;
+	};
 	api.validate_in_operation = (ctx, profile, content) => {
 		operation_context(ctx);
 		return with_candidate(ctx, profile, content, () => ({ ok: true }));
 	};
-	api.apply_in_operation = (ctx, profile, content, source, extra) => {
+	api.apply_in_operation = (ctx, profile, content, source, extra, options) => {
 		operation_context(ctx);
-		return activation(ctx, profile, content, source, extra);
+		return activation(ctx, profile, content, source, extra, options);
 	};
 	api.validate = (profile, content, source) => submit(
 		'config.validate', source, profile, (ctx) => complete_result(ctx,
@@ -331,5 +353,7 @@ export function create(runtime, operations, history) {
 				}));
 		});
 
+	if (type(history?.bind_config) == 'function')
+		history.bind_config(operations, api);
 	return api;
 };

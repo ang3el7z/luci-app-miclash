@@ -68,6 +68,13 @@ let internal = internal_env.ops.submit('subscription.update', 'auto', {}, (ctx) 
 		forged, 'config.yaml', fixture('valid.yaml')), 'INVALID_ARGUMENT');
 	assert_throws(() => internal_env.cfg.apply_in_operation(
 		forged, 'config.yaml', fixture('valid.yaml'), 'auto'), 'INVALID_ARGUMENT');
+	assert_throws(() => internal_env.cfg.save_draft_in_operation(
+		forged, 'config.yaml', 'forged-draft\n'), 'INVALID_ARGUMENT');
+	assert_throws(() => internal_env.cfg.apply_in_operation(
+		ctx, 'config.yaml', fixture('valid.yaml'), 'restore-before', {},
+		{ snapshot_before_validation: false }), 'INVALID_ARGUMENT');
+	assert_equal(internal_env.cfg.save_draft_in_operation(
+		ctx, 'config.yaml', 'internal-draft\n'), true);
 	internal_result = internal_env.cfg.validate_in_operation(
 		ctx, 'config.yaml', fixture('valid.yaml'));
 	if (internal_result?.ok !== true)
@@ -96,6 +103,8 @@ assert_throws(() => internal_env.cfg.validate_in_operation(
 	issued_ctx, 'config.yaml', fixture('valid.yaml')), 'INVALID_ARGUMENT');
 assert_throws(() => internal_env.cfg.apply_in_operation(
 	issued_ctx, 'config.yaml', fixture('valid.yaml'), 'auto'), 'INVALID_ARGUMENT');
+assert_throws(() => internal_env.cfg.save_draft_in_operation(
+	issued_ctx, 'config.yaml', 'expired-draft\n'), 'INVALID_ARGUMENT');
 
 // Only the three on-disk profile names are accepted.
 for (let profile in [ 'config.yaml', 'config2.yaml', 'config3.yaml' ])
@@ -217,7 +226,8 @@ assert_true(match(applied_history[0].filename, /^[A-Za-z0-9][A-Za-z0-9._-]*$/) !
 let history_rename = -1;
 let active_rename = -1;
 for (let index, call in env.fs.calls.rename) {
-	if (history_rename < 0 && match(call.to, /^\/opt\/clash\/history\/config\.yaml\/.+\.yaml$/))
+	if (history_rename < 0 && match(call.to,
+	    /^\/opt\/clash\/history\/config\.yaml\/\..+\.tmp-[0-9a-f]+\/config\.yaml$/))
 		history_rename = index;
 	if (call.to == '/opt/clash/config.yaml')
 		active_rename = index;
@@ -349,7 +359,7 @@ let metadata_revision = metadata_env.revisions.snapshot('config.yaml', 'system',
 	endpoint: 'https://user:pass@example.test/?token=url-secret'
 });
 let metadata_json = metadata_env.fs.readfile(
-	'/opt/clash/history/config.yaml/' + metadata_revision.revision + '.json');
+	'/opt/clash/history/config.yaml/' + metadata_revision.revision + '/metadata.json');
 assert_true(index(metadata_json, 'history-secret') < 0);
 assert_true(index(metadata_json, 'url-secret') < 0);
 assert_match(metadata_revision.filename, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
