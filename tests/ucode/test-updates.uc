@@ -95,6 +95,7 @@ function environment(options) {
 		start: () => {
 			push(service_calls, 'start'); running = true; start_count++;
 			if (options.new_start_throw && start_count == 1) die('HEALTH_FAILED');
+			if (options.old_start_throw && start_count == 2) die('HEALTH_FAILED');
 		},
 		wait_ready: (deadline, profile, wait_options) => {
 			wait_count++;
@@ -562,6 +563,62 @@ for (let recovery_case in [
 	assert_equal(recovered.updater.status().recovery_state, 'restored');
 }
 
+// applied is a proven destination-byte state, not a service-health state. Once
+// exact old bytes are restored it remains false even if their start/readiness
+// fails; an exception after the restore rename but before proof remains unknown.
+for (let recovery_kind in [ 'update', 'rollback' ]) {
+	for (let recovery_proof in [
+		{ name: 'old start throws', options: { old_start_throw: true,
+			readiness: [ true, false, true ] }, applied: false },
+		{ name: 'old readiness fails', options: {
+			readiness: [ true, false, true, false ] }, applied: false },
+		{ name: 'old verification throws', options: {
+			readiness: [ true, false, true ] }, applied: null, verify_throw: true },
+		{ name: 'old restore rename throws', options: {
+			readiness: [ true, false, true ] }, applied: null, rename_throw: true }
+	]) {
+		let recovery_options = { ...recovery_proof.options, running: true };
+		if (recovery_kind == 'rollback') recovery_options.old = 'current binary';
+		let proof = environment(recovery_options), destination_renames = 0;
+		let restored_hash = require('digest').sha256(
+			recovery_kind == 'rollback' ? 'current binary' : 'old mihomo binary');
+		if (recovery_kind == 'rollback') {
+			proof.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
+				'old mihomo binary');
+			proof.filesystem.chmod('/opt/clash/bin/previous/' + previous_id, 0o700);
+		}
+		let throw_verification = false;
+		proof.filesystem.on_rename = (from, to) => {
+			if (to != '/opt/clash/bin/clash') return;
+			destination_renames++;
+			if (destination_renames != 2) return;
+			if (recovery_proof.verify_throw) throw_verification = true;
+			if (recovery_proof.rename_throw)
+				proof.filesystem.throw_after_rename_once_to = '/opt/clash/bin/clash';
+		};
+		proof.filesystem.on_lstat = (path) => {
+			if (throw_verification && path == '/opt/clash/bin/clash') {
+				throw_verification = false;
+				die('INTERNAL');
+			}
+		};
+		let proof_op = recovery_kind == 'rollback' ?
+			proof.updater.rollback_mihomo({ id: previous_id }, 'luci') :
+			proof.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
+		proof.clock.advance(0);
+		let proof_operation = proof.ops.get(proof_op.id), proof_status = proof.updater.status();
+		let label = recovery_kind + ': ' + recovery_proof.name;
+		assert_equal(proof_operation.state, 'failure', label);
+		assert_equal(proof_operation.error.code, 'INTERNAL', label);
+		assert_equal(proof_status.state, 'failure', label);
+		assert_equal(proof_status.error_code, 'INTERNAL', label);
+		assert_equal(proof_status.recovery_state, 'failed', label);
+		assert_equal(proof_status.applied, recovery_proof.applied, label);
+		assert_equal(proof_status.sha256,
+			recovery_proof.applied === false ? restored_hash : null, label);
+	}
+}
+
 // Destination authority includes the root-owned parent hierarchy. Every
 // successful stopped update authenticates the final executable mode/hash; a
 // post-readiness substitution is recovered rather than reported as success.
@@ -580,6 +637,42 @@ tampered_ready.clock.advance(0);
 assert_equal(tampered_ready.ops.get(tampered_ready_op.id).state, 'failure');
 assert_equal(tampered_ready.filesystem.readfile('/opt/clash/bin/clash'),
 	'old mihomo binary');
+
+// The exact old destination and its parent authority are re-proven after
+// preservation and before the first service transition or destination write.
+for (let old_race in [ 'replacement', 'hash', 'mode', 'authority' ]) {
+	let raced_old = environment({ running: true }), armed = true;
+	raced_old.filesystem.on_rename = (from, to) => {
+		if (!armed || substr(to, 0, length('/opt/clash/bin/previous/mihomo-')) !=
+		    '/opt/clash/bin/previous/mihomo-') return;
+		if (old_race == 'replacement')
+			raced_old.filesystem.bump_inode('/opt/clash/bin/clash');
+		else if (old_race == 'hash')
+			raced_old.filesystem.writefile('/opt/clash/bin/clash', 'raced old bytes');
+		else if (old_race == 'mode')
+			raced_old.filesystem.set_mode('/opt/clash/bin/clash', 0o600);
+		armed = old_race == 'authority';
+	};
+	if (old_race == 'authority') {
+		raced_old.filesystem.on_lstat = (path) => {
+			if (armed && path == '/opt/clash/bin/clash') {
+				armed = false;
+				raced_old.filesystem.set_uid('/opt/clash/bin', 1000);
+			}
+		};
+	}
+	let raced_old_op = raced_old.updater.update_mihomo(
+		{ version: 'v1.2.3' }, 'luci');
+	raced_old.clock.advance(0);
+	assert_equal(raced_old.ops.get(raced_old_op.id).state, 'failure', old_race);
+	assert_equal(length(raced_old.service_calls), 0,
+		old_race + ' race fails before stop');
+	let destination_writes = 0;
+	for (let rename in raced_old.filesystem.calls.rename)
+		if (rename.to == '/opt/clash/bin/clash') destination_writes++;
+	assert_equal(destination_writes, 0,
+		old_race + ' race fails before destination write');
+}
 
 // Rollback runs the same candidate -v and Active -t pipeline before its first
 // stop, and its provenance is not falsely labelled as a published checksum.

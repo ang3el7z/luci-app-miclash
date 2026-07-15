@@ -576,32 +576,60 @@ function recover_kernel(app, authority, old, was_running, transaction) {
 			errors.fail('INTERNAL');
 	}
 	let exact_old = false;
-	try { exact_old = verify_binary(runtime, authority, old.hash)?.hash == old.hash; }
-	catch (error) { exact_old = false; }
+	try {
+		exact_old = verify_binary(runtime, authority, old.hash)?.hash == old.hash;
+		if (exact_old) {
+			transaction.applied = false;
+			transaction.sha256 = old.hash;
+		}
+	}
+	catch (error) {
+		transaction.applied = null;
+		transaction.sha256 = null;
+		exact_old = false;
+	}
 	if (!exact_old) {
+		transaction.applied = null;
+		transaction.sha256 = null;
 		storage.atomic_write(runtime, BINARY, old.content, 0o700);
 		verify_binary(runtime, authority, old.hash);
+		transaction.applied = false;
+		transaction.sha256 = old.hash;
 	}
 	if (was_running) {
 		app.service.start('config.yaml');
 		if (app.service.wait_ready(runtime.clock.now() + 15000,
 		    'config.yaml', {})?.ok !== true)
 			errors.fail('INTERNAL');
-		verify_binary(runtime, authority, old.hash);
+		try { verify_binary(runtime, authority, old.hash); }
+		catch (error) {
+			transaction.applied = null;
+			transaction.sha256 = null;
+			errors.fail(errors.normalize(error).code);
+		}
 	}
 	else if (observed_service(app).running)
 		errors.fail('INTERNAL');
-	transaction.applied = false;
 	transaction.recovery_state = 'restored';
 };
 
 function install_kernel(app, candidate, resolved, ctx, transaction) {
 	let runtime = app.runtime, authority = binary_authority(runtime);
 	let old = binary_snapshot(runtime, authority);
+	transaction.applied = false;
+	transaction.sha256 = old.hash;
 	ctx.stage('preserve', 50, 'preserve');
 	let previous_id = preserve(runtime, old, authority);
 	ctx.stage('transition', 55, 'transition');
-	verify_snapshot(runtime, old);
+	try {
+		if (!verify_snapshot(runtime, old)) errors.fail('INTERNAL');
+		verify_authority(runtime, authority);
+	}
+	catch (error) {
+		transaction.applied = null;
+		transaction.sha256 = null;
+		errors.fail(errors.normalize(error).code);
+	}
 	verify_owned(runtime, candidate);
 	let observed = observed_service(app), began = false;
 	transaction.stage = 'transition';
@@ -618,9 +646,12 @@ function install_kernel(app, candidate, resolved, ctx, transaction) {
 		began = true;
 		verify_authority(runtime, authority);
 		verify_owned(runtime, candidate);
+		transaction.applied = null;
+		transaction.sha256 = null;
 		storage.atomic_write(runtime, BINARY, candidate.content, 0o700);
-		transaction.applied = true;
 		verify_binary(runtime, authority, candidate.hash);
+		transaction.applied = true;
+		transaction.sha256 = candidate.hash;
 		if (observed.running) {
 			verify_binary(runtime, authority, candidate.hash);
 			app.service.start('config.yaml');
@@ -759,8 +790,8 @@ export function create(app) {
 		let requested = options.version == null ? null : version(options.version);
 		return app.operations.submit('updates.mihomo', source, {}, (ctx) => {
 			let candidate = null, resolved = null, installed = null;
-			let transaction = { applied: false, recovery_state: 'not_started',
-				stage: 'verification' };
+			let transaction = { applied: null, sha256: null,
+				recovery_state: 'not_started', stage: 'verification' };
 			try {
 				ctx.stage('release', 10, 'release');
 				resolved = resolve_mihomo(app.runtime, selected_channel, requested);
@@ -791,7 +822,7 @@ export function create(app) {
 				}
 				set_status({ state: 'failure', kind: 'mihomo', stage: transaction.stage,
 					operation_id: ctx.id, version: resolved?.version ?? requested,
-					sha256: transaction.applied ? installed?.sha256 : null,
+					sha256: transaction.sha256,
 					published_checksum_verified: null,
 					previous_id: installed?.previous_id ?? null,
 					error_code: normalized.code, applied: transaction.applied,
@@ -813,8 +844,8 @@ export function create(app) {
 		if (type(id) != 'string' || !match(id, /^mihomo-[0-9a-f]{64}$/))
 			invalid();
 		return app.operations.submit('updates.mihomo.rollback', source, {}, (ctx) => {
-			let transaction = { applied: false, recovery_state: 'not_started',
-				stage: 'verification' }, installed = null;
+			let transaction = { applied: null, sha256: null,
+				recovery_state: 'not_started', stage: 'verification' }, installed = null;
 			try {
 				ctx.stage('verification', 45, 'verification');
 				let candidate = previous(app.runtime, id);
@@ -832,7 +863,7 @@ export function create(app) {
 				let normalized = errors.normalize(error);
 				set_status({ state: 'failure', kind: 'mihomo', stage: transaction.stage,
 					operation_id: ctx.id, version: null,
-					sha256: transaction.applied ? installed?.sha256 : null,
+					sha256: transaction.sha256,
 					published_checksum_verified: null, previous_id: id,
 					error_code: normalized.code, applied: transaction.applied,
 					recovery_state: transaction.recovery_state,
