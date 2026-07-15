@@ -519,6 +519,39 @@ review_check(worker_exception_ops.calls[0].state == 'failure' &&
 	worker_exception_status.failure_count == 1,
 	'worker exception clears phase and schedules one retry');
 
+let success_persist_ops = production_operations();
+let success_persist = make_app({ operations: success_persist_ops });
+let success_persist_write = success_persist.app.store.write;
+let success_persist_writes = 0;
+success_persist.app.store.write = (value) => {
+	success_persist_writes++;
+	if (success_persist_writes == 3) die('transient success persistence failure');
+	return success_persist_write(value);
+};
+let success_persist_reconciler = reconcile.create(success_persist.app);
+success_persist_reconciler.run('automatic');
+let success_persist_status = success_persist_reconciler.circuit_status();
+let success_persist_durable = success_persist.persisted();
+review_check(success_persist_ops.calls[0].state == 'failure' &&
+	success_persist_ops.calls[0].error?.code == 'HEALTH_FAILED' &&
+	success_persist_ops.ownership_releases == 1 && success_persist_writes == 4 &&
+	success_persist_status.phase == 'idle' && success_persist_status.circuit == 'open' &&
+	success_persist_status.failure_count == 1 &&
+	success_persist_status.failure_id != null &&
+	success_persist_status.failure_id == success_persist_durable.failure_id &&
+	success_persist_status.failure_sequence == 1 &&
+	success_persist_status.failure_sequence == success_persist_durable.failure_sequence &&
+	success_persist_status.last_result == 'failure' &&
+	success_persist_status.last_result == success_persist_durable.last_result &&
+	success_persist_status.next_retry == success_persist_durable.next_retry &&
+	success_persist_durable.phase == 'idle' && success_persist_durable.circuit == 'open' &&
+	success_persist_durable.failure_count == 1 &&
+	length(filter(success_persist.events, (item) => item.type == 'failure')) == 1 &&
+	filter(success_persist.events, (item) => item.type == 'failure')[0].data.failure_id ==
+		success_persist_durable.failure_id &&
+	length(filter(success_persist.clock.timers, (item) => item.active)) == 1,
+	'success persistence failure rolls back into one durable retry');
+
 let mihomo_events = make_app({ states: { mihomo: failed() }, guard_on: true,
 	operations: production_operations() });
 reconcile.create(mihomo_events.app).run('automatic');

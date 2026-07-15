@@ -241,15 +241,20 @@ export function create(app) {
 	};
 
 	function transition_success(component, reason, observations, changed) {
-		let prior = state.failure_id;
-		invalidate_timer();
+		let before = clone(state);
+		let prior = before.failure_id;
 		state.phase = 'idle';
 		state.circuit = 'closed';
 		state.failure_count = 0;
 		state.next_retry = null;
 		state.failure_id = null;
 		state.last_result = 'success';
-		persist();
+		try { persist(); }
+		catch (error) {
+			state = before;
+			fail(errors.normalize(error).code);
+		}
+		invalidate_timer();
 		if (changed)
 			emit('self_heal', { component, reason });
 		if (prior != null)
