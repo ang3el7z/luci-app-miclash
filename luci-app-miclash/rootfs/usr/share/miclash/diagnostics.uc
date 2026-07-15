@@ -1,0 +1,396 @@
+import * as errors from 'miclash.errors';
+import * as redact from 'miclash.redact';
+
+const ROOT = '/tmp/miclash/diagnostics';
+const TTL = 900000;
+const MAX_REPORT = 131072;
+const RETENTION = 5;
+const MAX_ROOT_ENTRIES = 32;
+
+function invalid() { errors.fail('INVALID_ARGUMENT'); };
+function clone(value) {
+	try { return json(sprintf('%J', value)); }
+	catch (error) { errors.fail('INTERNAL'); }
+};
+function same_node(left, right) {
+	return left?.type == right?.type && left?.inode == right?.inode &&
+		left?.dev?.major == right?.dev?.major && left?.dev?.minor == right?.dev?.minor;
+};
+function secret_key(name) {
+	name = replace(lc(name ?? ''), /[^a-z0-9]+/g, '_');
+	return match(name, /(password|passwd|secret|token|authorization|cookie|credential|api_key|subscription_url)$/);
+};
+function add_secret(secrets, value) {
+	if (type(value) != 'string' || !length(value) || length(value) > 4096)
+		return;
+	for (let existing in secrets)
+		if (existing == value)
+			return;
+	push(secrets, value);
+};
+function discover(secrets, value, key) {
+	if (secret_key(key))
+		add_secret(secrets, value);
+	if (type(value) == 'array')
+		for (let item in value) discover(secrets, item, null);
+	else if (type(value) == 'object')
+		for (let name, item in value) discover(secrets, item, name);
+	else if (type(value) == 'string') {
+		let named = match(value,
+			/(password|passwd|secret|token|api[-_]?key|authorization|cookie)[=:][ \t]*([^ \t\r\n,;]+)/i);
+		if (named != null) add_secret(secrets, named[2]);
+		let bearer = match(value, /Bearer[ \t]+([^ \t\r\n,;]+)/i);
+		if (bearer != null) add_secret(secrets, bearer[1]);
+	}
+};
+function replace_all(input, wanted, replacement) {
+	if (!length(wanted)) return input;
+	let result = '', rest = input;
+	while (true) {
+		let position = index(rest, wanted);
+		if (position < 0) return result + rest;
+		result += substr(rest, 0, position) + replacement;
+		rest = substr(rest, position + length(wanted));
+	}
+};
+function scrub(value, secrets) {
+	if (type(value) == 'array') {
+		let output = [];
+		for (let item in value) push(output, scrub(item, secrets));
+		return output;
+	}
+	if (type(value) == 'object') {
+		let output = {};
+		for (let name, item in value) output[name] = scrub(item, secrets);
+		return output;
+	}
+	if (type(value) != 'string') return value;
+	let output = redact.text(value);
+	for (let secret in secrets)
+		output = replace_all(output, secret, redact.MASK);
+	return output;
+};
+function sanitize(value) {
+	let secrets = [];
+	discover(secrets, value, null);
+	let safe = scrub(redact.value('diagnostics', value), secrets);
+	if (length(sprintf('%J', safe)) > MAX_REPORT)
+		errors.fail('RESPONSE_TOO_LARGE');
+	return safe;
+};
+function call(source, name) {
+	try { return source[name](); }
+	catch (error) { return { state: 'unknown', code: 'UNAVAILABLE' }; }
+};
+function collect(sources) {
+	let result = {};
+	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
+		'updates', 'settings', 'last_repair', 'config', 'process', 'logs', 'uci',
+		'operations' ])
+		result[name] = call(sources, name);
+	let telegram = result.settings?.telegram;
+	let url = result.settings?.core?.subscription_url;
+	let transport = type(url) == 'string' && match(lc(url), /^https:\/\//) ? 'https' :
+		(type(url) == 'string' && match(lc(url), /^http:\/\//) ? 'http' : 'none');
+	result.public_status = {
+		telegram: {
+			enabled: telegram?.enabled === true,
+			configured: type(telegram?.token) == 'string' && length(telegram.token) > 0 &&
+				type(telegram?.user_id) == 'string' && length(telegram.user_id) > 0
+		},
+		subscription: {
+			configured: type(url) == 'string' && length(url) > 0,
+			transport,
+			insecure: transport == 'http'
+		}
+	};
+	return sanitize(result);
+};
+function make_summary(safe, now) {
+	return {
+		schema_version: 1,
+		generated_at: now,
+		versions: safe.versions,
+		architecture: safe.architecture,
+		state: {
+			desired: safe.state?.desired ?? {},
+			observed: safe.state?.observed ?? {}
+		},
+		health: safe.health,
+		memory: safe.memory,
+		updates: safe.updates,
+		telegram: safe.public_status.telegram,
+		subscription: safe.public_status.subscription,
+		last_repair: safe.last_repair
+	};
+};
+function verify_directory(runtime, path, identity) {
+	let current = runtime.fs.lstat(path);
+	if (current?.type != 'directory' || (identity != null && !same_node(identity, current)) ||
+		current.mode != 0o700 || (current.uid != null && current.uid != 0) ||
+		runtime.fs.realpath(path) != path)
+		errors.fail('INTERNAL');
+	return current;
+};
+function ensure_directory(runtime, path) {
+	let current = runtime.fs.lstat(path);
+	if (current == null && runtime.fs.mkdir(path) !== true)
+		errors.fail('INTERNAL');
+	current = runtime.fs.lstat(path);
+	if (current?.type != 'directory' || runtime.fs.realpath(path) != path ||
+		(current.uid != null && current.uid != 0) || runtime.fs.chmod(path, 0o700) !== true)
+		errors.fail('INTERNAL');
+	return verify_directory(runtime, path, current);
+};
+function safe_file(runtime, path, identity) {
+	let current = runtime.fs.lstat(path);
+	if (current?.type != 'file' || current.nlink != 1 ||
+		(identity != null && !same_node(identity, current)) || current.mode != 0o600 ||
+		(current.uid != null && current.uid != 0) || runtime.fs.realpath(path) != path)
+		errors.fail('CORRUPT_STATE');
+	return current;
+};
+function remove_scanned(runtime, root, name) {
+	if (!match(name, /^report-[0-9a-f]{32}$/)) errors.fail('CORRUPT_STATE');
+	let path = ROOT + '/' + name, identity = runtime.fs.lstat(path);
+	if (identity?.type != 'directory' || identity.mode != 0o700 ||
+		(identity.uid != null && identity.uid != 0) || runtime.fs.realpath(path) != path)
+		errors.fail('CORRUPT_STATE');
+	let entries = runtime.fs.lsdir(path);
+	if (type(entries) != 'array' || length(entries) != 2 ||
+		index(entries, 'report.json') < 0 || index(entries, 'report.txt') < 0)
+		errors.fail('CORRUPT_STATE');
+	for (let leaf in [ 'report.json', 'report.txt' ]) {
+		let file = path + '/' + leaf, file_identity = safe_file(runtime, file, null);
+		verify_directory(runtime, ROOT, root);
+		if (!same_node(file_identity, runtime.fs.lstat(file)) || runtime.fs.unlink(file) !== true)
+			errors.fail('INTERNAL');
+	}
+	verify_directory(runtime, path, identity);
+	verify_directory(runtime, ROOT, root);
+	if (runtime.fs.rmdir(path) !== true) errors.fail('INTERNAL');
+	verify_directory(runtime, ROOT, root);
+};
+function recover_reports(runtime, root) {
+	let names = runtime.fs.lsdir(ROOT);
+	if (type(names) != 'array') errors.fail('INTERNAL');
+	if (length(names) > MAX_ROOT_ENTRIES) errors.fail('RESPONSE_TOO_LARGE');
+	for (let name in names) remove_scanned(runtime, root, name);
+};
+function write_file(runtime, directory, path, content) {
+	if (type(content) != 'string' || length(content) > MAX_REPORT)
+		errors.fail('RESPONSE_TOO_LARGE');
+	verify_directory(runtime, directory.path, directory.identity);
+	let handle = runtime.fs.open(path, 'wx', 0o600);
+	if (handle == null) errors.fail('INTERNAL');
+	let opened = runtime.fs.fstat(handle), offset = 0, failure = null;
+	if (opened?.type != 'file' || opened.nlink != 1) failure = 'INTERNAL';
+	try {
+		while (failure == null && offset < length(content)) {
+			let amount = runtime.fs.write(handle, substr(content, offset));
+			if (type(amount) != 'int' || amount < 1) errors.fail('INTERNAL');
+			offset += amount;
+		}
+		if (runtime.fs.flush(handle) !== true) errors.fail('INTERNAL');
+	}
+	catch (error) { failure = errors.normalize(error).code; }
+	if (runtime.fs.close(handle) !== true) failure = 'INTERNAL';
+	if (failure == null && runtime.fs.chmod(path, 0o600) !== true) failure = 'INTERNAL';
+	let current = runtime.fs.lstat(path);
+	if (failure != null || !same_node(opened, current) || current?.nlink != 1 || current.mode != 0o600 ||
+		(current.uid != null && current.uid != 0) || runtime.fs.realpath(path) != path ||
+		current.size != length(content) || runtime.digest.sha256_file(path) != runtime.digest.sha256(content)) {
+		if (same_node(opened, current) && current?.type == 'file' && current.nlink == 1 &&
+			runtime.fs.realpath(path) == path)
+			try { runtime.fs.unlink(path); } catch (cleanup_error) {}
+		errors.fail(failure ?? 'INTERNAL');
+	}
+	verify_directory(runtime, directory.path, directory.identity);
+	return { path, identity: current, hash: runtime.digest.sha256(content) };
+};
+function read_file(runtime, directory, record) {
+	verify_directory(runtime, directory.path, directory.identity);
+	let leaf = runtime.fs.lstat(record.path);
+	if (!same_node(record.identity, leaf) || leaf?.nlink != 1 || leaf?.mode != 0o600 ||
+		(leaf.uid != null && leaf.uid != 0) || runtime.fs.realpath(record.path) != record.path)
+		errors.fail('INTERNAL');
+	let handle = runtime.fs.open(record.path, 're');
+	if (handle == null) errors.fail('INTERNAL');
+	let before = runtime.fs.fstat(handle), content = '', failure = null;
+	try {
+		while (length(content) <= MAX_REPORT) {
+			let chunk = runtime.fs.read(handle, 4096);
+			if (type(chunk) != 'string') errors.fail('INTERNAL');
+			if (!length(chunk)) break;
+			content += chunk;
+		}
+	}
+	catch (error) { failure = 'INTERNAL'; }
+	let after = runtime.fs.fstat(handle);
+	if (runtime.fs.close(handle) !== true) failure = 'INTERNAL';
+	let final = runtime.fs.lstat(record.path);
+	if (failure != null || length(content) > MAX_REPORT || before?.nlink != 1 || after?.nlink != 1 ||
+		!same_node(record.identity, before) || !same_node(before, after) ||
+		runtime.digest.sha256(content) != record.hash || runtime.digest.sha256_file(record.path) != record.hash ||
+		!same_node(record.identity, final) || final?.nlink != 1 || final.mode != 0o600 ||
+		(final.uid != null && final.uid != 0) || runtime.fs.realpath(record.path) != record.path)
+		errors.fail('INTERNAL');
+	verify_directory(runtime, directory.path, directory.identity);
+	return content;
+};
+function cleanup_staging(runtime, root, directory, files) {
+	verify_directory(runtime, ROOT, root);
+	verify_directory(runtime, directory.path, directory.identity);
+	let names = runtime.fs.lsdir(directory.path), expected = [];
+	for (let format in [ 'json', 'text' ])
+		if (files[format] != null)
+			push(expected, format == 'json' ? 'report.json' : 'report.txt');
+	if (type(names) != 'array' || length(names) != length(expected)) errors.fail('INTERNAL');
+	for (let name in names)
+		if (index(expected, name) < 0) errors.fail('INTERNAL');
+	for (let format in [ 'json', 'text' ]) {
+		let file = files[format];
+		if (file == null) continue;
+		safe_file(runtime, file.path, file.identity);
+		if (runtime.digest.sha256_file(file.path) != file.hash ||
+			runtime.fs.unlink(file.path) !== true)
+			errors.fail('INTERNAL');
+	}
+	verify_directory(runtime, directory.path, directory.identity);
+	if (runtime.fs.rmdir(directory.path) !== true) errors.fail('INTERNAL');
+	verify_directory(runtime, ROOT, root);
+};
+
+export function create(dependencies) {
+	let runtime = dependencies?.runtime, sources = dependencies?.sources;
+	if (type(runtime?.fs) != 'object' || type(runtime?.clock?.now) != 'function' ||
+		type(runtime?.random?.hex) != 'function' || type(runtime?.digest?.sha256) != 'function' ||
+		type(runtime?.digest?.sha256_file) != 'function' ||
+		runtime?.paths?.tmp != '/tmp/miclash' || type(sources) != 'object')
+		invalid();
+	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
+		'updates', 'settings', 'last_repair', 'config', 'process', 'logs', 'uci',
+		'operations' ])
+		if (type(sources[name]) != 'function') invalid();
+	ensure_directory(runtime, runtime.paths.tmp);
+	let root = ensure_directory(runtime, ROOT);
+	recover_reports(runtime, root);
+	let reports = {}, report_order = [];
+	function forget(id) {
+		let next = [];
+		for (let existing in report_order)
+			if (existing != id) push(next, existing);
+		report_order = next;
+		delete reports[id];
+	};
+	function remove_report(id) {
+		let report = reports[id];
+		if (report == null) return false;
+		verify_directory(runtime, ROOT, root);
+		verify_directory(runtime, report.directory.path, report.directory.identity);
+		let names = runtime.fs.lsdir(report.directory.path);
+		if (type(names) != 'array' || length(names) != 2 ||
+			index(names, 'report.json') < 0 || index(names, 'report.txt') < 0)
+			errors.fail('INTERNAL');
+		for (let format in [ 'json', 'text' ]) {
+			let file = report.files[format];
+			safe_file(runtime, file.path, file.identity);
+			if (!same_node(file.identity, runtime.fs.lstat(file.path)) ||
+				runtime.digest.sha256_file(file.path) != file.hash ||
+				runtime.fs.unlink(file.path) !== true)
+				errors.fail('INTERNAL');
+		}
+		verify_directory(runtime, report.directory.path, report.directory.identity);
+		if (runtime.fs.rmdir(report.directory.path) !== true) errors.fail('INTERNAL');
+		verify_directory(runtime, ROOT, root);
+		forget(id);
+		return true;
+	};
+	function prune() {
+		let now = runtime.clock.now();
+		for (let id in [ ...report_order ])
+			if (reports[id]?.expires_at <= now) remove_report(id);
+		while (length(report_order) >= RETENTION)
+			remove_report(report_order[0]);
+	};
+	return {
+		summary: (...args) => {
+			if (length(args)) invalid();
+			return clone(make_summary(collect(sources), runtime.clock.now()));
+		},
+		create_report: (...args) => {
+			if (length(args)) invalid();
+			prune();
+			ensure_directory(runtime, runtime.paths.tmp);
+			root = verify_directory(runtime, ROOT, root);
+			if (runtime.fs.realpath(ROOT) != ROOT || !same_node(root, runtime.fs.lstat(ROOT)))
+				errors.fail('INTERNAL');
+			let id = null;
+			for (let attempt = 0; attempt < 16 && id == null; attempt++) {
+				let candidate = 'rpt_' + runtime.random.hex(16);
+				if (!match(candidate, /^rpt_[0-9a-f]{32}$/)) errors.fail('INTERNAL');
+				if (reports[candidate] == null) id = candidate;
+			}
+			if (id == null) errors.fail('INTERNAL');
+			let path = null;
+			for (let attempt = 0; attempt < 16 && path == null; attempt++) {
+				let token = runtime.random.hex(16);
+				if (!match(token, /^[0-9a-f]{32}$/)) errors.fail('INTERNAL');
+				let candidate = ROOT + '/report-' + token;
+				if (runtime.fs.lstat(candidate) != null) continue;
+				if (runtime.fs.mkdir(candidate) !== true) {
+					if (runtime.fs.lstat(candidate) != null) continue;
+					errors.fail('INTERNAL');
+				}
+				path = candidate;
+			}
+			if (path == null || runtime.fs.chmod(path, 0o700) !== true)
+				errors.fail('INTERNAL');
+			let directory = { path, identity: verify_directory(runtime, path, runtime.fs.lstat(path)) };
+			let now = runtime.clock.now(), files = {}, failure = null;
+			try {
+				let safe = collect(sources);
+				let summary = make_summary(safe, now);
+				let report = { schema_version: 1, generated_at: now, summary,
+					details: { config: safe.config, process: safe.process, logs: safe.logs,
+						uci: safe.uci, operations: safe.operations } };
+				let json_text = sprintf('%J\n', report);
+				let text = 'MiClash diagnostic report\nGenerated: ' + now + '\n' +
+					'Architecture: ' + summary.architecture + '\n' +
+					'Mihomo health: ' + (summary.health?.mihomo?.state ?? 'unknown') + '\n';
+				if (length(json_text) + length(text) > MAX_REPORT)
+					errors.fail('RESPONSE_TOO_LARGE');
+				files.json = write_file(runtime, directory, path + '/report.json', json_text);
+				files.text = write_file(runtime, directory, path + '/report.txt', text);
+			}
+			catch (error) { failure = errors.normalize(error).code; }
+			if (failure != null) {
+				try { cleanup_staging(runtime, root, directory, files); }
+				catch (cleanup_error) { failure = 'INTERNAL'; }
+				errors.fail(failure);
+			}
+			reports[id] = { directory, files, created_at: now, expires_at: now + TTL };
+			push(report_order, id);
+			return { id, created_at: now, expires_at: now + TTL,
+				files: [ 'report.json', 'report.txt' ] };
+		},
+		read_report: (...args) => {
+			if (length(args) != 1) invalid();
+			let options = args[0];
+			if (type(options) != 'object' || length(keys(options)) != 2 ||
+				!exists(options, 'id') || !exists(options, 'format') ||
+				type(options.id) != 'string' || !match(options.id, /^rpt_[0-9a-f]{32}$/) ||
+				(options.format != 'json' && options.format != 'text')) invalid();
+			let report = reports[options.id];
+			if (report != null && runtime.clock.now() >= report.expires_at) {
+				remove_report(options.id);
+				report = null;
+			}
+			if (report == null)
+				errors.fail('NOT_FOUND');
+			return { id: options.id, format: options.format,
+				content: read_file(runtime, report.directory, report.files[options.format]),
+				expires_at: report.expires_at };
+		}
+	};
+};

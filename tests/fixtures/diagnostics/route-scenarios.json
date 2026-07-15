@@ -1,0 +1,106 @@
+[
+  {
+    "name": "device direct is blocked by Guard",
+    "input": { "target": "example.com", "device": "AA:BB:CC:DD:EE:FF", "interface": "lan" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [{ "mac": "AA:BB:CC:DD:EE:FF", "decision": "DIRECT" }],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["203.0.113.20"],
+    "rules": [{ "type": "DOMAIN", "payload": "example.com", "proxy": "DIRECT" }],
+    "expected": "BLOCK"
+  },
+  {
+    "name": "device proxy policy wins",
+    "input": { "target": "proxy.example", "device": "00:11:22:33:44:55" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [{ "mac": "00:11:22:33:44:55", "decision": "PROXY" }],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["198.51.100.12"],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "DIRECT" }],
+    "expected": "PROXY"
+  },
+  {
+    "name": "interface block policy wins",
+    "input": { "target": "198.51.100.40", "interface": "guest.20" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [{ "name": "guest.20", "decision": "BLOCK" }],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "PROXY" }],
+    "expected": "BLOCK"
+  },
+  {
+    "name": "proxy server bypass remains direct",
+    "input": { "target": "203.0.113.7" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": ["203.0.113.7"]
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "PROXY" }],
+    "expected": "DIRECT"
+  },
+  {
+    "name": "Mihomo direct is fail closed under Guard",
+    "input": { "target": "direct.example" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": ["192.0.2.44"],
+    "rules": [{ "type": "DOMAIN", "payload": "direct.example", "proxy": "DIRECT" }],
+    "expected": "BLOCK"
+  },
+  {
+    "name": "IPv6 target is evaluated without probes",
+    "input": { "target": "2001:db8::1" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": [{ "type": "MATCH", "payload": "", "proxy": "ProxyGroup" }],
+    "expected": "PROXY"
+  },
+  {
+    "name": "unavailable Mihomo remains unknown without Guard",
+    "input": { "target": "unknown.example" },
+    "desired": {
+      "guard": { "enabled": false },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": null,
+    "expected": "unknown"
+  },
+  {
+    "name": "unavailable Mihomo is fail closed with Guard",
+    "input": { "target": "guarded-unknown.example" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [],
+      "interfaces": [],
+      "proxy_servers": []
+    },
+    "answers": [],
+    "rules": null,
+    "expected": "BLOCK"
+  }
+]
