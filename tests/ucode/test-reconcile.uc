@@ -14,26 +14,43 @@ function failed(code) {
 	return { state: 'failed', code: code ?? 'FAILED', message: 'unhealthy', details: {} };
 };
 
-function operation_manager(options) {
+// Mirrors operations.uc completion semantics: any worker return other than
+// exactly false auto-completes success, while ctx.complete(error) records a
+// durable operation failure.
+function production_operations(options) {
 	options ??= {};
-	let manager = { calls: [], active: false, deferred: [] };
-	manager.submit = (kind, source, context, worker) => {
-		if (manager.active)
-			die('operation overlap');
-		let record = { id: sprintf('op-%d', length(manager.calls) + 1), kind, source, context };
-		push(manager.calls, record);
-		if (options.defer) {
-			push(manager.deferred, () => {
-				manager.active = true;
-				record.result = worker({ id: record.id });
-				manager.active = false;
-				return record.result;
-			});
-			return record;
+	let manager = { calls: [], deferred: [], fail_submit: options.fail_submit === true };
+	manager.start = (record) => {
+		record.state = 'running';
+		let completed = false;
+		let ctx = { id: record.id, complete: (error) => {
+			if (completed) return false;
+			completed = true;
+			record.state = error == null ? 'success' : 'failure';
+			record.error = error == null ? null : clone(error);
+			return true;
+		} };
+		let returned;
+		try { returned = record.worker(ctx); }
+		catch (error) {
+			if (!completed) ctx.complete({ code: error?.code ?? error?.message ?? 'INTERNAL' });
 		}
-		manager.active = true;
-		record.result = worker({ id: record.id });
-		manager.active = false;
+		if (returned !== false && !completed)
+			ctx.complete(null);
+		return record;
+	};
+	manager.submit = (kind, source, context, worker) => {
+		if (manager.fail_submit) {
+			manager.fail_submit = false;
+			die('INTERNAL');
+		}
+		let record = {
+			id: sprintf('op-%d', length(manager.calls) + 1), kind, source,
+			state: 'queued', error: null, worker
+		};
+		push(manager.calls, record);
+		if (options.defer) push(manager.deferred, () => manager.start(record));
+		else manager.start(record);
 		return record;
 	};
 	manager.drain = () => shift(manager.deferred)();
@@ -68,31 +85,36 @@ function make_app(options) {
 			push(actions, 'repair:' + name);
 			if (options.repair_success?.[name] === true)
 				states[name] = ok();
-			return { changed: true };
+			if (options.repair_results?.[name] != null)
+				return options.repair_results[name];
+			return {
+				changed: options.changed?.[name] ?? [ name ],
+				observe: options.repair_observers?.[name] ?? observer(name)
+			};
 		};
 	};
 	for (let name in COMPONENTS)
 		repairs[name] = repair(name);
 	let app = {
 		clock,
-		operations: options.operations ?? operation_manager(),
+		operations: options.operations ?? production_operations(),
 		observers,
 		repairs,
 		mihomo: {
 			reload: () => {
 				push(actions, 'reload');
 				if (options.mihomo_throw?.reload) die('secret reload error');
-				return { changed: true };
+				return { changed: [ 'mihomo-config' ], observe: observer('mihomo') };
 			},
 			restart_core: () => {
 				push(actions, 'restart_core');
 				if (options.mihomo_throw?.restart_core) die('secret core error');
-				return { changed: true };
+				return { changed: [ 'mihomo-core' ], observe: observer('mihomo') };
 			},
 			restart_service: () => {
 				push(actions, 'restart_service');
 				if (options.mihomo_throw?.restart_service) die('secret service error');
-				return { changed: true };
+				return { changed: [ 'mihomo-service' ], observe: observer('mihomo') };
 			}
 		},
 		guard: { is_on: () => options.guard_on === true },
@@ -147,17 +169,17 @@ assert_throws(() => health.observe_all({}), 'INVALID_ARGUMENT');
 // Targeted repair never rebuilds an upstream layer and rechecks only dependents.
 let targeted = make_app({ states: { routing: failed() }, repair_success: { routing: true } });
 let targeted_reconciler = reconcile.create(targeted.app);
-let targeted_result = targeted_reconciler.repair('routing').result;
-assert_equal(targeted_result.ok, true);
+let targeted_result = targeted_reconciler.repair('routing');
+assert_equal(targeted_result.state, 'success');
 assert_equal(join(',', targeted.actions), 'repair:routing');
 assert_equal(join(',', targeted.order), join(',', [ ...COMPONENTS, ...fixture.downstream.routing ]));
 assert_equal(index(join(',', targeted.actions), 'repair:firewall'), -1);
 
 // A repair return is never success proof: the fresh observer controls the result.
 let false_success = make_app({ states: { dns: failed() } });
-let rejected = reconcile.create(false_success.app).repair('dns').result;
-assert_equal(rejected.ok, false);
-assert_equal(rejected.component, 'dns');
+let rejected = reconcile.create(false_success.app).repair('dns');
+assert_equal(rejected.state, 'failure');
+assert_equal(rejected.error.code, 'HEALTH_FAILED');
 assert_equal(join(',', false_success.actions), 'repair:dns');
 assert_throws(() => reconcile.create(make_app().app).repair('future'), 'INVALID_ARGUMENT');
 
@@ -167,14 +189,14 @@ for (let stop = 0; stop < 3; stop++) {
 	for (let i = 0; i <= stop; i++)
 		push(sequence, i == stop ? ok() : failed());
 	let ladder = make_app({ states: { mihomo: failed() }, sequences: { mihomo: sequence } });
-	let result = reconcile.create(ladder.app).run('automatic').result;
-	assert_equal(result.ok, true);
+	let result = reconcile.create(ladder.app).run('automatic');
+	assert_equal(result.state, 'success');
 	assert_equal(join(',', ladder.actions), join(',', slice(fixture.mihomo_ladder, 0, stop + 1)));
 	assert_equal(ladder.events[length(ladder.events) - 1].type, 'recovery');
 }
 let total = make_app({ states: { mihomo: failed() }, guard_on: true });
-let total_result = reconcile.create(total.app).run('automatic').result;
-assert_equal(total_result.ok, false);
+let total_result = reconcile.create(total.app).run('automatic');
+assert_equal(total_result.state, 'failure');
 assert_equal(join(',', total.actions), join(',', fixture.mihomo_ladder));
 assert_equal(index(join(',', total.actions), 'restore_direct'), -1);
 assert_equal(total.events[length(total.events) - 1].type, 'fail_closed');
@@ -182,14 +204,17 @@ assert_equal(total.events[length(total.events) - 1].type, 'fail_closed');
 // Guard OFF permits one dependency-safe fallback only after the entire ladder,
 // and direct accessibility must itself be freshly observed.
 let fallback = make_app({ states: { mihomo: failed() }, direct_ok: true });
-let fallback_result = reconcile.create(fallback.app).run('automatic').result;
-assert_equal(fallback_result.ok, false);
-assert_equal(fallback_result.fallback, true);
+let fallback_reconciler = reconcile.create(fallback.app);
+let fallback_result = fallback_reconciler.run('automatic');
+assert_equal(fallback_result.state, 'failure');
+assert_equal(fallback_reconciler.circuit_status().last_result, 'fallback');
 assert_equal(join(',', fallback.actions),
 	'reload,restart_core,restart_service,restore_direct,observe_direct');
 assert_equal(fallback.events[length(fallback.events) - 1].type, 'direct_fallback');
 let unproved = make_app({ states: { mihomo: failed() }, direct_ok: false });
-assert_equal(reconcile.create(unproved.app).run('automatic').result.fallback, false);
+let unproved_reconciler = reconcile.create(unproved.app);
+assert_equal(unproved_reconciler.run('automatic').state, 'failure');
+assert_equal(unproved_reconciler.circuit_status().last_result, 'failure');
 
 // Guard ON remains fail closed across every retry and never invokes cleanup.
 let guarded = make_app({ states: { mihomo: failed() }, guard_on: true });
@@ -220,7 +245,7 @@ for (let i = 0; i < length(fixture.backoff_minutes); i++) {
 
 // Manual requests return BUSY while queued, reset a scheduled delay when idle,
 // and all mutations remain serialized through the operation adapter.
-let deferred_ops = operation_manager({ defer: true });
+let deferred_ops = production_operations({ defer: true });
 let manual = make_app({ states: { dns: failed() }, operations: deferred_ops });
 let manual_reconciler = reconcile.create(manual.app);
 manual_reconciler.run('automatic');
@@ -230,7 +255,8 @@ deferred_ops.drain();
 assert_true(manual_reconciler.circuit_status().next_retry != null);
 let requested = manual_reconciler.request_manual();
 assert_equal(requested.accepted, true);
-assert_equal(manual_reconciler.circuit_status().next_retry, null);
+assert_true(manual_reconciler.circuit_status().next_retry != null);
+assert_equal(manual_reconciler.circuit_status().phase, 'queued');
 assert_equal(length(deferred_ops.calls), 2);
 deferred_ops.drain();
 
@@ -238,21 +264,22 @@ deferred_ops.drain();
 // interrupted failure rather than success.
 let restart_clock = fakes.clock(2000);
 let restarted = make_app({ clock: restart_clock, persisted: {
-	version: 1, circuit: 'half_open', failure_count: 2, next_retry: null,
-	failure_id: 'failure-1', inflight: true, last_result: null
+	version: 1, circuit: 'half_open', phase: 'inflight', failure_count: 2,
+	next_retry: null, failure_id: 'failure-2-1000', failure_sequence: 2,
+	last_result: 'failure'
 } });
 let restarted_reconciler = reconcile.create(restarted.app);
 let restart_status = restarted_reconciler.circuit_status();
 assert_equal(restart_status.last_result, 'interrupted');
 assert_equal(restart_status.failure_count, 3);
 assert_equal(restart_status.next_retry, 2000 + 900000);
-assert_equal(restarted.persisted().inflight, false);
+assert_equal(restarted.persisted().phase, 'idle');
 restart_clock.advance(900000);
 assert_equal(length(restarted.app.operations.calls), 1);
 let future_clock = fakes.clock(5000);
 let future = make_app({ clock: future_clock, persisted: {
-	version: 1, circuit: 'open', failure_count: 1, next_retry: 7000,
-	failure_id: 'failure-future', inflight: false, last_result: 'failure'
+	version: 1, circuit: 'open', phase: 'idle', failure_count: 1, next_retry: 7000,
+	failure_id: 'failure-1-1000', failure_sequence: 1, last_result: 'failure'
 } });
 reconcile.create(future.app);
 future_clock.advance(1999);
@@ -262,8 +289,8 @@ assert_equal(length(future.app.operations.calls), 1);
 let restart_guard_clock = fakes.clock(9000);
 let restart_guard = make_app({ clock: restart_guard_clock, guard_on: true,
 	states: { mihomo: failed() }, persisted: {
-		version: 1, circuit: 'open', failure_count: 1, next_retry: 10000,
-		failure_id: 'failure-guard', inflight: false, last_result: 'failure'
+		version: 1, circuit: 'open', phase: 'idle', failure_count: 1, next_retry: 10000,
+		failure_id: 'failure-1-1000', failure_sequence: 1, last_result: 'failure'
 	} });
 reconcile.create(restart_guard.app);
 restart_guard_clock.advance(1000);
@@ -275,17 +302,229 @@ assert_throws(() => reconcile.create(corrupt_state.app), 'CORRUPT_STATE');
 // Event sink failures are isolated. Recovery is observer-confirmed and links
 // to the prior failure identity.
 let isolated = make_app({ states: { routing: failed() }, repair_success: { routing: true }, event_failure: true });
-assert_equal(reconcile.create(isolated.app).run('automatic').result.ok, true);
+assert_equal(reconcile.create(isolated.app).run('automatic').state, 'success');
 let recovery = make_app({ states: { scheduler: failed() } });
 let recovery_reconciler = reconcile.create(recovery.app);
 recovery_reconciler.run('automatic');
 let prior_failure = recovery_reconciler.circuit_status().failure_id;
 recovery.states.scheduler = ok();
 let recovered = recovery_reconciler.request_manual();
-assert_equal(recovered.operation.result.ok, true);
+assert_equal(recovered.operation.state, 'success');
 let recovery_event = recovery.events[length(recovery.events) - 1];
 assert_equal(recovery_event.type, 'recovery');
 assert_equal(recovery_event.data.failure_id, prior_failure);
 assert_equal(recovery_reconciler.circuit_status().circuit, 'closed');
 
 print('health reconciliation tests passed\n');
+
+// Blocking review regressions. Keep these aggregated so the RED records all
+// independently reproduced root causes in one focused invocation.
+let review_failures = [];
+function review_check(value, label) {
+	if (!value) push(review_failures, label);
+};
+function threw_code(fn, code) {
+	let caught = null;
+	try { fn(); } catch (error) { caught = error?.code ?? error?.message; }
+	return caught == code;
+};
+
+let operation_failure_ops = production_operations();
+let operation_failure = make_app({ states: { telegram: failed() },
+	operations: operation_failure_ops });
+reconcile.create(operation_failure.app).run('automatic');
+review_check(operation_failure_ops.calls[0].state == 'failure' &&
+	operation_failure_ops.calls[0].error?.code == 'HEALTH_FAILED',
+	'failed reconciliation operation status');
+
+let healthy_target = make_app({ states: { scheduler: failed() },
+	repair_success: { scheduler: true }, operations: production_operations() });
+reconcile.create(healthy_target.app).repair('routing');
+review_check(join(',', healthy_target.actions) == 'repair:scheduler',
+	'target healthy but downstream failed');
+let unhealthy_upstream = make_app({ states: { firewall: failed() },
+	repair_success: { routing: true }, operations: production_operations() });
+reconcile.create(unhealthy_upstream.app).repair('routing');
+review_check(length(unhealthy_upstream.actions) == 0 &&
+	unhealthy_upstream.events[0]?.data?.component == 'firewall',
+	'unhealthy upstream prerequisite');
+
+let dependent_failure = make_app({ states: { mihomo: failed(), scheduler: failed() },
+	sequences: { mihomo: [ failed(), ok() ] }, repair_success: { scheduler: true },
+	operations: production_operations(), direct_ok: true });
+reconcile.create(dependent_failure.app).run('automatic');
+review_check(join(',', dependent_failure.actions) == 'reload,repair:scheduler',
+	'Mihomo recovery decisions ignore downstream state');
+
+let open_state = make_app({ persisted: {
+	version: 1, circuit: 'open', phase: 'idle', failure_count: 1, next_retry: 61000,
+	failure_id: 'failure-1-1000', failure_sequence: 1, last_result: 'failure'
+}, operations: production_operations() });
+let open_reconciler = reconcile.create(open_state.app);
+review_check(threw_code(() => open_reconciler.run('automatic'), 'BUSY') &&
+	length(open_state.app.operations.calls) == 0,
+	'automatic run respects open delay');
+
+let stale_ops = production_operations();
+let stale = make_app({ states: { telegram: failed() }, operations: stale_ops });
+let stale_reconciler = reconcile.create(stale.app);
+stale_reconciler.run('automatic');
+for (let timer in stale.clock.timers)
+	timer.cancel = () => die('cancel failed');
+stale_reconciler.request_manual();
+stale.clock.advance(60000);
+review_check(length(stale_ops.calls) == 2, 'stale timer ignored after cancel exception');
+
+let submit_ops = production_operations();
+let submit_failure = make_app({ states: { telegram: failed() }, operations: submit_ops });
+let submit_reconciler = reconcile.create(submit_failure.app);
+submit_reconciler.run('automatic');
+submit_ops.fail_submit = true;
+review_check(threw_code(() => submit_reconciler.request_manual(), 'INTERNAL') &&
+	submit_reconciler.circuit_status().next_retry != null,
+	'manual submit failure restores durable retry');
+
+let loose = make_app({ persisted: {
+	version: 1, circuit: 'closed', phase: 'idle', failure_count: 0, next_retry: null,
+	failure_id: null, failure_sequence: 0, last_result: null, extra: true
+} });
+review_check(threw_code(() => reconcile.create(loose.app), 'CORRUPT_STATE'),
+	'exact persistent state allowlist');
+
+let queued_clock = fakes.clock(1000);
+let queued_restart = make_app({ clock: queued_clock, persisted: {
+	version: 1, circuit: 'open', phase: 'queued', failure_count: 1,
+	next_retry: 61000, failure_id: 'failure-7-1000', failure_sequence: 7,
+	last_result: 'failure'
+} });
+let queued_ok = true, queued_status = null;
+try { queued_status = reconcile.create(queued_restart.app).circuit_status(); }
+catch (error) { queued_ok = false; }
+review_check(queued_ok && queued_status.last_result == 'interrupted' &&
+	queued_restart.persisted().phase == 'idle', 'queued crash recovery');
+
+let inflight_restart = make_app({ clock: fakes.clock(1000), persisted: {
+	version: 1, circuit: 'half_open', phase: 'inflight', failure_count: 1,
+	next_retry: null, failure_id: 'failure-8-1000', failure_sequence: 8,
+	last_result: 'failure'
+} });
+let inflight_ok = true, inflight_status = null;
+try { inflight_status = reconcile.create(inflight_restart.app).circuit_status(); }
+catch (error) { inflight_ok = false; }
+review_check(inflight_ok && inflight_status.failure_count == 2 &&
+	inflight_status.last_result == 'interrupted', 'inflight crash recovery');
+
+let invalid_relation = make_app({ persisted: {
+	version: 1, circuit: 'closed', phase: 'idle', failure_count: 2,
+	next_retry: null, failure_id: null, failure_sequence: 2, last_result: 'success'
+} });
+review_check(threw_code(() => reconcile.create(invalid_relation.app), 'CORRUPT_STATE'),
+	'persistent relational invariants');
+let mismatched_sequence = make_app({ persisted: {
+	version: 1, circuit: 'open', phase: 'idle', failure_count: 1,
+	next_retry: 61000, failure_id: 'failure-9-1000', failure_sequence: 8,
+	last_result: 'failure'
+} });
+review_check(threw_code(() => reconcile.create(mismatched_sequence.app), 'CORRUPT_STATE'),
+	'failure identity matches persisted monotonic sequence');
+let inconsistent_inflight = make_app({ persisted: {
+	version: 1, circuit: 'half_open', phase: 'inflight', failure_count: 3,
+	next_retry: null, failure_id: null, failure_sequence: 3, last_result: 'success'
+} });
+review_check(threw_code(() => reconcile.create(inconsistent_inflight.app), 'CORRUPT_STATE'),
+	'inflight relation requires active failure identity for prior failures');
+let inconsistent_closed = make_app({ persisted: {
+	version: 1, circuit: 'closed', phase: 'idle', failure_count: 0,
+	next_retry: null, failure_id: null, failure_sequence: 3, last_result: null
+} });
+review_check(threw_code(() => reconcile.create(inconsistent_closed.app), 'CORRUPT_STATE'),
+	'closed historical state requires successful last result');
+
+let followup_calls = 0;
+let followup = make_app({ states: { dns: failed() }, operations: production_operations(),
+	repair_observers: { dns: () => { followup_calls++; return ok('FOLLOWUP_OK'); } } });
+reconcile.create(followup.app).repair('dns');
+review_check(followup_calls == 1 && followup.app.operations.calls[0].state == 'success',
+	'repair follow-up observer establishes success');
+
+let invalid_action = make_app({ states: { dns: failed() }, operations: production_operations(),
+	repair_results: { dns: { changed: [ 'dns' ], observe: () => ok(), extra: true } } });
+reconcile.create(invalid_action.app).repair('dns');
+review_check(invalid_action.app.operations.calls[0].state == 'failure' &&
+	invalid_action.app.operations.calls[0].error?.code == 'HEALTH_FAILED',
+	'exact repair action result validation');
+
+let changed = [ 'dns-resource' ];
+let action_events = make_app({ states: { dns: failed() }, operations: production_operations(),
+	changed: { dns: changed }, repair_success: { dns: true } });
+reconcile.create(action_events.app).repair('dns');
+changed[0] = 'mutated-after-return';
+let attempts = filter(action_events.events, (item) => item.type == 'action_attempt');
+let outcomes = filter(action_events.events, (item) => item.type == 'action_outcome');
+review_check(length(attempts) == 1 && length(outcomes) == 1 &&
+	outcomes[0].data.changed[0] == 'dns-resource' &&
+	type(outcomes[0].data.failure_id) == 'string',
+	'action attempt/outcome events and detached resources');
+
+let sequence_state = make_app({ now: 500, persisted: {
+	version: 1, circuit: 'closed', phase: 'idle', failure_count: 0,
+	next_retry: null, failure_id: null, failure_sequence: 41, last_result: 'success'
+}, states: { telegram: failed() }, operations: production_operations() });
+let sequence_ok = true;
+try { reconcile.create(sequence_state.app).run('automatic'); }
+catch (error) { sequence_ok = false; }
+review_check(sequence_ok && sequence_state.events[0]?.data?.failure_id == 'failure-42-500',
+	'monotonic failure identity across restart and clock rollback');
+
+let initial_submit_ops = production_operations({ fail_submit: true });
+let initial_submit = make_app({ operations: initial_submit_ops });
+let initial_submit_reconciler = reconcile.create(initial_submit.app);
+review_check(threw_code(() => initial_submit_reconciler.run('automatic'), 'INTERNAL') &&
+	initial_submit_reconciler.circuit_status().phase == 'idle' &&
+	initial_submit_reconciler.circuit_status().next_retry != null,
+	'initial synchronous submit failure becomes durable retry');
+
+let queued_window_ops = production_operations({ defer: true });
+let queued_window = make_app({ operations: queued_window_ops });
+reconcile.create(queued_window.app).run('automatic');
+let queued_snapshot = queued_window.persisted();
+let queued_window_restart = make_app({ persisted: queued_snapshot });
+let queued_window_status = reconcile.create(queued_window_restart.app).circuit_status();
+review_check(queued_snapshot.phase == 'queued' && queued_window_status.phase == 'idle' &&
+	queued_window_status.last_result == 'interrupted' &&
+	queued_window_status.next_retry != null, 'actual queued-window crash recovery');
+
+let worker_exception_ops = production_operations();
+let worker_exception = make_app({ operations: worker_exception_ops });
+let original_write = worker_exception.app.store.write;
+let worker_writes = 0;
+worker_exception.app.store.write = (value) => {
+	worker_writes++;
+	if (worker_writes == 2) die('transient store failure');
+	return original_write(value);
+};
+let worker_exception_reconciler = reconcile.create(worker_exception.app);
+worker_exception_reconciler.run('automatic');
+let worker_exception_status = worker_exception_reconciler.circuit_status();
+review_check(worker_exception_ops.calls[0].state == 'failure' &&
+	worker_exception_status.phase == 'idle' && worker_exception_status.next_retry != null &&
+	worker_exception_status.failure_count == 1,
+	'worker exception clears phase and schedules one retry');
+
+let mihomo_events = make_app({ states: { mihomo: failed() }, guard_on: true,
+	operations: production_operations() });
+reconcile.create(mihomo_events.app).run('automatic');
+let mihomo_attempts = filter(mihomo_events.events, (item) => item.type == 'action_attempt');
+let mihomo_outcomes = filter(mihomo_events.events, (item) => item.type == 'action_outcome');
+review_check(length(mihomo_attempts) == 3 && length(mihomo_outcomes) == 3 &&
+	join(',', map(mihomo_attempts, (item) => item.data.stage)) == join(',', fixture.mihomo_ladder) &&
+	join(',', fixture.action_events) == 'action_attempt,action_outcome',
+	'every Mihomo stage emits attempt and outcome');
+
+review_check(join(',', sort(keys(queued_snapshot))) ==
+	join(',', sort(fixture.persistent_fields)) &&
+	join(',', fixture.phases) == 'idle,queued,inflight',
+	'fixture-backed exact persistent schema');
+
+if (length(review_failures))
+	die('review regressions: ' + join('; ', review_failures));

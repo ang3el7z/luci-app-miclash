@@ -50,9 +50,11 @@ function validate(app) {
 			fail('INVALID_ARGUMENT');
 };
 
-function observe_range(app, first) {
+function observe_range(app, first, first_observer) {
 	validate(app);
 	if (type(first) != 'int' || first < 0 || first >= length(COMPONENTS))
+		fail('INVALID_ARGUMENT');
+	if (first_observer != null && type(first_observer) != 'function')
 		fail('INVALID_ARGUMENT');
 	let observed_at = app.clock.now();
 	if (type(observed_at) != 'int' || observed_at < 0)
@@ -61,7 +63,8 @@ function observe_range(app, first) {
 	for (let i = first; i < length(COMPONENTS); i++) {
 		let name = COMPONENTS[i];
 		let record;
-		try { record = canonical(app.observers[name]()); }
+		let observer = i == first && first_observer != null ? first_observer : app.observers[name];
+		try { record = canonical(observer()); }
 		catch (error) { record = unavailable('OBSERVER_FAILED'); }
 		record.observed_at = observed_at;
 		graph[name] = record;
@@ -73,11 +76,11 @@ export function observe_all(app) {
 	return observe_range(app, 0);
 };
 
-export function observe_from(app, component) {
+export function observe_from(app, component, first_observer) {
 	let first = index(COMPONENTS, component);
 	if (first < 0)
 		fail('INVALID_ARGUMENT');
-	return observe_range(app, first);
+	return observe_range(app, first, first_observer);
 };
 
 export function components() {

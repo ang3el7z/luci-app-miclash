@@ -10,5 +10,8 @@
     "telegram": ["telegram"]
   },
   "mihomo_ladder": ["reload", "restart_core", "restart_service"],
-  "backoff_minutes": [1, 5, 15, 30, 60, 60]
+  "backoff_minutes": [1, 5, 15, 30, 60, 60],
+  "persistent_fields": ["version", "circuit", "phase", "failure_count", "next_retry", "failure_id", "failure_sequence", "last_result"],
+  "phases": ["idle", "queued", "inflight"],
+  "action_events": ["action_attempt", "action_outcome"]
 }
