@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { basename } from 'node:path';
 
 for (const path of [
 	'tools/run-ucode-tests.sh',
@@ -22,6 +24,41 @@ const composition = readFileSync('luci-app-miclash/rootfs/usr/share/miclash/daem
 const api = readFileSync('luci-app-miclash/rootfs/usr/share/miclash/api.uc', 'utf8');
 const init = readFileSync('luci-app-miclash/rootfs/etc/init.d/miclashd', 'utf8');
 const makefile = readFileSync('luci-app-miclash/Makefile', 'utf8');
+
+function makeAssignment(name) {
+	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const found = makefile.match(new RegExp(
+		`^${escaped}\\s*:?=(?:[^\\r\\n]*\\\\\\r?\\n)*[^\\r\\n]*`, 'm'));
+	assert.ok(found, `missing make assignment ${name}`);
+	return found[0];
+}
+
+const packageModules = makeAssignment('MICLASH_PACKAGE_UCODE');
+const unshippedModules = makeAssignment('MICLASH_UNSHIPPED_UCODE');
+const expanded = spawnSync('make', [ '--no-print-directory', '-f', '-', 'all' ], {
+	cwd: 'luci-app-miclash',
+	input: `${unshippedModules}\n${packageModules}\n` +
+		'$(info UNSHIPPED=$(MICLASH_UNSHIPPED_UCODE))\n' +
+		'$(info PACKAGE=$(MICLASH_PACKAGE_UCODE))\nall: ;\n',
+	encoding: 'utf8'
+});
+assert.equal(expanded.status, 0, `GNU make expansion failed: ${expanded.stderr}`);
+function expandedBasenames(label) {
+	const line = expanded.stdout.split(/\r?\n/).find((candidate) => candidate.startsWith(`${label}=`));
+	assert.ok(line, `GNU make did not print ${label}`);
+	return line.slice(label.length + 1).trim().split(/\s+/).filter(Boolean)
+		.map((path) => basename(path)).sort();
+}
+const experimental = [ 'health.uc', 'memory.uc', 'reconcile.uc' ];
+assert.deepEqual(expandedBasenames('UNSHIPPED'), experimental,
+	'the explicit unshipped list must contain exactly the three experimental modules');
+const allModules = readdirSync('luci-app-miclash/rootfs/usr/share/miclash')
+	.filter((name) => name.endsWith('.uc')).sort();
+assert.deepEqual(expandedBasenames('PACKAGE'),
+	allModules.filter((name) => !experimental.includes(name)),
+	'the package make expression must retain every approved ucode module and exclude experiments');
+assert.match(makefile, /\$\(INSTALL_DATA\)\s+\$\(MICLASH_PACKAGE_UCODE\)\s+\$\(1\)\/usr\/share\/miclash\//,
+	'the package install recipe must consume the filtered ucode expansion');
 
 assert.match(daemon, /^#!\/usr\/bin\/ucode\n/);
 assert.match(composition, /recover_interrupted\(\)/);

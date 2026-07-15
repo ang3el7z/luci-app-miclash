@@ -19,6 +19,12 @@ PKG_CONFIG_DEPENDS:= \
 
 PKG_BUILD_DEPENDS:=luci-base/host
 
+MICLASH_UNSHIPPED_UCODE:= \
+	./rootfs/usr/share/miclash/health.uc \
+	./rootfs/usr/share/miclash/reconcile.uc \
+	./rootfs/usr/share/miclash/memory.uc
+MICLASH_PACKAGE_UCODE:=$(filter-out $(MICLASH_UNSHIPPED_UCODE),$(wildcard ./rootfs/usr/share/miclash/*.uc))
+
 include $(INCLUDE_DIR)/package.mk
 
 define Package/$(PKG_NAME)
@@ -111,7 +117,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
 	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json $(1)/usr/share/rpcd/acl.d/
 	$(INSTALL_DIR) $(1)/usr/share/miclash
-	$(INSTALL_DATA) ./rootfs/usr/share/miclash/*.uc $(1)/usr/share/miclash/
+	$(INSTALL_DATA) $(MICLASH_PACKAGE_UCODE) $(1)/usr/share/miclash/
 	$(INSTALL_DIR) $(1)/etc/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/mutation-lock.sh $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-remove $(1)/usr/share/miclash/
