@@ -260,7 +260,8 @@ function tar_header(name, size) {
 		sprintf('%07o', 0) + NUL + sprintf('%07o', 0) + NUL +
 		sprintf('%011o', size) + NUL + sprintf('%011o', 0) + NUL +
 		'        ' + '0' + zeroes(100) + 'ustar' + NUL + '00' +
-		zeroes(32) + zeroes(32) + zeroes(8) + zeroes(8) + zeroes(155) + zeroes(12);
+		zeroes(32) + zeroes(32) + sprintf('%07o', 0) + NUL +
+		sprintf('%07o', 0) + NUL + zeroes(155) + zeroes(12);
 	if (length(header) != 512) internal();
 	let checksum = 0;
 	for (let i = 0; i < 512; i++) checksum += ord(header, i);
@@ -338,8 +339,13 @@ function ustar_parse(bytes) {
 		let uid = octal_field(block, 108, 8), gid = octal_field(block, 116, 8);
 		let size = octal_field(block, 124, 12), mtime = octal_field(block, 136, 12);
 		let stored = octal_field(block, 148, 8), typeflag = ord(block, 156);
+		let uname = nul_field(block, 265, 32), gname = nul_field(block, 297, 32);
+		let dev_major = octal_field(block, 329, 8), dev_minor = octal_field(block, 337, 8);
 		if (!canonical_member_name(name) || seen[name] || mode == null || uid == null ||
 		    gid == null || size == null || mtime == null || stored == null ||
+		    mode > 0o7777 || uname == null || gname == null ||
+		    !match(uname, /^[A-Za-z0-9._-]*$/) || !match(gname, /^[A-Za-z0-9._-]*$/) ||
+		    dev_major == null || dev_minor == null || !all_zero(substr(block, 500, 12)) ||
 		    (typeflag != 0 && typeflag != 48) || size > MAX_MEMBER ||
 		    (name == 'manifest.json' && size > MAX_MANIFEST))
 			errors.fail(size != null && size > MAX_MEMBER ? 'RESPONSE_TOO_LARGE' : 'VALIDATION_FAILED');
@@ -460,7 +466,8 @@ function source_record(app, source_id) {
 	return { env, root, sidecar, sidecar_capture, archive };
 };
 
-function remove_tree(env, parent, name, expected) {
+function remove_tree(env, parent, name, expected, registered, relative) {
+	if (type(registered) != 'array') internal();
 	let directory;
 	try { directory = open_child_dir(env.secure, parent, name, false, expected); }
 	catch (error) { return false; }
@@ -470,11 +477,38 @@ function remove_tree(env, parent, name, expected) {
 	let failed = false;
 	for (let child_name in names) {
 		let identity = env.secure.stat(directory, child_name);
+		let child_path = length(relative ?? '') ? relative + '/' + child_name : child_name;
 		if (identity?.type == 'directory') {
-			if (!remove_tree(env, directory, child_name, identity)) failed = true;
+			let allowed = false;
+			for (let file in registered)
+				if (substr(file.path, 0, length(child_path) + 1) == child_path + '/') allowed = true;
+			if (!allowed || !remove_tree(env, directory, child_name, identity,
+			    registered, child_path)) failed = true;
 		}
-		else if (identity?.type == 'file' || identity?.type == 'link') {
-			try { if (env.secure.unlink(directory, child_name, identity) !== true) failed = true; }
+		else if (identity?.type == 'file') {
+			let registration = null;
+			for (let file in registered) if (file.path == child_path) registration = file;
+			let registered_identity = null;
+			if (registration != null && registration.identity != null) {
+				let value = registration.identity;
+				registered_identity = {
+					type: value.type, inode: value.inode,
+					dev: { major: value.dev_major, minor: value.dev_minor },
+					uid: value.uid, mode: value.mode, nlink: value.nlink, size: value.size
+				};
+			}
+			if (registration == null || identity.mode != registration.mode || identity.uid != 0 ||
+			    identity.nlink != 1 || (registered_identity != null &&
+			    !same_node(registered_identity, identity))) {
+				failed = true; continue;
+			}
+			try {
+				let captured = secure_read(env, directory, child_name, registration.size,
+					registration.mode, identity);
+				if (captured.size != registration.size || captured.sha256 != registration.sha256 ||
+				    env.secure.unlink(directory, child_name, captured.identity) !== true)
+					failed = true;
+			}
 			catch (error) { failed = true; }
 		}
 		else failed = true;
@@ -710,7 +744,7 @@ function recover_inspect(env, transaction, now) {
 	let stage = open_child_dir(env.secure, root, record.inspection_id, false, stat), seen = {};
 	authenticate_stage(env, stage, '', record.files, seen);
 	if (record.phase == 'preview' && now <= record.expires_at) return true;
-	if (!remove_tree(env, root, record.inspection_id, stage.identity)) internal();
+	if (!remove_tree(env, root, record.inspection_id, stage.identity, record.files, '')) internal();
 	journal_finish(env, transaction);
 	return true;
 };
@@ -1039,7 +1073,6 @@ function inspection_record(app, inspected_id) {
 	    report.expires_at - report.inspected_at != INSPECTION_TTL ||
 	    type(report.files) != 'array') errors.fail('CORRUPT_STATE');
 	if (env.runtime.clock.now() > report.expires_at) {
-		remove_tree(env, root, inspected_id, staging.identity);
 		errors.fail('NOT_FOUND');
 	}
 	let pseudo = { members: [ { name: 'manifest.json' } ], by_name: {} };

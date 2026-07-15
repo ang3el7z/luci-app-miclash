@@ -195,7 +195,8 @@ function test_header(name, size, typeflag, linkname) {
 		sprintf('%07o', 0) + NUL + sprintf('%07o', 0) + NUL +
 		sprintf('%011o', size) + NUL + sprintf('%011o', 0) + NUL + '        ' +
 		(typeflag ?? '0') + field(linkname ?? '', 100) + 'ustar' + NUL + '00' +
-		zeroes(32) + zeroes(32) + zeroes(8) + zeroes(8) + zeroes(155) + zeroes(12);
+		zeroes(32) + zeroes(32) + sprintf('%07o', 0) + NUL +
+		sprintf('%07o', 0) + NUL + zeroes(155) + zeroes(12);
 	let checksum = 0; for (let i = 0; i < 512; i++) checksum += ord(header, i);
 	return substr(header, 0, 148) + sprintf('%06o', checksum) + NUL + ' ' + substr(header, 156);
 };
@@ -257,6 +258,8 @@ assert_equal(base.filesystem.lstat(archive_path).mode, 0o600);
 assert_equal(base.filesystem.lstat(sidecar_path).mode, 0o600);
 assert_equal(base.filesystem.lstat('/etc/miclash/backups').mode, 0o700);
 let public_bytes = base.filesystem.readfile(archive_path);
+assert_true(index(public_bytes, 'manifest.json') > index(public_bytes, 'settings/settings.json'),
+	'manifest must be the final USTAR member');
 for (let secret in [ 'controller-password', 'telegram-secret', 'user:pass', 'subscription_url' ])
 	assert_true(index(public_bytes, secret) < 0, 'default archive leaked ' + secret);
 
@@ -303,15 +306,30 @@ function rejected_bytes(label, mutate, code) {
 	seeded = seed_import(box, label, { 'settings/settings.json': '{ }\n' }, { bytes });
 	assert_throws(() => backup.inspect(box.app, seeded.id), code ?? 'VALIDATION_FAILED');
 };
+function rewrite_header_byte(bytes, offset, replacement) {
+	let header = substr(bytes, 0, 512);
+	header = substr(header, 0, offset) + replacement + substr(header, offset + 1);
+	header = substr(header, 0, 148) + '        ' + substr(header, 156);
+	let checksum = 0; for (let i = 0; i < 512; i++) checksum += ord(header, i);
+	header = substr(header, 0, 148) + sprintf('%06o', checksum) + NUL + ' ' +
+		substr(header, 156);
+	return header + substr(bytes, 512);
+};
 rejected_bytes('00000000000000000000000000000002', (bytes) => substr(bytes, 0, length(bytes) - 1));
 rejected_bytes('00000000000000000000000000000003', (bytes) => bytes + bytes);
 rejected_bytes('00000000000000000000000000000004', (bytes) => bytes + 'x');
 rejected_bytes('00000000000000000000000000000005', (bytes) =>
 	substr(bytes, 0, 148) + '000000' + NUL + ' ' + substr(bytes, 156));
+rejected_bytes('00000000000000000000000000000006', (bytes) => bytes + zeroes(512));
+rejected_bytes('00000000000000000000000000000007', (bytes) =>
+	rewrite_header_byte(bytes, 124, '8'));
+rejected_bytes('00000000000000000000000000000008', (bytes) =>
+	rewrite_header_byte(bytes, 124, sprintf('%c', 128)));
 
 for (let hostile in [
 	{ typeflag: '1', linkname: 'settings/settings.json' },
-	{ typeflag: '2', linkname: '/etc/passwd' }, { typeflag: '3' }, { typeflag: 'x' }
+	{ typeflag: '2', linkname: '/etc/passwd' }, { typeflag: '3' }, { typeflag: 'x' },
+	{ typeflag: 'L' }, { typeflag: 'S' }
 ]) {
 	let box = make_app(), content = '{ }\n', manifest = manifest_for(box,
 		{ 'settings/settings.json': content });
@@ -324,6 +342,46 @@ for (let hostile in [
 		{ 'settings/settings.json': content }, { manifest, bytes });
 	assert_throws(() => backup.inspect(box.app, seeded.id), 'VALIDATION_FAILED');
 }
+
+for (let bad_name in [ '/absolute', '../escape', 'settings/../escape',
+	'settings//settings.json', 'C:/drive', 'settings\\settings.json',
+	'./manifest.json', 'settings/settings.json/' ]) {
+	let box = make_app(), content = '{ }\n', manifest = manifest_for(box,
+		{ 'settings/settings.json': content });
+	let bytes = test_tar([ { name: bad_name, content },
+		{ name: 'manifest.json', content: sprintf('%J\n', manifest) } ]);
+	let seeded = seed_import(box, sprintf('%032x', 200 + length(bad_name)),
+		{ 'settings/settings.json': content }, { manifest, bytes });
+	assert_throws(() => backup.inspect(box.app, seeded.id), 'VALIDATION_FAILED');
+}
+
+let duplicate_member = make_app(), duplicate_content = '{ }\n';
+let duplicate_manifest = manifest_for(duplicate_member,
+	{ 'settings/settings.json': duplicate_content });
+let duplicate_bytes = test_tar([
+	{ name: 'settings/settings.json', content: duplicate_content },
+	{ name: 'settings/settings.json', content: duplicate_content },
+	{ name: 'manifest.json', content: sprintf('%J\n', duplicate_manifest) }
+]);
+let duplicate_seed = seed_import(duplicate_member,
+	'00000000000000000000000000000060',
+	{ 'settings/settings.json': duplicate_content },
+	{ manifest: duplicate_manifest, bytes: duplicate_bytes });
+assert_throws(() => backup.inspect(duplicate_member.app, duplicate_seed.id), 'VALIDATION_FAILED');
+
+let unknown_manifest = make_app(), unknown_contents = { 'settings/settings.json': '{ }\n' };
+let unknown_value = manifest_for(unknown_manifest, unknown_contents); unknown_value.extra = true;
+let unknown_seed = seed_import(unknown_manifest,
+	'00000000000000000000000000000061', unknown_contents, { manifest: unknown_value });
+assert_throws(() => backup.inspect(unknown_manifest.app, unknown_seed.id), 'VALIDATION_FAILED');
+
+let physical_oversize = make_app(), huge = 'x';
+for (let power = 0; power < 24; power++) huge += huge;
+huge += 'x';
+let huge_seed = seed_import(physical_oversize,
+	'00000000000000000000000000000062', { 'settings/settings.json': '{ }\n' },
+	{ bytes: huge });
+assert_throws(() => backup.inspect(physical_oversize.app, huge_seed.id), 'CORRUPT_STATE');
 
 // Actual GNU tar streams pass through backup.inspect, not a side gate.
 let real_fs = require('fs');
@@ -750,6 +808,32 @@ never_returned.app.secure_fs.after = null;
 backup.list(never_returned.app);
 assert_equal(length(never_returned.filesystem.lsdir('/tmp/miclash/backup-inspected')), 0);
 assert_equal(length(transaction_names(never_returned)), 0);
+
+let late_foreign = make_app(), late_seed = seed_import(late_foreign,
+	'00000000000000000000000000000099', { 'settings/settings.json': '{ }\n' });
+let late_failed = false, late_inserted = false, late_path = null;
+late_foreign.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!late_failed && operation == 'write' && name == 'settings.json') {
+		late_failed = true; die('force-late-cleanup');
+	}
+};
+late_foreign.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (!late_inserted && operation == 'unlink' && name == 'settings.json') {
+		late_inserted = true;
+		let parts = split(directory.opaque, '/'); pop(parts);
+		late_path = join('/', parts) + '/unregistered';
+		late_foreign.filesystem.files[late_path] = 'foreign-late';
+		late_foreign.filesystem.bump_inode(late_path);
+		late_foreign.filesystem.set_mode(late_path, 0o400);
+		late_foreign.filesystem.set_uid(late_path, 0);
+	}
+};
+assert_throws(() => backup.inspect(late_foreign.app, late_seed.id), 'CORRUPT_STATE');
+assert_equal(late_foreign.filesystem.readfile(late_path), 'foreign-late',
+	'unregistered late arrival was deleted by cleanup');
+late_foreign.app.secure_fs.after = null; late_foreign.app.secure_fs.before = null;
+assert_throws(() => backup.list(late_foreign.app), 'INTERNAL');
+assert_equal(late_foreign.filesystem.readfile(late_path), 'foreign-late');
 cleanup_race.app.secure_fs.after = null; cleanup_race.app.secure_fs.before = null;
 assert_throws(() => backup.list(cleanup_race.app), 'INTERNAL');
 assert_equal(cleanup_race.filesystem.readfile('/opt/clash/cleanup-foreign'), 'foreign-cleanup');
