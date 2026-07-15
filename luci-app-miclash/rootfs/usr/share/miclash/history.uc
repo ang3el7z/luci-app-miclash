@@ -109,7 +109,11 @@ function valid_record(record, profile, revision) {
 		try { revision_id(record[name]); }
 		catch (error) { return false; }
 	}
-	if (record.duplicate_of != null && record.duplicate_of != record.content_revision ||
+	let id_fields = split(revision, '-');
+	if (int(id_fields[0]) != record.timestamp ||
+	    (length(id_fields) == 3 && id_fields[1] != substr(record.hash, 0, 12)) ||
+	    (length(id_fields) != 2 && length(id_fields) != 3) ||
+	    record.duplicate_of != null && record.duplicate_of != record.content_revision ||
 	    record.duplicate_of == null && record.content_revision != revision)
 		return false;
 	return true;
@@ -222,6 +226,8 @@ export function create(runtime, options) {
 		    !safe_optional(record.mihomo_version, 128) ||
 		    !safe_optional(record.operation_id, 128))
 			errors.fail('CORRUPT_STATE');
+		if (int(split(revision, '-')[0]) != record.timestamp)
+			errors.fail('CORRUPT_STATE');
 		let parent_revision = record.parent_revision ?? null;
 		let restored_revision = record.restored_revision ?? null;
 		if (parent_revision != null)
@@ -300,6 +306,19 @@ export function create(runtime, options) {
 		return { ...clone(redact.value('history', record)), corrupt: false };
 	};
 
+	function canonical_record(profile, record) {
+		if (record.duplicate_of == null)
+			return record;
+		let target;
+		try { target = read_record(profile, record.content_revision); }
+		catch (error) { errors.fail('CORRUPT_STATE'); }
+		if (target.profile != profile || target.revision != record.content_revision ||
+		    target.content_revision != target.revision || target.duplicate_of != null ||
+		    target.hash != record.hash || target.size != record.size)
+			errors.fail('CORRUPT_STATE');
+		return target;
+	};
+
 	function all_records(profile) {
 		profile = schema.profile_name(profile);
 		let output = [];
@@ -314,7 +333,11 @@ export function create(runtime, options) {
 				revision = name;
 			if (revision == null)
 				continue;
-			try { push(output, public_record(read_record(profile, revision))); }
+			try {
+				let record = read_record(profile, revision);
+				canonical_record(profile, record);
+				push(output, public_record(record));
+			}
 			catch (error) {
 				push(output, { revision, corrupt: true, error: 'CORRUPT_STATE' });
 			}
@@ -325,13 +348,7 @@ export function create(runtime, options) {
 
 	function read_content(profile, revision) {
 		let record = read_record(profile, revision);
-		let content_record = record;
-		if (record.content_revision != revision) {
-			content_record = read_record(profile, record.content_revision);
-			if (content_record.content_revision != content_record.revision ||
-			    content_record.hash != record.hash || content_record.size != record.size)
-				errors.fail('CORRUPT_STATE');
-		}
+		let content_record = canonical_record(profile, record);
 		let files = revision_files(profile, content_record.revision);
 		let content = secure_read(files.yaml,
 			0o600, MAX_CONTENT_BYTES, 'CORRUPT_STATE');
@@ -367,14 +384,19 @@ export function create(runtime, options) {
 		let destination = null;
 		let staging = null;
 		let revision_time = runtime.clock.now();
-		if (type(revision_time) != 'int' || revision_time < 0)
+		if (type(revision_time) != 'int' || revision_time < 0 ||
+		    revision_time > 9999999999999)
 			errors.fail('INTERNAL');
 		if (revision_time <= latest_timestamp)
 			revision_time = latest_timestamp + 1;
+		if (revision_time > 9999999999999)
+			errors.fail('INTERNAL');
 		for (let attempt = 0; attempt < 16; attempt++) {
 			let suffix = runtime.random.hex(8);
 			if (type(suffix) != 'string' ||
 			    !match(suffix, /^[0-9a-f]{16}$/))
+				errors.fail('INTERNAL');
+			if (revision_time + attempt > 9999999999999)
 				errors.fail('INTERNAL');
 			revision = sprintf('%013d-%s-%s', revision_time + attempt,
 				substr(hash, 0, 12), suffix);

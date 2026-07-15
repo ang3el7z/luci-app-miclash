@@ -132,6 +132,28 @@ function added_records(before, after) {
 	return output;
 };
 
+function revision_directory(record) {
+	return '/opt/clash/history/' + record.profile + '/' + record.revision;
+};
+
+function read_revision_metadata(env, record) {
+	return json(env.fs.readfile(revision_directory(record) + '/metadata.json'));
+};
+
+function write_revision_metadata(env, record, metadata) {
+	let path = revision_directory(record) + '/metadata.json';
+	env.fs.writefile(path, sprintf('%J\n', metadata));
+	env.fs.set_mode(path, 0o600);
+};
+
+function remove_revision_directory(env, record) {
+	let directory = revision_directory(record);
+	for (let name in [ 'config.yaml', 'metadata.json' ])
+		if (env.fs.lstat(directory + '/' + name) != null)
+			env.fs.unlink(directory + '/' + name);
+	assert_equal(env.fs.rmdir(directory), true);
+};
+
 let env = environment();
 let source_cases = [
 	[ 'manual', 'manual' ], [ 'subscription', 'subscription' ], [ 'auto', 'auto' ],
@@ -191,6 +213,135 @@ assert_equal(fetched.metadata.revision, first.revision);
 assert_equal(env.revisions.read('config.yaml', duplicate.revision), 'source-manual\n');
 assert_equal(env.revisions.diff('config.yaml', first.revision,
 	source_records[1].revision, LIMITS).changed, true);
+
+// Metadata-only aliases are public-valid only when their target is a direct,
+// authenticated self-content canonical record in the same profile.
+let dangling_alias = environment();
+let dangling_canonical = dangling_alias.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+let dangling = dangling_alias.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+remove_revision_directory(dangling_alias, dangling_canonical);
+assert_equal(dangling_alias.revisions.list('config.yaml')[0].revision, dangling.revision);
+assert_equal(dangling_alias.revisions.list('config.yaml')[0].corrupt, true);
+assert_throws(() => dangling_alias.revisions.get(
+	'config.yaml', dangling.revision), 'CORRUPT_STATE');
+
+let corrupt_target = environment();
+let corrupt_canonical = corrupt_target.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+let corrupt_alias = corrupt_target.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+write_revision_metadata(corrupt_target, corrupt_canonical, { broken: true });
+let corrupt_target_list = corrupt_target.revisions.list('config.yaml');
+assert_equal(corrupt_target_list[0].corrupt, true);
+assert_equal(corrupt_target_list[1].corrupt, true);
+
+let chained = environment();
+let chain_canonical = chained.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+let chain_alias = chained.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+let chain_leaf = chained.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+let chain_leaf_metadata = read_revision_metadata(chained, chain_leaf);
+chain_leaf_metadata.content_revision = chain_alias.revision;
+chain_leaf_metadata.duplicate_of = chain_alias.revision;
+write_revision_metadata(chained, chain_leaf, chain_leaf_metadata);
+let chain_by_id = {};
+for (let record in chained.revisions.list('config.yaml'))
+	chain_by_id[record.revision] = record;
+assert_equal(chain_by_id[chain_canonical.revision].corrupt, false);
+assert_equal(chain_by_id[chain_alias.revision].corrupt, false);
+assert_equal(chain_by_id[chain_leaf.revision].corrupt, true);
+
+let cyclic = environment();
+let cycle_canonical = cyclic.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+let cycle_left = cyclic.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+let cycle_right = cyclic.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+let cycle_left_metadata = read_revision_metadata(cyclic, cycle_left);
+let cycle_right_metadata = read_revision_metadata(cyclic, cycle_right);
+cycle_left_metadata.content_revision = cycle_right.revision;
+cycle_left_metadata.duplicate_of = cycle_right.revision;
+cycle_right_metadata.content_revision = cycle_left.revision;
+cycle_right_metadata.duplicate_of = cycle_left.revision;
+write_revision_metadata(cyclic, cycle_left, cycle_left_metadata);
+write_revision_metadata(cyclic, cycle_right, cycle_right_metadata);
+let cycle_by_id = {};
+for (let record in cyclic.revisions.list('config.yaml'))
+	cycle_by_id[record.revision] = record;
+assert_equal(cycle_by_id[cycle_canonical.revision].corrupt, false);
+assert_equal(cycle_by_id[cycle_left.revision].corrupt, true);
+assert_equal(cycle_by_id[cycle_right.revision].corrupt, true);
+
+let unauthenticated_coalesce = environment();
+let unauthenticated_original = unauthenticated_coalesce.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+write_revision_metadata(unauthenticated_coalesce, unauthenticated_original,
+	{ broken: true });
+let replacement_canonical = unauthenticated_coalesce.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'same-content\n', {});
+assert_equal(replacement_canonical.duplicate_of, null);
+assert_true(unauthenticated_coalesce.fs.lstat(
+	revision_directory(replacement_canonical) + '/config.yaml')?.type == 'file');
+
+// New IDs bind the persisted timestamp and hash prefix. Corrupt metadata never
+// influences the next logical timestamp or turns a safe snapshot into a DoS.
+let inconsistent_id = environment();
+let inconsistent = inconsistent_id.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'first\n', {});
+let inconsistent_metadata = read_revision_metadata(inconsistent_id, inconsistent);
+inconsistent_metadata.timestamp = 9999999999999;
+write_revision_metadata(inconsistent_id, inconsistent, inconsistent_metadata);
+assert_equal(inconsistent_id.revisions.list('config.yaml')[0].corrupt, true);
+let after_inconsistent = inconsistent_id.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'second\n', {});
+assert_equal(after_inconsistent.timestamp, inconsistent_id.clock.now());
+
+let hash_prefix = environment();
+let hash_mismatch = hash_prefix.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'first\n', {});
+let replacement_bytes = 'replacement\n';
+let hash_metadata = read_revision_metadata(hash_prefix, hash_mismatch);
+hash_metadata.hash = hash_prefix.runtime.digest.sha256(replacement_bytes);
+hash_metadata.size = length(replacement_bytes);
+hash_prefix.fs.writefile(revision_directory(hash_mismatch) + '/config.yaml', replacement_bytes);
+hash_prefix.fs.set_mode(revision_directory(hash_mismatch) + '/config.yaml', 0o600);
+write_revision_metadata(hash_prefix, hash_mismatch, hash_metadata);
+assert_equal(hash_prefix.revisions.list('config.yaml')[0].corrupt, true);
+
+let collision = environment();
+let collision_hash = collision.runtime.digest.sha256('collision\n');
+let collision_revision = sprintf('%013d-%s-%s', collision.clock.now(),
+	substr(collision_hash, 0, 12), '0000000000000001');
+let collision_path = '/opt/clash/history/config.yaml/' + collision_revision;
+collision.fs.mkdir(collision_path);
+collision.fs.chmod(collision_path, 0o700);
+collision.fs.writefile(collision_path + '/foreign', 'foreign');
+let after_collision_record = collision.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'collision\n', {});
+assert_true(after_collision_record.revision != collision_revision);
+assert_equal(collision.fs.readfile(collision_path + '/foreign'), 'foreign');
+
+let maximum = environment();
+let maximum_record = maximum.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'maximum\n', {});
+let maximum_metadata = read_revision_metadata(maximum, maximum_record);
+let maximum_revision = '9999999999999-' + substr(maximum_record.hash, 0, 12) + '-' +
+	split(maximum_record.revision, '-')[2];
+maximum_metadata.revision = maximum_revision;
+maximum_metadata.timestamp = 9999999999999;
+maximum_metadata.content_revision = maximum_revision;
+maximum.fs.rename(revision_directory(maximum_record),
+	'/opt/clash/history/config.yaml/' + maximum_revision);
+maximum_record.revision = maximum_revision;
+write_revision_metadata(maximum, maximum_record, maximum_metadata);
+assert_equal(maximum.revisions.list('config.yaml')[0].corrupt, false);
+assert_throws(() => maximum.revisions.snapshot_bytes(
+	'config.yaml', 'manual', 'beyond-maximum\n', {}), 'INTERNAL');
 
 // Opening a historical revision affects Draft only and uses one outer operation.
 let operations_before = length(env.ops.list());
@@ -421,3 +572,8 @@ assert_equal(legacy.revisions.list('config.yaml')[0].corrupt, false);
 assert_equal(legacy.revisions.prune('config.yaml'), 0);
 assert_true(legacy.fs.lstat(legacy_base + '.yaml') != null);
 assert_true(legacy.fs.lstat(legacy_base + '.json') != null);
+let legacy_mismatch = json(legacy.fs.readfile(legacy_base + '.json'));
+legacy_mismatch.timestamp++;
+legacy.fs.writefile(legacy_base + '.json', sprintf('%J\n', legacy_mismatch));
+legacy.fs.set_mode(legacy_base + '.json', 0o600);
+assert_equal(legacy.revisions.list('config.yaml')[0].corrupt, true);
