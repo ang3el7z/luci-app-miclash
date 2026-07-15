@@ -10,7 +10,8 @@ const LIMITS = {
 	max_output_bytes: 2048,
 	max_lines: 64,
 	max_hunks: 4,
-	context_lines: 1
+	context_lines: 1,
+	max_cells: 4096
 };
 
 function repeated(value, count) {
@@ -28,6 +29,22 @@ assert_equal(changed.text,
 assert_equal(diff.unified('same\n', 'same\n', LIMITS).text, '');
 assert_equal(diff.unified('same', 'same\n', LIMITS).text,
 	'--- old\n+++ next\n@@ -1,1 +1,1 @@\n-same\n\\ No newline at end of file\n+same\n');
+assert_equal(diff.unified(
+	'a\nb\nc\nd\ne\nf\ng\nh\n',
+	'a\nB\nc\nd\ne\nf\nG\nh\n', LIMITS).text,
+	'--- old\n+++ next\n' +
+	'@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n' +
+	'@@ -6,3 +6,3 @@\n f\n-g\n+G\n h\n');
+assert_equal(diff.unified('', 'inserted\n', LIMITS).text,
+	'--- old\n+++ next\n@@ -0,0 +1,1 @@\n+inserted\n');
+assert_equal(diff.unified('removed', '', LIMITS).text,
+	'--- old\n+++ next\n@@ -1,1 +0,0 @@\n-removed\n\\ No newline at end of file\n');
+assert_throws(() => diff.unified(
+	'a\nb\nc\nd\ne\nf\ng\nh\n',
+	'a\nB\nc\nd\ne\nf\nG\nh\n', { ...LIMITS, max_hunks: 1 }),
+	'RESPONSE_TOO_LARGE');
+assert_throws(() => diff.unified('a\nb\n', 'x\ny\n',
+	{ ...LIMITS, max_cells: 8 }), 'RESPONSE_TOO_LARGE');
 assert_throws(() => diff.unified('nul' + sprintf('%c', 0), 'text', LIMITS),
 	'INVALID_ARGUMENT');
 assert_throws(() => diff.unified('bad' + sprintf('%c', 255), 'text', LIMITS),
