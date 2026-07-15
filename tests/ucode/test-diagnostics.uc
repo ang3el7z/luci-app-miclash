@@ -424,4 +424,37 @@ for (let failure in [ 'write', 'second-file-open' ]) {
 	assert_equal(type(partial_center.summary()), 'object');
 }
 
+// The creation capability begins before mkdir. Every injected failure is
+// either cleaned immediately or recognized and cleaned by a fresh daemon.
+for (let failure in [ 'mkdir-crash', 'chmod', 'verify', 'open', 'write-crash' ]) {
+	let interrupted = report_environment();
+	let interrupted_center = interrupted.center();
+	let injected = false;
+	interrupted.fs.on_mkdir = (path) => {
+		if (injected || !match(path, /\/diagnostics\/(\.stage-|report-)/)) return;
+		if (failure == 'verify') return;
+		injected = true;
+		if (failure == 'mkdir-crash') die('INTERNAL');
+		if (failure == 'chmod') interrupted.fs.fail_on = 'chmod';
+		if (failure == 'write-crash') interrupted.fs.fail_on = 'write';
+	};
+	if (failure == 'verify')
+		interrupted.fs.on_lstat = (path, count) => {
+			if (!injected && match(path, /\/diagnostics\/(\.stage-|report-)/) && count >= 2) {
+				injected = true;
+				die('INTERNAL');
+			}
+		};
+	if (failure == 'open')
+		interrupted.fs.fail_open_once_matching = 'report.json';
+	assert_throws(() => interrupted_center.create_report(), 'INTERNAL');
+	interrupted.fs.on_mkdir = null;
+	interrupted.fs.on_lstat = null;
+	interrupted.fs.fail_on = null;
+	let recovered_center = interrupted.center();
+	assert_equal(type(recovered_center.summary()), 'object');
+	assert_equal(length(interrupted.fs.lsdir('/tmp/miclash/diagnostics')), 0,
+		failure + ' is restart recoverable');
+}
+
 print('diagnostics tests passed\n');

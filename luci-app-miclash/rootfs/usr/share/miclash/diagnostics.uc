@@ -251,11 +251,54 @@ function remove_scanned(runtime, root, name) {
 	if (runtime.fs.rmdir(path) !== true) errors.fail('INTERNAL');
 	verify_directory(runtime, ROOT, root);
 };
+function remove_staging(runtime, root, name) {
+	if (!match(name, /^\.stage-[0-9a-f]{32}$/)) errors.fail('CORRUPT_STATE');
+	let path = ROOT + '/' + name, identity = runtime.fs.lstat(path);
+	if (identity?.type != 'directory' || (identity.uid != null && identity.uid != 0) ||
+		(identity.mode & 0o022) != 0 || runtime.fs.realpath(path) != path)
+		errors.fail('CORRUPT_STATE');
+	let entries = runtime.fs.lsdir(path);
+	if (type(entries) != 'array' || length(entries) > 2)
+		errors.fail('CORRUPT_STATE');
+	for (let leaf in entries) {
+		if (leaf != 'report.json' && leaf != 'report.txt') errors.fail('CORRUPT_STATE');
+		let file = path + '/' + leaf, file_identity = safe_file(runtime, file, null);
+		verify_directory(runtime, ROOT, root);
+		if (!same_node(file_identity, runtime.fs.lstat(file)) || runtime.fs.unlink(file) !== true)
+			errors.fail('INTERNAL');
+	}
+	let current = runtime.fs.lstat(path);
+	if (!same_node(identity, current) || current?.type != 'directory' ||
+		(current.uid != null && current.uid != 0) || (current.mode & 0o022) != 0 ||
+		runtime.fs.realpath(path) != path)
+		errors.fail('INTERNAL');
+	verify_directory(runtime, ROOT, root);
+	if (runtime.fs.rmdir(path) !== true) errors.fail('INTERNAL');
+	verify_directory(runtime, ROOT, root);
+};
 function recover_reports(runtime, root) {
 	let names = runtime.fs.lsdir(ROOT);
 	if (type(names) != 'array') errors.fail('INTERNAL');
 	if (length(names) > MAX_ROOT_ENTRIES) errors.fail('RESPONSE_TOO_LARGE');
-	for (let name in names) remove_scanned(runtime, root, name);
+	for (let name in names)
+		if (match(name, /^report-[0-9a-f]{32}$/)) remove_scanned(runtime, root, name);
+		else if (match(name, /^\.stage-[0-9a-f]{32}$/)) remove_staging(runtime, root, name);
+		else errors.fail('CORRUPT_STATE');
+};
+function cleanup_creation(runtime, root, stage_name, final_name) {
+	let failure = null;
+	try {
+		if (runtime.fs.lstat(ROOT + '/' + stage_name) != null)
+			remove_staging(runtime, root, stage_name);
+	}
+	catch (error) { failure = 'INTERNAL'; }
+	try {
+		if (runtime.fs.lstat(ROOT + '/' + final_name) != null)
+			remove_scanned(runtime, root, final_name);
+	}
+	catch (error) { failure = 'INTERNAL'; }
+	if (failure != null) errors.fail(failure);
+	return true;
 };
 function write_file(runtime, directory, path, content) {
 	if (type(content) != 'string' || length(content) > MAX_REPORT)
@@ -318,29 +361,6 @@ function read_file(runtime, directory, record) {
 	verify_directory(runtime, directory.path, directory.identity);
 	return content;
 };
-function cleanup_staging(runtime, root, directory, files) {
-	verify_directory(runtime, ROOT, root);
-	verify_directory(runtime, directory.path, directory.identity);
-	let names = runtime.fs.lsdir(directory.path), expected = [];
-	for (let format in [ 'json', 'text' ])
-		if (files[format] != null)
-			push(expected, format == 'json' ? 'report.json' : 'report.txt');
-	if (type(names) != 'array' || length(names) != length(expected)) errors.fail('INTERNAL');
-	for (let name in names)
-		if (index(expected, name) < 0) errors.fail('INTERNAL');
-	for (let format in [ 'json', 'text' ]) {
-		let file = files[format];
-		if (file == null) continue;
-		safe_file(runtime, file.path, file.identity);
-		if (runtime.digest.sha256_file(file.path) != file.hash ||
-			runtime.fs.unlink(file.path) !== true)
-			errors.fail('INTERNAL');
-	}
-	verify_directory(runtime, directory.path, directory.identity);
-	if (runtime.fs.rmdir(directory.path) !== true) errors.fail('INTERNAL');
-	verify_directory(runtime, ROOT, root);
-};
-
 export function create(dependencies) {
 	let runtime = dependencies?.runtime, sources = dependencies?.sources;
 	if (type(runtime?.fs) != 'object' || type(runtime?.clock?.now) != 'function' ||
@@ -412,23 +432,48 @@ export function create(dependencies) {
 				if (reports[candidate] == null) id = candidate;
 			}
 			if (id == null) errors.fail('INTERNAL');
-			let path = null;
+			let stage_name = null, final_name = null, path = null, stage_created = false;
+			let creation_failure = null;
 			for (let attempt = 0; attempt < 16 && path == null; attempt++) {
 				let token = runtime.random.hex(16);
 				if (!match(token, /^[0-9a-f]{32}$/)) errors.fail('INTERNAL');
-				let candidate = ROOT + '/report-' + token;
-				if (runtime.fs.lstat(candidate) != null) continue;
-				if (runtime.fs.mkdir(candidate) !== true) {
-					if (runtime.fs.lstat(candidate) != null) continue;
-					errors.fail('INTERNAL');
+				stage_name = '.stage-' + token;
+				final_name = 'report-' + token;
+				let candidate = ROOT + '/' + stage_name;
+				if (runtime.fs.lstat(candidate) != null ||
+				    runtime.fs.lstat(ROOT + '/' + final_name) != null) continue;
+				try {
+					if (runtime.fs.mkdir(candidate) !== true) {
+						if (runtime.fs.lstat(candidate) != null) continue;
+						errors.fail('INTERNAL');
+					}
+					stage_created = true;
+					path = candidate;
 				}
-				path = candidate;
+				catch (error) {
+					creation_failure = errors.normalize(error).code;
+					try { stage_created = runtime.fs.lstat(candidate) != null; }
+					catch (capture_error) { stage_created = false; }
+					path = candidate;
+					break;
+				}
 			}
-			if (path == null || runtime.fs.chmod(path, 0o700) !== true)
-				errors.fail('INTERNAL');
-			let directory = { path, identity: verify_directory(runtime, path, runtime.fs.lstat(path)) };
+			if (path == null) errors.fail('INTERNAL');
+			if (creation_failure != null) {
+				if (stage_created)
+					try { cleanup_creation(runtime, root, stage_name, final_name); }
+					catch (cleanup_error) { creation_failure = 'INTERNAL'; }
+				errors.fail(creation_failure);
+			}
+			let directory = null;
 			let now = runtime.clock.now(), files = {}, failure = null;
 			try {
+				let initial = runtime.fs.lstat(path);
+				if (initial?.type != 'directory' || (initial.uid != null && initial.uid != 0) ||
+					(initial.mode & 0o022) != 0 || runtime.fs.realpath(path) != path)
+					errors.fail('INTERNAL');
+				if (runtime.fs.chmod(path, 0o700) !== true) errors.fail('INTERNAL');
+				directory = { path, identity: verify_directory(runtime, path, initial) };
 				let safe = collect(sources);
 				let summary = make_summary(safe, now);
 				let report = { schema_version: 1, generated_at: now, summary,
@@ -442,10 +487,31 @@ export function create(dependencies) {
 					errors.fail('RESPONSE_TOO_LARGE');
 				files.json = write_file(runtime, directory, path + '/report.json', json_text);
 				files.text = write_file(runtime, directory, path + '/report.txt', text);
+				verify_directory(runtime, ROOT, root);
+				verify_directory(runtime, directory.path, directory.identity);
+				if (runtime.fs.lstat(ROOT + '/' + final_name) != null ||
+					runtime.fs.rename(path, ROOT + '/' + final_name) !== true)
+					errors.fail('INTERNAL');
+				let final_path = ROOT + '/' + final_name;
+				let final_identity = runtime.fs.lstat(final_path);
+				if (!same_node(directory.identity, final_identity) ||
+					runtime.fs.realpath(final_path) != final_path || runtime.fs.lstat(path) != null)
+					errors.fail('INTERNAL');
+				directory = { path: final_path,
+					identity: verify_directory(runtime, final_path, final_identity) };
+				for (let format in [ 'json', 'text' ]) {
+					let name = format == 'json' ? 'report.json' : 'report.txt';
+					let final_file = final_path + '/' + name;
+					let identity = safe_file(runtime, final_file, files[format].identity);
+					if (runtime.digest.sha256_file(final_file) != files[format].hash)
+						errors.fail('INTERNAL');
+					files[format].path = final_file;
+					files[format].identity = identity;
+				}
 			}
 			catch (error) { failure = errors.normalize(error).code; }
 			if (failure != null) {
-				try { cleanup_staging(runtime, root, directory, files); }
+				try { cleanup_creation(runtime, root, stage_name, final_name); }
 				catch (cleanup_error) { failure = 'INTERNAL'; }
 				errors.fail(failure);
 			}
