@@ -189,6 +189,18 @@ replies.set('transfer_begin', { transfer_id: 'a'.repeat(64), chunk_size: Number.
 await assert.rejects(transferClient.uploadChunks('backup', {}, new Uint8Array([1])),
 	(error) => error.code === 'INVALID_RESPONSE');
 
+const maximumTransfer = new Uint8Array(16 * 1024 * 1024);
+let writesBeforeTinyUpload = calls.filter((call) => call.method === 'transfer_write').length;
+let abortsBeforeTinyUpload = calls.filter((call) => call.method === 'transfer_abort').length;
+replies.set('transfer_begin', { transfer_id: '9'.repeat(64), chunk_size: 1, expires_at: 1 });
+replies.set('transfer_write', { next_seq: -1, received: 0 });
+await assert.rejects(transferClient.uploadChunks('backup', {}, maximumTransfer),
+	(error) => error.code === 'INVALID_RESPONSE');
+assert.equal(calls.filter((call) => call.method === 'transfer_write').length,
+	writesBeforeTinyUpload, 'unsafe upload declaration started an unbounded RPC loop');
+assert.equal(calls.filter((call) => call.method === 'transfer_abort').length,
+	abortsBeforeTinyUpload + 1, 'unsafe upload declaration was not aborted exactly once');
+
 const downloadBytes = Buffer.from('diagnostic');
 const downloadHash = Buffer.from(await webcrypto.subtle.digest('SHA-256', downloadBytes)).toString('hex');
 let readOffset = 0;
@@ -204,6 +216,18 @@ const downloadedBytes = await transferClient.downloadChunks('report', 'rpt_' + '
 assert.equal(Buffer.from(downloadedBytes).toString(), 'diagnostic');
 assert.equal(calls.filter((call) => call.method === 'transfer_read').length, 3,
 	'download must use exactly ceil(size/chunk_size) reads');
+
+let readsBeforeTinyDownload = calls.filter((call) => call.method === 'transfer_read').length;
+let abortsBeforeTinyDownload = calls.filter((call) => call.method === 'transfer_abort').length;
+replies.set('transfer_begin', { transfer_id: '8'.repeat(64), chunk_size: 1,
+	size: 16 * 1024 * 1024, sha256: 'a'.repeat(64), expires_at: 1 });
+replies.set('transfer_read', { seq: 0, next_seq: 1, data: 'AA==', eof: true });
+await assert.rejects(transferClient.downloadChunks('backup',
+	'b-0000000005000-' + '8'.repeat(32), {}), (error) => error.code === 'INVALID_RESPONSE');
+assert.equal(calls.filter((call) => call.method === 'transfer_read').length,
+	readsBeforeTinyDownload, 'unsafe download declaration started an unbounded RPC loop');
+assert.equal(calls.filter((call) => call.method === 'transfer_abort').length,
+	abortsBeforeTinyDownload + 1, 'unsafe download declaration was not aborted exactly once');
 
 // Destroying a view aborts already-begun transfers through the raw declaration,
 // even though public wrappers reject after destroy.

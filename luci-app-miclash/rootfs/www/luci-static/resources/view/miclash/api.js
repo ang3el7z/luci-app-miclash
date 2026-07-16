@@ -59,6 +59,7 @@ const METHOD_SPECS = [
 const TERMINAL = new Set(['success', 'failure', 'interrupted']);
 const MAX_TRANSFER = 16777216;
 const MAX_CHUNK = 49152;
+const MAX_TRANSFER_CHUNKS = Math.ceil(MAX_TRANSFER / MAX_CHUNK);
 
 function apiError(code, message, details) {
 	const error = new Error(String(message || code || 'INTERNAL'));
@@ -217,7 +218,8 @@ function createClient(options) {
 				ensureActive();
 				const chunkSize = begun.chunk_size;
 				if (typeof transferId !== 'string' || !/^[0-9a-f]{64}$/.test(transferId) ||
-					!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK)
+					!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK ||
+					Math.ceil(bytes.length / chunkSize) > MAX_TRANSFER_CHUNKS)
 					throw apiError('INVALID_RESPONSE', 'Invalid transfer declaration');
 				activeTransfers.add(transferId);
 				let seq = 0;
@@ -251,7 +253,8 @@ function createClient(options) {
 				if (typeof transferId !== 'string' || !/^[0-9a-f]{64}$/.test(transferId) ||
 					!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK ||
 					!Number.isInteger(begun.size) || begun.size < 0 || begun.size > MAX_TRANSFER ||
-					!/^[0-9a-f]{64}$/.test(begun.sha256 || ''))
+					!/^[0-9a-f]{64}$/.test(begun.sha256 || '') ||
+					Math.ceil(begun.size / chunkSize) > MAX_TRANSFER_CHUNKS)
 					throw apiError('INVALID_RESPONSE', 'Invalid transfer declaration');
 				activeTransfers.add(transferId);
 				const output = new Uint8Array(begun.size);

@@ -253,10 +253,15 @@ export function create_transfers(dependencies) {
 		try { safe_unlink(record); } catch (error) {}
 		delete records[record.id];
 	};
+	function cancel_timer(timer) {
+		if (timer?.cancel == null) return;
+		try { timer.cancel(); } catch (error) {}
+	};
 	function cancel_expiry() {
-		if (expiry_timer?.cancel != null) expiry_timer.cancel();
+		let timer = expiry_timer;
 		expiry_timer = null;
 		expiry_due = null;
+		cancel_timer(timer);
 	};
 	function prune() {
 		let now = runtime.clock.now();
@@ -270,18 +275,25 @@ export function create_transfers(dependencies) {
 			if (earliest == null || record.expires_at < earliest) earliest = record.expires_at;
 		if (earliest == null) return cancel_expiry();
 		if (expiry_timer != null && expiry_due == earliest) return;
-		cancel_expiry();
-		let timer;
-		timer = runtime.clock.set_timeout(max(0, earliest - runtime.clock.now()), () => {
-			if (expiry_timer !== timer || closed) return;
-			expiry_timer = null;
-			expiry_due = null;
-			prune();
-			schedule_expiry();
-		});
-		if (timer == null || type(timer.cancel) != 'function') errors.fail('INTERNAL');
+		let previous = expiry_timer, timer = null, activated = false, fired = false;
+		try {
+			timer = runtime.clock.set_timeout(max(0, earliest - runtime.clock.now()), () => {
+				if (!activated) { fired = true; return; }
+				if (expiry_timer !== timer || closed) return;
+				expiry_timer = null;
+				expiry_due = null;
+				prune();
+				schedule_expiry();
+			});
+		} catch (error) { errors.fail('INTERNAL'); }
+		if (timer == null || type(timer.cancel) != 'function' || fired) {
+			cancel_timer(timer);
+			errors.fail('INTERNAL');
+		}
 		expiry_timer = timer;
 		expiry_due = earliest;
+		activated = true;
+		cancel_timer(previous);
 	};
 	function acquire(id, direction) {
 		prune();
@@ -346,10 +358,15 @@ export function create_transfers(dependencies) {
 				discard_created(path, handle, identity);
 				errors.fail(errors.normalize(error).code);
 			}
-			records[id] = { id, direction: 'upload', kind: arguments.kind, metadata,
+			let record = { id, direction: 'upload', kind: arguments.kind, metadata,
 				size: arguments.size, sha256: arguments.sha256, received: 0, next_seq: 0,
 				expires_at: runtime.clock.now() + TRANSFER_TTL, path, handle, identity };
-			schedule_expiry();
+			records[id] = record;
+			try { schedule_expiry(); }
+			catch (error) {
+				dispose(record);
+				errors.fail(errors.normalize(error).code);
+			}
 			return { transfer_id: id, chunk_size: TRANSFER_CHUNK,
 				expires_at: records[id].expires_at };
 		}
@@ -372,10 +389,15 @@ export function create_transfers(dependencies) {
 			try { source?.close?.(); } catch (error) {}
 			errors.fail('INVALID_RESPONSE');
 		}
-		records[id] = { id, direction: 'download', kind: arguments.kind, metadata,
+		let record = { id, direction: 'download', kind: arguments.kind, metadata,
 			size: source.size, sha256: source.sha256, offset: 0, next_seq: 0,
 			expires_at: runtime.clock.now() + TRANSFER_TTL, source };
-		schedule_expiry();
+		records[id] = record;
+		try { schedule_expiry(); }
+		catch (error) {
+			dispose(record);
+			errors.fail(errors.normalize(error).code);
+		}
 		return { transfer_id: id, chunk_size: TRANSFER_CHUNK, size: source.size,
 			sha256: source.sha256, expires_at: records[id].expires_at };
 	};

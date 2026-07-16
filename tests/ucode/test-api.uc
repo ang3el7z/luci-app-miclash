@@ -412,9 +412,10 @@ function contract_delegate(name, operation) {
 		if (name == 'telegram_test') return true;
 		if (operation)
 			return { id: sprintf('0000000005000-%08d-0123456789abcdef', ++contract_sequence) };
-		if (name == 'config_list') return [];
-		if (name == 'config_read') return 'mode: rule\n';
-		return { ok: true, state: 'running' };
+		if (name == 'config_list') return [ { marker: 'read:' + name } ];
+		if (name == 'config_read') return 'read:' + name;
+		if (name == 'operation_list') return [ { marker: 'read:' + name } ];
+		return { marker: 'read:' + name };
 	};
 };
 for (let entry in canonical) {
@@ -425,12 +426,22 @@ let contract_transfers = {};
 function transfer_delegate(method_name) {
 	return (arguments) => {
 		push(delegation, { name: 'transfer_' + method_name, args: [ arguments ] });
-		return { delegated: method_name };
+		return { marker: 'read:transfer_' + method_name };
 	};
 };
 for (let method_name in [ 'begin', 'write', 'read', 'finish', 'abort' ])
 	contract_transfers[method_name] = transfer_delegate(method_name);
 let contract_methods = api.method_table(contract_app, contract_transfers);
+function expected_read_reply(entry, arguments) {
+	let marker = { marker: 'read:' + entry.name };
+	if (entry.name == 'operation_get') return { operation: marker };
+	if (entry.name == 'operation_list') return { operations: [ marker ] };
+	if (entry.name == 'config_list') return { profiles: [ marker ] };
+	if (entry.name == 'config_read')
+		return { profile: arguments.profile, content: 'read:' + entry.name };
+	if (entry.name == 'telegram_test') return { sent: true };
+	return marker;
+};
 for (let entry in canonical) {
 	let arguments = valid_contract_arguments(entry), before = length(delegation);
 	let reply = contract_methods[entry.name].call({ args: arguments });
@@ -440,7 +451,11 @@ for (let entry in canonical) {
 		expected_delegate_arguments(entry.name, arguments)),
 		entry.name + ' normalized delegate arguments');
 	if (entry.operation) json_equal(keys(reply), [ 'operation_id' ], entry.name + ' operation reply');
-	else assert_equal(exists(reply, 'operation_id'), false, entry.name + ' read returned operation ID');
+	else {
+		assert_equal(reply?.error, null, entry.name + ' read returned an error');
+		assert_true(structural_equal(reply, expected_read_reply(entry, arguments)),
+			entry.name + ' read success shape/marker');
+	}
 	let invalid = { ...arguments, unexpected: true };
 	let rejected = contract_methods[entry.name].call({ args: invalid });
 	assert_equal(rejected.error.code, 'INVALID_ARGUMENT', entry.name + ' accepted unknown field');
@@ -653,6 +668,130 @@ assert_equal(length(filter(collision_clock.timers, (timer) => timer.active)), 0)
 assert_equal(collision_transfer.begin({ direction: 'download', kind: 'report',
 	object_id: 'rpt_' + sprintf('%032x', 25), size: 0, sha256: '', metadata: {} }).error.code,
 	'HEALTH_FAILED');
+
+// Timer setup is part of begin's transaction. A null, invalid, or throwing
+// timer cannot leave an unreachable record, upload leaf, or download source.
+let failed_timer_modes = [ 'null', 'invalid', 'throw' ];
+for (let timer_mode in failed_timer_modes) {
+	let timer_fs = fakes.fs({}), timer_clock = fakes.clock(0), source_closes = 0;
+	timer_clock.set_timeout = (milliseconds, callback) => {
+		if (timer_mode == 'null') return null;
+		if (timer_mode == 'invalid') return {};
+		die('set_timeout failed');
+	};
+	let failed_timer = api.create_transfers({ runtime: { fs: timer_fs, clock: timer_clock,
+		random: fakes.entropy(), digest: fakes.digest(timer_fs), paths: { tmp: '/tmp/miclash' } },
+		uploads: {}, downloads: { report: (id) => ({ size: 0,
+			sha256: fakes.digest(timer_fs).sha256(''), read: () => '',
+			finish: () => ({ size: 0, sha256: fakes.digest(timer_fs).sha256('') }),
+			close: () => source_closes++ }) } });
+	assert_equal(failed_timer.begin({ direction: 'download', kind: 'report',
+		object_id: 'rpt_' + sprintf('%032x', 31), size: 0, sha256: '', metadata: {} })
+		.error.code, 'INTERNAL', timer_mode + ' timer failure was accepted');
+	assert_equal(source_closes, 1, timer_mode + ' timer failure leaked its source');
+}
+let failed_upload_fs = fakes.fs({}), failed_upload_clock = fakes.clock(0);
+let healthy_set_timeout = failed_upload_clock.set_timeout;
+failed_upload_clock.set_timeout = () => null;
+let failed_upload_runtime = { fs: failed_upload_fs, clock: failed_upload_clock,
+	random: fakes.entropy(), digest: fakes.digest(failed_upload_fs), paths: { tmp: '/tmp/miclash' } };
+let failed_upload = api.create_transfers({ runtime: failed_upload_runtime,
+	uploads: { backup: (staged) => ({ import_id: 'i-0000000000000-' + sprintf('%032x', 7) }) },
+	downloads: {} });
+assert_equal(failed_upload.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 1, sha256: failed_upload_runtime.digest.sha256('x'), metadata: {} }).error.code,
+	'INTERNAL');
+let failed_upload_path = failed_upload_fs.calls.open[length(failed_upload_fs.calls.open) - 1].path;
+assert_true(failed_upload_fs.lstat(failed_upload_path) == null,
+	'failed initial timer left an inaccessible staging leaf');
+failed_upload_clock.set_timeout = healthy_set_timeout;
+let recovered_upload = failed_upload.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 1, sha256: failed_upload_runtime.digest.sha256('x'), metadata: {} });
+assert_match(recovered_upload.transfer_id, /^[0-9a-f]{64}$/,
+	'failed initial timer retained an upload reservation');
+failed_upload.abort({ transfer_id: recovered_upload.transfer_id });
+
+// A replacement timer is validated before the live timer is touched.
+let replacement_fs = fakes.fs({}), replacement_clock = fakes.clock(0);
+let replacement_set_timeout = replacement_clock.set_timeout, reject_replacement = false;
+replacement_clock.set_timeout = (milliseconds, callback) => reject_replacement ? null :
+	replacement_set_timeout(milliseconds, callback);
+let replacement_runtime = { fs: replacement_fs, clock: replacement_clock,
+	random: fakes.entropy(), digest: fakes.digest(replacement_fs), paths: { tmp: '/tmp/miclash' } };
+let replacement = api.create_transfers({ runtime: replacement_runtime, uploads: {},
+	downloads: { report: (id) => ({ size: 1, sha256: replacement_runtime.digest.sha256('z'),
+		read: () => 'z', finish: () => ({ size: 1,
+			sha256: replacement_runtime.digest.sha256('z') }), close: () => true }) } });
+let replacement_first = replacement.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 32), size: 0, sha256: '', metadata: {} });
+replacement_clock.advance(1);
+let replacement_second = replacement.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 33), size: 0, sha256: '', metadata: {} });
+reject_replacement = true;
+assert_equal(replacement.abort({ transfer_id: replacement_first.transfer_id }).error.code,
+	'INTERNAL');
+assert_equal(length(filter(replacement_clock.timers, (timer) => timer.active)), 1,
+	'failed replacement canceled the existing live timer');
+assert_equal(b64dec(replacement.read({ transfer_id: replacement_second.transfer_id, seq: 0 }).data),
+	'z', 'failed replacement made an existing record inaccessible');
+reject_replacement = false;
+replacement.abort({ transfer_id: replacement_second.transfer_id });
+
+// If the old timer's cancel capability throws, the validated replacement still
+// becomes authoritative and keeps the remaining record expirable/accessible.
+let cancel_replace_fs = fakes.fs({}), cancel_replace_clock = fakes.clock(0);
+let cancel_replace_set_timeout = cancel_replace_clock.set_timeout, cancel_replace_closes = 0;
+cancel_replace_clock.set_timeout = (milliseconds, callback) => {
+	let timer = cancel_replace_set_timeout(milliseconds, callback);
+	timer.cancel = () => die('replacement cancel failed');
+	return timer;
+};
+let cancel_replace_runtime = { fs: cancel_replace_fs, clock: cancel_replace_clock,
+	random: fakes.entropy(), digest: fakes.digest(cancel_replace_fs),
+	paths: { tmp: '/tmp/miclash' } };
+let cancel_replace = api.create_transfers({ runtime: cancel_replace_runtime, uploads: {},
+	downloads: { report: (id) => ({ size: 1,
+		sha256: cancel_replace_runtime.digest.sha256('k'), read: () => 'k',
+		finish: () => ({ size: 1, sha256: cancel_replace_runtime.digest.sha256('k') }),
+		close: () => cancel_replace_closes++ }) } });
+let cancel_replace_first = cancel_replace.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 35), size: 0, sha256: '', metadata: {} });
+cancel_replace_clock.advance(1);
+let cancel_replace_second = cancel_replace.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 36), size: 0, sha256: '', metadata: {} });
+assert_equal(cancel_replace.abort({ transfer_id: cancel_replace_first.transfer_id }).aborted, true);
+assert_true(length(filter(cancel_replace_clock.timers, (timer) => timer.active)) >= 1,
+	'throwing old cancel left the existing record without a live timer');
+assert_equal(b64dec(cancel_replace.read({ transfer_id: cancel_replace_second.transfer_id,
+	seq: 0 }).data), 'k');
+assert_equal(cancel_replace.close(), true);
+assert_equal(cancel_replace_closes, 2);
+
+// A throwing timer cancel is isolated so close still disposes every record.
+let close_fs = fakes.fs({}), close_clock = fakes.clock(0), download_closes = 0;
+let close_set_timeout = close_clock.set_timeout;
+close_clock.set_timeout = (milliseconds, callback) => {
+	let timer = close_set_timeout(milliseconds, callback);
+	timer.cancel = () => die('cancel failed');
+	return timer;
+};
+let close_runtime = { fs: close_fs, clock: close_clock, random: fakes.entropy(),
+	digest: fakes.digest(close_fs), paths: { tmp: '/tmp/miclash' } };
+let close_transfer = api.create_transfers({ runtime: close_runtime,
+	uploads: { backup: (staged) => ({ import_id: 'i-0000000000000-' + sprintf('%032x', 8) }) },
+	downloads: { report: (id) => ({ size: 0, sha256: close_runtime.digest.sha256(''),
+		read: () => '', finish: () => ({ size: 0, sha256: close_runtime.digest.sha256('') }),
+		close: () => download_closes++ }) } });
+let close_upload = close_transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 1, sha256: close_runtime.digest.sha256('c'), metadata: {} });
+let close_path = close_fs.calls.open[length(close_fs.calls.open) - 1].path;
+close_transfer.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 34), size: 0, sha256: '', metadata: {} });
+let close_failure = null;
+try { close_transfer.close(); } catch (error) { close_failure = error; }
+assert_equal(close_failure, null, 'throwing timer cancel escaped close');
+assert_true(close_fs.lstat(close_path) == null, 'throwing timer cancel leaked upload staging');
+assert_equal(download_closes, 1, 'throwing timer cancel leaked download source');
 let exhaust_fs = fakes.fs({}), exhaust_runtime = { fs: exhaust_fs, clock: fakes.clock(0),
 	random: { hex: (bytes) => token_a }, digest: fakes.digest(exhaust_fs),
 	paths: { tmp: '/tmp/miclash' } };
