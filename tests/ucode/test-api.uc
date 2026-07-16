@@ -767,6 +767,50 @@ assert_equal(b64dec(cancel_replace.read({ transfer_id: cancel_replace_second.tra
 assert_equal(cancel_replace.close(), true);
 assert_equal(cancel_replace_closes, 2);
 
+// If callback rearming fails after the earliest deadline, expiry fails closed:
+// the expired source is pruned and every later source/staging leaf is disposed
+// synchronously without leaking an exception into the event loop.
+for (let rearm_mode in [ 'throw', 'null', 'invalid' ]) {
+	let rearm_fs = fakes.fs({}), rearm_clock = fakes.clock(0), rearm_closes = 0;
+	let healthy_rearm = rearm_clock.set_timeout, fail_rearm = false;
+	rearm_clock.set_timeout = (milliseconds, callback) => {
+		if (!fail_rearm) return healthy_rearm(milliseconds, callback);
+		if (rearm_mode == 'throw') die('rearm failed');
+		if (rearm_mode == 'invalid') return {};
+		return null;
+	};
+	let rearm_runtime = { fs: rearm_fs, clock: rearm_clock, random: fakes.entropy(),
+		digest: fakes.digest(rearm_fs), paths: { tmp: '/tmp/miclash' } };
+	let rearm = api.create_transfers({ runtime: rearm_runtime,
+		uploads: { backup: (staged) => ({ import_id: 'i-0000000000000-' + sprintf('%032x', 9) }) },
+		downloads: { report: (id) => ({ size: 1,
+			sha256: rearm_runtime.digest.sha256('r'), read: () => 'r',
+			finish: () => ({ size: 1, sha256: rearm_runtime.digest.sha256('r') }),
+			close: () => rearm_closes++ }) } });
+	let rearm_first = rearm.begin({ direction: 'download', kind: 'report',
+		object_id: 'rpt_' + sprintf('%032x', 41), size: 0, sha256: '', metadata: {} });
+	rearm_clock.advance(1);
+	let rearm_second = rearm.begin({ direction: 'download', kind: 'report',
+		object_id: 'rpt_' + sprintf('%032x', 42), size: 0, sha256: '', metadata: {} });
+	let rearm_upload = rearm.begin({ direction: 'upload', kind: 'backup', object_id: '',
+		size: 1, sha256: rearm_runtime.digest.sha256('u'), metadata: {} });
+	let rearm_path = rearm_fs.calls.open[length(rearm_fs.calls.open) - 1].path;
+	fail_rearm = true;
+	let callback_failure = null;
+	try { rearm_clock.advance(299999); } catch (error) { callback_failure = error; }
+	assert_equal(callback_failure, null, rearm_mode + ' rearm exception escaped timer callback');
+	assert_equal(rearm_closes, 2, rearm_mode + ' rearm did not close both download sources');
+	assert_true(rearm_fs.lstat(rearm_path) == null,
+		rearm_mode + ' rearm leaked the later upload staging leaf');
+	assert_equal(rearm.read({ transfer_id: rearm_second.transfer_id, seq: 0 }).error.code,
+		'NOT_FOUND', rearm_mode + ' rearm left an inaccessible download record');
+	assert_equal(rearm.write({ transfer_id: rearm_upload.transfer_id, seq: 0,
+		data: b64enc('u') }).error.code, 'NOT_FOUND',
+		rearm_mode + ' rearm left an inaccessible upload record');
+	assert_equal(length(filter(rearm_clock.timers, (timer) => timer.active)), 0,
+		rearm_mode + ' rearm left an active timer');
+}
+
 // A throwing timer cancel is isolated so close still disposes every record.
 let close_fs = fakes.fs({}), close_clock = fakes.clock(0), download_closes = 0;
 let close_set_timeout = close_clock.set_timeout;

@@ -263,6 +263,13 @@ export function create_transfers(dependencies) {
 		expiry_due = null;
 		cancel_timer(timer);
 	};
+	function dispose_all() {
+		cancel_expiry();
+		for (let record in values(records)) {
+			try { dispose(record); }
+			catch (error) { delete records[record.id]; }
+		}
+	};
 	function prune() {
 		let now = runtime.clock.now();
 		for (let record in values(records))
@@ -283,7 +290,8 @@ export function create_transfers(dependencies) {
 				expiry_timer = null;
 				expiry_due = null;
 				prune();
-				schedule_expiry();
+				try { schedule_expiry(); }
+				catch (error) { dispose_all(); }
 			});
 		} catch (error) { errors.fail('INTERNAL'); }
 		if (timer == null || type(timer.cancel) != 'function' || fired) {
@@ -503,8 +511,7 @@ export function create_transfers(dependencies) {
 	function close() {
 		if (closed) return true;
 		closed = true;
-		cancel_expiry();
-		for (let record in values(records)) dispose(record);
+		dispose_all();
 		return true;
 	};
 	function safe(callback) {
