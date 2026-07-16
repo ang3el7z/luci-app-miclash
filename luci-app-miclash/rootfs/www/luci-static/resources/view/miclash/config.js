@@ -12,6 +12,8 @@
 'require view.miclash.ui-shell';
 'require view.miclash.subscription';
 'require view.miclash.editor';
+'require view.miclash.api';
+'require view.miclash.diagnostics-panel';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
@@ -37,6 +39,7 @@ let operationAutoClearTimer = null;
 let controlPollBusy = false;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
+let diagnosticsPanel = null;
 
 view_miclash_utils.bumpRpcTimeout();
 
@@ -1922,7 +1925,10 @@ function buildSettingsPaneHtml() {
 	return '' +
 		'<div class="sbox-settings-overview">' +
 			'<div id="sbox-settings-status" class="cbi-section-descr sbox-settings-status">' +
-				buildSettingsSummary() +
+				'<div class="sbox-settings-summary-grid">' +
+					'<div class="sbox-settings-summary-current">' + buildSettingsSummary() + '</div>' +
+					'<div id="sbox-diagnostics-summary" class="sbox-diagnostics-summary" aria-live="polite"></div>' +
+				'</div>' +
 			'</div>' +
 			buildReleaseChannelSectionHtml(s) +
 		'</div>' +
@@ -2274,6 +2280,8 @@ function renderSettingsPane() {
 
 	pane.innerHTML = buildSettingsPaneHtml();
 	bindSettingsPaneEvents();
+	const diagnosticsHost = pane.querySelector('#sbox-diagnostics-summary');
+	if (diagnosticsHost && diagnosticsPanel) diagnosticsPanel.mount(diagnosticsHost);
 }
 
 async function collectSettingsFormState() {
@@ -3029,6 +3037,8 @@ return view.extend({
 	},
 
 	render: async function(data) {
+		if (diagnosticsPanel) diagnosticsPanel.destroy();
+		diagnosticsPanel = null;
 		await ensureConfigProfilesReady(data[0] || '');
 		appState.configProfiles = CONFIG_PROFILES.slice();
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
@@ -3065,6 +3075,9 @@ return view.extend({
 		bindControlAndHeaderEvents();
 		bindConfigEvents();
 		bindTabEvents();
+		diagnosticsPanel = view_miclash_diagnostics_panel.create({
+			api: view_miclash_api.create()
+		});
 		renderSettingsPane();
 		updateHeaderAndControlDom();
 		refreshReleaseMeta({ force: true }).catch(() => {});
@@ -3087,5 +3100,12 @@ return view.extend({
 		});
 
 		return pageRoot;
+	},
+
+	unload: function() {
+		if (diagnosticsPanel) {
+			diagnosticsPanel.destroy();
+			diagnosticsPanel = null;
+		}
 	}
 });

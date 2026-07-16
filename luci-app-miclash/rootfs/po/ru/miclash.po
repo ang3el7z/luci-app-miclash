@@ -1438,3 +1438,129 @@ msgstr "Определяет нормальное потребление пам�
 
 msgid "Failed to synchronize memory guard service."
 msgstr "Не удалось синхронизировать службу контроля памяти."
+
+msgid "Ready"
+msgstr "Готово"
+
+msgid "Degraded"
+msgstr "Ограниченная готовность"
+
+msgid "Failed"
+msgstr "Ошибка"
+
+msgid "Unknown"
+msgstr "Неизвестно"
+
+msgid "None"
+msgstr "Нет"
+
+msgid "Configured"
+msgstr "Настроено"
+
+msgid "Not configured"
+msgstr "Не настроено"
+
+msgid "Disabled"
+msgstr "Отключено"
+
+msgid "Enabled and configured"
+msgstr "Включено и настроено"
+
+msgid "Enabled, not configured"
+msgstr "Включено, но не настроено"
+
+msgid "Component status"
+msgstr "Состояние компонентов"
+
+msgid "Mihomo"
+msgstr "Mihomo"
+
+msgid "DNS"
+msgstr "DNS"
+
+msgid "Firewall"
+msgstr "Межсетевой экран"
+
+msgid "Routing"
+msgstr "Маршрутизация"
+
+msgid "RSS"
+msgstr "RSS"
+
+msgid "Baseline"
+msgstr "Базовый уровень"
+
+msgid "Pressure"
+msgstr "Давление памяти"
+
+msgid "Inactive"
+msgstr "Неактивен"
+
+msgid "Cooldown"
+msgstr "Период ожидания"
+
+msgid "Last repair"
+msgstr "Последнее исправление"
+
+msgid "Subscription activation"
+msgstr "Активация подписки"
+
+msgid "Telegram"
+msgstr "Telegram"
+
+msgid "Diagnostic actions"
+msgstr "Действия диагностики"
+
+msgid "Details"
+msgstr "Подробнее"
+
+msgid "Download diagnostic report"
+msgstr "Скачать диагностический отчёт"
+
+msgid "Route test"
+msgstr "Проверка маршрутизации"
+
+msgid "Unknown error"
+msgstr "Неизвестная ошибка"
+
+msgid "Component evidence"
+msgstr "Данные компонентов"
+
+msgid "Last self-heal"
+msgstr "Последнее автовосстановление"
+
+msgid "MiClash diagnostics"
+msgstr "Диагностика MiClash"
+
+msgid "Invalid diagnostic report response"
+msgstr "Некорректный ответ при создании диагностического отчёта"
+
+msgid "Expected route: %s"
+msgstr "Ожидаемый маршрут: %s"
+
+msgid "Optional device"
+msgstr "Устройство (необязательно)"
+
+msgid "Optional interface"
+msgstr "Интерфейс (необязательно)"
+
+msgid "Run route test"
+msgstr "Проверить маршрут"
+
+msgid "Domain or IP address"
+msgstr "Домен или IP-адрес"
+
+msgid "Device (optional)"
+msgstr "Устройство (необязательно)"
+
+msgid "Interface (optional)"
+msgstr "Интерфейс (необязательно)"
+
+msgid "Enter a valid domain or IP address"
+msgstr "Введите корректный домен или IP-адрес"
+
+msgid "Device or interface is invalid"
+msgstr "Некорректное устройство или имя интерфейса"
+
+msgid "Enabled"
+msgstr "Включено"

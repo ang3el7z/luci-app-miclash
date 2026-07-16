@@ -1385,3 +1385,129 @@ msgstr "学习 Mihomo 的正常内存占用，仅在系统持续内存压力下�
 
 msgid "Failed to synchronize memory guard service."
 msgstr "无法同步内存监控服务。"
+
+msgid "Ready"
+msgstr "就绪"
+
+msgid "Degraded"
+msgstr "性能下降"
+
+msgid "Failed"
+msgstr "失败"
+
+msgid "Unknown"
+msgstr "未知"
+
+msgid "None"
+msgstr "无"
+
+msgid "Configured"
+msgstr "已配置"
+
+msgid "Not configured"
+msgstr "未配置"
+
+msgid "Disabled"
+msgstr "已禁用"
+
+msgid "Enabled and configured"
+msgstr "已启用并配置"
+
+msgid "Enabled, not configured"
+msgstr "已启用但未配置"
+
+msgid "Component status"
+msgstr "组件状态"
+
+msgid "Mihomo"
+msgstr "Mihomo"
+
+msgid "DNS"
+msgstr "DNS"
+
+msgid "Firewall"
+msgstr "防火墙"
+
+msgid "Routing"
+msgstr "路由"
+
+msgid "RSS"
+msgstr "RSS"
+
+msgid "Baseline"
+msgstr "基线"
+
+msgid "Pressure"
+msgstr "内存压力"
+
+msgid "Inactive"
+msgstr "未生效"
+
+msgid "Cooldown"
+msgstr "冷却期"
+
+msgid "Last repair"
+msgstr "上次修复"
+
+msgid "Subscription activation"
+msgstr "订阅激活"
+
+msgid "Telegram"
+msgstr "Telegram"
+
+msgid "Diagnostic actions"
+msgstr "诊断操作"
+
+msgid "Details"
+msgstr "详情"
+
+msgid "Download diagnostic report"
+msgstr "下载诊断报告"
+
+msgid "Route test"
+msgstr "路由测试"
+
+msgid "Unknown error"
+msgstr "未知错误"
+
+msgid "Component evidence"
+msgstr "组件依据"
+
+msgid "Last self-heal"
+msgstr "上次自动修复"
+
+msgid "MiClash diagnostics"
+msgstr "MiClash 诊断"
+
+msgid "Invalid diagnostic report response"
+msgstr "诊断报告响应无效"
+
+msgid "Expected route: %s"
+msgstr "预期路由：%s"
+
+msgid "Optional device"
+msgstr "设备（可选）"
+
+msgid "Optional interface"
+msgstr "接口（可选）"
+
+msgid "Run route test"
+msgstr "运行路由测试"
+
+msgid "Domain or IP address"
+msgstr "域名或 IP 地址"
+
+msgid "Device (optional)"
+msgstr "设备（可选）"
+
+msgid "Interface (optional)"
+msgstr "接口（可选）"
+
+msgid "Enter a valid domain or IP address"
+msgstr "请输入有效的域名或 IP 地址"
+
+msgid "Device or interface is invalid"
+msgstr "设备或接口无效"
+
+msgid "Enabled"
+msgstr "已启用"

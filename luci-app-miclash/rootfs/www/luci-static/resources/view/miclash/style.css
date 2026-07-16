@@ -614,6 +614,106 @@
 	font-size: 12px;
 	line-height: 1.5;
 }
+.sbox-settings-summary-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	align-items: start;
+}
+.sbox-settings-summary-current,
+.sbox-diagnostics-summary {
+	min-width: 0;
+}
+.sbox-diagnostics-content {
+	display: grid;
+	gap: 8px;
+}
+.sbox-diagnostics-components,
+.sbox-diagnostics-facts {
+	display: grid;
+	gap: 3px;
+}
+.sbox-diagnostics-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	min-width: 0;
+}
+.sbox-diagnostics-label {
+	color: var(--sbox-muted);
+}
+.sbox-diagnostics-value {
+	min-width: 0;
+	color: var(--sbox-text);
+	font-weight: 600;
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+.sbox-diagnostics-state {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-weight: 700;
+	white-space: nowrap;
+}
+.sbox-diagnostics-state-icon {
+	font-size: 10px;
+}
+.sbox-diagnostics-state-ok { color: var(--sbox-success); }
+.sbox-diagnostics-state-warning { color: var(--sbox-warn); }
+.sbox-diagnostics-state-error { color: var(--sbox-danger); }
+.sbox-diagnostics-state-unknown { color: var(--sbox-muted); }
+.sbox-diagnostics-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	padding-top: 3px;
+}
+.sbox-diagnostics-link {
+	color: var(--sbox-accent);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+.sbox-diagnostics-modal {
+	max-width: min(860px, 92vw);
+	max-height: 72vh;
+	overflow: auto;
+	color: var(--sbox-text);
+}
+.sbox-diagnostics-modal h4 {
+	margin: 10px 0 6px;
+}
+.sbox-diagnostics-evidence,
+.sbox-route-steps {
+	margin: 6px 0 12px;
+	padding-left: 22px;
+}
+.sbox-diagnostics-evidence li,
+.sbox-route-steps li {
+	margin: 5px 0;
+	overflow-wrap: anywhere;
+}
+.sbox-route-form {
+	display: grid;
+	grid-template-columns: minmax(130px, auto) minmax(220px, 1fr);
+	gap: 8px 10px;
+	align-items: center;
+}
+.sbox-route-form .sbox-actions {
+	grid-column: 1 / -1;
+}
+.sbox-route-result {
+	margin-top: 12px;
+}
+.sbox-route-decision {
+	font-weight: 800;
+}
+.sbox-diagnostics-error {
+	color: var(--sbox-danger);
+	font-weight: 700;
+}
 .sbox-settings-save-wrap {
 	margin-top: 12px;
 }
@@ -771,8 +871,13 @@
 	.sbox-settings-overview,
 	.sbox-settings-grid,
 	.sbox-form-grid,
-	.sbox-rulesets-layout {
+	.sbox-rulesets-layout,
+	.sbox-settings-summary-grid,
+	.sbox-route-form {
 		grid-template-columns: 1fr;
+	}
+	.sbox-route-form .sbox-actions {
+		grid-column: auto;
 	}
 	.sbox-subscription-actions {
 		justify-content: flex-start;
