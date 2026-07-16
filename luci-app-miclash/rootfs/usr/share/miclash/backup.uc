@@ -662,18 +662,6 @@ function journal_text(record) {
 	return content;
 };
 
-function journal_begin(env, kind, created_at, initial) {
-	let root = open_dir(env.secure, TRANSACTION_ROOT), nonce = env.runtime.random.hex(16);
-	if (!match(nonce, /^[0-9a-f]{32}$/)) internal();
-	let id = sprintf('t-%013d-%s', created_at, nonce), record = journal_base(id, kind, created_at);
-	for (let name, value in initial ?? {}) {
-		if (!exists(JOURNAL_FIELDS, name)) internal();
-		record[name] = value;
-	}
-	let written = secure_create(env, root, id + '.json', journal_text(record), 0o600);
-	return { root, name: id + '.json', record, identity: written.identity };
-};
-
 function journal_store(env, transaction) {
 	let written = secure_replace(env, transaction.root, transaction.name, transaction.identity,
 		journal_text(transaction.record), 0o600);
@@ -782,7 +770,7 @@ function recover_prune(env, transaction) {
 	return true;
 };
 
-function recover_transactions(env) {
+function recover_transactions_locked(env) {
 	let root = open_dir(env.secure, TRANSACTION_ROOT);
 	let names = sorted(safe_names(env.secure, root, MAX_TRANSACTIONS + 1));
 	if (length(names) > MAX_TRANSACTIONS) internal();
@@ -805,6 +793,29 @@ function recover_transactions(env) {
 		else recover_prune(env, transaction);
 	}
 	return true;
+};
+
+function recover_transactions(env) {
+	return env.secure.with_admission_lock(() => recover_transactions_locked(env));
+};
+
+function journal_begin(env, kind, created_at, initial) {
+	return env.secure.with_admission_lock(() => {
+		recover_transactions_locked(env);
+		let root = open_dir(env.secure, TRANSACTION_ROOT);
+		if (length(safe_names(env.secure, root, MAX_TRANSACTIONS)) >= MAX_TRANSACTIONS)
+			errors.fail('BUSY');
+		let nonce = env.runtime.random.hex(16);
+		if (!match(nonce, /^[0-9a-f]{32}$/)) internal();
+		let id = sprintf('t-%013d-%s', created_at, nonce);
+		let record = journal_base(id, kind, created_at);
+		for (let name, value in initial ?? {}) {
+			if (!exists(JOURNAL_FIELDS, name)) internal();
+			record[name] = value;
+		}
+		let written = secure_create(env, root, id + '.json', journal_text(record), 0o600);
+		return { root, name: id + '.json', record, identity: written.identity };
+	});
 };
 
 function list_records(app) {
@@ -933,7 +944,8 @@ function create_impl(app, options, source) {
 		if (transaction != null)
 			try { recover_transactions(env); } catch (ignore) {}
 		let code = errors.normalize(error).code;
-		errors.fail(code == 'RESPONSE_TOO_LARGE' || code == 'INVALID_ARGUMENT' ? code : 'INTERNAL');
+		errors.fail(code == 'RESPONSE_TOO_LARGE' || code == 'INVALID_ARGUMENT' || code == 'BUSY' ?
+			code : 'INTERNAL');
 	}
 };
 
@@ -1045,7 +1057,8 @@ function inspect_impl(app, source_id, options) {
 	catch (error) {
 		try { recover_transactions(source.env); } catch (ignore) {}
 		let code = errors.normalize(error).code;
-		errors.fail(code == 'RESPONSE_TOO_LARGE' || code == 'VALIDATION_FAILED' ? code : 'CORRUPT_STATE');
+		errors.fail(code == 'RESPONSE_TOO_LARGE' || code == 'VALIDATION_FAILED' || code == 'BUSY' ?
+			code : 'CORRUPT_STATE');
 	}
 };
 

@@ -727,6 +727,37 @@ assert_throws(() => backup.create(journal_swap.app), 'INTERNAL');
 assert_equal(journal_swap_fired, true, 'journal did not reach CAS replacement boundary');
 assert_equal(journal_swap.filesystem.readfile(journal_foreign), 'foreign-journal');
 
+// Recovery, capacity count, and exclusive journal creation share one mandatory
+// admission critical section. Reentrant admission is BUSY, never a second journal.
+let admission_race = make_app();
+let admission_seed = seed_import(admission_race,
+	'00000000000000000000000000000103', { 'settings/settings.json': '{ }\n' });
+let admission_probe = false;
+admission_race.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (!admission_probe && operation == 'create_exclusive' && match(name, /^t-.*\.json$/)) {
+		admission_probe = true;
+		assert_throws(() => backup.inspect(admission_race.app, admission_seed.id), 'BUSY');
+	}
+};
+backup.inspect(admission_race.app, admission_seed.id);
+assert_equal(admission_probe, true, 'admission race did not reach journal reservation');
+assert_equal(length(transaction_names(admission_race)), 1,
+	'reentrant admission created a second transaction');
+
+let capacity = make_app();
+let capacity_seed = seed_import(capacity,
+	'00000000000000000000000000000104', { 'settings/settings.json': '{ }\n' });
+for (let i = 0; i < 64; i++) backup.inspect(capacity.app, capacity_seed.id);
+assert_equal(length(transaction_names(capacity)), 64);
+let capacity_stages = length(capacity.filesystem.lsdir('/tmp/miclash/backup-inspected'));
+assert_throws(() => backup.inspect(capacity.app, capacity_seed.id), 'BUSY');
+assert_equal(length(transaction_names(capacity)), 64, '65th admission added a journal');
+assert_equal(length(capacity.filesystem.lsdir('/tmp/miclash/backup-inspected')),
+	capacity_stages, '65th admission added a staging artifact');
+backup.list(capacity.app);
+assert_equal(length(transaction_names(capacity)), 64,
+	'bounded active transactions were not recoverable');
+
 function create_crash(operation, predicate, suffix) {
 	let box = make_app(), fired = false;
 	box.app.secure_fs.after = (seen_operation, directory, name, extra) => {
