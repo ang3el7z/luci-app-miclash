@@ -18,6 +18,7 @@
     { "name": "config_external_adopt", "params": ["profile", "source"], "operation": true },
     { "name": "settings_get", "params": [], "operation": false },
     { "name": "settings_set", "params": ["settings", "source"], "operation": true },
+    { "name": "guard_transition", "params": ["enabled", "source"], "operation": true },
     { "name": "history_list", "params": ["profile", "limit"], "operation": false },
     { "name": "history_diff", "params": ["profile", "from_revision", "to_revision"], "operation": false },
     { "name": "history_open_draft", "params": ["profile", "revision", "source"], "operation": true },

@@ -315,7 +315,6 @@ function defaultOperationalSettings() {
 		autoDetectLan: true,
 		autoDetectWan: true,
 		blockQuic: true,
-		internetOnlyMiclash: false,
 		useTmpfsRules: true,
 		enableMemoryGuard: false,
 		autoHideNotifications: true,
@@ -358,7 +357,6 @@ async function loadOperationalSettings() {
 				case 'AUTO_DETECT_LAN': settings.autoDetectLan = value === 'true'; break;
 				case 'AUTO_DETECT_WAN': settings.autoDetectWan = value === 'true'; break;
 				case 'BLOCK_QUIC': settings.blockQuic = value === 'true'; break;
-				case 'INTERNET_ONLY_MICLASH': settings.internetOnlyMiclash = value === 'true'; break;
 				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
 				case 'ENABLE_MEMORY_GUARD': settings.enableMemoryGuard = value === 'true'; break;
 				case 'AUTO_HIDE_NOTIFICATIONS': settings.autoHideNotifications = value !== 'false'; break;
@@ -466,7 +464,7 @@ async function detectWanInterface() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
 	let detectedLan = '';
 	let detectedWan = '';
 	const cleanAutoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalHours);
@@ -491,7 +489,6 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 	settings.AUTO_DETECT_LAN = autoDetectLan;
 	settings.AUTO_DETECT_WAN = autoDetectWan;
 	settings.BLOCK_QUIC = blockQuic;
-	settings.INTERNET_ONLY_MICLASH = internetOnlyMiclash;
 	settings.USE_TMPFS_RULES = useTmpfsRules;
 	settings.AUTO_UPDATE_CONFIG = autoUpdateConfig !== false;
 	settings.AUTO_UPDATE_INTERVAL_HOURS = cleanAutoUpdateIntervalHours;

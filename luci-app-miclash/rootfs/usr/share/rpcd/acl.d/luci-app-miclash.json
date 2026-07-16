@@ -43,6 +43,17 @@
             },
             "ubus": {
                 "file": [ "read", "stat", "exec" ],
+                "miclash": [
+                    "status", "health", "operation_get", "operation_list",
+                    "config_list", "config_read", "config_read_draft", "settings_get",
+                    "history_list", "history_diff", "subscription_get", "subscription_probe",
+                    "update_release", "memory_status", "memory_settings",
+                    "diagnostics_summary", "diagnostics_create_report", "diagnostics_route_test",
+                    "backup_list", "backup_inspect", "telegram_status", "telegram_settings",
+                    "devices_list", "devices_timezones", "devices_policy_list",
+                    "notifications_settings", "notifications_list",
+                    "transfer_begin", "transfer_read", "transfer_finish", "transfer_abort"
+                ],
                 "service": [ "list" ]
             }
         },
@@ -74,7 +85,8 @@
                 "/usr/bin/logger": [ "exec" ]
             },
             "ubus": {
-                "file": [ "write", "exec" ]
+                "file": [ "write", "exec" ],
+                "miclash": [ "*" ]
             }
         }
     }

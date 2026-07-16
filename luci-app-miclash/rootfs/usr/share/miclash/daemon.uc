@@ -517,6 +517,90 @@ export function compose(runtime, overrides) {
 					runtime.paths.tmp + '/state.json', snapshot, 0o600)
 			}
 		});
+		let guard_failure_sequence = 0;
+		function guard_failure(protected, reason) {
+			let failure_id = sprintf('failure-%d-%d', ++guard_failure_sequence,
+				runtime.clock.now());
+			let data = { failure_id, component: 'guard', reason };
+			try { runtime.events?.emit?.('failure', data); } catch (error) {}
+			if (protected)
+				try { runtime.events?.emit?.('fail_closed', data); } catch (error) {}
+			try { runtime.reconcile?.run?.('guard-transition'); } catch (error) {}
+		};
+		function persist_guard(enabled) {
+			let failure = null;
+			for (let attempt = 0; attempt < 2; attempt++) {
+				try {
+					let saved = settings_domain.set({ guard: { enabled } });
+					state_model.set_desired(saved);
+					return saved;
+				}
+				catch (error) { failure = errors.normalize(error).code; }
+			}
+			errors.fail(failure ?? 'INTERNAL');
+		};
+		function exact_protection() {
+			let control = runtime.guard_control;
+			if (type(control?.protect) != 'function') errors.fail('HEALTH_FAILED');
+			for (let attempt = 0; attempt < 2; attempt++) {
+				try { if (control.protect() === true) return true; }
+				catch (error) {}
+			}
+			errors.fail('HEALTH_FAILED');
+		};
+		function exact_guard(enabled) {
+			let control = runtime.guard_control;
+			if (type(control?.verify) != 'function' || control.verify(enabled) !== true)
+				errors.fail('HEALTH_FAILED');
+			return true;
+		};
+		function guard_transition(enabled, source) {
+			if (type(enabled) != 'bool') errors.fail('INVALID_ARGUMENT');
+			return operation_manager.submit('guard.transition', source, { enabled }, (ctx) => {
+				let failure = 'HEALTH_FAILED', protected = false, persisted = false;
+				try {
+					ctx.stage('protect', 10, 'Establishing fail-closed Guard');
+					exact_protection(); protected = true;
+					ctx.stage('settings', 35, 'Applying canonical Guard setting');
+					persist_guard(enabled); persisted = true;
+					if (!enabled) {
+						ctx.stage('disable', 65, 'Atomically disabling Guard');
+						if (type(runtime.guard_control?.disable) != 'function' ||
+						    runtime.guard_control.disable() !== true)
+							errors.fail('HEALTH_FAILED');
+						protected = false;
+					}
+					ctx.stage('verify', 90, 'Verifying applied Guard state');
+					exact_guard(enabled);
+					ctx.stage('ready', 100, 'Guard transition complete');
+					return { enabled, guard_preserved: enabled };
+				}
+				catch (error) {
+					failure = errors.normalize(error).code;
+					if (enabled) {
+						// Preserve canonical repair intent even when protection could not be
+						// established; any successful protection remains installed.
+						if (!persisted) try { persist_guard(true); } catch (intent_error) {}
+						if (protected) try { exact_protection(); } catch (protect_error) { protected = false; }
+					}
+					else {
+						// OFF is never allowed to fail open. Restore canonical ON first,
+						// reinstall exact protection, then prove both before returning failure.
+						try { persist_guard(true); }
+						catch (rollback_error) { failure = 'INTERNAL'; }
+						// Physical fail-closed recovery is independent from UCI recovery:
+						// a broken config store must never skip emergency protection.
+						try { exact_protection(); protected = true; }
+						catch (protect_error) { protected = false; failure = 'INTERNAL'; }
+						if (protected)
+							try { exact_guard(true); }
+							catch (verify_error) { failure = 'INTERNAL'; }
+					}
+					guard_failure(protected, enabled ? 'enable-transition' : 'disable-transition');
+					errors.fail(failure);
+				}
+			});
+		};
 		let app = modules.application.create({
 			operations: operation_manager,
 			settings: settings_domain,
@@ -529,44 +613,11 @@ export function compose(runtime, overrides) {
 			devices: devices_domain,
 			notifications: notifications_domain,
 			telegram: telegram_domain,
+			guard: { transition: guard_transition },
 			clock: runtime.clock
 		});
 		if (type(desired.telegram) == 'object') {
 			let unavailable = () => errors.fail('HEALTH_FAILED');
-			function guard_transition(enabled, source) {
-				if (type(enabled) != 'bool') errors.fail('INVALID_ARGUMENT');
-				return operation_manager.submit('guard.transition', source, { enabled }, (ctx) => {
-					let before = settings_domain.get(), persisted = false;
-					try {
-						ctx.stage('settings', 20, 'Applying Guard setting');
-						let saved = settings_domain.set({ guard: { enabled } });
-						persisted = true;
-						state_model.set_desired(saved);
-						ctx.stage('reconcile', 60, 'Reconciling protected routing');
-						service_adapter.restart_service('config.yaml');
-						let ready = service_adapter.wait_ready(runtime.clock.now() + 5000,
-							'config.yaml', { tun_required: saved?.core?.proxy_mode == 'tun',
-								guard_enabled: enabled });
-						if (ready?.ok !== true) errors.fail('HEALTH_FAILED');
-						ctx.stage('ready', 100, 'Guard transition complete');
-						return { enabled, guard_preserved: true };
-					}
-					catch (error) {
-						let failure = errors.normalize(error).code;
-						// Enabling Guard fails closed: keep the desired protection enabled so
-						// autonomous repair cannot reopen direct traffic. Disabling rolls back.
-						if (persisted && !enabled) {
-							try {
-								let restored = settings_domain.set(before);
-								state_model.set_desired(restored);
-								service_adapter.restart_service('config.yaml');
-							}
-							catch (rollback_error) { failure = 'INTERNAL'; }
-						}
-						errors.fail(failure);
-					}
-				});
-			};
 			let subscription_domain = modules.subscription.create({
 				runtime, http: modules.http, operations: operation_manager,
 				config: configuration, settings: settings_domain

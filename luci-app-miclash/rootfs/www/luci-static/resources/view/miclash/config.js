@@ -337,7 +337,7 @@ const detectPackageManager = view_miclash_package.detectPackageManager;
 const getNetworkInterfaces = view_miclash_settings_model.getNetworkInterfaces;
 const transformProxyMode = view_miclash_settings_model.transformProxyMode;
 const detectCurrentProxyMode = view_miclash_settings_model.detectCurrentProxyMode;
-const loadOperationalSettings = view_miclash_settings_model.loadOperationalSettings;
+const loadLegacyOperationalSettings = view_miclash_settings_model.loadOperationalSettings;
 const loadInterfacesByMode = view_miclash_settings_model.loadInterfacesByMode;
 const detectLanBridge = view_miclash_settings_model.detectLanBridge;
 const detectWanInterface = view_miclash_settings_model.detectWanInterface;
@@ -353,6 +353,60 @@ const tryDecodeBase64 = view_miclash_subscription.tryDecodeBase64;
 const looksLikeUriSubscription = view_miclash_subscription.looksLikeUriSubscription;
 const looksLikeBase64Blob = view_miclash_subscription.looksLikeBase64Blob;
 const looksLikeYamlConfig = view_miclash_subscription.looksLikeYamlConfig;
+
+async function typedSettings() {
+	const owned = !configApi;
+	const api = configApi || view_miclash_api.create();
+	try { return await api.settings_get(); }
+	finally { if (owned) api.destroy(); }
+}
+
+async function loadOperationalSettings() {
+	const [ legacy, typed ] = await Promise.all([
+		loadLegacyOperationalSettings(),
+		typedSettings()
+	]);
+	legacy.internetOnlyMiclash = !!(typed.guard && typed.guard.enabled);
+	return legacy;
+}
+
+function operationFailure(record) {
+	const error = new Error(record?.error?.message || _('Guard transition failed.'));
+	error.code = record?.error?.code || 'HEALTH_FAILED';
+	return error;
+}
+
+function awaitTypedOperation(reply, message) {
+	const id = reply?.operation_id;
+	if (!configApi || typeof configApi.watchOperation !== 'function' || typeof id !== 'string' || !id.length)
+		return Promise.reject(new Error(_('Invalid operation response.')));
+	return new Promise((resolve, reject) => {
+		let done = false, cancel = null;
+		const finish = (callback, value) => {
+			if (done) return;
+			done = true;
+			if (typeof cancel === 'function') cancel();
+			callback(value);
+		};
+		cancel = configApi.watchOperation(id, (record, error) => {
+			if (error) return finish(reject, error);
+			if (record?.stage) setOperationStatus('running', message, { detail: record.stage });
+			if (record?.state === 'success') finish(resolve, record);
+			else if (record?.state === 'failure' || record?.state === 'interrupted')
+				finish(reject, operationFailure(record));
+		});
+	});
+}
+
+async function refreshCanonicalGuardState() {
+	const typed = await typedSettings();
+	const enabled = !!(typed.guard && typed.guard.enabled);
+	if (appState.settings) appState.settings.internetOnlyMiclash = enabled;
+	const checkbox = pageRoot?.querySelector('#sbox-internet-only-miclash');
+	if (checkbox) checkbox.checked = enabled;
+	updateHeaderAndControlDom();
+	return enabled;
+}
 
 async function getVersions() {
 	const info = { app: 'unknown', clash: 'unknown' };
@@ -1178,13 +1232,6 @@ async function restartOrReloadServiceOrThrow(action, options) {
 	return runMiClashServiceJob(action, message);
 }
 
-async function refreshGuardRulesOrThrow() {
-	const result = await fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh']);
-	if (result.code !== 0) {
-		throw new Error(String(result.stderr || result.stdout || _('Failed to refresh protection rules.')).trim());
-	}
-}
-
 function notifyDetailedError(title, detail) {
 	ui.addNotification(null, E('div', {}, [
 		E('p', String(title || '')),
@@ -1423,7 +1470,6 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			autoDetectLan,
 			autoDetectWan,
 			blockQuic,
-			internetOnlyMiclash,
 			useTmpfsRules,
 			interfaces,
 			enableHwid,
@@ -1434,12 +1480,21 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			autoUpdateConfig,
 			autoUpdateIntervalHours
 		);
+		const typed = await configApi.settings_get();
+		if (!!(typed.guard && typed.guard.enabled) !== !!internetOnlyMiclash) {
+			setOperationStatus('running', _('Applying protection setting...'));
+			await awaitTypedOperation(
+				await configApi.guard_transition(!!internetOnlyMiclash, 'luci'),
+				_('Applying protection setting...')
+			);
+		}
 		if (!opts.silent) {
 			notify('info', _('Settings saved.'));
 		}
 		await logUiAction('info', 'Settings saved');
 		return true;
 	} catch (e) {
+		try { await refreshCanonicalGuardState(); } catch (refreshError) {}
 		await logUiAction('err', 'Failed to save settings: ' + e.message);
 		notify('error', _('Failed to save settings: %s').format(e.message));
 		return false;
@@ -1484,7 +1539,7 @@ async function switchProxyModeFromHeader(targetMode) {
 		setOperationStatus('running', _('Restarting Clash service...'));
 		await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
 	} else {
-		await refreshGuardRulesOrThrow();
+		await refreshCanonicalGuardState();
 	}
 
 	appState.settings = await loadOperationalSettings();
@@ -2601,7 +2656,7 @@ function bindSettingsPaneEvents() {
 					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
 				}
 			} else {
-				await refreshGuardRulesOrThrow();
+				await refreshCanonicalGuardState();
 				setOperationSuccess(_('Settings saved.'));
 				notify('info', _('Settings saved.'));
 			}

@@ -153,6 +153,11 @@ export function create(dependencies) {
 				arguments.source);
 		},
 		settings_get: () => dependencies.settings.get(),
+		guard_transition: (enabled, source) => {
+			writable();
+			if (type(dependencies.guard?.transition) != 'function') errors.fail('HEALTH_FAILED');
+			return dependencies.guard.transition(enabled, source);
+		},
 		settings_set: (patch, source) => {
 			writable();
 			patch = dependencies.settings.validate(patch);

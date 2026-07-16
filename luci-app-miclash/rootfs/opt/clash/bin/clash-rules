@@ -1611,6 +1611,11 @@ guard_verify_on() {
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc verify-bootstrap-on
 }
 
+guard_verify_protected() {
+	verify_guard_rules || return 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc verify-bootstrap-on
+}
+
 guard_verify_off() {
 	load_all_settings_once
 	[ "$INTERNET_ONLY_MICLASH" = "false" ] || return 1
@@ -3726,7 +3731,7 @@ stop() {
 }
 
 case "$1" in
-	package_guard_start|package_guard_verify|package_cleanup|guard_verify_on|guard_verify_off|validate_policy|validate_forward|health) ;;
+	package_guard_start|package_guard_verify|package_cleanup|guard_verify_on|guard_verify_off|guard_verify_protected|validate_policy|validate_forward|health) ;;
 	*) routing_mutation_allowed || exit 1 ;;
 esac
 
@@ -3777,6 +3782,9 @@ case "$1" in
 		;;
 	guard_verify_on)
 		guard_verify_on
+		;;
+	guard_verify_protected)
+		guard_verify_protected
 		;;
 	guard_verify_off)
 		guard_verify_off
@@ -3853,7 +3861,7 @@ case "$1" in
         exit $?
         ;;
     *)
-		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|guard_finalize|guard_verify_on|guard_verify_off|package_guard_start|package_guard_verify|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
+		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|guard_finalize|guard_verify_on|guard_verify_off|guard_verify_protected|package_guard_start|package_guard_verify|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
         exit 1
         ;;
 esac

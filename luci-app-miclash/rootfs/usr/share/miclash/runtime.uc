@@ -543,6 +543,18 @@ function readiness_observers(runtime) {
 	};
 };
 
+function guard_control_adapter(runtime) {
+	function action(name) {
+		return runtime.process.run({ command: '/opt/clash/bin/clash-rules',
+			args: [ name ], timeout_ms: 15000 }).code === 0;
+	};
+	return {
+		protect: () => action('guard_start') && action('guard_verify_protected'),
+		disable: () => action('guard_finalize') && action('guard_verify_off'),
+		verify: (enabled) => runtime.observers.guard(enabled)?.ready === true
+	};
+};
+
 function mutation_identity(filesystem) {
 	let boot = trim(filesystem.readfile('/proc/sys/kernel/random/boot_id') ?? '');
 	let stat = filesystem.readfile('/proc/self/stat') ?? '';
@@ -599,6 +611,7 @@ export function create(overrides) {
 		reconcile: null,
 		reboot: null,
 		rulesets: null,
+		guard_control: null,
 		mutation_lock_self: null,
 		core_available: false,
 		app_version: '0.9.2',
@@ -632,6 +645,8 @@ export function create(overrides) {
 		...readiness_observers(runtime),
 		...(runtime.observers ?? {})
 	};
+	if (runtime.guard_control == null)
+		runtime.guard_control = guard_control_adapter(runtime);
 	if (runtime.mutation_lock_self == null)
 		runtime.mutation_lock_self = mutation_identity(runtime.fs);
 	if (overrides?.core_available == null)

@@ -2062,3 +2062,9 @@ msgstr "Укажите корректное время расписания UTC.
 
 msgid "Schedule anchor (UTC)"
 msgstr "Опорное время расписания (UTC)"
+
+msgid "Applying protection setting..."
+msgstr "Применение настройки защиты..."
+
+msgid "Guard transition failed."
+msgstr "Не удалось изменить состояние защиты."

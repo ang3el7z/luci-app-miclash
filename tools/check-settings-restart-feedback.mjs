@@ -45,11 +45,16 @@ check(settingsSaveBlock.includes('if (wasRunning)') &&
 	'Settings save must restart only when MiClash was already running.');
 check(/await restartOrReloadServiceOrThrow\('restart'(?:,|\))/.test(settingsSaveBlock),
 	'Settings save must still restart the Clash service.');
-check(source.includes('async function refreshGuardRulesOrThrow()') &&
-	source.includes("fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh'])"),
-	'Settings save must expose a guard_refresh helper for live protection rules.');
-check(settingsSaveBlock.includes('await refreshGuardRulesOrThrow();'),
-	'Settings save must refresh guard rules without starting a stopped service.');
+check(source.includes('configApi.guard_transition') && source.includes('awaitTypedOperation'),
+	'Settings save must use and await the typed Guard transition backend.');
+check(!source.includes("fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh'])"),
+	'Main LuCI settings must not execute the Guard backend directly.');
+check(!settingsModel.includes("case 'INTERNET_ONLY_MICLASH'") &&
+	!settingsModel.includes('settings.INTERNET_ONLY_MICLASH ='),
+	'Operational settings model must not read or write the legacy Guard key.');
+check(source.includes('settings_get') && source.includes('typed.guard') &&
+	source.includes('internetOnlyMiclash'),
+	'Main LuCI settings must display canonical typed Guard state.');
 check(proxyModeBlock.includes('const wasRunning = await getServiceStatus();'),
 	'Proxy mode switch must check whether MiClash is running before restart.');
 check(proxyModeBlock.includes('if (wasRunning)') &&

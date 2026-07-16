@@ -6,6 +6,7 @@ import { join, relative } from 'node:path';
 const fixturePath = 'tests/fixtures/api/methods.json';
 const uiPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/api.js';
 const backendPath = 'luci-app-miclash/rootfs/usr/share/miclash/api.uc';
+const aclPath = 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json';
 assert.ok(existsSync(uiPath), `missing ${uiPath}`);
 
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
@@ -13,6 +14,13 @@ const names = fixture.methods.map((entry) => entry.name);
 assert.equal(new Set(names).size, names.length, 'canonical methods must be unique');
 const ui = readFileSync(uiPath, 'utf8');
 const backend = readFileSync(backendPath, 'utf8');
+const acl = JSON.parse(readFileSync(aclPath, 'utf8'))['luci-app-miclash'];
+const readMethods = acl?.read?.ubus?.miclash || [];
+const writeMethods = acl?.write?.ubus?.miclash || [];
+assert.ok(!readMethods.includes('*'), 'read-only LuCI ACL must not expose mutating MiClash methods');
+assert.ok(readMethods.includes('settings_get') && readMethods.includes('operation_get'));
+assert.ok(writeMethods.includes('*') || writeMethods.includes('guard_transition'),
+	'write LuCI ACL must permit typed Guard transitions');
 const declared = [ ...ui.matchAll(/\{ name: '([a-z0-9_]+)', params: \[([^\]]*)\], operation: (true|false) \}/g) ]
 	.map((match) => ({
 		name: match[1],
@@ -45,7 +53,7 @@ const legacy = {
 		"await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-service', ['clear-status']), null);",
 		"const result = await fs.exec('/opt/clash/bin/miclash-update', ['job', '--token', token, kind].concat(args || []));",
 		"const result = await fs.exec('/opt/clash/bin/miclash-service', ['job', '--token', token, action]);",
-		"const result = await fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh']);"
+
 	],
 	'logs.js': [
 		"const all = await fs.exec('/sbin/logread', []);",

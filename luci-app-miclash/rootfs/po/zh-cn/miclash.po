@@ -2006,3 +2006,9 @@ msgstr "请选择有效的 UTC 计划时间。"
 
 msgid "Schedule anchor (UTC)"
 msgstr "计划基准时间（UTC）"
+
+msgid "Applying protection setting..."
+msgstr "正在应用保护设置..."
+
+msgid "Guard transition failed."
+msgstr "无法切换保护状态。"

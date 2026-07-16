@@ -217,6 +217,10 @@ let app = {
 			state_model.set_desired(settings_domain.set(patch));
 		});
 	},
+	guard_transition: (enabled, source) => {
+		application_writable();
+		return operations.submit('guard.transition', source, { enabled }, () => ({ enabled }));
+	},
 	telegram_status: () => ({
 		running: true, configured: true, token: 'telegram-secret', user_id: '42'
 	}),
@@ -236,7 +240,7 @@ json_equal(names, sort([
 	'service_start', 'service_stop', 'service_reload', 'service_restart',
 	'config_list', 'config_read', 'config_read_draft', 'config_save_draft',
 	'config_validate', 'config_apply',
-	'config_external_adopt', 'settings_get', 'settings_set',
+	'config_external_adopt', 'settings_get', 'settings_set', 'guard_transition',
 	'history_list', 'history_diff', 'history_open_draft', 'history_restore',
 	'subscription_get', 'subscription_set', 'subscription_update', 'subscription_probe',
 	'update_release', 'update_miclash', 'update_mihomo', 'update_rollback_mihomo',
@@ -278,6 +282,7 @@ json_equal(methods.config_read_draft.args, { profile: '' });
 json_equal(methods.config_save_draft.args, { profile: '', content: '', source: '' });
 json_equal(methods.history_open_draft.args, { profile: '', revision: '', source: '' });
 json_equal(methods.settings_set.args, { settings: {}, source: '' });
+json_equal(methods.guard_transition.args, { enabled: false, source: '' });
 json_equal(methods.telegram_status.args, {});
 json_equal(methods.telegram_settings.args, {});
 	json_equal(methods.telegram_test.args, {});
@@ -368,13 +373,15 @@ assert_invalid('operation_get', {});
 assert_invalid('operation_get', { operation_id: '../bad' });
 assert_invalid('operation_list', { state: 'raw-state' });
 assert_invalid('settings_set', { settings: { core: { proxy_mode: 'bad' } } });
+assert_invalid('guard_transition', { enabled: 'true' });
 
 // Draining rejects every new mutation with BUSY while reads remain available.
 api.set_draining(app, true);
 for (let name in [ 'service_start', 'service_stop', 'service_reload', 'service_restart',
-	'config_save_draft', 'config_validate', 'config_apply', 'settings_set' ]) {
+	'config_save_draft', 'config_validate', 'config_apply', 'settings_set', 'guard_transition' ]) {
 	let args = name == 'settings_set' ? { settings: {} } :
-		(index(name, 'config_') == 0 ? { profile: 'config.yaml', content: 'mode: rule\n' } : {});
+		(name == 'guard_transition' ? { enabled: true } :
+		(index(name, 'config_') == 0 ? { profile: 'config.yaml', content: 'mode: rule\n' } : {}));
 	assert_equal(invoke(name, args).error.code, 'BUSY', name);
 }
 assert_true(invoke('status').desired != null);
@@ -400,6 +407,7 @@ function valid_contract_arguments(entry) {
 		operation_id: 'op-valid', state: 'queued', kind: 'service.start', source: 'luci',
 		arguments: { profile: 'config.yaml' }, profile: 'config.yaml', content: 'mode: rule\n',
 		settings: {}, limit: 10, from_revision: 'rev-from', to_revision: 'rev-to',
+		enabled: true,
 		revision: 'rev-one', url: 'https://example.test/subscription', channel: 'stable',
 		generation: 'ng_00000000000000000000000000000001', cursor: 0,
 		target: 'example.test', device: 'AA:BB:CC:DD:EE:FF', interface: 'lan', options: {},
@@ -427,6 +435,7 @@ function expected_delegate_arguments(name, arguments) {
 	if (name == 'config_save_draft' || name == 'config_validate' || name == 'config_apply')
 		return [ arguments.profile, arguments.content, arguments.source ];
 	if (name == 'settings_set') return [ arguments.settings, arguments.source ];
+	if (name == 'guard_transition') return [ arguments.enabled, arguments.source ];
 	return [ arguments ];
 };
 let delegation = [], contract_sequence = 100;

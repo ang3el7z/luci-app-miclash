@@ -529,7 +529,7 @@ export function method_table(app, transfers) {
 		'service_start', 'service_stop', 'service_reload', 'service_restart',
 		'config_list', 'config_read', 'config_read_draft', 'config_save_draft',
 		'config_validate', 'config_apply',
-		'settings_get', 'settings_set', 'set_draining'
+		'settings_get', 'settings_set', 'guard_transition', 'set_draining'
 	]) if (type(app?.[name]) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 
@@ -660,6 +660,12 @@ export function method_table(app, transfers) {
 				settings: { type: 'object', required: true }, source: { type: 'string' }
 			});
 			return operation_reply(app.settings_set(arguments.settings, source(arguments)));
+		}),
+		guard_transition: method({ enabled: false, source: '' }, (arguments) => {
+			exact(arguments, {
+				enabled: { type: 'bool', required: true }, source: { type: 'string' }
+			});
+			return operation_reply(app.guard_transition(arguments.enabled, source(arguments)));
 		}),
 		history_list: method({ profile: '', limit: 0 }, (arguments) => {
 			exact(arguments, { profile: { type: 'string' }, limit: { type: 'int' } });
