@@ -13,6 +13,7 @@ import * as memory from 'miclash.memory';
 import * as backup from 'miclash.backup';
 import * as devices from 'miclash.devices';
 import * as notify from 'miclash.notify';
+import * as telegram from 'miclash.telegram';
 import * as mutation_lock from 'miclash.mutation_lock';
 import * as reconcile_adapter from 'miclash.reconcile-adapter';
 
@@ -71,7 +72,7 @@ export function compose(runtime, overrides) {
 
 	let modules = {
 		operations, settings, storage, history, diff, service, config, state, application,
-		api, memory, backup, devices, notify, mutation_lock,
+		api, memory, backup, devices, notify, telegram, mutation_lock,
 		reconcile_adapter,
 		...(overrides ?? {})
 	};
@@ -119,7 +120,26 @@ export function compose(runtime, overrides) {
 		let notification_settings = clone(desired.notifications);
 		let notifier = modules.notify.create(runtime, notification_config(notification_settings));
 		let producer = modules.notify.producer(runtime);
+		let telegram_controller = null, telegram_channel_unsubscribe = null;
+		let operation_unsubscribe = operation_manager.subscribe((record) => {
+			if (record?.state != 'success' && record?.state != 'failure' &&
+			    record?.state != 'interrupted') return;
+			try { notifier.emit(producer.operation(record)); } catch (error) {}
+		});
 		let notifications_closed = false;
+		function sync_telegram_channel() {
+			if (telegram_channel_unsubscribe != null) {
+				try { telegram_channel_unsubscribe(); } catch (error) {}
+				telegram_channel_unsubscribe = null;
+			}
+			if (notifications_closed || telegram_controller == null ||
+			    index(notification_settings.channels, 'telegram') < 0)
+				return false;
+			let channel = modules.notify.telegram_channel(telegram_controller);
+			channel.types = clone(notification_settings.events);
+			telegram_channel_unsubscribe = notifier.subscribe(channel);
+			return true;
+		};
 		function prepare_notification_settings(next) {
 			if (notifications_closed) errors.fail('HEALTH_FAILED');
 			let configured = clone(next);
@@ -130,9 +150,14 @@ export function compose(runtime, overrides) {
 		};
 		let notifications_domain = {
 			settings: () => clone(notification_settings),
+			list: (arguments) => {
+				if (notifications_closed) errors.fail('HEALTH_FAILED');
+				return notifier.list(arguments);
+			},
 			test: (channel) => {
 				if (notifications_closed) errors.fail('HEALTH_FAILED');
-				if (channel == 'telegram') return false;
+				if (channel == 'telegram')
+					return telegram_controller != null && telegram_controller.test() === true;
 				return notifier.test(channel) === true;
 			},
 			prepare: prepare_notification_settings,
@@ -145,14 +170,47 @@ export function compose(runtime, overrides) {
 				else
 					notifier = modules.notify.create(runtime, prepared.notifier);
 				notification_settings = clone(prepared.settings);
+				sync_telegram_channel();
 				return clone(notification_settings);
 			},
 			close: () => {
 				if (notifications_closed) return false;
-				notifications_closed = true; notifier = null; return true;
+				notifications_closed = true;
+				if (operation_unsubscribe != null) {
+					operation_unsubscribe(); operation_unsubscribe = null;
+				}
+				if (telegram_channel_unsubscribe != null) {
+					telegram_channel_unsubscribe(); telegram_channel_unsubscribe = null;
+				}
+				notifier = null; return true;
 			}
 		};
 		push(close_domains, notifications_domain);
+		let telegram_settings = clone(desired.telegram ?? {
+			enabled: false, token: '', user_id: ''
+		});
+		function prepare_telegram_settings(next) {
+			if (type(next) != 'object' || type(next.enabled) != 'bool')
+				errors.fail('INVALID_ARGUMENT');
+			return clone(next);
+		};
+		let telegram_domain = {
+			status: () => telegram_controller == null ? {
+				running: false, enabled: telegram_settings.enabled, configured: false
+			} : telegram_controller.status(),
+			settings: () => clone(telegram_settings),
+			test: () => telegram_controller != null && telegram_controller.test() === true,
+			prepare: prepare_telegram_settings,
+			configure: (next) => {
+				next = prepare_telegram_settings(next);
+				telegram_settings = clone(next);
+				if (telegram_controller == null) return clone(telegram_settings);
+				let running = telegram_controller.status().running === true;
+				if (next.enabled && !running) telegram_controller.start();
+				if (!next.enabled && running) telegram_controller.stop();
+				return clone(telegram_settings);
+			}
+		};
 
 		let guard = modules.memory.create(runtime, service_adapter, operation_manager, (event) => {
 			if (notifications_closed) return false;
@@ -262,8 +320,49 @@ export function compose(runtime, overrides) {
 			backup: backup_domain,
 			devices: devices_domain,
 			notifications: notifications_domain,
+			telegram: telegram_domain,
 			clock: runtime.clock
 		});
+		if (type(desired.telegram) == 'object') {
+			let unavailable = () => errors.fail('HEALTH_FAILED');
+			let telegram_app = {
+				runtime, http: runtime.http, operations: operation_manager,
+				logger: runtime.logger, audit: runtime.audit,
+				settings_get: app.settings_get,
+				status: app.status, health: app.health,
+				memory_status: app.memory_status,
+				diagnostics_summary: () => ({ status: app.status(), health: app.health(),
+					memory: app.memory_status() }),
+				logs_read: () => [],
+				service_start: app.service_start, service_stop: app.service_stop,
+				service_restart: app.service_restart, service_reload: app.service_reload,
+				reboot: type(runtime.reboot) == 'function' ? runtime.reboot : unavailable,
+				subscription_update: type(app.subscription_update) == 'function'
+					? app.subscription_update : unavailable,
+				update_miclash: type(app.update_miclash) == 'function'
+					? app.update_miclash : unavailable,
+				update_mihomo: type(app.update_mihomo) == 'function'
+					? app.update_mihomo : unavailable,
+				settings_set: app.settings_set,
+				backup_create: (source) => app.backup_create({
+					options: { include_secrets: false }, source
+				})
+			};
+			telegram_controller = modules.telegram.create(telegram_app);
+			sync_telegram_channel();
+			telegram_domain.configure(telegram_settings);
+			let telegram_closed = false;
+			push(close_domains, { close: () => {
+				if (telegram_closed) return false;
+				telegram_closed = true;
+				if (telegram_channel_unsubscribe != null) {
+					telegram_channel_unsubscribe(); telegram_channel_unsubscribe = null;
+				}
+				telegram_controller.stop();
+				telegram_controller = null;
+				return true;
+			} });
+		}
 		transfers = modules.api.create_transfers({
 			runtime,
 			uploads: { backup: (staged) => backup_domain.import(staged) },

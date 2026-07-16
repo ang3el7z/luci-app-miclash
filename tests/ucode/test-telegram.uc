@@ -528,6 +528,7 @@ let notify_env = environment({ send_failure: true });
 let notify_controller = telegram.create(notify_env.app);
 let runtime = {
 	clock: notify_env.clock,
+	random: notify_env.app.runtime.random,
 	process: fakes.process(),
 	ubus: { connect: () => ({ send: () => true }) }
 };

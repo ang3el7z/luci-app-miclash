@@ -6,6 +6,7 @@ const paths = {
 	settings: root + 'settings-panels.js',
 	devices: root + 'devices-panel.js',
 	backup: root + 'backup-panel.js',
+	notifications: root + 'notification-poller.js',
 	config: root + 'config.js',
 	api: root + 'api.js',
 	css: root + 'style.css'
@@ -16,6 +17,7 @@ for (const [name, path] of Object.entries(paths))
 const settings = readFileSync(paths.settings, 'utf8');
 const devices = readFileSync(paths.devices, 'utf8');
 const backup = readFileSync(paths.backup, 'utf8');
+const notificationPoller = readFileSync(paths.notifications, 'utf8');
 const config = readFileSync(paths.config, 'utf8');
 const api = readFileSync(paths.api, 'utf8');
 const css = readFileSync(paths.css, 'utf8');
@@ -58,7 +60,8 @@ assert.match(backup, /type[^\n]*file/i, 'backup import lacks a file input');
 assert.match(backup, /warning|Warning/i, 'include-secrets warning is missing');
 
 for (const token of [ 'view.miclash.settings-panels', 'view.miclash.devices-panel',
-	'view.miclash.backup-panel', 'managementOwner', 'sbox-management-panels' ])
+	'view.miclash.backup-panel', 'view.miclash.notification-poller', 'managementOwner',
+	'notificationOwner', 'sbox-management-panels' ])
 	assert.match(config, new RegExp(token), `settings integration missing ${token}`);
 assert.match(css, /sbox-management-grid/);
 assert.match(css, /@media[\s\S]*max-width:[\s\S]*sbox-management-grid/,
@@ -68,6 +71,10 @@ assert.match(api, /devices_policy_delete[^\n]*policy_id[^\n]*expected_revision/,
 	'device delete transport does not match the domain CAS contract');
 assert.doesNotMatch(config, /id="sbox-memory-guard"|id="sbox-auto-hide-notifications"|miclash-memory-guard[^\n]*sync/,
 	'legacy Settings form still owns Memory Guard or notification controls');
+assert.doesNotMatch(config, /settings\.autoHideNotifications/,
+	'notification toasts still read the removed legacy settings owner');
+assert.match(config, /notificationAutoHide/,
+	'notification toasts do not consume typed notifications.auto_hide state');
 assert.match(api, /devices_timezones/, 'typed timezone allowlist method is missing');
 
 const identity = (value) => String(value);
@@ -146,7 +153,7 @@ const dynamicLoad = (source) => new Function('ui', 'E', '_', 'document', 'window
 	uiMock, E, identity, documentMock, windowMock);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-const settingsCalls = [], settingsErrors = [];
+const settingsCalls = [], settingsErrors = [], autoHideChanges = [];
 let settingsFailNext = false, notificationSent = true;
 const settingsApi = {
 	async settings_get() { if (settingsFailNext) { settingsFailNext = false; throw new Error('transient'); }
@@ -165,8 +172,11 @@ const settingsApi = {
 	destroy() { settingsCalls.push([ 'destroy' ]); }
 };
 const settingsPanel = dynamicLoad(settings).create({ api: settingsApi, document: documentMock, window: windowMock,
-	onError(error) { settingsErrors.push(error); } });
+	onError(error) { settingsErrors.push(error); },
+	onNotificationSettings(value) { autoHideChanges.push(value); } });
 const settingsHost = new MiniNode('div'); settingsPanel.mount(settingsHost); await tick();
+assert.equal(autoHideChanges.at(-1)?.auto_hide, true,
+	'typed notification auto_hide state was not published to the page owner');
 assert.equal(settingsHost.querySelector('#sbox-telegram-token').value, '', 'stored Telegram token entered the DOM input');
 assert.equal(settingsHost.querySelector('#sbox-telegram-user-id').value, '9007199254740993123456789');
 assert.equal(settingsHost.querySelector('.sbox-management-expert').getAttribute('open'), null,
@@ -196,6 +206,42 @@ assert.match(String(settingsErrors.at(-1)?.message || ''), /not sent/i,
 settingsPanel.destroy();
 assert.ok(settingsCalls.some((call) => call[0] === 'destroy'));
 assert.equal(Array.from(timers).length, 0, 'destroy left a settings poll timer behind');
+
+const notificationCalls = [], notificationToasts = [];
+let notificationPage = 0;
+const notificationApi = {
+	async notificationEvents(generation, cursor, limit) {
+		notificationCalls.push([ generation, cursor, limit ]);
+		if (notificationPage++ === 0) return {
+			generation: 'ng_00000000000000000000000000000001', cursor: 0,
+			stale: false, has_more: false, events: []
+		};
+		if (notificationPage === 2) return {
+			generation: 'ng_00000000000000000000000000000001', cursor: 1,
+			stale: false, has_more: false, events: [ { cursor: 1, event: {
+				type: 'subscription_outcome', severity: 'notice', component: 'subscription',
+				title: 'Subscription updated', message: 'Validated configuration is active'
+			} } ]
+		};
+		return { generation: 'ng_00000000000000000000000000000001',
+			cursor, stale: false, has_more: false, events: [] };
+	},
+	destroy() { notificationCalls.push([ 'destroy' ]); }
+};
+const poller = dynamicLoad(notificationPoller).create({ api: notificationApi,
+	document: documentMock, window: windowMock,
+	onEvent(event) { notificationToasts.push(event); } });
+poller.start(); await tick(); await tick();
+assert.equal(notificationToasts.length, 0, 'bootstrap replayed old daemon notifications as LuCI toasts');
+const notificationTimer = Array.from(timers)[0]; timers.delete(notificationTimer);
+notificationTimer.fn(); await tick(); await tick();
+assert.equal(notificationToasts.length, 1, 'one daemon event did not produce exactly one LuCI toast');
+const duplicateTimer = Array.from(timers)[0]; timers.delete(duplicateTimer);
+duplicateTimer.fn(); await tick(); await tick();
+assert.equal(notificationToasts.length, 1, 'cursor polling repeated an already consumed LuCI toast');
+poller.destroy();
+assert.ok(notificationCalls.some((call) => call[0] === 'destroy'));
+assert.equal(Array.from(timers).length, 0, 'notification poller left a lifecycle timer behind');
 
 const deviceCalls = [];
 const knownPolicy = { id: 'dp_1_0000000000000001', revision: 7, scope: 'device',

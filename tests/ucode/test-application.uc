@@ -23,7 +23,8 @@ let service = {
 let settings_value = {
 	core: { proxy_mode: 'tproxy' },
 	memory: { enabled: false, sample_interval_ms: 60000 },
-	notifications: { channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: true }
+	notifications: { channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: true },
+	telegram: { enabled: false, token: '', user_id: '' }
 };
 let validated = 0, saved = 0, fail_save = false;
 let desired = json(sprintf('%J', settings_value));
@@ -93,12 +94,21 @@ let devices = {
 let notifications = {
 	settings: () => ({ channels: [ 'syslog' ], events: [ 'failure' ] }),
 	test: (channel) => channel == 'syslog',
+	list: (arguments) => ({ generation: 'ng_00000000000000000000000000000001',
+		cursor: arguments.cursor, stale: false, events: [], has_more: false }),
 	prepare: (value) => value,
 	configure: (value) => push(management_calls, [ 'notifications.configure', value ])
 };
+let telegram = {
+	status: () => ({ running: false, configured: false }),
+	settings: () => settings_value.telegram,
+	test: () => false,
+	prepare: (value) => value,
+	configure: (value) => push(management_calls, [ 'telegram.configure', value ])
+};
 let app = application.create({
 	operations, service, settings, config, history, state, memory, backup, devices,
-	notifications, clock: { now: () => 1000 }
+	notifications, telegram, clock: { now: () => 1000 }
 });
 
 assert_equal(app.status().status, 'safe');
@@ -116,6 +126,7 @@ assert_equal(app.history_diff({ profile: 'config.yaml', from_revision: 'a', to_r
 assert_equal(app.settings_get().core.proxy_mode, 'tproxy');
 assert_equal(app.memory_status().phase, 'monitoring');
 assert_equal(app.memory_settings().sample_interval_ms, 60000);
+assert_equal(app.notifications_list({ generation: null, cursor: 0, limit: 10 }).cursor, 0);
 assert_equal(app.backup_list()[0].id, 'b-0000000000001-00000000000000000000000000000001');
 assert_equal(app.backup_inspect({ backup_id: 'i-0000000000001-00000000000000000000000000000001',
 	options: {} }).source_id, 'i-0000000000001-00000000000000000000000000000001');
@@ -226,13 +237,19 @@ let atomic_memory_domain = {
 	}
 };
 let atomic_notification_domain = {
-	settings: () => atomic_notifications, test: notifications.test,
+	settings: () => atomic_notifications, test: notifications.test, list: notifications.list,
 	prepare: (value) => { if (fail_notify_prepare) die('INVALID_ARGUMENT'); return json(sprintf('%J', value)); },
 	configure: (value) => {
 		atomic_notify_configures++;
 		if (fail_notify_configure) die('INTERNAL');
 		atomic_notifications = json(sprintf('%J', value)); return atomic_notifications;
 	}
+};
+let atomic_telegram = json(sprintf('%J', atomic_value.telegram));
+let atomic_telegram_domain = {
+	status: telegram.status, settings: () => atomic_telegram, test: telegram.test,
+	prepare: (value) => json(sprintf('%J', value)),
+	configure: (value) => { atomic_telegram = json(sprintf('%J', value)); return atomic_telegram; }
 };
 let atomic_state = {
 	snapshot: state.snapshot, health: state.health,
@@ -244,6 +261,7 @@ let atomic_state = {
 let atomic_app = application.create({
 	operations, service, settings: atomic_settings, config, history, state: atomic_state,
 	memory: atomic_memory_domain, backup, devices, notifications: atomic_notification_domain,
+	telegram: atomic_telegram_domain,
 	clock: { now: () => 1000 }
 });
 function run_last() { return submitted[length(submitted) - 1].worker({ stage: () => null }); };

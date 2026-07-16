@@ -40,7 +40,10 @@ function make_runtime(start) {
 			};
 		}
 	};
-	return { runtime: { clock, process, ubus }, clock, process, ubus, published };
+	let entropy_sequence = 0;
+	return { runtime: { clock, process, ubus,
+		random: { hex: () => sprintf('%032x', ++entropy_sequence) }
+	}, clock, process, ubus, published };
 };
 
 function settings(changes) {
@@ -982,6 +985,45 @@ for (let i = 0; i < 201; i++)
 assert_equal(length(bounded_center.history()), 200);
 assert_equal(bounded_center.history()[0].dedupe_key, 'updates/outcome/1');
 assert_equal(bounded_center.history()[199].dedupe_key, 'updates/outcome/200');
+let first_batch = bounded_center.list({ generation: null, cursor: 0, limit: 2 });
+assert_true(match(first_batch.generation, /^ng_[0-9a-f]{32}$/) != null);
+assert_equal(first_batch.stale, false);
+assert_equal(length(first_batch.events), 0);
+assert_equal(first_batch.cursor, 201);
+assert_equal(first_batch.has_more, false);
+for (let i = 201; i < 203; i++)
+	assert_equal(bounded_center.emit(make_event({
+		type: 'update_outcome', severity: 'info', component: 'updates',
+		title: 'Update outcome', message: 'Outcome ' + i,
+		dedupe_key: 'updates/outcome/' + i, occurred_at: 50000 + i,
+		context: { operation_id: 'operation-' + i, outcome: 'success' }
+	})), true);
+let second_batch = bounded_center.list({ generation: first_batch.generation,
+	cursor: first_batch.cursor, limit: 1 });
+assert_equal(second_batch.stale, false);
+assert_equal(length(second_batch.events), 1);
+assert_equal(second_batch.events[0].cursor, 202);
+assert_equal(second_batch.events[0].event.dedupe_key, 'updates/outcome/201');
+assert_equal(second_batch.cursor, 202);
+assert_equal(second_batch.has_more, true);
+let third_batch = bounded_center.list({ generation: first_batch.generation,
+	cursor: second_batch.cursor, limit: 200 });
+assert_equal(length(third_batch.events), 1);
+assert_equal(third_batch.cursor, 203);
+assert_equal(third_batch.has_more, false);
+let evicted_cursor = bounded_center.list({ generation: first_batch.generation,
+	cursor: 0, limit: 10 });
+assert_equal(evicted_cursor.stale, true);
+assert_equal(length(evicted_cursor.events), 0);
+assert_equal(evicted_cursor.cursor, 203);
+let wrong_generation = bounded_center.list({
+	generation: 'ng_ffffffffffffffffffffffffffffffff', cursor: 201, limit: 10
+});
+assert_equal(wrong_generation.stale, true);
+assert_equal(wrong_generation.generation, first_batch.generation);
+assert_equal(wrong_generation.cursor, 203);
+assert_throws(() => bounded_center.list({ generation: first_batch.generation,
+	cursor: 201, limit: 201 }), 'INVALID_ARGUMENT');
 
 // Reconfiguration is prepared before commit and preserves history, dedupe and
 // optional channel subscriptions on the same notifier instance.

@@ -115,7 +115,8 @@ let integrated_connection = {
 	publish: (name, methods) => { integration_methods = methods; return { name }; },
 	disconnect: () => { integrated_disconnects++; return true; }
 };
-let operation_sequence = 0, operation_records = {};
+let operation_sequence = 0, operation_records = {}, integrated_operation_listener = null;
+let integrated_operation_unsubscribes = 0;
 let integrated_operations = {
 	recover_interrupted: () => true,
 	submit: (kind, source, context, worker) => {
@@ -127,13 +128,18 @@ let integrated_operations = {
 		return { id };
 	},
 	get: (id) => operation_records[id] ?? null,
-	list: () => values(operation_records), subscribe: () => () => true
+	list: () => values(operation_records),
+	subscribe: (listener) => {
+		integrated_operation_listener = listener;
+		return () => { integrated_operation_unsubscribes++; return true; };
+	}
 };
 let desired = {
 	memory: { enabled: true, sample_interval_ms: 60000 },
-	notifications: { auto_hide: true, channels: [ 'syslog', 'luci' ], events: [ 'failure' ] },
+	notifications: { auto_hide: true, channels: [ 'syslog', 'luci', 'telegram' ],
+		events: [ 'failure', 'subscription_outcome' ] },
 	backup: { enabled: false, retention: 5, include_secrets: false },
-	telegram: { enabled: false, token: '', user_id: '' }
+	telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42' }
 };
 let integrated_state = {
 	snapshot: () => ({ desired }), health: () => ({ ready: true }),
@@ -149,9 +155,21 @@ let guard = {
 	},
 	reset_baseline: () => true, sample: () => true
 };
+let emitted_notifications = [], notification_channel_unsubscribes = 0;
 let notifier = {
-	emit: () => true, test: (channel) => channel == 'syslog' || channel == 'luci'
+	emit: (event) => { push(emitted_notifications, event); return true; },
+	list: (arguments) => ({ generation: 'ng_00000000000000000000000000000001',
+		cursor: arguments.cursor, stale: false,
+		events: [ { cursor: 1, event: { type: 'subscription_outcome', title: 'Updated',
+			message: 'Subscription updated', severity: 'notice' } } ], has_more: false }),
+	test: (channel) => channel == 'syslog' || channel == 'luci',
+	subscribe: (channel) => {
+		assert_equal(channel.name, 'telegram');
+		return () => { notification_channel_unsubscribes++; return true; };
+	}
 };
+let telegram_starts = 0, telegram_stops = 0, telegram_tests = 0, telegram_running = false;
+let telegram_facade = null;
 let imported_staged = null, backup_app_seen = null, devices_app_seen = null;
 let fake_transfers = null;
 let integrated_factories = {
@@ -178,7 +196,28 @@ let integrated_factories = {
 	},
 	storage: { write_json: () => true },
 	memory: { create: () => guard },
-	notify: { producer: () => ({ memory: (event) => event }), create: () => notifier },
+	notify: {
+		producer: () => ({
+			memory: (event) => event,
+			operation: (record) => ({ notification: 'operation', id: record.id,
+				kind: record.kind, state: record.state })
+		}),
+		telegram_channel: (controller) => ({
+			name: 'telegram', minimum_severity: 'info', types: [], components: [],
+			send: controller.send_event
+		}),
+		create: () => notifier
+	},
+	telegram: { create: (facade) => {
+		telegram_facade = facade;
+		return {
+			start: () => { telegram_starts++; telegram_running = true; return true; },
+			stop: () => { telegram_stops++; telegram_running = false; return true; },
+			status: () => ({ running: telegram_running, configured: true }),
+			test: () => { telegram_tests++; return true; },
+			send_event: () => true
+		};
+	} },
 	backup: {
 		list: (app) => { backup_app_seen = app; return [ { id: 'b-1700000000000-00000000000000000000000000000000' } ]; },
 		create: () => ({ id: 'b-1700000000000-00000000000000000000000000000000' }),
@@ -218,6 +257,29 @@ let integrated_runtime = {
 };
 let integrated = daemon.compose(integrated_runtime, integrated_factories);
 assert_equal(guard_settings_calls, 0);
+assert_true(telegram_facade != null);
+assert_equal(telegram_starts, 1);
+assert_equal(integration_methods.telegram_test.call({ args: {} }).sent, true);
+assert_equal(telegram_tests, 1);
+assert_true(type(integrated_operation_listener) == 'function');
+integrated_operation_listener({ id: 'subscription-finished', kind: 'subscription.update',
+	state: 'success', source: 'scheduler', context: {} });
+assert_equal(emitted_notifications[length(emitted_notifications) - 1].id,
+	'subscription-finished');
+let integration_notification_page = integration_methods.notifications_list.call({ args: {
+	generation: null, cursor: 0, limit: 10
+} });
+assert_equal(integration_notification_page.events[0].cursor, 1);
+let emitted_before_running = length(emitted_notifications);
+integrated_operation_listener({ id: 'subscription-running', kind: 'subscription.update',
+	state: 'running', source: 'scheduler', context: {} });
+assert_equal(length(emitted_notifications), emitted_before_running);
+integrated.app.settings_set({ telegram: { enabled: false } }, 'luci');
+assert_equal(telegram_stops, 1);
+assert_equal(telegram_running, false);
+integrated.app.settings_set({ telegram: { enabled: true } }, 'luci');
+assert_equal(telegram_starts, 2);
+assert_equal(telegram_running, true);
 integrated.app.settings_set({ core: { proxy_mode: 'tun' } }, 'luci');
 assert_equal(guard_settings_calls, 0);
 assert_equal(integration_methods.memory_status.call({ args: {} }).phase, 'monitoring');
@@ -233,6 +295,9 @@ assert_true(devices_app_seen.timezones.list()[0] == 'UTC');
 assert_equal(integrated.close(), true);
 assert_equal(integrated_disconnects, 1);
 assert_true(index(integrated_closes, 'transfers') >= 0);
+assert_equal(integrated_operation_unsubscribes, 1);
+assert_equal(notification_channel_unsubscribes, 1);
+assert_equal(telegram_stops, 2);
 
 // The production composition must construct every management domain and the
 // real transfer manager. Only host capabilities are substituted here.

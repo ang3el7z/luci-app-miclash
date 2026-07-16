@@ -222,6 +222,10 @@ let app = {
 	}),
 	telegram_settings: () => settings_domain.get().telegram,
 	telegram_test: () => true,
+	notifications_list: (arguments) => ({
+		generation: arguments.generation ?? 'ng_00000000000000000000000000000001',
+		cursor: arguments.cursor, stale: false, events: [], has_more: false
+	}),
 	devices_timezones: () => [ 'UTC', 'Europe/Berlin' ],
 	set_draining: (value) => application_draining = value
 };
@@ -241,7 +245,7 @@ json_equal(names, sort([
 	'backup_list', 'backup_create', 'backup_inspect', 'backup_restore',
 	'telegram_status', 'telegram_settings', 'telegram_test',
 	'devices_list', 'devices_timezones', 'devices_policy_list', 'devices_policy_set', 'devices_policy_delete',
-	'notifications_settings', 'notifications_test',
+	'notifications_settings', 'notifications_test', 'notifications_list',
 	'transfer_begin', 'transfer_write', 'transfer_read', 'transfer_finish', 'transfer_abort'
 ]));
 assert_equal(api.register(connection, app).registered, true);
@@ -276,7 +280,8 @@ json_equal(methods.history_open_draft.args, { profile: '', revision: '', source:
 json_equal(methods.settings_set.args, { settings: {}, source: '' });
 json_equal(methods.telegram_status.args, {});
 json_equal(methods.telegram_settings.args, {});
-json_equal(methods.telegram_test.args, {});
+	json_equal(methods.telegram_test.args, {});
+	json_equal(methods.notifications_list.args, { generation: '', cursor: 0, limit: 0 });
 for (let name in names) {
 	assert_equal(type(methods[name].call), 'function');
 	assert_equal(type(methods[name].args), 'object');
@@ -396,6 +401,7 @@ function valid_contract_arguments(entry) {
 		arguments: { profile: 'config.yaml' }, profile: 'config.yaml', content: 'mode: rule\n',
 		settings: {}, limit: 10, from_revision: 'rev-from', to_revision: 'rev-to',
 		revision: 'rev-one', url: 'https://example.test/subscription', channel: 'stable',
+		generation: 'ng_00000000000000000000000000000001', cursor: 0,
 		target: 'example.test', device: 'AA:BB:CC:DD:EE:FF', interface: 'lan', options: {},
 		backup_id: 'b-0000000005000-' + sprintf('%032x', 4),
 		inspection_id: 'x-0000000005000-' + sprintf('%032x', 5),

@@ -382,7 +382,8 @@ function accepts(filter, event) {
 
 function valid_runtime(runtime) {
 	return type(runtime) == 'object' && type(runtime.clock?.now) == 'function' &&
-		type(runtime.process?.run) == 'function' && type(runtime.ubus?.connect) == 'function';
+		type(runtime.process?.run) == 'function' && type(runtime.ubus?.connect) == 'function' &&
+		type(runtime.random?.hex) == 'function';
 };
 
 function validate_restoration(runtime, event) {
@@ -438,7 +439,11 @@ export function create(runtime, settings) {
 	if (!valid_runtime(runtime))
 		invalid();
 	let configured = clean_settings(settings);
-	let history = [], dedupe = {}, dedupe_order = [], active = {};
+	let generation = 'ng_' + runtime.random.hex(16);
+	if (!match(generation, /^ng_[0-9a-f]{32}$/))
+		invalid();
+	let history = [], entries = [], cursor = 0;
+	let dedupe = {}, dedupe_order = [], active = {};
 	let channels = {}, channel_order = [];
 
 	function send_syslog(event) {
@@ -515,6 +520,31 @@ export function create(runtime, settings) {
 
 	let notifier = {};
 	notifier.history = () => clone(history);
+	notifier.list = (input) => {
+		exact(input, { generation: true, cursor: true, limit: true }, 3);
+		if ((input.generation != null &&
+		    (type(input.generation) != 'string' ||
+		     !match(input.generation, /^ng_[0-9a-f]{32}$/))) ||
+		    type(input.cursor) != 'int' || input.cursor < 0 ||
+		    type(input.limit) != 'int' || input.limit < 1 || input.limit > HISTORY_LIMIT)
+			invalid();
+		let reset_cursor = length(entries) ? entries[0].cursor - 1 : cursor;
+		if (input.generation == null) {
+			if (input.cursor != 0) invalid();
+			return { generation, cursor, stale: false, events: [], has_more: false };
+		}
+		else if (input.generation != generation || input.cursor < reset_cursor ||
+		         input.cursor > cursor)
+			return { generation, cursor, stale: true, events: [], has_more: false };
+		let output = [], next_cursor = input.cursor;
+		for (let entry in entries) {
+			if (entry.cursor <= input.cursor) continue;
+			if (length(output) >= input.limit) break;
+			push(output, clone(entry)); next_cursor = entry.cursor;
+		}
+		return { generation, cursor: next_cursor, stale: false, events: output,
+			has_more: next_cursor < cursor };
+	};
 	notifier.prepare = (next) => clean_settings(next);
 	notifier.configure = (prepared) => {
 		configured = clean_settings(prepared);
@@ -579,9 +609,12 @@ export function create(runtime, settings) {
 			}
 		}
 
-		push(history, clone(event));
-		if (length(history) > HISTORY_LIMIT)
-			shift(history);
+		let stored = clone(event);
+		push(history, stored);
+		push(entries, { cursor: ++cursor, event: clone(stored) });
+		if (length(history) > HISTORY_LIMIT) {
+			shift(history); shift(entries);
+		}
 		dispatch(event);
 		return true;
 	};

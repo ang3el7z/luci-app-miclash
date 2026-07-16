@@ -52,6 +52,7 @@ const METHOD_SPECS = [
 	{ name: 'devices_policy_delete', params: ['policy_id', 'expected_revision', 'source'], operation: true },
 	{ name: 'notifications_settings', params: [], operation: false },
 	{ name: 'notifications_test', params: ['channel'], operation: false },
+	{ name: 'notifications_list', params: ['generation', 'cursor', 'limit'], operation: false },
 	{ name: 'transfer_begin', params: ['direction', 'kind', 'object_id', 'size', 'sha256', 'metadata'], operation: false },
 	{ name: 'transfer_write', params: ['transfer_id', 'seq', 'data'], operation: false },
 	{ name: 'transfer_read', params: ['transfer_id', 'seq'], operation: false },
@@ -335,7 +336,8 @@ function createClient(options) {
 		setDevicePolicy: client.devices_policy_set,
 		deleteDevicePolicy: client.devices_policy_delete,
 		notificationSettings: client.notifications_settings,
-		testNotification: client.notifications_test
+		testNotification: client.notifications_test,
+		notificationEvents: client.notifications_list
 	});
 	return client;
 }

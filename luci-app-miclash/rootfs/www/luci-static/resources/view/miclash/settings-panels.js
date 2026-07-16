@@ -102,6 +102,11 @@ function create(options) {
 	function progress(message, record) {
 		if (typeof options.onProgress === 'function') options.onProgress(message, record || null);
 	}
+	function publishNotificationSettings() {
+		if (typeof options.onNotificationSettings !== 'function') return;
+		const desired = state.desired?.notifications || {};
+		options.onNotificationSettings({ auto_hide: desired.auto_hide !== false });
+	}
 	function clearTimer() { if (timer != null) win.clearTimeout(timer); timer = null; }
 	function schedule(delay) {
 		clearTimer();
@@ -305,6 +310,7 @@ function create(options) {
 			if (destroyed || token !== generation) return;
 			state = { desired: replies[0] || {}, memory: replies[1] || {}, memorySettings: replies[2] || {},
 				telegram: replies[3] || {}, telegramSettings: replies[4] || {}, notifications: replies[5] || {} };
+			publishNotificationSettings();
 			retryMs = POLL_MS;
 			if (replaceForm || (!dirty && !busy)) paint(); else paintStatus();
 		}

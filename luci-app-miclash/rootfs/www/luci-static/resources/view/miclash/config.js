@@ -18,6 +18,7 @@
 'require view.miclash.settings-panels';
 'require view.miclash.devices-panel';
 'require view.miclash.backup-panel';
+'require view.miclash.notification-poller';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
@@ -56,6 +57,38 @@ const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
 });
+const notificationOwner = (() => {
+	let poller = null, generation = 0;
+	function destroy() {
+		generation++;
+		if (!poller) return false;
+		const owned = poller; poller = null;
+		owned.destroy();
+		return true;
+	}
+	function replace() {
+		destroy();
+		const token = ++generation;
+		const api = view_miclash_api.create();
+		poller = view_miclash_notification_poller.create({
+			api,
+			onEvent: (event) => {
+				if (token !== generation) return;
+				const severity = String(event?.severity || 'info');
+				const kind = /^(?:warning|error|critical)$/.test(severity) ? 'error' : 'info';
+				notify(kind, [ event?.title, event?.message ].filter(Boolean).join(': '));
+			},
+			onError: () => {}
+		});
+		api.notificationSettings().then((settings) => {
+			if (token === generation)
+				appState.notificationAutoHide = settings?.auto_hide !== false;
+		}).catch(() => {});
+		poller.start();
+		return poller;
+	}
+	return { replace, destroy };
+})();
 const managementOwner = (() => {
 	let panels = null;
 	function destroy() {
@@ -73,6 +106,9 @@ const managementOwner = (() => {
 			for (const factory of factories) created.push(factory.create({
 				api: view_miclash_api.create(),
 				onError: (error) => { setOperationError(error); notify('error', error?.message || error); },
+				onNotificationSettings: (settings) => {
+					appState.notificationAutoHide = settings?.auto_hide !== false;
+				},
 				onProgress: (message, operation) => setOperationStatus('running', message, {
 					detail: operation?.stage || '', context: 'management'
 				})
@@ -113,6 +149,7 @@ const appState = {
 	selectedConfigName: MAIN_CONFIG_NAME,
 	configProfiles: CONFIG_PROFILES.slice(),
 	settings: null,
+	notificationAutoHide: true,
 	interfaces: [],
 	selectedInterfaces: [],
 	detectedLan: '',
@@ -139,7 +176,7 @@ function notify(type, message) {
 	// short timeout (longer for errors so the user has time to read them).
 	// When the user turns the option off, the toast stays until they close it
 	// manually - useful for diagnosing rare issues without losing the message.
-	const autoHide = !appState.settings || appState.settings.autoHideNotifications !== false;
+	const autoHide = appState.notificationAutoHide !== false;
 	if (node && autoHide) {
 		const timeout = type === 'error' ? 10000 : 6000;
 		setTimeout(() => {
@@ -2056,7 +2093,6 @@ function buildSettingsPaneHtml() {
 		internetOnlyMiclash: false,
 		useTmpfsRules: true,
 		enableMemoryGuard: false,
-		autoHideNotifications: true,
 		autoUpdateConfig: true,
 		autoUpdateIntervalHours: '4',
 		miclashReleaseChannel: 'release',
@@ -3164,6 +3200,7 @@ return view.extend({
 	},
 
 	render: async function(data) {
+		notificationOwner.destroy();
 		managementOwner.destroy();
 		destroyConfigDraftRuntime();
 		await ensureConfigProfilesReady(data[0] || '');
@@ -3249,6 +3286,7 @@ return view.extend({
 		bindConfigEvents();
 		bindTabEvents();
 		diagnosticsOwner.replace();
+		notificationOwner.replace();
 		if (appState.activeCfgTab === 'settings') managementOwner.replace();
 		renderSettingsPane();
 		updateHeaderAndControlDom();
@@ -3283,6 +3321,7 @@ return view.extend({
 
 	unload: function() {
 		diagnosticsOwner.destroy();
+		notificationOwner.destroy();
 		managementOwner.destroy();
 		destroyConfigDraftRuntime();
 	}

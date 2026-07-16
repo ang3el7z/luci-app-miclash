@@ -50,6 +50,7 @@
     { "name": "devices_policy_delete", "params": ["policy_id", "expected_revision", "source"], "operation": true },
     { "name": "notifications_settings", "params": [], "operation": false },
     { "name": "notifications_test", "params": ["channel"], "operation": false },
+    { "name": "notifications_list", "params": ["generation", "cursor", "limit"], "operation": false },
     { "name": "transfer_begin", "params": ["direction", "kind", "object_id", "size", "sha256", "metadata"], "operation": false },
     { "name": "transfer_write", "params": ["transfer_id", "seq", "data"], "operation": false },
     { "name": "transfer_read", "params": ["transfer_id", "seq"], "operation": false },

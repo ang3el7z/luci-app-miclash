@@ -59,7 +59,12 @@ export function create(dependencies) {
 	    type(dependencies?.devices?.timezones) != 'function' ||
 	    type(dependencies?.notifications?.settings) != 'function' ||
 	    type(dependencies?.notifications?.test) != 'function' ||
+	    type(dependencies?.notifications?.list) != 'function' ||
 	    type(dependencies?.notifications?.configure) != 'function' ||
+	    type(dependencies?.telegram?.status) != 'function' ||
+	    type(dependencies?.telegram?.settings) != 'function' ||
+	    type(dependencies?.telegram?.test) != 'function' ||
+	    type(dependencies?.telegram?.configure) != 'function' ||
 	    type(dependencies?.clock?.now) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 
@@ -155,22 +160,32 @@ export function create(dependencies) {
 				let wanted = effective(before, patch);
 				let memory_changed = !same(before.memory, wanted.memory);
 				let notifications_changed = !same(before.notifications, wanted.notifications);
+				let telegram_changed = !same(before.telegram, wanted.telegram);
 				let prepare_memory = type(dependencies.memory.prepare) == 'function'
 					? dependencies.memory.prepare : clone;
 				let prepare_notifications = type(dependencies.notifications.prepare) == 'function'
 					? dependencies.notifications.prepare : clone;
+				let prepare_telegram = type(dependencies.telegram.prepare) == 'function'
+					? dependencies.telegram.prepare : clone;
 				let next_memory = memory_changed ? prepare_memory(wanted.memory) : null;
 				let next_notifications = notifications_changed
 					? prepare_notifications(wanted.notifications) : null;
+				let next_telegram = telegram_changed ? prepare_telegram(wanted.telegram) : null;
 				let prior_notifications = notifications_changed
 					? prepare_notifications(before.notifications) : null;
+				let prior_telegram = telegram_changed ? prepare_telegram(before.telegram) : null;
 				ctx.stage('settings', 20, '');
-				let persisted = false, notifications_attempted = false, failure = null;
+				let persisted = false, notifications_attempted = false,
+					telegram_attempted = false, failure = null;
 				try {
 					let saved = dependencies.settings.set(patch);
 					persisted = true;
 					ctx.stage('committing', 80, '');
 					dependencies.state.set_desired(saved);
+					if (telegram_changed) {
+						telegram_attempted = true;
+						dependencies.telegram.configure(next_telegram);
+					}
 					if (notifications_changed) {
 						notifications_attempted = true;
 						dependencies.notifications.configure(next_notifications);
@@ -184,6 +199,9 @@ export function create(dependencies) {
 					let rollback_failed = false;
 					if (persisted)
 						try { dependencies.settings.set(before); }
+						catch (error) { rollback_failed = true; }
+					if (telegram_attempted)
+						try { dependencies.telegram.configure(prior_telegram); }
 						catch (error) { rollback_failed = true; }
 					if (notifications_attempted)
 						try { dependencies.notifications.configure(prior_notifications); }
@@ -219,6 +237,10 @@ export function create(dependencies) {
 				arguments.expected_revision)),
 		notifications_settings: () => dependencies.notifications.settings(),
 		notifications_test: (arguments) => ({ sent: dependencies.notifications.test(arguments.channel) === true }),
+		notifications_list: (arguments) => dependencies.notifications.list(arguments),
+		telegram_status: () => dependencies.telegram.status(),
+		telegram_settings: () => dependencies.telegram.settings(),
+		telegram_test: () => dependencies.telegram.test() === true,
 		set_draining: (value) => {
 			if (type(value) != 'bool')
 				errors.fail('INVALID_ARGUMENT');

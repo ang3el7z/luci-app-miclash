@@ -831,6 +831,19 @@ export function method_table(app, transfers) {
 			exact(arguments, { channel: { type: 'string', required: true } });
 			return domain_read('notifications_test', { channel: safe_id(arguments.channel) });
 		}),
+		notifications_list: method({ generation: '', cursor: 0, limit: 0 }, (arguments) => {
+			exact(arguments, {
+				generation: { type: 'string', nullable: true },
+				cursor: { type: 'int' }, limit: { type: 'int' }
+			});
+			let generation = arguments.generation;
+			if (generation != null && !match(generation, /^ng_[0-9a-f]{32}$/))
+				errors.fail('INVALID_ARGUMENT');
+			let cursor = arguments.cursor ?? 0, limit = arguments.limit ?? 32;
+			if (cursor < 0 || limit < 1 || limit > 200)
+				errors.fail('INVALID_ARGUMENT');
+			return domain_read('notifications_list', { generation, cursor, limit });
+		}),
 		transfer_begin: method({ direction: '', kind: '', object_id: '', size: 0,
 			sha256: '', metadata: {} }, (arguments) => {
 			exact(arguments, {
