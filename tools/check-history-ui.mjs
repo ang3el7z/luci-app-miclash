@@ -17,7 +17,7 @@ assert.doesNotMatch(panel, /(?:innerHTML|outerHTML|insertAdjacentHTML|document\.
 assert.doesNotMatch(panel, /(?:fs\.|exec\s*\(|\/bin\/sh|\/usr\/bin\/|\/sbin\/)/,
 	'history panel must use only the typed ubus API');
 for (const token of ['historyList', 'historyDiff', 'historyOpenDraft', 'historyRestore',
-	'watchOperation', 'Open in editor', 'Restore', 'Configuration history', 'source'])
+	'watchOperation', 'Open in editor', 'Restore', 'Close', 'Configuration history', 'source'])
 	assert.match(panel, new RegExp(token), `history panel missing ${token}`);
 for (const token of ['Draft', 'Validate', 'Apply', 'History'])
 	assert.match(config, new RegExp(token), `configuration UI missing ${token}`);
@@ -25,6 +25,12 @@ assert.match(editor, /config_validate/);
 assert.match(editor, /config_apply/);
 assert.match(config, /draftActions\.save\(editor\.getValue\(\)\)/);
 assert.match(config, /destroyConfigDraftRuntime/);
+assert.match(config, /const createdHistoryPanel = [\s\S]*historyPanel = createdHistoryPanel/,
+	'history callbacks do not capture the exact panel instance');
+assert.match(config, /historyPanel !== owner \|\| !owner\.owns\(token\)/,
+	'history callbacks lack exact panel identity and modal generation ownership');
+assert.match(config, /historyPanel === owner && owner\.owns\(token\)/,
+	'late Restore refresh lacks post-RPC history ownership check');
 assert.match(config, /Active configuration changed; Draft preserved\./);
 const subscriptionBlock = config.slice(config.indexOf("const updateUrlBtn ="), config.indexOf("const clearUrlBtn ="));
 assert.doesNotMatch(subscriptionBlock, /freshConfig[\s\S]{0,300}editor\.setValue/,
@@ -89,6 +95,7 @@ const history = historyModule.create({ api, profile: 'config.yaml',
 	onDraft(content) { openedDraft = content; }, onRestored() { restores++; } });
 const modalBody = await history.open('config.yaml');
 assert.equal(modalCalls[0].title, 'Configuration history');
+assert.ok(modalBody.querySelector('[data-action="close-history"]'), 'history modal lacks accessible Close action');
 assert.equal(calls[0][0], 'historyList');
 const items = modalBody.querySelectorAll('.sbox-history-item');
 assert.equal(items.length, 3);
@@ -151,11 +158,17 @@ const pendingHistory = historyModule.create({ api: pendingApi, onDraft() { pendi
 const pendingBody = await pendingHistory.open('config.yaml');
 pendingBody.querySelector('[data-action="open-draft"]').click();
 await new Promise((resolve) => setImmediate(resolve));
-pendingHistory.destroy();
-assert.equal(pendingCancelled, 1, 'destroy did not cancel the owned history operation watcher');
+const hiddenBeforeClose = modalCalls.filter((entry) => entry.hidden).length;
+pendingBody.querySelector('[data-action="close-history"]').click();
+assert.equal(modalCalls.filter((entry) => entry.hidden).length, hiddenBeforeClose + 1,
+	'Close did not dismiss history modal');
+assert.equal(pendingCancelled, 1, 'Close did not cancel the owned history UI watcher');
 pendingCallback({ id: 'pending-open', state: 'success' });
 await new Promise((resolve) => setImmediate(resolve));
-assert.equal(pendingRestored, 0, 'late watcher completion mutated destroyed history/editor state');
+assert.equal(pendingRestored, 0, 'late watcher completion mutated closed history/editor state');
+const reopenedPending = await pendingHistory.open('config.yaml');
+assert.ok(reopenedPending.querySelector('[data-action="open-draft"]'), 'history modal did not reopen cleanly');
+pendingHistory.destroy();
 let failedRestoreCallbacks = 0, preservedDraftMarker = 'exact Draft before restore';
 const restoreFailureApi = {
 	async historyList() { return [revisions[1]]; }, async historyDiff() { return { text: '' }; },
@@ -182,6 +195,30 @@ const storage = { get length() { return storageData.size; }, key(index) { return
 const windowMock = { localStorage: storage, setTimeout, clearTimeout };
 const L = { Class: { extend(value) { return value; } }, resource(value) { return value; } };
 const editorModule = new Function('L', 'E', 'window', 'document', editor)(L, E, windowMock, { head: new MiniNode('head') });
+assert.equal(typeof editorModule.createDraftLoadCoordinator, 'function', 'missing stale-load ownership coordinator');
+let loadRuntime = { generation: 1, api: {}, controller: {}, editor: {}, selectedProfile: 'config.yaml' };
+let releaseLoad, staleCommits = 0;
+const loadCoordinator = editorModule.createDraftLoadCoordinator(() => loadRuntime);
+const staleLoad = loadCoordinator.load('config.yaml', () => new Promise((resolve) => { releaseLoad = resolve; }),
+	() => { staleCommits++; });
+loadRuntime = { generation: 2, api: {}, controller: {}, editor: {}, selectedProfile: 'config2.yaml' };
+releaseLoad({ active: { content: 'A' }, draft: { content: 'A draft' } });
+assert.equal((await staleLoad).stale, true);
+assert.equal(staleCommits, 0, 'late Restore A committed into replacement runtime B');
+let currentCommits = 0;
+const currentLoad = await loadCoordinator.load('config2.yaml', async () => ({ active: { content: 'B' } }),
+	() => { currentCommits++; return 'B committed'; });
+assert.deepEqual(currentLoad, { stale: false, value: 'B committed' });
+assert.equal(currentCommits, 1, 'replacement runtime could not perform its own current Draft load');
+let releaseOverlapped, overlappedCommits = [];
+const overlapped = loadCoordinator.load('config2.yaml', () => new Promise((resolve) => { releaseOverlapped = resolve; }),
+	(captured, replies, profile) => { overlappedCommits.push(profile); });
+const latest = await loadCoordinator.load('config3.yaml', async () => ({}),
+	(captured, replies, profile) => { overlappedCommits.push(profile); });
+assert.equal(latest.stale, false);
+releaseOverlapped({});
+assert.equal((await overlapped).stale, true, 'older same-runtime profile load retained commit ownership');
+assert.deepEqual(overlappedCommits, ['config3.yaml'], 'overlapped profile load committed stale Draft bytes');
 const lifecycle = editorModule.createLifecycleOwner();
 let lifecycleDestroys = 0;
 lifecycle.replace({ destroy() { lifecycleDestroys++; } });
@@ -232,6 +269,41 @@ assert.equal(collisionReply.changed, true, 'hash collision incorrectly suppresse
 assert.equal(collisionSaves, 1);
 const brokenStorage = { length: 0, key() { throw new Error('denied'); }, getItem() { throw new Error('denied'); },
 	setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+const noDraftController = editorModule.createDraftController({ storage: brokenStorage, profile: 'config3.yaml',
+	content: 'same as Active\n' });
+noDraftController.load('config3.yaml', { content: 'same as Active\n' }, { content: null });
+let noDraftSaves = 0;
+const noDraftSaved = await noDraftController.saveRouter({ async configSaveDraft(profile, content) {
+	noDraftSaves++; assert.equal(content, 'same as Active\n'); return { operation_id: 'first-durable-draft' };
+} }, 'same as Active\n');
+assert.equal(noDraftSaved.changed, true, 'missing Router Draft file suppressed first durable save');
+assert.equal(noDraftSaves, 1);
+const runMissingDraft = async (failMutation) => {
+	const sequence = [];
+	const controller = editorModule.createDraftController({ storage: brokenStorage,
+		profile: 'missing.yaml', content: 'same as Active\n' });
+	controller.load('missing.yaml', { content: 'same as Active\n' }, { content: null });
+	let saveCalls = 0;
+	const actions = editorModule.createDraftActions({ controller,
+		getProfile: () => 'missing.yaml', getContent: () => 'same as Active\n', api: {
+			async configSaveDraft(profile, content) {
+				saveCalls++; sequence.push('save'); assert.equal(content, 'same as Active\n');
+				return { operation_id: 'save-missing' };
+			},
+			watchOperation(id, callback) { callback({ id, state: 'success', percent: 100 }); return () => {}; }
+		} });
+	const operation = actions.runExternal(async () => {
+		sequence.push('mutation');
+		if (failMutation) throw new Error('subscription failed');
+	});
+	if (failMutation) await assert.rejects(operation, /subscription failed/); else await operation;
+	assert.deepEqual(sequence, ['save', 'mutation'], 'subscription mutation ran before first durable Router Draft save');
+	assert.equal(saveCalls, 1, 'missing Router Draft was not saved exactly once before subscription mutation');
+	assert.equal(controller.routerDraftExists(), true, 'confirmed Router Draft existence was not retained');
+	controller.destroy();
+};
+await runMissingDraft(false);
+await runMissingDraft(true);
 const isolated = editorModule.createDraftController({ storage: brokenStorage, profile: 'config2.yaml', content: 'safe\n' });
 assert.equal(isolated.flushLocal(), false, 'storage exception was not isolated');
 const exactFailedContent = 'rules:\n  - MATCH,DIRECT  # keep exact bytes\n';

@@ -48,11 +48,16 @@ let editorChangeCleanup = null;
 let pageHideHandler = null;
 let visibilityChangeHandler = null;
 let subscriptionUpdateBusy = false;
+let configRuntimeGeneration = 0;
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
 });
 const configDraftLifecycle = view_miclash_editor.createLifecycleOwner();
+const draftLoadCoordinator = view_miclash_editor.createDraftLoadCoordinator(() => ({
+	generation: configRuntimeGeneration, api: configApi, controller: draftController,
+	editor: editor, selectedProfile: appState.selectedConfigName
+}));
 
 view_miclash_utils.bumpRpcTimeout();
 
@@ -1516,35 +1521,44 @@ function bindDraftEditorChanges() {
 	}
 }
 
-async function loadDraftProfile(profile) {
+async function loadDraftProfile(profile, ownership) {
 	const selected = normalizeConfigProfileName(profile);
-	const [active, draft] = await Promise.all([
-		configApi.config_read(selected),
-		configApi.configReadDraft(selected)
-	]);
-	const loaded = await draftController.load(selected, active, draft);
-	appState.selectedConfigName = selected;
-	appState.configContent = loaded.active;
-	setDraftEditorContent(loaded.draft);
-	if (loaded.conflict) {
+	const result = await draftLoadCoordinator.load(selected, async (captured) => {
+		const replies = await Promise.all([
+			captured.api.config_read(selected), captured.api.configReadDraft(selected)
+		]);
+		return { active: replies[0], draft: replies[1] };
+	}, (captured, replies) => {
+		const loaded = captured.controller.load(selected, replies.active, replies.draft);
+		appState.selectedConfigName = selected;
+		appState.configContent = loaded.active;
+		captured.editor.setValue(loaded.draft, -1);
+		captured.editor.clearSelection();
+		if (!loaded.conflict) return loaded;
 		showModal({
 			title: _('Unsaved local Draft found'),
 			body: _('A browser crash copy differs from the router Draft. Choose the local copy to keep it, or keep the router Draft and discard the local crash copy.'),
 			buttons: [
 				{ label: _('Open local copy'), className: 'cbi-button cbi-button-apply',
 					onClick: async function(ctx) {
-						setDraftEditorContent(draftController.useCrashCopy(loaded.crash));
+						if (captured.generation !== configRuntimeGeneration ||
+							captured.controller !== draftController || captured.editor !== editor) return;
+						const value = captured.controller.useCrashCopy(loaded.crash);
+						captured.editor.setValue(value, -1); captured.editor.clearSelection();
 						ctx.closeModal();
 					} },
 				{ label: _('Keep router Draft'), className: 'cbi-button cbi-button-neutral',
 					onClick: async function(ctx) {
-						draftController.keepRouterCopy();
+						if (captured.generation !== configRuntimeGeneration ||
+							captured.controller !== draftController) return;
+						captured.controller.keepRouterCopy();
 						ctx.closeModal();
 					} }
 			]
 		});
-	}
-	return loaded;
+		return loaded;
+	}, ownership?.owns);
+	return result.stale ? null : result.value;
 }
 
 async function saveRouterDraft() {
@@ -1563,6 +1577,7 @@ async function applyDraft() {
 }
 
 function releaseConfigDraftRuntime() {
+	configRuntimeGeneration++;
 	subscriptionUpdateBusy = false;
 	if (pageHideHandler) window.removeEventListener('pagehide', pageHideHandler);
 	pageHideHandler = null;
@@ -2785,6 +2800,7 @@ async function switchConfigProfile(profileName) {
 	let content = '';
 	if (configApi && draftController) {
 		const loaded = await loadDraftProfile(selected);
+		if (!loaded) return;
 		content = loaded.draft;
 	} else {
 		content = await readConfigFileByName(selected);
@@ -3177,20 +3193,27 @@ return view.extend({
 				appState.configContent = String(active?.content || '');
 			}
 		});
-		historyPanel = view_miclash_history_panel.create({
+		const createdHistoryPanel = view_miclash_history_panel.create({
 			api: configApi,
 			profile: appState.selectedConfigName,
 			onDraft: async (content, record, token) => {
-				if (token.profile !== appState.selectedConfigName ||
+				const owner = createdHistoryPanel;
+				if (historyPanel !== owner || !owner.owns(token) ||
+					token.profile !== appState.selectedConfigName ||
 					token.profile !== draftController?.getProfile()) return;
 				setDraftEditorContent(content);
 			},
 			onRestored: async (record, token) => {
-				if (token.profile !== appState.selectedConfigName ||
+				const owner = createdHistoryPanel;
+				if (historyPanel !== owner || !owner.owns(token) ||
+					token.profile !== appState.selectedConfigName ||
 					token.profile !== draftController?.getProfile()) return;
-				await loadDraftProfile(token.profile);
+				await loadDraftProfile(token.profile, {
+					owns: () => historyPanel === owner && owner.owns(token)
+				});
 			}
 		});
+		historyPanel = createdHistoryPanel;
 
 		try {
 			await initializeConfigEditor(appState.configContent);

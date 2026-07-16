@@ -1580,6 +1580,9 @@ msgstr "История"
 msgid "Configuration history"
 msgstr "История конфигурации"
 
+msgid "Close configuration history"
+msgstr "Закрыть историю конфигурации"
+
 msgid "Configuration revisions"
 msgstr "Версии конфигурации"
 

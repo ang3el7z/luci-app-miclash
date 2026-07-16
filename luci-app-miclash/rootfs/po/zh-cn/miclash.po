@@ -1527,6 +1527,9 @@ msgstr "历史"
 msgid "Configuration history"
 msgstr "配置历史"
 
+msgid "Close configuration history"
+msgstr "关闭配置历史"
+
 msgid "Configuration revisions"
 msgstr "配置版本"
 

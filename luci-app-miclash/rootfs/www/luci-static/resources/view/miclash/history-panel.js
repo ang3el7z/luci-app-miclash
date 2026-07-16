@@ -56,6 +56,7 @@ function create(options) {
 	let body = null, detail = null;
 	const watches = new Set();
 	const current = (token, ownedProfile) => !destroyed && token === generation && profile === ownedProfile;
+	const owns = (token) => !!token && current(token.generation, token.profile);
 	function cancelWatches() { for (const watch of watches) watch.cancel(); watches.clear(); }
 	function invalidate(nextProfile) {
 		generation++; cancelWatches(); busy = false; selected = null;
@@ -167,17 +168,21 @@ function create(options) {
 	async function open(nextProfile) {
 		invalidate(nextProfile || profile); destroyed = false;
 		const token = generation, ownedProfile = profile;
+		const close = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral',
+			'data-action': 'close-history', 'aria-label': _('Close configuration history') }, [ _('Close') ]);
+		close.addEventListener('click', () => { invalidate(ownedProfile); ui.hideModal(); });
 		body = E('div', { 'class': 'sbox-history-layout' }, [
 			E('section', { 'class': 'sbox-history-sidebar', 'data-history-list': '1',
 				'aria-label': _('Configuration revisions') }, [ E('p', {}, [ _('Loading history…') ]) ]),
-			E('section', { 'class': 'sbox-history-detail', 'aria-live': 'polite' }) ]);
+			E('section', { 'class': 'sbox-history-detail', 'aria-live': 'polite' }),
+			E('div', { 'class': 'sbox-history-close' }, [ close ]) ]);
 		detail = body.querySelector('.sbox-history-detail'); ui.showModal(_('Configuration history'), body);
 		try { await refresh(token, ownedProfile); }
 		catch (error) { if (current(token, ownedProfile)) status((error.code ? error.code + ': ' : '') + error.message, true); }
 		return body;
 	}
 	function destroy() { invalidate(); destroyed = true; body = null; detail = null; records = []; }
-	return { open, refresh, destroy, invalidate, selectRevision };
+	return { open, refresh, destroy, invalidate, selectRevision, owns };
 }
 
 return { create: create, operationWatch: operationWatch, normalizeRecords: normalizeRecords };

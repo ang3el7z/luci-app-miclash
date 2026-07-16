@@ -153,6 +153,7 @@ function createDraftController(options) {
 	let revision = String(opts.revision || '');
 	let content = String(opts.content || '');
 	let routerContent = String(opts.routerContent ?? content);
+	let routerDraftExists = opts.routerDraftExists !== false;
 	let timer = null;
 	let destroyed = false;
 	let pendingConflict = null;
@@ -206,10 +207,11 @@ function createDraftController(options) {
 			return { record: parsed, raw };
 		}, null);
 	}
-	async function load(name, activeReply, draftReply) {
+	function load(name, activeReply, draftReply) {
 		profile = String(name || 'config.yaml');
 		const active = String(activeReply?.content || '');
-		const draft = draftReply?.content == null ? active : String(draftReply.content);
+		routerDraftExists = draftReply?.content != null;
+		const draft = routerDraftExists ? String(draftReply.content) : active;
 		revision = String(draftReply?.revision || activeReply?.revision || '');
 		content = draft;
 		routerContent = draft;
@@ -223,7 +225,7 @@ function createDraftController(options) {
 		if (nextContent != null) content = String(nextContent);
 		flushLocal();
 		const nextHash = contentHash(content);
-		if (content === routerContent) return { changed: false, hash: nextHash };
+		if (routerDraftExists && content === routerContent) return { changed: false, hash: nextHash };
 		const savedProfile = profile;
 		const reply = await api.configSaveDraft(savedProfile, content, 'luci');
 		return { changed: true, hash: nextHash, content, profile: savedProfile,
@@ -232,6 +234,7 @@ function createDraftController(options) {
 	function confirmRouterSaved(saved) {
 		if (saved?.changed === true && saved.profile === profile && saved.content === content) {
 			routerContent = saved.content;
+			routerDraftExists = true;
 			return true;
 		}
 		return false;
@@ -261,7 +264,28 @@ function createDraftController(options) {
 	}
 	return { hash: contentHash, setContent, flushLocal, load, saveRouter, confirmRouterSaved,
 		useCrashCopy, keepRouterCopy, hasPendingConflict: () => pendingConflict != null,
-		getContent: () => content, getProfile: () => profile, destroy };
+		getContent: () => content, getProfile: () => profile,
+		routerDraftExists: () => routerDraftExists, destroy };
+}
+
+function createDraftLoadCoordinator(getSnapshot) {
+	let requestGeneration = 0;
+	function same(left, right) {
+		return left && right && left.generation === right.generation && left.api === right.api &&
+			left.controller === right.controller && left.editor === right.editor &&
+			left.selectedProfile === right.selectedProfile;
+	}
+	async function load(profile, fetch, commit, owns) {
+		const request = ++requestGeneration;
+		const captured = getSnapshot();
+		const replies = await fetch(captured, profile);
+		if (request !== requestGeneration || !same(captured, getSnapshot()) ||
+			(typeof owns === 'function' && !owns()))
+			return { stale: true };
+		const value = commit(captured, replies, profile);
+		return { stale: false, value };
+	}
+	return { load };
 }
 
 function createDraftActions(options) {
@@ -368,5 +392,6 @@ return L.Class.extend({
 	createDraftController: createDraftController,
 	createDraftActions: createDraftActions,
 	createLifecycleOwner: createLifecycleOwner,
+	createDraftLoadCoordinator: createDraftLoadCoordinator,
 	contentHash: contentHash
 });
