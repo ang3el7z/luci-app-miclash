@@ -190,6 +190,20 @@ for (let sample in [
 	[ 'address interface counter over bound', (record) => record.interface_total = 513 ],
 	[ 'address truncation mismatch', (record) => record.interfaces_truncated = true ],
 	[ 'address truncation wrong type', (record) => record.interfaces_truncated = 'true' ],
+	[ 'cached DHCP address retains interface evidence', (record, item) => {
+		item.sources = [ 'dhcp', 'neighbor' ]; record.source = 'dhcp';
+		record.interfaces = [ 'br-lan' ]; record.interface_total = 1;
+		record.interfaces_truncated = false;
+	} ],
+	[ 'cached neighbor address has no interface evidence', (record, item) => {
+		item.sources = [ 'dhcp', 'neighbor' ]; record.source = 'neighbor';
+		record.interfaces = []; record.interface_total = 0; record.interfaces_truncated = false;
+	} ],
+	[ 'cached neighbor address has short truncated evidence', (record, item) => {
+		item.sources = [ 'dhcp', 'neighbor' ]; record.source = 'neighbor';
+		record.interfaces = [ 'br-lan' ]; record.interface_total = 17;
+		record.interfaces_truncated = true;
+	} ],
 	[ 'duplicate device sources', (record, item) => item.sources = [ 'neighbor', 'neighbor' ] ],
 	[ 'unsorted device sources', (record, item) => item.sources = [ 'neighbor', 'dhcp' ] ],
 	[ 'device extra key', (record, item) => item.extra = true ],
@@ -197,6 +211,10 @@ for (let sample in [
 	[ 'identity reason mismatch', (record, item) => item.identity.reason = 'locally_administered_mac' ],
 	[ 'device interface counter mismatch', (record, item) => item.interface_total = 17 ],
 	[ 'device truncation wrong type', (record, item) => item.interfaces_truncated = 'false' ],
+	[ 'device has short truncated interface evidence', (record, item) => {
+		item.interfaces = [ 'br-lan' ]; item.interface_total = 17;
+		item.interfaces_truncated = true;
+	} ],
 	[ 'conflict extra key', (record, item) => {
 		item.conflicts[0] ??= { reason: 'address_interfaces', subject: record.address,
 			evidence: [ 'br-lan' ], total: 1, truncated: false };
@@ -215,8 +233,44 @@ for (let sample in [
 	[ 'conflict duplicate evidence', (record, item) => {
 		item.conflicts[0] = { reason: 'address_interfaces', subject: record.address,
 			evidence: [ 'br-lan', 'br-lan' ], total: 2, truncated: false };
+	} ],
+	[ 'conflict identity evidence is not canonical', (record, item) => {
+		item.sources = [ 'dhcp', 'neighbor' ]; item.hostname ??= 'cached';
+		item.conflicts[0] = { reason: 'duplicate_hostname', subject: item.hostname,
+			evidence: [ 'bogus', 'mac:' + item.mac ], total: 2, truncated: false };
 	} ]
 ]) corrupt_cached_record(sample[0], sample[1]);
+
+function hostile_cache() {
+	let box = runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: () => ({ observed_at: 1710000000, data: '[]' })
+	} });
+	box.device_cache = json(committed_cache); return box;
+};
+let hostile_graph = {};
+for (let depth = 0; depth < 1000; depth++) hostile_graph = { nested: hostile_graph };
+let hostile_array_cache = hostile_cache(), hostile_array_original = hostile_array_cache.device_cache;
+let hostile_array_item = hostile_array_cache.device_cache.devices[keys(hostile_array_cache.device_cache.devices)[0]];
+hostile_array_item.addresses = [];
+for (let at = 0; at < 33; at++) push(hostile_array_item.addresses, hostile_graph);
+assert_throws(() => devices.discover(hostile_array_cache), 'CORRUPT_STATE',
+	'cache address count maps to CORRUPT_STATE before nested traversal');
+assert_true(hostile_array_cache.device_cache == hostile_array_original,
+	'hostile cache reference is never replaced or serialized');
+let hostile_string_cache = hostile_cache(), hostile_string_original = hostile_string_cache.device_cache;
+let hostile_string_item = hostile_string_cache.device_cache.devices[keys(hostile_string_cache.device_cache.devices)[0]];
+hostile_string_item.identity.extra = sprintf('%0300000d', 0);
+assert_throws(() => devices.discover(hostile_string_cache), 'CORRUPT_STATE',
+	'cache nested oversized string maps to CORRUPT_STATE before copying');
+assert_true(hostile_string_cache.device_cache == hostile_string_original,
+	'oversized nested cache string leaves the original object unpublished');
+let hostile_hook_cache = hostile_cache(), hostile_hook_original = hostile_hook_cache.device_cache;
+let hostile_hook_item = hostile_hook_cache.device_cache.devices[keys(hostile_hook_cache.device_cache.devices)[0]];
+hostile_hook_item.identity.extra = { toJSON: () => die('raw cache serializer invoked') };
+assert_throws(() => devices.discover(hostile_hook_cache), 'CORRUPT_STATE',
+	'toJSON-like cache extras reject by schema without invocation');
+assert_true(hostile_hook_cache.device_cache == hostile_hook_original);
 
 function hostname_history(order) {
 	let lines = map(order, (host) => '1710003600 ac:bb:cc:dd:ee:44 192.168.1.44 ' + host + ' *');
@@ -678,10 +732,149 @@ let malformed_compile = json(enc(compile_input));
 malformed_compile.devices[0].identity.extra = 'untrusted';
 assert_throws(() => devices.compile_sets(precedence, malformed_compile), 'INVALID_ARGUMENT');
 
+// Raw devices must be bounded before any whole-object JSON clone. The same
+// deeply nested object is referenced from every over-limit address slot: a
+// preflight length rejection is constant-work and never traverses this graph.
+let deep_untrusted = {};
+for (let depth = 0; depth < 1000; depth++) deep_untrusted = { nested: deep_untrusted };
+let over_limit_raw = json(enc(deterministic_one));
+over_limit_raw.addresses = [];
+for (let at = 0; at < 33; at++) push(over_limit_raw.addresses, deep_untrusted);
+assert_throws(() => devices.compile_sets(deterministic_app(false), {
+	timestamp: 1710000000, devices: [ over_limit_raw ]
+}), 'INVALID_ARGUMENT', 'address count rejects before traversing raw nested values');
+let huge_nested_string = json(enc(deterministic_one));
+huge_nested_string.identity.extra = sprintf('%0300000d', 0);
+assert_throws(() => devices.compile_sets(deterministic_app(false), {
+	timestamp: 1710000000, devices: [ huge_nested_string ]
+}), 'INVALID_ARGUMENT', 'nested schema rejects before copying an oversized string');
+let hostile_compile_hook = json(enc(deterministic_one));
+hostile_compile_hook.identity.extra = { toJSON: () => die('raw compile serializer invoked') };
+assert_throws(() => devices.compile_sets(deterministic_app(false), {
+	timestamp: 1710000000, devices: [ hostile_compile_hook ]
+}), 'INVALID_ARGUMENT', 'toJSON-like compile extras reject by schema without invocation');
+
+function semantic_device() { return json(enc(deterministic_one)); };
+function reject_semantic(label, mutate) {
+	let item = semantic_device(); mutate(item);
+	assert_throws(() => devices.compile_sets(deterministic_app(false), {
+		timestamp: 1710000000, devices: [ item ]
+	}), 'INVALID_ARGUMENT', label);
+};
+for (let sample in [
+	[ 'DHCP address cannot retain neighbor interfaces', (item) => {
+		item.sources = [ 'dhcp', 'neighbor' ]; item.addresses[0].source = 'dhcp';
+	} ],
+	[ 'DHCP address interface counters are exactly empty', (item) => {
+		item.sources = [ 'dhcp', 'neighbor' ]; item.addresses[0].source = 'dhcp';
+		item.addresses[0].interfaces = []; item.addresses[0].interface_total = 1;
+		item.addresses[0].interfaces_truncated = true;
+	} ],
+	[ 'neighbor address requires retained interface evidence', (item) => {
+		item.addresses[0].interfaces = []; item.addresses[0].interface_total = 0;
+	} ],
+	[ 'short neighbor evidence cannot claim truncation', (item) => {
+		item.addresses[0].interface_total = 2; item.addresses[0].interfaces_truncated = true;
+	} ],
+	[ 'device source must cover each address source', (item) => item.sources = [ 'dhcp' ] ]
+]) reject_semantic(sample[0], sample[1]);
+
+function conflict_device(reason) {
+	let item = semantic_device(), self = 'mac:' + item.mac;
+	if (reason == 'hostname_changed') {
+		item.hostname = 'alpha'; item.sources = [ 'dhcp', 'neighbor' ];
+		item.conflicts = [ { reason, subject: self, evidence: [ 'alpha', 'beta' ],
+			total: 2, truncated: false } ];
+	}
+	else if (reason == 'duplicate_hostname') {
+		item.hostname = 'same'; item.sources = [ 'dhcp', 'neighbor' ];
+		item.conflicts = [ { reason, subject: 'same',
+			evidence: [ self, 'mac:ac:bb:cc:dd:ee:71' ], total: 2, truncated: false } ];
+	}
+	else if (reason == 'shared_address') item.conflicts = [ { reason,
+		subject: 'ipv4:192.168.9.9', evidence: [ self, 'mac:ac:bb:cc:dd:ee:71' ],
+		total: 2, truncated: false } ];
+	else {
+		item.interfaces = [ 'br-lan', 'wlan0' ]; item.interface_total = 2;
+		item.addresses[0].interfaces = [ 'br-lan', 'wlan0' ];
+		item.addresses[0].interface_total = 2;
+		item.conflicts = [ { reason: 'address_interfaces', subject: '192.168.9.9',
+			evidence: [ 'br-lan', 'wlan0' ], total: 2, truncated: false } ];
+	}
+	return item;
+};
+function reject_conflict(label, reason, mutate) {
+	let item = conflict_device(reason); mutate(item.conflicts[0], item);
+	assert_throws(() => devices.compile_sets(deterministic_app(false), {
+		timestamp: 1710000000, devices: [ item ]
+	}), 'INVALID_ARGUMENT', label);
+};
+for (let sample in [
+	[ 'hostname history requires two names', 'hostname_changed', (conflict) => {
+		conflict.evidence = [ 'alpha' ]; conflict.total = 1;
+	} ],
+	[ 'hostname history must retain selected hostname', 'hostname_changed', (conflict) =>
+		conflict.evidence = [ 'beta', 'gamma' ] ],
+	[ 'hostname history requires DHCP provenance', 'hostname_changed', (conflict, item) =>
+		item.sources = [ 'neighbor' ] ],
+	[ 'duplicate hostname subject matches device hostname', 'duplicate_hostname', (conflict) =>
+		conflict.subject = 'other' ],
+	[ 'duplicate hostname requires a retained device hostname', 'duplicate_hostname', (conflict, item) => {
+		item.hostname = null; conflict.subject = '*';
+	} ],
+	[ 'duplicate hostname evidence uses canonical identities', 'duplicate_hostname', (conflict) =>
+		conflict.evidence[1] = 'bogus' ],
+	[ 'duplicate hostname requires at least two identities', 'duplicate_hostname', (conflict) => {
+		conflict.evidence = [ conflict.evidence[0] ]; conflict.total = 1;
+	} ],
+	[ 'shared address subject matches a current address', 'shared_address', (conflict) =>
+		conflict.subject = 'ipv4:192.168.9.10' ],
+	[ 'shared address evidence uses canonical identities', 'shared_address', (conflict) =>
+		conflict.evidence[1] = 'MAC:AC:BB:CC:DD:EE:71' ],
+	[ 'multiple-interface evidence matches its address', 'address_interfaces', (conflict) =>
+		conflict.evidence = [ 'br-lan', 'eth0' ] ],
+	[ 'multiple-interface conflict requires two interfaces', 'address_interfaces', (conflict) => {
+		conflict.evidence = [ 'br-lan' ]; conflict.total = 1;
+	} ],
+	[ 'multiple-interface evidence cannot be omitted', 'address_interfaces', (conflict, item) =>
+		item.conflicts = [] ],
+	[ 'short conflict evidence cannot claim truncation', 'duplicate_hostname', (conflict) => {
+		conflict.total = 17; conflict.truncated = true;
+	} ]
+]) reject_conflict(sample[0], sample[1], sample[2]);
+assert_throws(() => devices.effective(deterministic_app(false), {
+	mac: deterministic_one.mac, interfaces: [ 'br-lan' ], interface_total: 17,
+	interfaces_truncated: true, timestamp: 1710000000
+}), 'INVALID_ARGUMENT', 'effective rejects forged short-truncated interface evidence');
+
+// Every closed provenance form emitted by discovery remains compilable.
+let split_entries = [];
+for (let iface = 0; iface < 16; iface++) {
+	push(split_entries, { dst: '192.168.4.1', dev: sprintf('a%02d', iface),
+		lladdr: 'ac:bb:cc:dd:ee:72', state: [ 'REACHABLE' ] });
+	push(split_entries, { dst: '192.168.4.2', dev: sprintf('z%02d', iface),
+		lladdr: 'ac:bb:cc:dd:ee:72', state: [ 'REACHABLE' ] });
+}
+let split_max_app = runtime({ observers: {
+	dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+	neighbors: (family) => ({ observed_at: 1710000000,
+		data: family == 'ipv4' ? enc(split_entries) : '[]' })
+} });
+let split_max_devices = devices.discover(split_max_app);
+assert_equal(split_max_devices[0].interface_total, 32,
+	'max-bound round trip retains the exact device interface total');
+devices.compile_sets(split_max_app, { timestamp: 1710000000, devices: split_max_devices });
+for (let discovered in [ hostname_history([ 'gamma', 'alpha', 'beta' ]),
+	evidence_devices[0], multi_interface[0], interface_over.devices[0], unrelated[0] ])
+	devices.compile_sets(runtime({ guard: false }), { timestamp: 1710000000, devices: [ discovered ] });
+
 function reasoning_devices(all_truncated) {
 	let output = [], address_number = 0;
 	for (let device_number = 0; device_number < 34; device_number++) {
 		let truncated = all_truncated || device_number == 33, addresses = [];
+		let device_interfaces = [ 'br-lan' ];
+		if (truncated) for (let iface = 0; iface < 15; iface++)
+			push(device_interfaces, sprintf('if%02d', iface));
 		let count = device_number == 33 ? 1 : 32;
 		for (let at = 0; at < count; at++) {
 			address_number++;
@@ -690,14 +883,14 @@ function reasoning_devices(all_truncated) {
 					int((address_number % 65536) / 256), address_number % 256);
 			push(addresses, { address: ip, family: 'ipv4', current: true,
 				last_seen: 1710000000, source: 'neighbor', interfaces: [ 'br-lan' ],
-				interface_total: truncated ? 17 : 1, interfaces_truncated: truncated });
+				interface_total: 1, interfaces_truncated: false });
 		}
 		let mac_value = sprintf('ac:bb:cc:dd:%02x:%02x', int(device_number / 256),
 			device_number % 256);
 		push(output, { identity: { kind: 'mac', value: mac_value, confidence: 'high',
 			persistent_policy_eligible: true, reason: 'stable_mac' }, mac: mac_value,
 			hostname: null, last_seen: 1710000000, sources: [ 'neighbor' ],
-			interfaces: [ 'br-lan' ], interface_total: truncated ? 17 : 1,
+			interfaces: device_interfaces, interface_total: truncated ? 17 : 1,
 			interfaces_truncated: truncated, conflicts: [], addresses });
 	}
 	return output;

@@ -35,6 +35,11 @@ function exact(value, allowed, required) {
 	for (let name in required ?? allowed) if (!exists(value, name)) invalid();
 };
 function has(values, wanted) { for (let value in values ?? []) if (value == wanted) return true; return false; };
+function same_strings(left, right) {
+	if (length(left) != length(right)) return false;
+	for (let at = 0; at < length(left); at++) if (left[at] != right[at]) return false;
+	return true;
+};
 function add_unique(values, value) { if (value != null && !has(values, value)) push(values, value); };
 function canonical_strings(values) {
 	let seen = {}, output = [];
@@ -68,7 +73,8 @@ function interface_name(value, code) {
 	return value;
 };
 function mac(value, code) {
-	if (type(value) != 'string' || !match(value, /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/))
+	if (type(value) != 'string' || length(value) != 17 ||
+	    !match(value, /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/))
 		invalid(code);
 	let normalized = lc(value), fields = split(normalized, ':');
 	let first = int(fields[0], 16);
@@ -190,19 +196,33 @@ function strict_sorted_strings(values, maximum, validator) {
 	}
 	return values;
 };
+function bounded_counter(values, total, truncated, maximum, total_maximum) {
+	integer(total, length(values), total_maximum);
+	if (type(truncated) != 'bool') invalid();
+	if (truncated) {
+		if (length(values) != maximum || total <= maximum) invalid();
+	}
+	else if (total != length(values)) invalid();
+};
 function validate_address_record(value, timestamp) {
 	exact(value, { address: true, family: true, current: true, last_seen: true, source: true,
 		interfaces: true, interface_total: true, interfaces_truncated: true });
 	if (type(value.current) != 'bool' || !has([ 'dhcp', 'neighbor' ], value.source)) invalid();
-	integer(value.last_seen, 0, timestamp);
+	let last_seen = integer(value.last_seen, 0, timestamp);
 	strict_sorted_strings(value.interfaces, MAX_INTERFACES, interface_name);
-	integer(value.interface_total, length(value.interfaces), MAX_LINES);
-	if (type(value.interfaces_truncated) != 'bool' ||
-	    value.interfaces_truncated != (value.interface_total > length(value.interfaces))) invalid();
+	bounded_counter(value.interfaces, value.interface_total, value.interfaces_truncated,
+		MAX_INTERFACES, MAX_LINES);
+	if (value.source == 'dhcp' && (length(value.interfaces) || value.interface_total ||
+	    value.interfaces_truncated)) invalid();
+	if (value.source == 'neighbor' && !length(value.interfaces)) invalid();
+	if (type(value.address) != 'string' || length(value.address) > 45) invalid();
 	let interface_evidence = value.interfaces[0] ?? (value.interface_total > 0 ? 'truncated' : null);
 	let parsed = address(value.address, null, interface_evidence);
 	if (parsed.family != value.family || parsed.address != value.address) invalid();
-	return value;
+	let interfaces = []; for (let iface in value.interfaces) push(interfaces, iface);
+	return { address: parsed.address, family: parsed.family, current: value.current,
+		last_seen, source: value.source, interfaces, interface_total: value.interface_total,
+		interfaces_truncated: value.interfaces_truncated };
 };
 function hostname(value, code) {
 	if (value == '*') return null;
@@ -362,13 +382,17 @@ function validate_cache_state(value, now) {
 	    value.ephemeral_sequence > MAX_DEVICES || type(value.devices) != 'object' ||
 	    type(value.devices) == 'array' || length(keys(value.devices)) > MAX_DEVICES)
 		invalid('CORRUPT_STATE');
+	let devices = {};
 	for (let key, item in value.devices) {
-		try { compile_device(item, now); }
+		let normalized;
+		try { normalized = compile_device(item, now); }
 		catch (error) { invalid('CORRUPT_STATE'); }
-		let expected = item.identity.kind == 'mac' ? 'mac:' + item.mac : item.identity.value;
+		let expected = normalized.identity.kind == 'mac' ?
+			'mac:' + normalized.mac : normalized.identity.value;
 		if (key != expected) invalid('CORRUPT_STATE');
+		devices[key] = normalized;
 	}
-	return clone(value);
+	return { last_now: value.last_now, ephemeral_sequence: value.ephemeral_sequence, devices };
 };
 
 export function discover(app) {
@@ -653,10 +677,9 @@ function subject(value) {
 	for (let iface in interfaces) add_unique(normalized_interfaces, interface_name(iface));
 	normalized_interfaces = sort(normalized_interfaces);
 	let interface_total = value.interface_total ?? length(normalized_interfaces);
-	integer(interface_total, length(normalized_interfaces), MAX_LINES);
 	let interfaces_truncated = value.interfaces_truncated ?? false;
-	if (type(interfaces_truncated) != 'bool' ||
-	    interfaces_truncated != (interface_total > length(normalized_interfaces))) invalid();
+	bounded_counter(normalized_interfaces, interface_total, interfaces_truncated,
+		MAX_INTERFACES, MAX_LINES);
 	return { mac: value.mac == null ? null : mac(value.mac), interfaces: normalized_interfaces,
 		interface_total, interfaces_truncated,
 		timestamp: integer(value.timestamp, 0, MAX_TIMESTAMP) };
@@ -715,28 +738,40 @@ export function effective(app, input) {
 		reason: redact.text(selected == null ? 'no active policy' : 'active ' + selected.scope + ' policy') };
 };
 
-function bounded_strings(values, maximum, allowed) {
-	if (type(values) != 'array' || length(values) > maximum) invalid();
-	let seen = {};
-	for (let value in values) {
-		if (type(value) != 'string' || !length(value) || length(value) > 128 ||
-		    (allowed != null && !has(allowed, value)) || seen[value]) invalid();
-		seen[value] = true;
+function identity_id(value) {
+	if (type(value) != 'string' || !length(value) || length(value) > 80) invalid();
+	if (match(value, /^mac:/)) {
+		let normalized = mac(substr(value, 4));
+		if (value != 'mac:' + normalized) invalid();
+		return value;
 	}
-	return values;
+	if (!match(value, /^ephemeral:(0|[1-9][0-9]*):[1-9][0-9]*:(dhcp|neighbor)$/)) invalid();
+	let fields = split(value, ':');
+	integer(int(fields[1]), 0, MAX_TIMESTAMP);
+	integer(int(fields[2]), 1, MAX_DEVICES);
+	return value;
+};
+function retained_identity(evidence, total, truncated, identity) {
+	if (!truncated && !has(evidence, identity)) invalid();
+	if (truncated && identity <= evidence[length(evidence) - 1] && !has(evidence, identity)) invalid();
 };
 compile_device = function(value, timestamp) {
 	exact(value, { identity: true, mac: true, hostname: true, last_seen: true, sources: true,
 		interfaces: true, interface_total: true, interfaces_truncated: true,
 		conflicts: true, addresses: true });
-	value = clone(value);
 	exact(value.identity, { kind: true, value: true, confidence: true,
 		persistent_policy_eligible: true, reason: true });
+	if (type(value.sources) != 'array' || length(value.sources) > 2 ||
+	    type(value.interfaces) != 'array' || length(value.interfaces) > MAX_INTERFACES ||
+	    type(value.conflicts) != 'array' || length(value.conflicts) > MAX_CONFLICTS ||
+	    type(value.addresses) != 'array' || !length(value.addresses) ||
+	    length(value.addresses) > MAX_ADDRESSES) invalid();
 	if (!has([ 'mac', 'ip' ], value.identity.kind) ||
 	    !has([ 'high', 'low', 'ephemeral' ], value.identity.confidence) ||
 	    type(value.identity.persistent_policy_eligible) != 'bool' ||
 	    !has([ 'stable_mac', 'locally_administered_mac', 'mac_unavailable' ],
 		value.identity.reason)) invalid();
+	let normalized_mac = null, normalized_identity;
 	if (value.identity.kind == 'mac') {
 		let normalized = mac(value.mac);
 		if (value.identity.value != normalized ||
@@ -744,62 +779,114 @@ compile_device = function(value, timestamp) {
 		    value.identity.persistent_policy_eligible != !local_mac(normalized) ||
 		    value.identity.reason != (local_mac(normalized) ?
 			'locally_administered_mac' : 'stable_mac')) invalid();
+		normalized_mac = normalized;
 	}
 	else {
 		if (value.mac != null || value.identity.confidence != 'ephemeral' ||
 		    value.identity.persistent_policy_eligible || value.identity.reason != 'mac_unavailable' ||
-		    type(value.identity.value) != 'string' ||
-		    !match(value.identity.value, /^ephemeral:[0-9]+:[1-9][0-9]*:(dhcp|neighbor)$/)) invalid();
+		    identity_id(value.identity.value) != value.identity.value) invalid();
 	}
-	if (value.hostname != null) hostname(value.hostname);
-	integer(value.last_seen, 0, timestamp);
+	normalized_identity = { kind: value.identity.kind, value: value.identity.value,
+		confidence: value.identity.confidence,
+		persistent_policy_eligible: value.identity.persistent_policy_eligible,
+		reason: value.identity.reason };
+	let normalized_hostname = value.hostname == null ? null : hostname(value.hostname);
+	if (value.hostname != null && normalized_hostname != value.hostname) invalid();
+	let last_seen = integer(value.last_seen, 0, timestamp);
 	strict_sorted_strings(value.sources, 2, (source) => {
 		if (!has([ 'dhcp', 'neighbor' ], source)) invalid();
 	});
 	strict_sorted_strings(value.interfaces, MAX_INTERFACES, interface_name);
-	integer(value.interface_total, length(value.interfaces), MAX_LINES);
-	if (type(value.interfaces_truncated) != 'bool' ||
-	    value.interfaces_truncated != (value.interface_total > length(value.interfaces))) invalid();
-	if (type(value.conflicts) != 'array' || length(value.conflicts) > MAX_CONFLICTS) invalid();
-	let identity_subject = value.identity.kind == 'mac' ? 'mac:' + value.mac : value.identity.value;
+	bounded_counter(value.interfaces, value.interface_total, value.interfaces_truncated,
+		MAX_INTERFACES, MAX_LINES);
+	if (has(value.sources, 'neighbor') != (length(value.interfaces) > 0)) invalid();
+	let sources = [], interfaces = [];
+	for (let source in value.sources) push(sources, source);
+	for (let iface in value.interfaces) push(interfaces, iface);
+	let addresses = [], newest_address = null;
+	for (let raw_address in value.addresses) {
+		let item = validate_address_record(raw_address, timestamp);
+		if (!has(sources, item.source) || item.last_seen > last_seen ||
+		    item.interface_total > value.interface_total) invalid();
+		if (item.source == 'neighbor' && !value.interfaces_truncated)
+			for (let iface in item.interfaces) if (!has(interfaces, iface)) invalid();
+		if (item.interfaces_truncated && !value.interfaces_truncated) invalid();
+		newest_address = newest_address == null ? item.last_seen : max(newest_address, item.last_seen);
+		push(addresses, item);
+	}
+	if (newest_address != last_seen) invalid();
+	if (value.identity.kind == 'ip') {
+		let fields = split(value.identity.value, ':');
+		if (length(addresses) != 1 || length(sources) != 1 || sources[0] != fields[3] ||
+		    last_seen != int(fields[1])) invalid();
+	}
+	let identity_subject = value.identity.kind == 'mac' ? 'mac:' + normalized_mac : value.identity.value;
+	let conflicts = [];
 	let prior_conflict = null;
-	for (let conflict in value.conflicts) {
-		exact(conflict, { reason: true, subject: true, evidence: true, total: true, truncated: true });
+	for (let raw_conflict in value.conflicts) {
+		exact(raw_conflict, { reason: true, subject: true, evidence: true, total: true, truncated: true });
 		if (!has([ 'hostname_changed', 'duplicate_hostname', 'shared_address', 'address_interfaces' ],
-		    conflict.reason) || type(conflict.subject) != 'string' || !length(conflict.subject) ||
-		    length(conflict.subject) > 128 || type(conflict.truncated) != 'bool') invalid();
-		strict_sorted_strings(conflict.evidence, MAX_EVIDENCE, (evidence) => {
+		    raw_conflict.reason) || type(raw_conflict.subject) != 'string' ||
+		    !length(raw_conflict.subject) || length(raw_conflict.subject) > 128) invalid();
+		strict_sorted_strings(raw_conflict.evidence, MAX_EVIDENCE, (evidence) => {
 			if (type(evidence) != 'string' || !length(evidence) || length(evidence) > 128) invalid();
 		});
-		integer(conflict.total, length(conflict.evidence), MAX_LINES);
-		if (conflict.truncated != (conflict.total > length(conflict.evidence))) invalid();
-		if (conflict.reason == 'hostname_changed') {
-			if (conflict.subject != identity_subject) invalid();
-			for (let evidence in conflict.evidence) hostname(evidence);
+		bounded_counter(raw_conflict.evidence, raw_conflict.total, raw_conflict.truncated,
+			MAX_EVIDENCE, MAX_LINES);
+		if (raw_conflict.total < 2) invalid();
+		if (raw_conflict.reason == 'hostname_changed') {
+			if (raw_conflict.subject != identity_subject || normalized_hostname == null ||
+			    !has(sources, 'dhcp')) invalid();
+			for (let evidence in raw_conflict.evidence) hostname(evidence);
+			if (raw_conflict.evidence[0] != normalized_hostname) invalid();
 		}
-		else if (conflict.reason == 'duplicate_hostname') hostname(conflict.subject);
-		else if (conflict.reason == 'address_interfaces') {
-			for (let evidence in conflict.evidence) interface_name(evidence);
-			address(conflict.subject, null, conflict.evidence[0] ?? 'truncated');
+		else if (raw_conflict.reason == 'duplicate_hostname') {
+			if (normalized_hostname == null || hostname(raw_conflict.subject) != normalized_hostname ||
+			    !has(sources, 'dhcp')) invalid();
+			if (raw_conflict.total > MAX_DEVICES) invalid();
+			for (let evidence in raw_conflict.evidence) identity_id(evidence);
+			retained_identity(raw_conflict.evidence, raw_conflict.total,
+				raw_conflict.truncated, identity_subject);
 		}
-		else if (conflict.reason == 'shared_address') {
-			let at = index(conflict.subject, ':'), family = substr(conflict.subject, 0, at);
-			let parsed = address(substr(conflict.subject, at + 1), null, 'shared');
-			if (family != parsed.family) invalid();
+		else if (raw_conflict.reason == 'address_interfaces') {
+			for (let evidence in raw_conflict.evidence) interface_name(evidence);
+			let matched = null;
+			for (let item in addresses) if (item.address == raw_conflict.subject &&
+			    item.source == 'neighbor') { matched = item; break; }
+			if (matched == null || raw_conflict.total != matched.interface_total ||
+			    raw_conflict.truncated != matched.interfaces_truncated ||
+			    !same_strings(raw_conflict.evidence, matched.interfaces)) invalid();
 		}
-		let conflict_key = conflict.reason + ':' + conflict.subject;
+		else {
+			let at = index(raw_conflict.subject, ':'), family = substr(raw_conflict.subject, 0, at);
+			let parsed = at < 1 ? null : address(substr(raw_conflict.subject, at + 1), null, 'shared');
+			if (parsed == null || family != parsed.family ||
+			    raw_conflict.subject != parsed.family + ':' + parsed.address) invalid();
+			let matched = false;
+			for (let item in addresses) if (item.current && item.family == parsed.family &&
+			    item.address == parsed.address) matched = true;
+			if (!matched) invalid();
+			if (raw_conflict.total > MAX_DEVICES) invalid();
+			for (let evidence in raw_conflict.evidence) identity_id(evidence);
+			retained_identity(raw_conflict.evidence, raw_conflict.total,
+				raw_conflict.truncated, identity_subject);
+		}
+		let conflict_key = raw_conflict.reason + ':' + raw_conflict.subject;
 		if (prior_conflict != null && conflict_key <= prior_conflict) invalid();
 		prior_conflict = conflict_key;
+		let evidence = []; for (let item in raw_conflict.evidence) push(evidence, item);
+		push(conflicts, { reason: raw_conflict.reason, subject: raw_conflict.subject,
+			evidence, total: raw_conflict.total, truncated: raw_conflict.truncated });
 	}
-	if (type(value.addresses) != 'array' || length(value.addresses) > MAX_ADDRESSES) invalid();
-	let newest_address = null;
-	for (let item in value.addresses) {
-		validate_address_record(item, timestamp);
-		if (item.last_seen > value.last_seen) invalid();
-		newest_address = newest_address == null ? item.last_seen : max(newest_address, item.last_seen);
+	for (let item in addresses) if (item.source == 'neighbor' && item.interface_total > 1) {
+		let found = false;
+		for (let item_conflict in conflicts) if (item_conflict.reason == 'address_interfaces' &&
+		    item_conflict.subject == item.address) found = true;
+		if (!found) invalid();
 	}
-	if (length(value.addresses) && newest_address != value.last_seen) invalid();
-	return value;
+	return { identity: normalized_identity, mac: normalized_mac, hostname: normalized_hostname,
+		last_seen, sources, interfaces, interface_total: value.interface_total,
+		interfaces_truncated: value.interfaces_truncated, conflicts, addresses };
 };
 function rank(decision) {
 	if (decision.action == 'block') return 4;
@@ -841,6 +928,8 @@ export function compile_sets(app, input) {
 			let observation = observations[key][identity];
 			for (let iface in item.interfaces)
 				add_unique(observation.interfaces, iface);
+			for (let iface in device.interfaces)
+				add_unique(observation.interfaces, iface);
 			observation.interface_total = max(observation.interface_total,
 				max(item.interface_total, device.interface_total));
 			observation.interfaces_truncated = observation.interfaces_truncated ||
@@ -858,11 +947,17 @@ export function compile_sets(app, input) {
 		for (let identity in identity_keys) {
 			let observation = observations[key][identity];
 			observation.interfaces = sort(observation.interfaces);
-			if (observation.interfaces_truncated &&
-			    observation.interface_total <= length(observation.interfaces))
-				observation.interface_total = length(observation.interfaces) + 1;
-			else if (!observation.interfaces_truncated)
-				observation.interface_total = length(observation.interfaces);
+			if (length(observation.interfaces) > MAX_INTERFACES) {
+				observation.interface_total = max(observation.interface_total,
+					length(observation.interfaces));
+				observation.interfaces_truncated = true;
+				let bounded = [];
+				for (let at = 0; at < MAX_INTERFACES; at++) push(bounded, observation.interfaces[at]);
+				observation.interfaces = bounded;
+			}
+			if (observation.interfaces_truncated)
+				observation.interface_total = max(observation.interface_total, MAX_INTERFACES + 1);
+			else observation.interface_total = length(observation.interfaces);
 			push(values, { identity, decision: effective(app, { mac: observation.mac,
 				interfaces: observation.interfaces, interface_total: observation.interface_total,
 				interfaces_truncated: observation.interfaces_truncated, timestamp }) });
