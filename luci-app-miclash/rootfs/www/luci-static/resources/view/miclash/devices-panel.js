@@ -3,9 +3,9 @@
 
 const SOURCE = 'luci';
 const POLL_MS = 30000;
+const MAX_POLL_MS = 300000;
 const MAC = /^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$/;
 const ACTIONS = [ 'inherit', 'proxy', 'direct', 'block' ];
-const ZONE = /^[A-Za-z][A-Za-z0-9_+.-]*(\/[A-Za-z0-9_+.-]+)+$/;
 
 function text(value, fallback) { return String(value == null || value === '' ? (fallback || '-') : value); }
 function normalizedMac(value) {
@@ -33,11 +33,12 @@ function operationError(record) {
 function create(options) {
 	options = options || {};
 	const api = options.api, doc = options.document || document, win = options.window || window;
-	if (!api || typeof api.devicesList !== 'function' || typeof api.devicePolicies !== 'function' ||
+	if (!api || typeof api.devicesList !== 'function' || typeof api.deviceTimezones !== 'function' ||
+		typeof api.devicePolicies !== 'function' ||
 		typeof api.setDevicePolicy !== 'function' || typeof api.deleteDevicePolicy !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed devices API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, modalGeneration = 0;
-	let devices = [], policies = [], busy = false;
+	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, retryMs = POLL_MS;
 	const cancels = new Set();
 
 	function report(error) {
@@ -47,9 +48,9 @@ function create(options) {
 	}
 	function progress(message, record) { if (typeof options.onProgress === 'function') options.onProgress(message, record || null); }
 	function clearTimer() { if (timer != null) win.clearTimeout(timer); timer = null; }
-	function schedule() {
+	function schedule(delay) {
 		clearTimer(); if (destroyed || doc.hidden || !host) return;
-		timer = win.setTimeout(() => { timer = null; refresh().catch(report); }, POLL_MS);
+		timer = win.setTimeout(() => { timer = null; refresh().catch(report); }, delay || retryMs);
 	}
 	function wait(reply, message) {
 		const id = reply?.operation_id;
@@ -115,6 +116,7 @@ function create(options) {
 	}
 	function openEditor(mac, device, policy) {
 		const token = ++modalGeneration, schedule = policy?.schedule || null;
+		const selectedZone = timezones.includes(schedule?.timezone) ? schedule.timezone : 'UTC';
 		const scheduleEnabled = E('input', { 'id': 'sbox-device-schedule-enabled', 'type': 'checkbox',
 			'checked': schedule ? 'checked' : null });
 		const body = E('div', { 'class': 'sbox-device-policy-editor' }, [
@@ -127,8 +129,10 @@ function create(options) {
 					'value': schedule?.start || '00:00' }) ]),
 				E('label', {}, [ _('End'), E('input', { 'id': 'sbox-device-end', 'type': 'time',
 					'value': schedule?.end || '23:59' }) ]),
-				E('label', {}, [ _('Timezone'), E('input', { 'id': 'sbox-device-timezone', 'type': 'text',
-					'value': schedule?.timezone || 'Europe/Moscow', 'maxlength': '64' }) ])
+				E('label', {}, [ _('Timezone'), E('select', { 'id': 'sbox-device-timezone',
+					'class': 'cbi-input-select', 'value': selectedZone }, timezones.map((name) => E('option', {
+						'value': name, 'selected': name === selectedZone ? 'selected' : null
+					}, name))) ])
 			]),
 			E('p', { 'class': 'sbox-muted' }, _('Guard precedence: fail-closed protection is evaluated before device direct/proxy policy.')),
 			E('div', { 'class': 'right sbox-management-actions' }, [
@@ -166,7 +170,7 @@ function create(options) {
 			const timezone = String(body.querySelector('#sbox-device-timezone')?.value || '').trim();
 			if (!days.length || days.some((day) => !Number.isInteger(day) || day < 1 || day > 7) ||
 				!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(start) ||
-				!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(end) || start === end || !ZONE.test(timezone))
+				!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(end) || start === end || !timezones.includes(timezone))
 				throw new Error(_('Enter valid schedule days, times, and IANA timezone.'));
 			policy.schedule = { days, start, end, timezone };
 		}
@@ -178,11 +182,20 @@ function create(options) {
 	}
 	async function refresh(force) {
 		if (destroyed || doc.hidden && !force) return;
-		const token = ++generation, replies = await Promise.all([ api.devicesList(), api.devicePolicies() ]);
-		if (destroyed || token !== generation) return;
-		devices = Array.isArray(replies[0]) ? replies[0] : (Array.isArray(replies[0]?.devices) ? replies[0].devices : []);
-		policies = Array.isArray(replies[1]) ? replies[1] : (Array.isArray(replies[1]?.policies) ? replies[1].policies : []);
-		paint(); schedule();
+		const token = ++generation;
+		try {
+			const replies = await Promise.all([ api.devicesList(), api.devicePolicies(), api.deviceTimezones() ]);
+			if (destroyed || token !== generation) return;
+			const zones = Array.isArray(replies[2]) ? replies[2] : replies[2]?.timezones;
+			if (!Array.isArray(zones) || !zones.length || zones.length > 512 || zones[0] !== 'UTC' ||
+				zones.some((name, index) => typeof name !== 'string' || name.length > 64 || zones.indexOf(name) !== index))
+				throw new Error(_('Invalid timezone response.'));
+			devices = Array.isArray(replies[0]) ? replies[0] : (Array.isArray(replies[0]?.devices) ? replies[0].devices : []);
+			policies = Array.isArray(replies[1]) ? replies[1] : (Array.isArray(replies[1]?.policies) ? replies[1].policies : []);
+			timezones = zones.slice(); retryMs = POLL_MS; paint();
+		}
+		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
+		finally { if (!destroyed && token === generation) schedule(); }
 	}
 	function visibilitychange() { if (doc.hidden) clearTimer(); else refresh().catch(report); }
 	function mount(node) { host = node; destroyed = false; paint(); refresh().catch(report); return host; }

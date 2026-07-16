@@ -43,7 +43,7 @@ assert.match(settings, /10000/); // lower expert cadence bound
 assert.match(settings, /86400000/); // bounded notification dedupe window
 
 for (const token of [
-	'devicesList', 'devicePolicies', 'setDevicePolicy', 'deleteDevicePolicy',
+	'devicesList', 'deviceTimezones', 'devicePolicies', 'setDevicePolicy', 'deleteDevicePolicy',
 	'AA:BB:CC:DD:EE:FF', 'inherit', 'proxy', 'direct', 'block', 'timezone',
 	'expected_revision', 'Guard', 'visibilitychange', 'destroy'
 ]) assert.match(devices, new RegExp(token), `devices panel missing ${token}`);
@@ -66,6 +66,9 @@ assert.match(css, /@media[\s\S]*max-width:[\s\S]*sbox-management-grid/,
 
 assert.match(api, /devices_policy_delete[^\n]*policy_id[^\n]*expected_revision/,
 	'device delete transport does not match the domain CAS contract');
+assert.doesNotMatch(config, /id="sbox-memory-guard"|id="sbox-auto-hide-notifications"|miclash-memory-guard[^\n]*sync/,
+	'legacy Settings form still owns Memory Guard or notification controls');
+assert.match(api, /devices_timezones/, 'typed timezone allowlist method is missing');
 
 const identity = (value) => String(value);
 const load = (source) => new Function('ui', 'E', '_', 'document', 'window', source)(
@@ -107,6 +110,7 @@ class MiniNode {
 	addEventListener(type, callback) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(callback); }
 	removeEventListener(type, callback) { this.listeners.set(type, (this.listeners.get(type) || []).filter((item) => item !== callback)); }
 	click() { for (const callback of this.listeners.get('click') || []) callback({ preventDefault() {}, target: this }); }
+	dispatch(type) { for (const callback of this.listeners.get(type) || []) callback({ target: this }); }
 	remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((item) => item !== this); }
 	matches(selector) {
 		if (selector.startsWith('#')) return this.getAttribute('id') === selector.slice(1);
@@ -142,9 +146,11 @@ const dynamicLoad = (source) => new Function('ui', 'E', '_', 'document', 'window
 	uiMock, E, identity, documentMock, windowMock);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-const settingsCalls = [];
+const settingsCalls = [], settingsErrors = [];
+let settingsFailNext = false, notificationSent = true;
 const settingsApi = {
-	async settings_get() { return { memory: { enabled: true }, telegram: { enabled: true },
+	async settings_get() { if (settingsFailNext) { settingsFailNext = false; throw new Error('transient'); }
+		return { memory: { enabled: true }, telegram: { enabled: true },
 		notifications: { auto_hide: true, channels: [ 'telegram' ], events: [ 'failure' ] } }; },
 	async memoryStatus() { return { phase: 'monitoring', current_rss_kb: 64000, baseline_rss_kb: 32000 }; },
 	async memorySettings() { return Object.fromEntries(Object.entries(settingsModule.MEMORY_FIELDS).map(([name, range]) => [name, range[2]])); },
@@ -153,25 +159,43 @@ const settingsApi = {
 	async notificationSettings() { return {}; },
 	async settings_set(patch, source) { settingsCalls.push([ 'settings_set', patch, source ]); return { operation_id: 'save-settings' }; },
 	async telegram_test() { settingsCalls.push([ 'telegram_test' ]); return { sent: true }; },
-	async testNotification(channel) { settingsCalls.push([ 'notifications_test', channel ]); return { sent: true }; },
+	async testNotification(channel) { settingsCalls.push([ 'notifications_test', channel ]); return { sent: notificationSent }; },
 	async memoryResetBaseline() { return { operation_id: 'reset-memory' }; },
 	watchOperation(id, callback) { callback({ id, state: 'success', progress: 100 }); return () => settingsCalls.push([ 'cancel', id ]); },
 	destroy() { settingsCalls.push([ 'destroy' ]); }
 };
-const settingsPanel = dynamicLoad(settings).create({ api: settingsApi, document: documentMock, window: windowMock });
+const settingsPanel = dynamicLoad(settings).create({ api: settingsApi, document: documentMock, window: windowMock,
+	onError(error) { settingsErrors.push(error); } });
 const settingsHost = new MiniNode('div'); settingsPanel.mount(settingsHost); await tick();
 assert.equal(settingsHost.querySelector('#sbox-telegram-token').value, '', 'stored Telegram token entered the DOM input');
 assert.equal(settingsHost.querySelector('#sbox-telegram-user-id').value, '9007199254740993123456789');
 assert.equal(settingsHost.querySelector('.sbox-management-expert').getAttribute('open'), null,
 	'expert memory settings are expanded by default');
+const dirtyToken = settingsHost.querySelector('#sbox-telegram-token');
+dirtyToken.value = 'draft-token'; dirtyToken.dispatch('input');
+const firstPoll = Array.from(timers)[0]; timers.delete(firstPoll); settingsFailNext = true; firstPoll.fn();
+await tick(); await tick();
+assert.equal(settingsHost.querySelector('#sbox-telegram-token'), dirtyToken,
+	'failed status poll replaced a dirty token input');
+assert.equal(dirtyToken.value, 'draft-token');
+const recoveryPoll = Array.from(timers)[0]; timers.delete(recoveryPoll); recoveryPoll.fn(); await tick(); await tick();
+assert.equal(settingsHost.querySelector('#sbox-telegram-token'), dirtyToken,
+	'successful status poll replaced a dirty form');
+dirtyToken.value = '';
 settingsHost.querySelector('[data-action="telegram-test"]').click(); await tick(); await tick();
 assert.equal(settingsCalls.findIndex((call) => call[0] === 'settings_set') <
 	settingsCalls.findIndex((call) => call[0] === 'telegram_test'), true,
 	'Telegram test ran before validated settings save completed');
 assert.equal(settingsCalls.find((call) => call[0] === 'settings_set')[1].telegram.token, undefined,
 	'blank Telegram token overwrote the stored secret');
+notificationSent = false;
+settingsHost.querySelector('#sbox-notification-test-channel').value = 'telegram';
+settingsHost.querySelector('[data-action="notification-test"]').click(); await tick(); await tick(); await tick();
+assert.match(String(settingsErrors.at(-1)?.message || ''), /not sent/i,
+	'notification sent=false was reported as success');
 settingsPanel.destroy();
 assert.ok(settingsCalls.some((call) => call[0] === 'destroy'));
+assert.equal(Array.from(timers).length, 0, 'destroy left a settings poll timer behind');
 
 const deviceCalls = [];
 const knownPolicy = { id: 'dp_1_0000000000000001', revision: 7, scope: 'device',
@@ -180,6 +204,7 @@ const devicesApi = {
 	async devicesList() { return [ { hostname: '<script>alert(1)</script>', mac: 'aa:bb:cc:dd:ee:ff',
 		last_seen: 1, addresses: [ { address: '192.0.2.2', current: true } ] } ]; },
 	async devicePolicies() { return [ knownPolicy ]; },
+	async deviceTimezones() { return [ 'UTC', 'Europe/Berlin' ]; },
 	async setDevicePolicy(policy, source) { deviceCalls.push([ 'set', policy, source ]); return { operation_id: 'policy-save' }; },
 	async deleteDevicePolicy(id, revision, source) { deviceCalls.push([ 'delete', id, revision, source ]); return { operation_id: 'policy-delete' }; },
 	watchOperation(id, callback) { callback({ id, state: 'success' }); return () => {}; }, destroy() { deviceCalls.push([ 'destroy' ]); }
@@ -190,6 +215,7 @@ assert.match(devicesHost.textContent, /proxy/, 'lowercase domain MAC did not mat
 assert.equal(devicesHost.querySelector('script'), null, 'hostile hostname was interpreted as HTML');
 assert.match(devicesHost.textContent, /Guard has highest precedence/);
 const deviceModal = devicesPanel.openEditor('AA:BB:CC:DD:EE:FF', { hostname: 'router' }, knownPolicy);
+assert.equal(deviceModal.querySelector('#sbox-device-timezone').tagName, 'SELECT');
 deviceModal.querySelector('#sbox-device-policy-action').value = 'block';
 deviceModal.querySelector('[data-action="save"]').click(); await tick(); await tick();
 assert.deepEqual(deviceCalls.find((call) => call[0] === 'set'), [ 'set', {
@@ -202,6 +228,7 @@ let releaseDevices, releasePolicies;
 const lateApi = {
 	devicesList() { return new Promise((resolve) => { releaseDevices = resolve; }); },
 	devicePolicies() { return new Promise((resolve) => { releasePolicies = resolve; }); },
+	async deviceTimezones() { return [ 'UTC' ]; },
 	async setDevicePolicy() { return { operation_id: 'unused' }; }, async deleteDevicePolicy() { return { operation_id: 'unused' }; },
 	watchOperation() { return () => {}; }, destroy() {}
 };
@@ -217,11 +244,15 @@ const backupApi = {
 	async settings_set(patch, source) { backupCalls.push([ 'settings', patch, source ]); return { operation_id: 'backup-settings' }; },
 	async backupCreate() { return { operation_id: 'backup-create' }; },
 	async backupInspect(id) { backupCalls.push([ 'inspect', id ]); return { id: 'x-0000000000001-00000000000000000000000000000003',
-		files: [ { path: '<img src=x onerror=alert(1)>', size: 1, secret: false } ], app_version: '1' }; },
+		source_id: id, created_at: 1710000000000, inspected_at: 1710000001000, expires_at: 1710000900000,
+		includes: [ 'settings', '<b>rulesets</b>' ],
+		files: [ { path: '<img src=x onerror=alert(1)>', size: 1,
+			sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', secret: true,
+			content: 'DO_NOT_RENDER' } ], app_version: '1' }; },
 	async backupRestore(id, source) { backupCalls.push([ 'restore', id, source ]); return { operation_id: 'restore-one' }; },
 	async downloadChunks() { return new Uint8Array([1]); },
 	async uploadChunks(kind, metadata, payload) { backupCalls.push([ 'upload', kind, metadata, payload.byteLength ]);
-		return { import_id: 'i-0000000000001-00000000000000000000000000000002' }; },
+		return { completed: true, result: { import_id: 'i-0000000000001-00000000000000000000000000000002' } }; },
 	watchOperation(id, callback) { callback({ id, state: 'success' }); return () => {}; }, destroy() {}
 };
 const backupPanel = dynamicLoad(backup).create({ api: backupApi, document: documentMock, window: windowMock });
@@ -237,9 +268,18 @@ await backupPanel.importArchive(archive);
 assert.deepEqual(backupCalls.map((call) => call[0]), [ 'upload', 'inspect' ], 'import restored before inspection preview');
 const planBody = modalCalls.at(-1).body;
 assert.equal(planBody.querySelector('img'), null, 'backup manifest was interpreted as HTML');
+for (const expected of [ 'x-0000000000001-00000000000000000000000000000003',
+	'i-0000000000001-00000000000000000000000000000002', 'settings', '<b>rulesets</b>',
+	'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'secret' ])
+	assert.ok(planBody.textContent.includes(expected), `manifest preview omitted ${expected}`);
+assert.doesNotMatch(planBody.textContent, /DO_NOT_RENDER/, 'manifest preview rendered an unapproved secret field');
 planBody.querySelector('[data-action="restore"]').click(); await tick(); await tick();
 assert.equal(backupCalls.at(-1)[0], 'restore');
 assert.match(backupCalls.at(-1)[1], /^x-/, 'restore did not use the opaque inspection ID');
+backupApi.uploadChunks = async () => ({ completed: true,
+	import_id: 'i-0000000000001-00000000000000000000000000000004' });
+await assert.rejects(backupPanel.importArchive(archive), /Invalid backup import response/,
+	'non-envelope import response was accepted');
 backupPanel.destroy();
 
 console.log('MiClash management panels contract passed');

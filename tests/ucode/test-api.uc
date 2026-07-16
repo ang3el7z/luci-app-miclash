@@ -222,6 +222,7 @@ let app = {
 	}),
 	telegram_settings: () => settings_domain.get().telegram,
 	telegram_test: () => true,
+	devices_timezones: () => [ 'UTC', 'Europe/Berlin' ],
 	set_draining: (value) => application_draining = value
 };
 let methods = api.method_table(app);
@@ -239,7 +240,7 @@ json_equal(names, sort([
 	'diagnostics_summary', 'diagnostics_create_report', 'diagnostics_route_test',
 	'backup_list', 'backup_create', 'backup_inspect', 'backup_restore',
 	'telegram_status', 'telegram_settings', 'telegram_test',
-	'devices_list', 'devices_policy_list', 'devices_policy_set', 'devices_policy_delete',
+	'devices_list', 'devices_timezones', 'devices_policy_list', 'devices_policy_set', 'devices_policy_delete',
 	'notifications_settings', 'notifications_test',
 	'transfer_begin', 'transfer_write', 'transfer_read', 'transfer_finish', 'transfer_abort'
 ]));

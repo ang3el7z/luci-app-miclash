@@ -440,7 +440,8 @@ function schedule_spec(value) {
 	    !match(value.start, /^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/) ||
 	    !match(value.end, /^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/) || value.start == value.end ||
 	    type(value.timezone) != 'string' || length(value.timezone) > 64 ||
-	    !match(value.timezone, /^[A-Za-z][A-Za-z0-9_+.-]*(\/[A-Za-z0-9_+.-]+)+$/)) invalid();
+	    (value.timezone != 'UTC' &&
+	     !match(value.timezone, /^[A-Za-z][A-Za-z0-9_+.-]*(\/[A-Za-z0-9_+.-]+)+$/))) invalid();
 	let seen = {};
 	for (let day in value.days) { integer(day, 1, 7); if (seen[day]) invalid(); seen[day] = true; }
 	return clone(value);
@@ -612,8 +613,41 @@ export function policy_list(app) {
 	journal_state(app, result, false);
 	return clone(result);
 };
+export function timezones(app) {
+	if (type(app?.timezones?.list) != 'function' || type(app?.timezones?.resolve) != 'function')
+		invalid('INTERNAL');
+	let provided = app.timezones.list();
+	if (type(provided) != 'array' || !length(provided) || length(provided) > 512)
+		invalid('INTERNAL');
+	let seen = {}, rest = [], has_utc = false;
+	for (let name in provided) {
+		if (type(name) != 'string' || length(name) > 64 ||
+		    (name != 'UTC' && !match(name, /^[A-Za-z][A-Za-z0-9_+.-]*(\/[A-Za-z0-9_+.-]+)+$/)) ||
+		    seen[name]) invalid('INTERNAL');
+		seen[name] = true;
+		if (name == 'UTC') has_utc = true; else push(rest, name);
+	}
+	if (!has_utc) invalid('INTERNAL');
+	sort(rest);
+	return [ 'UTC', ...rest ];
+};
+function validate_policy_timezone(app, policy) {
+	if (policy.schedule == null) return true;
+	if (index(timezones(app), policy.schedule.timezone) < 0)
+		invalid('VALIDATION_FAILED');
+	let now = app?.clock?.now();
+	if (type(now) != 'int' || now < 0) invalid('INTERNAL');
+	let timestamp = int(now / 1000), resolved;
+	try { resolved = app.timezones.resolve(policy.schedule.timezone, timestamp); }
+	catch (error) { invalid('VALIDATION_FAILED'); }
+	if (resolved == null) invalid('VALIDATION_FAILED');
+	try { schedule.active(policy.schedule, timestamp, resolved); }
+	catch (error) { invalid('VALIDATION_FAILED'); }
+	return true;
+};
 export function policy_set(app, policy) {
 	let wanted = normalized_policy(policy);
+	validate_policy_timezone(app, wanted);
 	if (wanted.action == 'direct' && guard(app) !== false) invalid('VALIDATION_FAILED');
 	return with_lock(app, { barrier: 'normal', wait_ms: 0 }, () => {
 		let uci = cursor(app);
@@ -693,7 +727,7 @@ function subject(value) {
 function policy_active(app, policy, timestamp) {
 	if (policy.schedule == null) return true;
 	if (type(app?.timezones?.resolve) != 'function') invalid('INTERNAL');
-	let capability = app.timezones.resolve(policy.schedule.timezone);
+	let capability = app.timezones.resolve(policy.schedule.timezone, timestamp);
 	return schedule.active(policy.schedule, timestamp, capability);
 };
 function safe_action(app, action, policy_id) {

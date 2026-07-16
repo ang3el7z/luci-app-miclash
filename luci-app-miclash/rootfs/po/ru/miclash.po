@@ -2020,3 +2020,24 @@ msgstr "Результат обновления"
 
 msgid "Warm-up time (ms)"
 msgstr "Время прогрева (мс)"
+
+msgid "Expires"
+msgstr "Истекает"
+
+msgid "Inspected"
+msgstr "Проверено"
+
+msgid "Inspection ID"
+msgstr "ID проверки"
+
+msgid "Invalid timezone response."
+msgstr "Получен некорректный список часовых поясов."
+
+msgid "Notification test message was not sent."
+msgstr "Тестовое уведомление не было отправлено."
+
+msgid "public"
+msgstr "открытый"
+
+msgid "Source ID"
+msgstr "ID источника"

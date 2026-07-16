@@ -8,6 +8,10 @@ const IMPORT_ID = /^i-[0-9]{13}-[0-9a-f]{32}$/;
 const INSPECTION_ID = /^x-[0-9]{13}-[0-9a-f]{32}$/;
 
 function text(value, fallback) { return String(value == null || value === '' ? (fallback || '-') : value); }
+function boundedText(value, maximum, fallback) {
+	const result = text(value, fallback);
+	return result.length <= maximum ? result : result.slice(0, maximum) + '…';
+}
 function bytes(value) {
 	const n = Number(value); if (!Number.isFinite(n) || n < 0) return '-';
 	if (n < 1024) return Math.round(n) + ' B';
@@ -159,8 +163,11 @@ function create(options) {
 		const bytesValue = new Uint8Array(await file.arrayBuffer());
 		if (destroyed || bytesValue.byteLength !== file.size) throw new Error(_('Backup archive changed while reading.'));
 		const staged = await api.uploadChunks('backup', { purpose: 'inspect' }, bytesValue);
-		if (!IMPORT_ID.test(staged?.import_id || '')) throw new Error(_('Invalid backup import response.'));
-		await inspect(staged.import_id);
+		if (!staged || staged.completed !== true || Object.keys(staged).length !== 2 ||
+			!staged.result || typeof staged.result !== 'object' || Array.isArray(staged.result) ||
+			Object.keys(staged.result).length !== 1 || !IMPORT_ID.test(staged.result.import_id || ''))
+			throw new Error(_('Invalid backup import response.'));
+		await inspect(staged.result.import_id);
 	}
 	async function inspect(id) {
 		if (!BACKUP_ID.test(id || '') && !IMPORT_ID.test(id || '')) throw new Error(_('Invalid backup/import ID.'));
@@ -172,12 +179,22 @@ function create(options) {
 	function showPlan(plan, token) {
 		const inspection_id = plan.id;
 		const files = Array.isArray(plan.files) ? plan.files.slice(0, 512) : [];
+		const groups = Array.isArray(plan.includes) ? plan.includes.slice(0, 32) : [];
 		const manifest = E('ul', { 'class': 'sbox-backup-manifest' }, files.map((file) => E('li', {}, [
-			text(file.path), ' · ', bytes(file.size), file.secret === true ? ' · ' + _('secret') : ''
+			boundedText(file.path, 512), ' · ', bytes(file.size), ' · ',
+			/^[0-9a-f]{64}$/.test(file.sha256 || '') ? file.sha256 : '-', ' · ',
+			file.secret === true ? _('secret') : _('public')
 		])));
 		const restore = action(_('Restore inspected backup'), 'restore', true), close = action(_('Close'), 'close');
 		const body = E('div', { 'class': 'sbox-backup-plan' }, [
-			E('p', {}, [ E('strong', {}, _('Restore plan')), ' · ', text(plan.app_version), ' · ', when(plan.created_at) ]),
+			E('p', {}, [ E('strong', {}, _('Restore plan')), ' · ', boundedText(plan.app_version, 64),
+				' · ', when(plan.created_at) ]),
+			E('p', { 'class': 'sbox-muted' }, [ _('Inspection ID'), ': ', inspection_id,
+				' · ', _('Source ID'), ': ', boundedText(plan.source_id, 64) ]),
+			E('p', { 'class': 'sbox-muted' }, [ _('Created'), ': ', when(plan.created_at),
+				' · ', _('Inspected'), ': ', when(plan.inspected_at),
+				' · ', _('Expires'), ': ', when(plan.expires_at) ]),
+			E('p', {}, [ _('Contents'), ': ', groups.map((name) => boundedText(name, 64)).join(', ') || '-' ]),
 			E('p', { 'class': 'sbox-muted' }, _('Review this exact manifest before restore. Restore uses only the opaque inspection ID.')),
 			manifest, E('div', { 'class': 'right sbox-management-actions' }, [ restore, close ])
 		]);

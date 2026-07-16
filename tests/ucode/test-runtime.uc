@@ -22,6 +22,24 @@ assert_equal(fake_process.calls[0].command, 'echo');
 assert_throws(() => fake_process.run('echo hello'), 'INVALID_ARGUMENT');
 assert_throws(() => fake_process.run({ command: 'echo', args: [], shell: true }), 'INVALID_ARGUMENT');
 
+let timezone_capability = { list: () => [ 'UTC' ], resolve: () => ({}) };
+let secure_capability = { open: () => ({}) };
+let reconciliation = { run: () => ({ state: 'queued' }) };
+let rulesets = { validate: () => true };
+let lock_identity = { boot: 'boot', pid: 1, start: 1 };
+let extended = runtime.create({
+	timezones: timezone_capability, secure_fs: secure_capability,
+	reconcile: reconciliation, rulesets, mutation_lock_self: lock_identity,
+	core_available: true, app_version: '0.9.2'
+});
+assert_true(extended.timezones === timezone_capability);
+assert_true(extended.secure_fs === secure_capability);
+assert_true(extended.reconcile === reconciliation);
+assert_true(extended.rulesets === rulesets);
+assert_true(extended.mutation_lock_self === lock_identity);
+assert_equal(extended.core_available, true);
+assert_equal(extended.app_version, '0.9.2');
+
 let production = runtime.create();
 assert_true(type(production.clock.set_timeout) == 'function');
 assert_true(type(production.random.hex) == 'function');

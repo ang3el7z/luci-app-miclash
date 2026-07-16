@@ -209,10 +209,12 @@ assert.match(packageRemoval, /stop_disable miclash-memory-guard/);
 assert.match(acl, /"\/opt\/clash\/bin\/miclash-memory-guard": \[ "exec" \]/);
 assert.match(settingsModel, /enableMemoryGuard: false/);
 assert.match(settingsModel, /case 'ENABLE_MEMORY_GUARD': settings\.enableMemoryGuard = value === 'true'/);
-assert.match(settingsModel, /settings\.ENABLE_MEMORY_GUARD = enableMemoryGuard/);
-assert.match(config, /id="sbox-memory-guard"/);
-assert.match(config, /fs\.exec\('\/opt\/clash\/bin\/miclash-memory-guard', \['sync'\]\)/);
-assert.match(config, /formState\.enableMemoryGuard/);
+assert.doesNotMatch(settingsModel, /settings\.ENABLE_MEMORY_GUARD = enableMemoryGuard/,
+	'the legacy serializer must not own Memory Guard writes');
+assert.doesNotMatch(config, /id="sbox-memory-guard"|id="sbox-auto-hide-notifications"/,
+	'the legacy form must not duplicate management controls');
+assert.doesNotMatch(config, /fs\.exec\('\/opt\/clash\/bin\/miclash-memory-guard', \['sync'\]\)|formState\.enableMemoryGuard/,
+	'the legacy save path must not synchronize Memory Guard');
 assert.match(source, /usage: \$0[^"]*snapshot[^"]*run[^"]*sync/);
 for (const forbidden of ['reboot', 'drop_caches', 'swapon', 'swapoff']) {
 	assert.ok(!source.includes(forbidden), `memory guard must not invoke ${forbidden}`);

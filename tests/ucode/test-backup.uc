@@ -10,9 +10,9 @@ const LOCK_BOOT = '12345678-1234-1234-1234-123456789abc';
 const LOCK_PID = 7000;
 const LOCK_START = 500;
 
-for (let method in [ 'list', 'create', 'inspect', 'restore', 'prune' ])
+for (let method in [ 'list', 'create', 'inspect', 'restore', 'prune', 'transfer_download', 'transfer_import' ])
 	assert_equal(type(backup[method]), 'function', method + ' is exported');
-assert_equal(length(keys(backup)), 5, 'backup module must expose exactly five methods');
+assert_equal(length(keys(backup)), 7, 'backup module must expose exactly seven methods');
 
 function clone(value) { return json(sprintf('%J', value)); };
 
@@ -621,6 +621,32 @@ assert_true(index(public_bytes, 'manifest.json') > index(public_bytes, 'settings
 	'manifest must be the final USTAR member');
 for (let secret in [ 'controller-password', 'telegram-secret', 'user:pass', 'subscription_url' ])
 	assert_true(index(public_bytes, secret) < 0, 'default archive leaked ' + secret);
+
+let download_source = backup.transfer_download(base.app, created.id);
+assert_equal(download_source.size, length(public_bytes));
+assert_equal(download_source.sha256, base.runtime.digest.sha256(public_bytes));
+assert_equal(download_source.read(0, 17), substr(public_bytes, 0, 17));
+assert_equal(download_source.read(17, length(public_bytes) - 17), substr(public_bytes, 17));
+assert_equal(download_source.finish().sha256, download_source.sha256);
+assert_equal(download_source.close(), true);
+assert_throws(() => download_source.read(0, 1), 'HEALTH_FAILED');
+
+let upload_offset = 0;
+let imported = backup.transfer_import(base.app, {
+	kind: 'backup', metadata: { purpose: 'inspect' }, size: length(public_bytes),
+	sha256: base.runtime.digest.sha256(public_bytes),
+	read: (amount) => {
+		let chunk = substr(public_bytes, upload_offset, amount);
+		upload_offset += length(chunk); return chunk;
+	}
+});
+assert_match(imported.import_id, /^i-[0-9]{13}-[0-9a-f]{32}$/);
+let imported_plan = backup.inspect(base.app, imported.import_id);
+assert_equal(imported_plan.source_id, imported.import_id);
+assert_throws(() => backup.transfer_import(base.app, {
+	kind: 'backup', metadata: { purpose: 'restore' }, size: 1,
+	sha256: base.runtime.digest.sha256('x'), read: () => 'x'
+}), 'INVALID_ARGUMENT');
 
 let ruleset_90 = '', ruleset_91 = '';
 for (let i = 0; i < 86; i++) ruleset_90 += 'a';

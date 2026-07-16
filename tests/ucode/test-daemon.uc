@@ -1,11 +1,14 @@
 import { assert_equal, assert_throws, assert_true } from 'testlib';
 import * as daemon from 'miclash.daemon';
+import * as real_api from 'miclash.api';
+import * as real_application from 'miclash.application';
 
 let order = [];
 let connect_count = 0, disconnect_count = 0;
+let published_methods = null;
 let connection = {
 	call: () => null,
-	publish: (name, methods) => { push(order, 'publish'); return { name }; },
+	publish: (name, methods) => { published_methods = methods; push(order, 'publish'); return { name }; },
 	disconnect: () => { disconnect_count++; push(order, 'disconnect'); return true; }
 };
 let rt = {
@@ -47,8 +50,26 @@ let factories = {
 	config: { create: () => { push(order, 'config'); return {}; } },
 	state: { create: () => state_model },
 	application: { create: () => application },
-	settings: { load: () => ({}), validate_patch: (patch) => patch, save: () => ({}) },
-	storage: { write_json: () => true }
+	settings: { load: () => ({
+		memory: { enabled: false, sample_interval_ms: 60000 },
+		notifications: { auto_hide: true, channels: [ 'syslog' ], events: [ 'failure' ] }
+	}), validate_patch: (patch) => patch, save: () => ({}) },
+	storage: { write_json: () => true },
+	memory: { create: () => ({ status: () => ({}), settings: (value) => value ?? {
+		sample_interval_ms: 60000 }, reset_baseline: () => true, sample: () => true }) },
+	notify: { producer: () => ({ memory: (event) => event }), create: () => ({
+		emit: () => true, test: () => true }) },
+	backup: {
+		list: () => [], create: () => ({}), inspect: () => ({}), restore: () => ({}),
+		transfer_download: () => ({}), transfer_import: () => ({})
+	},
+	devices: {
+		discover: () => [], timezones: (app) => app.timezones.list(), policy_list: () => [],
+		policy_set: () => ({}), policy_delete: () => true
+	},
+	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
+	api: { create_transfers: () => ({ begin: () => ({}), write: () => ({}), read: () => ({}),
+		finish: () => ({}), abort: () => ({}), close: () => true }), register: real_api.register }
 };
 
 let process = daemon.compose(rt, factories);
@@ -80,3 +101,125 @@ function malformed_connection(candidate) {
 assert_equal(malformed_connection({ call: () => null, disconnect: () => true }), 1);
 assert_equal(malformed_connection({ publish: () => ({}), disconnect: () => true }), 1);
 assert_equal(malformed_connection({ call: () => null, publish: () => ({}) }), 0);
+
+// The management cutover uses the real application facade and real API
+// registration. Domain implementations remain injected so this test observes
+// daemon composition rather than duplicating each domain's focused tests.
+let integration_methods = null, integrated_disconnects = 0, integrated_closes = [];
+let integrated_connection = {
+	call: () => null,
+	send: () => true,
+	publish: (name, methods) => { integration_methods = methods; return { name }; },
+	disconnect: () => { integrated_disconnects++; return true; }
+};
+let operation_sequence = 0, operation_records = {};
+let integrated_operations = {
+	recover_interrupted: () => true,
+	submit: (kind, source, context, worker) => {
+		let id = 'operation-' + (++operation_sequence);
+		let record = { id, kind, source, context, state: 'running' };
+		operation_records[id] = record;
+		let result = worker({ id, stage: () => true });
+		record.state = 'success'; record.result = result;
+		return { id };
+	},
+	get: (id) => operation_records[id] ?? null,
+	list: () => values(operation_records), subscribe: () => () => true
+};
+let desired = {
+	memory: { enabled: true, sample_interval_ms: 60000 },
+	notifications: { auto_hide: true, channels: [ 'syslog', 'luci' ], events: [ 'failure' ] },
+	backup: { enabled: false, retention: 5, include_secrets: false },
+	telegram: { enabled: false, token: '', user_id: '' }
+};
+let integrated_state = {
+	snapshot: () => ({ desired }), health: () => ({ ready: true }),
+	set_desired: (value) => desired = value, observe: () => null,
+	close: () => { push(integrated_closes, 'state'); return true; }, flush: () => true
+};
+let guard = {
+	status: () => ({ phase: 'monitoring', current_rss_kb: 64000 }),
+	settings: (value) => value ?? { sample_interval_ms: 60000 },
+	reset_baseline: () => true, sample: () => true
+};
+let notifier = {
+	emit: () => true, test: (channel) => channel == 'syslog' || channel == 'luci'
+};
+let imported_staged = null, backup_app_seen = null, devices_app_seen = null;
+let fake_transfers = null;
+let integrated_factories = {
+	operations: { create: () => integrated_operations },
+	service: { create: () => ({
+		start: () => true, stop: () => true, reload: () => true,
+		restart_service: () => true, wait_ready: () => ({ ok: true })
+	}) },
+	history: { create: () => ({
+		list: () => [], diff: () => ({ text: '' }), open_draft: () => ({ id: 'operation-history' }),
+		restore: () => ({ id: 'operation-restore' })
+	}) },
+	config: { create: () => ({
+		list_profiles: () => [ 'config.yaml' ], read_active: () => 'mode: rule\n',
+		read_draft: () => 'mode: rule\n', save_draft: () => ({ id: 'operation-draft' }),
+		validate: () => ({ id: 'operation-validate' }), apply: () => ({ id: 'operation-apply' }),
+		validate_in_operation: () => ({ ok: true })
+	}) },
+	state: { create: () => integrated_state },
+	application: real_application,
+	settings: {
+		load: () => desired, validate_patch: (patch) => patch,
+		save: (runtime, patch) => { desired = { ...desired, ...patch }; return desired; }
+	},
+	storage: { write_json: () => true },
+	memory: { create: () => guard },
+	notify: { producer: () => ({ memory: (event) => event }), create: () => notifier },
+	backup: {
+		list: (app) => { backup_app_seen = app; return [ { id: 'b-1700000000000-00000000000000000000000000000000' } ]; },
+		create: () => ({ id: 'b-1700000000000-00000000000000000000000000000000' }),
+		inspect: (app, id) => ({ id: 'x-1700000000000-00000000000000000000000000000000', source_id: id }),
+		restore: () => ({ id: 'operation-backup-restore' }),
+		transfer_download: () => ({ size: 1, sha256: sprintf('%064d', 0), read: () => 'x', finish: () => ({}), close: () => true }),
+		transfer_import: (app, staged) => { imported_staged = staged; return { import_id: 'i-1700000000000-00000000000000000000000000000000' }; }
+	},
+	devices: {
+		discover: (app) => { devices_app_seen = app; return [ { mac: '02:00:00:00:00:01' } ]; },
+		timezones: (app) => app.timezones.list(), policy_list: () => [],
+		policy_set: () => ({ id: 'dp_1_0000000000000000', revision: 1 }),
+		policy_delete: () => true
+	},
+	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
+	api: {
+		create_transfers: (dependencies) => {
+			fake_transfers = {
+				begin: () => ({ transfer_id: 'transfer' }), write: () => ({ next_seq: 1 }),
+				read: () => ({ completed: true }), abort: () => ({ aborted: true }),
+				finish: () => ({ completed: true, result: dependencies.uploads.backup({
+					kind: 'backup', metadata: { purpose: 'inspect' }, size: 1,
+					sha256: sprintf('%064d', 0), read: () => 'x'
+				}) }),
+				close: () => { push(integrated_closes, 'transfers'); return true; }
+			};
+			return fake_transfers;
+		},
+		register: real_api.register
+	}
+};
+let integrated_runtime = {
+	ubus: { connect: () => integrated_connection },
+	clock: { now: () => 1700000000000, set_timeout: () => ({ cancel: () => true }) },
+	paths: { tmp: '/tmp/miclash', etc: '/etc/miclash', run: '/var/run/miclash' },
+	secure_fs: {}, fs: {}, digest: {}, random: {}, uci: {}, process: { run: () => ({ code: 0 }) }
+};
+let integrated = daemon.compose(integrated_runtime, integrated_factories);
+assert_equal(integration_methods.memory_status.call({ args: {} }).phase, 'monitoring');
+assert_equal(length(integration_methods.backup_list.call({ args: {} })), 1);
+assert_equal(integration_methods.devices_timezones.call({ args: {} })[0], 'UTC');
+assert_equal(integration_methods.devices_list.call({ args: {} })[0].mac, '02:00:00:00:00:01');
+assert_equal(integration_methods.notifications_test.call({ args: { channel: 'syslog' } }).sent, true);
+assert_equal(fake_transfers.finish({}).result.import_id,
+	'i-1700000000000-00000000000000000000000000000000');
+assert_true(imported_staged != null);
+assert_true(backup_app_seen.runtime === integrated_runtime);
+assert_true(devices_app_seen.timezones.list()[0] == 'UTC');
+assert_equal(integrated.close(), true);
+assert_equal(integrated_disconnects, 1);
+assert_true(index(integrated_closes, 'transfers') >= 0);

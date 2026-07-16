@@ -1964,3 +1964,24 @@ msgstr "更新结果"
 
 msgid "Warm-up time (ms)"
 msgstr "预热时间 (ms)"
+
+msgid "Expires"
+msgstr "过期时间"
+
+msgid "Inspected"
+msgstr "检查时间"
+
+msgid "Inspection ID"
+msgstr "检查 ID"
+
+msgid "Invalid timezone response."
+msgstr "时区列表响应无效。"
+
+msgid "Notification test message was not sent."
+msgstr "测试通知未发送。"
+
+msgid "public"
+msgstr "公开"
+
+msgid "Source ID"
+msgstr "来源 ID"

@@ -383,6 +383,13 @@ export function create(overrides) {
 		uci: uci_adapter(),
 		observers: {},
 		service_options: {},
+		secure_fs: null,
+		timezones: null,
+		reconcile: null,
+		rulesets: null,
+		mutation_lock_self: null,
+		core_available: false,
+		app_version: '0.9.2',
 		logger: logger_adapter(),
 		paths
 	};

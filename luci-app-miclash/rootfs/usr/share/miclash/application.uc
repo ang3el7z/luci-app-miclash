@@ -23,6 +23,22 @@ export function create(dependencies) {
 	    type(dependencies?.state?.snapshot) != 'function' ||
 	    type(dependencies?.state?.health) != 'function' ||
 	    type(dependencies?.state?.set_desired) != 'function' ||
+	    type(dependencies?.memory?.status) != 'function' ||
+	    type(dependencies?.memory?.settings) != 'function' ||
+	    type(dependencies?.memory?.reset_baseline) != 'function' ||
+	    type(dependencies?.memory?.configure) != 'function' ||
+	    type(dependencies?.backup?.list) != 'function' ||
+	    type(dependencies?.backup?.create) != 'function' ||
+	    type(dependencies?.backup?.inspect) != 'function' ||
+	    type(dependencies?.backup?.restore) != 'function' ||
+	    type(dependencies?.devices?.list) != 'function' ||
+	    type(dependencies?.devices?.policy_list) != 'function' ||
+	    type(dependencies?.devices?.policy_set) != 'function' ||
+	    type(dependencies?.devices?.policy_delete) != 'function' ||
+	    type(dependencies?.devices?.timezones) != 'function' ||
+	    type(dependencies?.notifications?.settings) != 'function' ||
+	    type(dependencies?.notifications?.test) != 'function' ||
+	    type(dependencies?.notifications?.configure) != 'function' ||
 	    type(dependencies?.clock?.now) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 
@@ -55,6 +71,15 @@ export function create(dependencies) {
 					errors.fail('HEALTH_FAILED');
 				ctx.stage('ready', 100, '');
 			});
+	};
+	function domain_action(kind, source, context, worker) {
+		writable();
+		return dependencies.operations.submit(kind, source, context, (ctx) => {
+			ctx.stage(kind, 20, '');
+			let result = worker(ctx);
+			ctx.stage('complete', 100, '');
+			return result;
+		});
 	};
 
 	return {
@@ -107,10 +132,36 @@ export function create(dependencies) {
 			return dependencies.operations.submit('settings.set', source, {}, (ctx) => {
 				ctx.stage('settings', 20, '');
 				let saved = dependencies.settings.set(patch);
+				dependencies.memory.configure(saved.memory);
+				dependencies.notifications.configure(saved.notifications);
 				dependencies.state.set_desired(saved);
 				ctx.stage('saved', 100, '');
 			});
 		},
+		memory_status: () => dependencies.memory.status(),
+		memory_settings: () => dependencies.memory.settings(),
+		memory_reset_baseline: (arguments) => domain_action('memory.reset_baseline',
+			arguments.source, {}, () => dependencies.memory.reset_baseline()),
+		backup_list: () => dependencies.backup.list(),
+		backup_create: (arguments) => domain_action('backup.create', arguments.source,
+			{ options: arguments.options }, () => dependencies.backup.create(arguments.options,
+				arguments.source)),
+		backup_inspect: (arguments) => dependencies.backup.inspect(arguments.backup_id,
+			arguments.options),
+		backup_restore: (arguments) => {
+			writable();
+			return dependencies.backup.restore(arguments.inspection_id, arguments.source);
+		},
+		devices_list: () => dependencies.devices.list(),
+		devices_timezones: () => dependencies.devices.timezones(),
+		devices_policy_list: () => dependencies.devices.policy_list(),
+		devices_policy_set: (arguments) => domain_action('devices.policy_set', arguments.source,
+			{}, () => dependencies.devices.policy_set(arguments.policy)),
+		devices_policy_delete: (arguments) => domain_action('devices.policy_delete',
+			arguments.source, {}, () => dependencies.devices.policy_delete(arguments.policy_id,
+				arguments.expected_revision)),
+		notifications_settings: () => dependencies.notifications.settings(),
+		notifications_test: (arguments) => ({ sent: dependencies.notifications.test(arguments.channel) === true }),
 		set_draining: (value) => {
 			if (type(value) != 'bool')
 				errors.fail('INVALID_ARGUMENT');

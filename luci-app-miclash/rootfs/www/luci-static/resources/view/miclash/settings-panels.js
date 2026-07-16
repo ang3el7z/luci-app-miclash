@@ -4,6 +4,7 @@
 const MASK = '[REDACTED]';
 const SOURCE = 'luci';
 const POLL_MS = 30000;
+const MAX_POLL_MS = 300000;
 const KNOWN_CHANNELS = [ 'syslog', 'luci', 'telegram' ];
 const KNOWN_EVENTS = [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 	'direct_fallback', 'memory_action', 'memory_outcome', 'subscription_outcome',
@@ -88,7 +89,8 @@ function create(options) {
 		typeof api.notificationSettings !== 'function' || typeof api.testNotification !== 'function' ||
 		typeof api.settings_get !== 'function' || typeof api.settings_set !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
-	let host = null, destroyed = false, generation = 0, timer = null, busy = false;
+	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
+		dirty = false, retryMs = POLL_MS;
 	let state = { desired: {}, memory: {}, memorySettings: {}, telegram: {}, telegramSettings: {}, notifications: {} };
 	const cancels = new Set();
 
@@ -101,10 +103,10 @@ function create(options) {
 		if (typeof options.onProgress === 'function') options.onProgress(message, record || null);
 	}
 	function clearTimer() { if (timer != null) win.clearTimeout(timer); timer = null; }
-	function schedule() {
+	function schedule(delay) {
 		clearTimer();
 		if (destroyed || doc.hidden || !host) return;
-		timer = win.setTimeout(() => { timer = null; refresh().catch(report); }, POLL_MS);
+		timer = win.setTimeout(() => { timer = null; refresh().catch(report); }, delay || retryMs);
 	}
 	function awaitOperation(reply, title) {
 		const id = reply?.operation_id;
@@ -132,11 +134,11 @@ function create(options) {
 		const settings = Object.assign({}, Object.fromEntries(Object.entries(MEMORY_FIELDS).map(([ name, bound ]) => [ name, bound[2] ])),
 			state.memorySettings || {}, desired || {});
 		const facts = E('div', { 'class': 'sbox-management-facts', 'aria-live': 'polite' }, [
-			E('span', {}, [ E('strong', {}, _('RSS') + ': '), bytes(current.current_rss_kb ?? current.rss_kb) ]),
-			E('span', {}, [ E('strong', {}, _('Baseline') + ': '), bytes(current.baseline_rss_kb) ]),
-			E('span', {}, [ E('strong', {}, _('Pressure') + ': '), value(current.phase) ]),
-			E('span', {}, [ E('strong', {}, _('Last action') + ': '), value(current.last_action) ]),
-			E('span', {}, [ E('strong', {}, _('Cooldown') + ': '), when(current.cooldown_until) ])
+			E('span', { 'data-memory-fact': 'rss' }, [ E('strong', {}, _('RSS') + ': '), bytes(current.current_rss_kb ?? current.rss_kb) ]),
+			E('span', { 'data-memory-fact': 'baseline' }, [ E('strong', {}, _('Baseline') + ': '), bytes(current.baseline_rss_kb) ]),
+			E('span', { 'data-memory-fact': 'pressure' }, [ E('strong', {}, _('Pressure') + ': '), value(current.phase) ]),
+			E('span', { 'data-memory-fact': 'action' }, [ E('strong', {}, _('Last action') + ': '), value(current.last_action) ]),
+			E('span', { 'data-memory-fact': 'cooldown' }, [ E('strong', {}, _('Cooldown') + ': '), when(current.cooldown_until) ])
 		]);
 		const expertFields = Object.entries(MEMORY_FIELDS).map(([ name, bounds ]) => field(
 			'sbox-memory-' + name.replaceAll('_', '-'), MEMORY_LABELS[name](),
@@ -163,7 +165,8 @@ function create(options) {
 		return E('section', { 'class': 'cbi-section sbox-settings-block sbox-management-card', 'data-panel': 'telegram' }, [
 			E('h4', {}, _('Telegram')),
 			check('sbox-telegram-enabled', _('Enable Telegram control'), desired.enabled === true),
-			E('p', { 'class': 'sbox-muted', 'role': 'status' }, status.running === true ? _('Poller is running') : _('Poller is stopped')),
+			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
+				status.running === true ? _('Poller is running') : _('Poller is stopped')),
 			field('sbox-telegram-token', _('BotFather token'), E('input', { 'type': 'password', 'class': 'cbi-input-text',
 				'value': '', 'autocomplete': 'new-password', 'placeholder': tokenState })),
 			field('sbox-telegram-user-id', _('Allowed Telegram user ID'), E('input', { 'type': 'text',
@@ -201,6 +204,23 @@ function create(options) {
 			E('div', { 'class': 'sbox-management-save-row' }, [ action(_('Save management settings'), 'save', true) ]));
 		bind();
 	}
+	function paintStatus() {
+		if (!host || destroyed) return;
+		const current = state.memory || {};
+		const facts = {
+			rss: [ _('RSS') + ': ', bytes(current.current_rss_kb ?? current.rss_kb) ],
+			baseline: [ _('Baseline') + ': ', bytes(current.baseline_rss_kb) ],
+			pressure: [ _('Pressure') + ': ', value(current.phase) ],
+			action: [ _('Last action') + ': ', value(current.last_action) ],
+			cooldown: [ _('Cooldown') + ': ', when(current.cooldown_until) ]
+		};
+		for (const [ name, parts ] of Object.entries(facts)) {
+			const node = host.querySelector('[data-memory-fact="' + name + '"]');
+			if (node) node.replaceChildren(E('strong', {}, parts[0]), parts[1]);
+		}
+		const telegram = host.querySelector('[data-telegram-status="running"]');
+		if (telegram) telegram.textContent = state.telegram?.running === true ? _('Poller is running') : _('Poller is stopped');
+	}
 	function checked(group) {
 		return Array.from(host.querySelectorAll('[data-' + group + ']')).filter((input) => input.checked)
 			.map((input) => input.getAttribute('data-' + group)).filter((item) =>
@@ -236,7 +256,8 @@ function create(options) {
 		const patch = formPatch();
 		progress(_('Saving management settings…'));
 		await awaitOperation(await api.settings_set(patch, SOURCE), _('Saving management settings…'));
-		await refresh(true);
+		dirty = false;
+		await refresh(true, true);
 		return patch;
 	}
 	async function withBusy(button, callback) {
@@ -246,6 +267,12 @@ function create(options) {
 		finally { busy = false; if (button && !destroyed) button.disabled = false; }
 	}
 	function bind() {
+		const markDirty = () => { dirty = true; };
+		for (const input of [ ...host.querySelectorAll('input'), ...host.querySelectorAll('select') ]) {
+			input.addEventListener('input', markDirty);
+			input.addEventListener('change', markDirty);
+		}
+		for (const details of host.querySelectorAll('details')) details.addEventListener('toggle', markDirty);
 		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () =>
 			withBusy(button, async () => {
 				const actionName = button.getAttribute('data-action');
@@ -263,20 +290,26 @@ function create(options) {
 					const channel = host.querySelector('#sbox-notification-test-channel')?.value;
 					if (!KNOWN_CHANNELS.includes(channel)) throw new Error(_('Invalid notification channel.'));
 					await saveFromDom();
-					await api.testNotification(channel);
+					const reply = await api.testNotification(channel);
+					if (reply?.sent !== true) throw new Error(_('Notification test message was not sent.'));
 				}
 			}).catch(report));
 	}
 
-	async function refresh(force) {
+	async function refresh(force, replaceForm) {
 		if (destroyed || doc.hidden && !force) return;
 		const token = ++generation;
-		const replies = await Promise.all([ api.settings_get(), api.memoryStatus(), api.memorySettings(),
-			api.telegram_status(), api.telegram_settings(), api.notificationSettings() ]);
-		if (destroyed || token !== generation) return;
-		state = { desired: replies[0] || {}, memory: replies[1] || {}, memorySettings: replies[2] || {},
-			telegram: replies[3] || {}, telegramSettings: replies[4] || {}, notifications: replies[5] || {} };
-		paint(); schedule();
+		try {
+			const replies = await Promise.all([ api.settings_get(), api.memoryStatus(), api.memorySettings(),
+				api.telegram_status(), api.telegram_settings(), api.notificationSettings() ]);
+			if (destroyed || token !== generation) return;
+			state = { desired: replies[0] || {}, memory: replies[1] || {}, memorySettings: replies[2] || {},
+				telegram: replies[3] || {}, telegramSettings: replies[4] || {}, notifications: replies[5] || {} };
+			retryMs = POLL_MS;
+			if (replaceForm || (!dirty && !busy)) paint(); else paintStatus();
+		}
+		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
+		finally { if (!destroyed && token === generation) schedule(); }
 	}
 	function visibilitychange() { if (doc.hidden) clearTimer(); else refresh().catch(report); }
 	function mount(node) { host = node; destroyed = false; paint(); refresh().catch(report); return host; }

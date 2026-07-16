@@ -466,7 +466,7 @@ async function detectWanInterface() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, enableMemoryGuard, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
 	let detectedLan = '';
 	let detectedWan = '';
 	const cleanAutoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalHours);
@@ -493,8 +493,6 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 	settings.BLOCK_QUIC = blockQuic;
 	settings.INTERNET_ONLY_MICLASH = internetOnlyMiclash;
 	settings.USE_TMPFS_RULES = useTmpfsRules;
-	settings.ENABLE_MEMORY_GUARD = enableMemoryGuard;
-	settings.AUTO_HIDE_NOTIFICATIONS = autoHideNotifications !== false;
 	settings.AUTO_UPDATE_CONFIG = autoUpdateConfig !== false;
 	settings.AUTO_UPDATE_INTERVAL_HOURS = cleanAutoUpdateIntervalHours;
 	settings.MICLASH_RELEASE_CHANNEL = view_miclash_release.normalizeReleaseChannel(miclashReleaseChannel);

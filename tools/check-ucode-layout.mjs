@@ -66,14 +66,14 @@ assert.match(makefile, /\$\(INSTALL_DATA\)\s+\$\(MICLASH_PACKAGE_UCODE\)\s+\$\(1
 
 assert.match(daemon, /^#!\/usr\/bin\/ucode\n/);
 assert.match(composition, /recover_interrupted\(\)/);
-assert.match(composition, /api\.register\(connection, app\)/);
+assert.match(composition, /modules\.api\.register\(connection, app, transfers\)/);
 assert.match(daemon, /signal\(['"]SIGTERM['"]/);
 assert.match(daemon, /\.cancel\(\)/);
 assert.match(daemon, /uloop\.done\(\)/);
 assert.match(composition, /connection\.disconnect\(\)/);
 assert.ok(composition.indexOf('recover_interrupted()') < composition.indexOf('runtime.ubus.connect()'),
 	'operation recovery must finish before ubus publication');
-assert.ok(composition.indexOf('runtime.ubus.connect()') < composition.indexOf('api.register(connection, app)'),
+assert.ok(composition.indexOf('runtime.ubus.connect()') < composition.indexOf('modules.api.register(connection, app, transfers)'),
 	'one daemon ubus connection must exist before publication');
 assert.ok(daemon.indexOf('process.drain()') < daemon.indexOf('observation_timer.cancel()'),
 	'shutdown must reject mutations before cancelling observation');

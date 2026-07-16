@@ -28,10 +28,11 @@ function runtime(options) {
 		random: fakes.entropy(), uci, uci_fake: uci,
 		mutation_lock_self: { boot: BOOT, pid: 8123, start: 222 },
 		observers: options?.observers, core_available: options?.core_available ?? true,
-		timezones: { resolve: (name) => name == 'Europe/Berlin' ? {
+		timezones: options?.timezones ?? { list: () => [ 'UTC', 'Etc/UTC', 'Europe/Berlin' ], resolve: (name) => name == 'Europe/Berlin' ? {
 			name: 'Europe/Berlin', from: 1700000000, until: 1735000000, initial_offset: 3600,
 			transitions: [ { at: 1711846800, offset: 7200 }, { at: 1729990800, offset: 3600 } ]
-		} : { name: 'Etc/UTC', from: 0, until: 4102444800, initial_offset: 0, transitions: [] } },
+		} : (name == 'UTC' || name == 'Etc/UTC' ? { name, from: 0, until: 4102444800,
+			initial_offset: 0, transitions: [] } : null) },
 		device_cache: {}
 	};
 	return value;
@@ -65,6 +66,8 @@ assert_equal(uci_contract_cursor.get_all('miclash', 'dp_1_0000000000000001'), nu
 
 // UTC, exact boundaries, weekdays, overnight association, and closed schemas.
 assert_true(schedule.active(spec([ 1 ], '09:00', '10:00'), 1704099600, utc_zone()), 'Monday start inclusive');
+assert_true(schedule.active(spec([ 1 ], '09:00', '10:00', 'UTC'), 1704099600,
+	{ ...utc_zone(), name: 'UTC' }), 'exact UTC name is accepted');
 assert_true(schedule.active(spec([ 1 ], '09:00', '10:00'), 1704103199, utc_zone()), 'end-minus-one active');
 assert_true(!schedule.active(spec([ 1 ], '09:00', '10:00'), 1704103200, utc_zone()), 'end exclusive');
 assert_true(schedule.active(spec([ 1 ], '23:00', '02:00'), 1704151800, utc_zone()), 'Monday overnight active Tuesday');
@@ -447,6 +450,31 @@ far_clock.clock.advance(4102444800000 - NOW);
 assert_throws(() => devices.discover(far_clock), 'CORRUPT_STATE');
 
 function set_policy(app, value) { return devices.policy_set(app, value); };
+assert_equal(devices.timezones(runtime())[0], 'UTC', 'daemon-provided timezone list is canonical');
+let timezone_validation = runtime();
+let timezone_before = enc(timezone_validation.uci_fake.values);
+assert_throws(() => set_policy(timezone_validation, { scope: 'global', action: 'proxy',
+	schedule: spec([ 1 ], '09:00', '10:00', 'Madeup/Zone') }), 'VALIDATION_FAILED',
+	'unknown timezone is rejected before persistence');
+assert_equal(enc(timezone_validation.uci_fake.values), timezone_before,
+	'unknown timezone cannot mutate UCI');
+let utc_policy = set_policy(timezone_validation, { scope: 'global', action: 'proxy',
+	schedule: spec([ 1 ], '09:00', '10:00', 'UTC') });
+assert_equal(utc_policy.schedule.timezone, 'UTC', 'exact UTC timezone is accepted');
+let resolved_timestamps = [];
+let strict_timezone = runtime({ timezones: {
+	list: () => [ 'UTC' ],
+	resolve: (name, timestamp) => {
+		push(resolved_timestamps, timestamp);
+		return type(timestamp) == 'int' ? { name: 'UTC', from: 0, until: 4102444800,
+			initial_offset: 0, transitions: [] } : null;
+	}
+} });
+let strict_policy = set_policy(strict_timezone, { scope: 'global', action: 'proxy',
+	schedule: spec([ 1 ], '09:00', '10:00', 'UTC') });
+devices.effective(strict_timezone, { mac: null, interface: null, timestamp: 1710000000 });
+assert_equal(resolved_timestamps[0], int(NOW / 1000), 'policy validation resolves the current instant');
+assert_equal(resolved_timestamps[1], 1710000000, 'policy evaluation resolves the requested instant');
 let policies = runtime({ guard: false });
 let direct = set_policy(policies, { scope: 'device', mac: 'AC:BB:CC:DD:EE:10',
 	action: 'direct', schedule: null });

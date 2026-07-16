@@ -15,7 +15,7 @@ function integer(value, minimum, maximum) {
 };
 function zone_name(value) {
 	if (type(value) != 'string' || length(value) < 3 || length(value) > 64 ||
-	    !match(value, /^[A-Za-z][A-Za-z0-9_+.-]*(\/[A-Za-z0-9_+.-]+)+$/) ||
+	    (value != 'UTC' && !match(value, /^[A-Za-z][A-Za-z0-9_+.-]*(\/[A-Za-z0-9_+.-]+)+$/)) ||
 	    match(value, /(^|\/)\.\.?($|\/)/)) invalid();
 	return value;
 };

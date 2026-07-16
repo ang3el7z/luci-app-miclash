@@ -45,8 +45,7 @@ const legacy = {
 		"await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-service', ['clear-status']), null);",
 		"const result = await fs.exec('/opt/clash/bin/miclash-update', ['job', '--token', token, kind].concat(args || []));",
 		"const result = await fs.exec('/opt/clash/bin/miclash-service', ['job', '--token', token, action]);",
-		"const result = await fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh']);",
-		"const result = await fs.exec('/opt/clash/bin/miclash-memory-guard', ['sync']);"
+		"const result = await fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh']);"
 	],
 	'logs.js': [
 		"const all = await fs.exec('/sbin/logread', []);",

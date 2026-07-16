@@ -799,6 +799,10 @@ export function method_table(app, transfers) {
 			exact(arguments, {});
 			return domain_read('devices_list', {});
 		}),
+		devices_timezones: method(empty, (arguments) => {
+			exact(arguments, {});
+			return domain_read('devices_timezones', {});
+		}),
 		devices_policy_list: method(empty, (arguments) => {
 			exact(arguments, {});
 			return domain_read('devices_policy_list', {});

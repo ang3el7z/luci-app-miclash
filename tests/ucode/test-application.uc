@@ -61,8 +61,35 @@ let state = {
 	health: () => ({ health: 'safe' }),
 	set_desired: (value) => desired = value
 };
+let management_calls = [];
+let memory = {
+	status: () => ({ phase: 'monitoring' }),
+	settings: () => ({ sample_interval_ms: 60000 }),
+	reset_baseline: () => push(management_calls, [ 'memory.reset' ]),
+	configure: (value) => push(management_calls, [ 'memory.configure', value ])
+};
+let backup = {
+	list: () => [ { id: 'b-0000000000001-00000000000000000000000000000001' } ],
+	create: (options, source) => push(management_calls, [ 'backup.create', options, source ]),
+	inspect: (id, options) => ({ id: 'x-0000000000001-00000000000000000000000000000002',
+		source_id: id, options }),
+	restore: (id, source) => ({ id: 'backup-restore', inspection_id: id, source })
+};
+let devices = {
+	list: () => [ { mac: 'aa:bb:cc:dd:ee:ff' } ],
+	policy_list: () => [ { id: 'dp_1_0000000000000001', revision: 1 } ],
+	policy_set: (policy) => push(management_calls, [ 'devices.set', policy ]),
+	policy_delete: (id, revision) => push(management_calls, [ 'devices.delete', id, revision ]),
+	timezones: () => [ 'UTC', 'Europe/Berlin' ]
+};
+let notifications = {
+	settings: () => ({ channels: [ 'syslog' ], events: [ 'failure' ] }),
+	test: (channel) => channel == 'syslog',
+	configure: (value) => push(management_calls, [ 'notifications.configure', value ])
+};
 let app = application.create({
-	operations, service, settings, config, history, state, clock: { now: () => 1000 }
+	operations, service, settings, config, history, state, memory, backup, devices,
+	notifications, clock: { now: () => 1000 }
 });
 
 assert_equal(app.status().status, 'safe');
@@ -78,6 +105,33 @@ assert_equal(limited_history[0].revision, 'rev-4');
 assert_equal(limited_history[1].revision, 'rev-3');
 assert_equal(app.history_diff({ profile: 'config.yaml', from_revision: 'a', to_revision: 'b' }).to_revision, 'b');
 assert_equal(app.settings_get().core.proxy_mode, 'tproxy');
+assert_equal(app.memory_status().phase, 'monitoring');
+assert_equal(app.memory_settings().sample_interval_ms, 60000);
+assert_equal(app.backup_list()[0].id, 'b-0000000000001-00000000000000000000000000000001');
+assert_equal(app.backup_inspect({ backup_id: 'i-0000000000001-00000000000000000000000000000001',
+	options: {} }).source_id, 'i-0000000000001-00000000000000000000000000000001');
+assert_equal(app.devices_list()[0].mac, 'aa:bb:cc:dd:ee:ff');
+assert_equal(app.devices_policy_list()[0].revision, 1);
+assert_equal(app.devices_timezones()[1], 'Europe/Berlin');
+assert_equal(app.notifications_settings().channels[0], 'syslog');
+assert_equal(app.notifications_test({ channel: 'syslog' }).sent, true);
+assert_equal(app.notifications_test({ channel: 'telegram' }).sent, false);
+
+let memory_reset = app.memory_reset_baseline({ source: 'luci' });
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(memory_reset.id, submitted[length(submitted) - 1].record.id);
+let backup_create = app.backup_create({ options: { include_secrets: false }, source: 'luci' });
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(backup_create.id, submitted[length(submitted) - 1].record.id);
+let policy_set = app.devices_policy_set({ policy: { scope: 'device', action: 'block' }, source: 'luci' });
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(policy_set.id, submitted[length(submitted) - 1].record.id);
+let policy_delete = app.devices_policy_delete({ policy_id: 'dp_1_0000000000000001',
+	expected_revision: 1, source: 'luci' });
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(policy_delete.id, submitted[length(submitted) - 1].record.id);
+assert_equal(app.backup_restore({ inspection_id: 'x-0000000000001-00000000000000000000000000000002',
+	source: 'luci' }).id, 'backup-restore');
 
 for (let action in [ 'start', 'stop', 'reload', 'restart' ]) {
 	let before = length(submitted);
@@ -105,6 +159,8 @@ assert_equal(saved, 0);
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(saved, 1);
 assert_equal(desired.core.proxy_mode, 'tun');
+assert_equal(management_calls[length(management_calls) - 2][0], 'memory.configure');
+assert_equal(management_calls[length(management_calls) - 1][0], 'notifications.configure');
 assert_equal(setting_record.id, submitted[length(submitted) - 1].record.id);
 
 fail_save = true;
@@ -120,6 +176,13 @@ for (let mutation in [
 	() => app.config_validate('config.yaml', 'valid\n', 'luci'),
 	() => app.config_save_draft('config.yaml', 'draft\n', 'luci'),
 	() => app.history_open_draft({ profile: 'config.yaml', revision: 'rev-1', source: 'luci' }),
-	() => app.settings_set({}, 'luci')
+	() => app.settings_set({}, 'luci'),
+	() => app.memory_reset_baseline({ source: 'luci' }),
+	() => app.backup_create({ options: {}, source: 'luci' }),
+	() => app.devices_policy_set({ policy: {}, source: 'luci' }),
+	() => app.devices_policy_delete({ policy_id: 'dp_1_0000000000000001', expected_revision: 1,
+		source: 'luci' }),
+	() => app.backup_restore({ inspection_id: 'x-0000000000001-00000000000000000000000000000002',
+		source: 'luci' })
 ]) assert_throws(mutation, 'BUSY');
 assert_equal(app.status().status, 'safe');

@@ -1376,14 +1376,7 @@ async function openDashboard() {
 	}
 }
 
-async function syncMemoryGuardServiceOrThrow() {
-	const result = await fs.exec('/opt/clash/bin/miclash-memory-guard', ['sync']);
-	if (result.code !== 0) {
-		throw new Error(String(result.stderr || result.stdout || _('Failed to synchronize memory guard service.')).trim());
-	}
-}
-
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, enableMemoryGuard, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, options) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, options) {
 	const opts = options || {};
 	try {
 		await view_miclash_settings_model.saveOperationalSettings(
@@ -1395,19 +1388,15 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			blockQuic,
 			internetOnlyMiclash,
 			useTmpfsRules,
-			enableMemoryGuard,
 			interfaces,
 			enableHwid,
 			hwidUserAgent,
 			hwidDeviceOS,
-			autoHideNotifications,
 			miclashReleaseChannel,
 			mihomoReleaseChannel,
 			autoUpdateConfig,
 			autoUpdateIntervalHours
 		);
-		await syncMemoryGuardServiceOrThrow();
-
 		if (!opts.silent) {
 			notify('info', _('Settings saved.'));
 		}
@@ -1440,12 +1429,10 @@ async function switchProxyModeFromHeader(targetMode) {
 		!!current.blockQuic,
 		!!current.internetOnlyMiclash,
 		!!current.useTmpfsRules,
-		!!current.enableMemoryGuard,
 		interfaces,
 		!!current.enableHwid,
 		current.hwidUserAgent || 'MiClash',
 		current.hwidDeviceOS || 'OpenWrt',
-		current.autoHideNotifications !== false,
 		current.miclashReleaseChannel || 'release',
 		current.mihomoReleaseChannel || 'release',
 		current.autoUpdateConfig !== false,
@@ -2154,17 +2141,6 @@ function buildSettingsPaneHtml() {
 					'<input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Store rules/providers on tmpfs')) + '</span>' +
 				'</label>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-memory-guard"' + (s.enableMemoryGuard ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Monitor abnormal Mihomo memory usage')) + '</span>' +
-				'</label>' +
-				'<div class="sbox-muted sbox-settings-help">' +
-					safeText(_('Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure.')) +
-				'</div>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-auto-hide-notifications"' + (s.autoHideNotifications !== false ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Auto-hide notifications')) + '</span>' +
-				'</label>' +
 				'<label class="sbox-checkbox-row sbox-auto-update-row">' +
 					'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
 					'<span>' + safeText(_('Auto-update config')) + '</span>' +
@@ -2464,9 +2440,6 @@ async function collectSettingsFormState() {
 	const blockQuic = !!pane.querySelector('#sbox-block-quic')?.checked;
 	const internetOnlyMiclash = !!pane.querySelector('#sbox-internet-only-miclash')?.checked;
 	const useTmpfsRules = !!pane.querySelector('#sbox-tmpfs')?.checked;
-	const enableMemoryGuard = !!pane.querySelector('#sbox-memory-guard')?.checked;
-	const autoHideNotificationsEl = pane.querySelector('#sbox-auto-hide-notifications');
-	const autoHideNotifications = autoHideNotificationsEl ? !!autoHideNotificationsEl.checked : true;
 	const autoUpdateConfigEl = pane.querySelector('#sbox-auto-update-config');
 	const autoUpdateIntervalEl = pane.querySelector('input[name="sbox-auto-update-interval"]:checked');
 	const autoUpdateConfig = autoUpdateConfigEl ? !!autoUpdateConfigEl.checked : true;
@@ -2495,8 +2468,6 @@ async function collectSettingsFormState() {
 		blockQuic,
 		internetOnlyMiclash,
 		useTmpfsRules,
-		enableMemoryGuard,
-		autoHideNotifications,
 		autoUpdateConfig,
 		autoUpdateIntervalHours,
 		selected,
@@ -2566,12 +2537,10 @@ function bindSettingsPaneEvents() {
 				formState.blockQuic,
 				formState.internetOnlyMiclash,
 				formState.useTmpfsRules,
-				formState.enableMemoryGuard,
 				formState.selected,
 				formState.enableHwid,
 				formState.hwidUserAgent,
 				formState.hwidDeviceOS,
-				formState.autoHideNotifications,
 				formState.miclashReleaseChannel,
 				formState.mihomoReleaseChannel,
 				formState.autoUpdateConfig,

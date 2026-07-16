@@ -673,8 +673,8 @@ function valid_journal(record, name) {
 	    !valid_file_identity_record(record.sidecar_identity) ||
 	    !valid_directory_identity_record(record.stage_identity)) return false;
 	if (record.kind == 'create')
-		return valid_id(record.backup_id, 'b') &&
-			match(record.temp_name, /^\.b-[0-9]{13}-[0-9a-f]{32}\.tar\.tmp$/) &&
+		return (valid_id(record.backup_id, 'b') || valid_id(record.backup_id, 'i')) &&
+			match(record.temp_name, /^\.[bi]-[0-9]{13}-[0-9a-f]{32}\.tar\.tmp$/) &&
 			record.archive_name == record.backup_id + '.tar' &&
 			record.sidecar_name == record.backup_id + '.json' &&
 			type(record.archive_size) == 'int' && record.archive_size > 0 &&
@@ -767,7 +767,8 @@ function registered_file(env, directory, name, size, digest, recorded) {
 };
 
 function recover_create(env, transaction) {
-	let record = transaction.record, root = open_dir(env, BACKUP_ROOT);
+	let record = transaction.record, root = open_dir(env,
+		valid_id(record.backup_id, 'i') ? IMPORT_ROOT : BACKUP_ROOT);
 	let temp = registered_file(env, root, record.temp_name, record.archive_size,
 		record.archive_sha256, record.temp_identity);
 	let archive = registered_file(env, root, record.archive_name, record.archive_size,
@@ -896,6 +897,37 @@ function with_transaction_lease(env, worker) {
 		if (type(lease) != 'object') internal();
 		return worker({ runtime: env.runtime, secure: env.secure, lease });
 	});
+};
+
+export function transfer_download(app, backup_id) {
+	if (!valid_id(backup_id, 'b')) invalid();
+	try {
+		let env = validate_app(app);
+		return with_transaction_lease(env, (leased) => {
+			recover_transactions_locked(leased);
+			let source = source_record(app, backup_id, leased), content = source.archive.content;
+			let expected_size = source.archive.size, expected_sha256 = source.archive.sha256;
+			let closed = false;
+			return {
+				size: expected_size,
+				sha256: expected_sha256,
+				read: (offset, amount) => {
+					if (closed) errors.fail('HEALTH_FAILED');
+					if (type(offset) != 'int' || type(amount) != 'int' || offset < 0 || amount < 0 ||
+					    offset > expected_size || amount > expected_size - offset) invalid();
+					return substr(content, offset, amount);
+				},
+				finish: () => {
+					if (closed || length(content) != expected_size ||
+					    leased.runtime.digest.sha256(content) != expected_sha256)
+						errors.fail('CORRUPT_STATE');
+					return { size: expected_size, sha256: expected_sha256 };
+				},
+				close: () => { if (closed) return false; closed = true; content = null; return true; }
+			};
+		});
+	}
+	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
 function journal_begin(env, kind, created_at, initial) {
@@ -1075,6 +1107,74 @@ function manifest_from_archive(env, archive) {
 		if (file.path == 'settings/settings.json')
 			settings_document(parsed.by_name[file.path].content, file.secret);
 	return { manifest, parsed };
+};
+
+export function transfer_import(app, staged) {
+	if (!exact_fields(staged, { kind: true, metadata: true, size: true, sha256: true, read: true }) ||
+	    staged.kind != 'backup' || !exact_fields(staged.metadata, { purpose: true }) ||
+	    staged.metadata.purpose != 'inspect' || type(staged.size) != 'int' || staged.size < 1 ||
+	    staged.size > MAX_ARCHIVE || !match(staged.sha256, /^[0-9a-f]{64}$/) ||
+	    type(staged.read) != 'function') invalid();
+	try {
+		let env = validate_app(app), content = '';
+		while (length(content) < staged.size) {
+			let chunk = staged.read(min(49152, staged.size - length(content)));
+			if (type(chunk) != 'string' || !length(chunk) ||
+			    length(content) + length(chunk) > staged.size) errors.fail('VALIDATION_FAILED');
+			content += chunk;
+		}
+		if (length(content) != staged.size || env.runtime.digest.sha256(content) != staged.sha256)
+			errors.fail('VALIDATION_FAILED');
+		return with_transaction_lease(env, (leased) => {
+			recover_transactions_locked(leased);
+			let decoded;
+			try { decoded = manifest_from_archive(leased, { content }); }
+			catch (error) { errors.fail('VALIDATION_FAILED'); }
+			let manifest = decoded.manifest, now = leased.runtime.clock.now();
+			let nonce = leased.runtime.random.hex(16);
+			if (type(now) != 'int' || now < 0 || !match(nonce, /^[0-9a-f]{32}$/)) internal();
+			let id = sprintf('i-%013d-%s', now, nonce), root = open_dir(leased, IMPORT_ROOT);
+			if (leased.secure.stat(root, id + '.tar', leased.lease) != null ||
+			    leased.secure.stat(root, id + '.json', leased.lease) != null) internal();
+			let sidecar = { schema: 1, id, created_at: manifest.created_at,
+				app_version: manifest.app_version, includes: clone(manifest.includes),
+				file_count: length(manifest.files), size: length(content), sha256: staged.sha256 };
+			let sidecar_text = sprintf('%J\n', sidecar), temp_name = '.' + id + '.tar.tmp';
+			let transaction = journal_begin(leased, 'create', now, {
+				backup_id: id, temp_name, archive_name: id + '.tar', sidecar_name: id + '.json',
+				archive_size: length(content), archive_sha256: staged.sha256,
+				sidecar_size: length(sidecar_text),
+				sidecar_sha256: leased.runtime.digest.sha256(sidecar_text)
+			});
+			try {
+				let temp = secure_create(leased, root, temp_name, content, 0o600);
+				transaction.record.temp_identity = file_identity_record(temp.identity);
+				transaction.record.phase = 'temp'; journal_store(leased, transaction);
+				transaction.record.phase = 'side_planned'; journal_store(leased, transaction);
+				let side = secure_create(leased, root, id + '.json', sidecar_text, 0o600);
+				transaction.record.sidecar_identity = file_identity_record(side.identity);
+				transaction.record.phase = 'side'; journal_store(leased, transaction);
+				transaction.record.phase = 'publish_planned'; journal_store(leased, transaction);
+				let archive_identity = leased.secure.rename_noreplace(root, temp_name, id + '.tar',
+					temp.identity, { mode: 0o600, uid: 0, nlink: 1 }, leased.lease);
+				if (!valid_file_identity(archive_identity, 0o600, length(content))) internal();
+				transaction.record.temp_identity = null;
+				transaction.record.archive_identity = file_identity_record(archive_identity);
+				transaction.record.phase = 'published'; journal_store(leased, transaction);
+				let published = secure_read(leased, root, id + '.tar', MAX_ARCHIVE, 0o600,
+					archive_identity);
+				if (published.sha256 != staged.sha256) internal();
+				transaction.record.phase = 'complete'; journal_store(leased, transaction);
+				journal_finish(leased, transaction);
+				return { import_id: id };
+			}
+			catch (error) {
+				try { recover_transactions_locked(leased); } catch (ignore) {}
+				errors.fail(errors.normalize(error).code);
+			}
+		});
+	}
+	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
 function inspect_impl(app, source_id, options, env) {
