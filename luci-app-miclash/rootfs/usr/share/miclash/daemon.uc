@@ -14,6 +14,7 @@ import * as backup from 'miclash.backup';
 import * as devices from 'miclash.devices';
 import * as notify from 'miclash.notify';
 import * as mutation_lock from 'miclash.mutation_lock';
+import * as reconcile_adapter from 'miclash.reconcile-adapter';
 
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
@@ -66,6 +67,7 @@ export function compose(runtime, overrides) {
 	let modules = {
 		operations, settings, storage, history, diff, service, config, state, application,
 		api, memory, backup, devices, notify, mutation_lock,
+		reconcile_adapter,
 		...(overrides ?? {})
 	};
 	let operation_manager = modules.operations.create(runtime);
@@ -104,6 +106,11 @@ export function compose(runtime, overrides) {
 			set: (patch) => modules.settings.save(runtime, patch)
 		};
 		let desired = settings_domain.get();
+		if (runtime.reconcile == null)
+			runtime.reconcile = modules.reconcile_adapter.create({
+				operations: operation_manager, service: service_adapter,
+				settings: settings_domain, clock: runtime.clock
+			});
 		let notification_settings = clone(desired.notifications);
 		let notifier = modules.notify.create(runtime, notification_config(notification_settings));
 		let producer = modules.notify.producer(runtime);

@@ -43,6 +43,35 @@ assert_equal(extended.app_version, '0.9.2');
 let production = runtime.create();
 assert_true(type(production.clock.set_timeout) == 'function');
 assert_true(type(production.random.hex) == 'function');
+assert_true(type(production.secure_fs?.open) == 'function');
+assert_true(type(production.secure_fs?.open_at) == 'function');
+assert_true(type(production.secure_fs?.open_reader) == 'function');
+assert_true(type(production.secure_fs?.replace_atomic) == 'function');
+assert_true(type(production.secure_fs?.with_transaction_lease) == 'function');
+assert_true(type(production.timezones?.list) == 'function');
+assert_true(type(production.timezones?.resolve) == 'function');
+let installed_timezones = production.timezones.list();
+assert_true(type(installed_timezones) == 'array');
+assert_true(length(installed_timezones) >= 1 && length(installed_timezones) <= 512);
+assert_true(index(installed_timezones, 'UTC') >= 0);
+let utc_capability = production.timezones.resolve('UTC', 1700000000);
+assert_equal(utc_capability.name, 'UTC');
+assert_equal(utc_capability.from, 1700000000);
+assert_equal(utc_capability.until, 1700000001);
+assert_equal(utc_capability.initial_offset, 0);
+assert_equal(length(utc_capability.transitions), 0);
+if (length(installed_timezones) > 1)
+	assert_true(production.timezones.resolve(installed_timezones[1], 1700000000) != null);
+assert_equal(production.timezones.resolve('../etc/passwd', 1700000000), null);
+assert_true(type(production.observers?.dhcp_leases) == 'function');
+assert_true(type(production.observers?.neighbors) == 'function');
+assert_true(type(production.mutation_lock_self?.boot) == 'string');
+assert_true(type(production.mutation_lock_self?.pid) == 'int');
+assert_true(type(production.mutation_lock_self?.start) == 'int');
+assert_true(type(production.core_available) == 'bool');
+assert_equal(production.rulesets.validate('safe.txt', 'DOMAIN,example.test\n'), true);
+assert_equal(production.rulesets.validate('../unsafe.txt', 'DOMAIN,example.test\n'), false);
+assert_equal(production.rulesets.validate('safe.txt', 'DOMAIN,' + sprintf('%c', 1) + '\n'), false);
 let random_hex = production.random.hex(8);
 assert_match(random_hex, /^[0-9a-f]{16}$/);
 assert_equal(production.fs.flush({ flush: () => null, error: () => null }), true);
@@ -82,6 +111,18 @@ assert_true(exists(production_result, 'stdout'));
 assert_true(exists(production_result, 'stderr'));
 assert_equal(production_result.stdout, null);
 assert_equal(production_result.stderr, null);
+
+let timezone_fs = fakes.fs({
+	'/usr/share/zoneinfo/zone1970.tab': 'RU\t+5545+03737\tEurope/Moscow\n',
+	'/usr/share/zoneinfo/Europe/Moscow': 'TZif'
+});
+let timezone_runtime = runtime.create({
+	fs: timezone_fs, digest: fakes.digest(timezone_fs), random: fakes.entropy(),
+	clock: fakes.clock(0), process: fakes.process(), uci: fakes.uci({}),
+	ubus: { connect: () => null }, http: { request: () => null }
+});
+assert_true(index(timezone_runtime.timezones.list(), 'Europe/Moscow') >= 0);
+assert_true(timezone_runtime.timezones.resolve('Europe/Moscow', 1700000000) != null);
 
 let fake_result = validation_fake.run({ command: '/bin/true' });
 assert_equal(fake_result.code, 0);

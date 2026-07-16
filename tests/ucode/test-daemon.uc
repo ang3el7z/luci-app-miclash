@@ -2,6 +2,8 @@ import { assert_equal, assert_throws, assert_true } from 'testlib';
 import * as daemon from 'miclash.daemon';
 import * as real_api from 'miclash.api';
 import * as real_application from 'miclash.application';
+import * as runtime_module from 'miclash.runtime';
+import * as fakes from './fakes.uc';
 
 let order = [];
 let connect_count = 0, disconnect_count = 0;
@@ -14,7 +16,8 @@ let connection = {
 let rt = {
 	ubus: { connect: () => { connect_count++; push(order, 'connect'); return connection; } },
 	clock: { now: () => 0 },
-	paths: { tmp: '/tmp/miclash' }
+	paths: { tmp: '/tmp/miclash' },
+	reconcile: { run: () => ({ id: 'reconcile' }) }
 };
 let operation_manager = {
 	recover_interrupted: () => push(order, 'recover'),
@@ -223,3 +226,96 @@ assert_true(devices_app_seen.timezones.list()[0] == 'UTC');
 assert_equal(integrated.close(), true);
 assert_equal(integrated_disconnects, 1);
 assert_true(index(integrated_closes, 'transfers') >= 0);
+
+// The production composition must construct every management domain and the
+// real transfer manager. Only host capabilities are substituted here.
+let production_methods = null, production_disconnects = 0;
+let production_running = false;
+let production_connection = {
+	call: (object, method, args) => {
+		if (object == 'service' && method == 'list')
+			return { clash: { instances: production_running
+				? { core: { running: true, pid: 321 } } : {} } };
+		if (object == 'service' && method == 'state') {
+			production_running = args.spawn === true;
+			return {};
+		}
+		return {};
+	},
+	send: () => true,
+	publish: (name, methods) => { production_methods = methods; return { name }; },
+	disconnect: () => { production_disconnects++; return true; }
+};
+let production_clock = fakes.clock(1700000000000);
+let production_fs = fakes.fs({
+	'/proc/sys/kernel/random/boot_id': '11111111-1111-1111-1111-111111111111\n',
+	'/proc/self/stat': '123 (ucode) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 200 21 22\n',
+	'/proc/123/stat': '123 (ucode) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 200 21 22\n',
+	'/var/run/miclash/.keep': '', '/tmp/miclash/.keep': '',
+	'/etc/miclash/.keep': '', '/opt/clash/.keep': '',
+	'/opt/clash/config.yaml': 'external-controller: 127.0.0.1:9090\n',
+	'/opt/clash/bin/clash': 'binary',
+	'/usr/libexec/miclash/validate-config.uc': 'helper'
+});
+production_fs.set_mode('/opt/clash', 0o700);
+production_fs.set_mode('/opt/clash/config.yaml', 0o600);
+production_fs.set_mode('/opt/clash/bin/clash', 0o755);
+let production_runtime = runtime_module.create({
+	fs: production_fs,
+	digest: fakes.digest(production_fs),
+	random: fakes.entropy(),
+	clock: production_clock,
+	process: fakes.process(),
+	uci: fakes.uci({ miclash: {
+		core: { '.type': 'core' }, interfaces: { '.type': 'interfaces' },
+		guard: { '.type': 'guard' }, memory: { '.type': 'memory' },
+		updates: { '.type': 'updates' }, telegram: { '.type': 'telegram' },
+		notifications: { '.type': 'notifications' }, backup: { '.type': 'backup' },
+		meta: { '.type': 'meta' }
+	} }),
+	ubus: { connect: () => production_connection },
+	http: { request: () => ({ status: 200, body: '{}' }) },
+	observers: {
+		dhcp_leases: () => ({ observed_at: 1700000000, data: '' }),
+		neighbors: () => ({ observed_at: 1700000000, data: '[]' }),
+		dns: () => ({ ready: true }), tun: () => ({ ready: true }),
+		policy: () => ({ ready: true }), forward: () => ({ ready: true })
+	}
+});
+let production_daemon = daemon.compose(production_runtime);
+assert_true(type(production_runtime.rulesets?.validate) == 'function');
+assert_true(type(production_runtime.reconcile?.run) == 'function');
+assert_true(type(production_methods?.settings_get?.call) == 'function');
+assert_true(type(production_methods?.transfer_begin?.call) == 'function');
+assert_equal(production_methods.devices_timezones.call({ args: {} })[0], 'UTC');
+assert_equal(length(production_methods.backup_list.call({ args: {} })), 0);
+let create_record = production_methods.backup_create.call({ args: {
+	options: { include_secrets: true }, source: 'luci'
+} });
+production_clock.advance(0);
+create_record = production_daemon.app.operation_get(create_record.operation_id);
+assert_equal(create_record.state, 'success');
+let created_backups = production_methods.backup_list.call({ args: {} });
+assert_equal(length(created_backups), 1);
+let inspection = production_methods.backup_inspect.call({ args: {
+	backup_id: created_backups[0].id, options: {}
+} });
+let restore_record = production_methods.backup_restore.call({ args: {
+	inspection_id: inspection.id, source: 'luci'
+} });
+production_clock.advance(0);
+restore_record = production_daemon.app.operation_get(restore_record.operation_id);
+assert_equal(restore_record.stage, 'complete');
+assert_equal(restore_record.error?.code, null);
+assert_equal(restore_record.state, 'success');
+production_clock.advance(0);
+let reconciliations = production_daemon.app.operation_list({ kind: 'system.reconcile' });
+assert_equal(length(reconciliations), 1);
+assert_equal(reconciliations[0].state, 'success');
+let upload = production_methods.transfer_begin.call({ args: {
+	direction: 'upload', kind: 'backup', metadata: { purpose: 'inspect' },
+	size: 1, sha256: sprintf('%064d', 0)
+} });
+assert_true(type(upload.transfer_id) == 'string');
+assert_equal(production_daemon.close(), true);
+assert_equal(production_disconnects, 1);

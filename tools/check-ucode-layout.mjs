@@ -52,6 +52,7 @@ function expandedBasenames(label) {
 const experimental = [
 	'backup.uc', 'devices.uc', 'diagnostics.uc', 'diff.uc', 'health.uc', 'http.uc',
 	'memory.uc', 'notify.uc', 'reconcile.uc', 'route-test.uc', 'schedule.uc',
+	'reconcile-adapter.uc',
 	'scheduler.uc', 'subscription.uc', 'telegram.uc', 'updates.uc'
 ].sort();
 assert.deepEqual(expandedBasenames('UNSHIPPED'), experimental,

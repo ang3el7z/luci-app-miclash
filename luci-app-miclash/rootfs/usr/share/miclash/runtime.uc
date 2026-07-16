@@ -1,5 +1,7 @@
 import { fail } from 'miclash.errors';
 import { sha256 as digest_sha256, sha256_file as digest_sha256_file } from 'digest';
+import * as secure_fs from 'miclash.secure-fs';
+import * as rulesets from 'miclash.rulesets';
 
 const PROCESS_FIELDS = {
 	command: true,
@@ -362,6 +364,109 @@ function logger_adapter() {
 	};
 };
 
+function installed_timezones(filesystem) {
+	let cached = null;
+	function list_zones() {
+		if (cached != null) return [ ...cached ];
+		let zones = [ 'UTC' ], seen = { UTC: true };
+		let document = filesystem.readfile('/usr/share/zoneinfo/zone1970.tab') ??
+			filesystem.readfile('/usr/share/zoneinfo/zone.tab') ?? '';
+		for (let line in split(document, '\n')) {
+			if (length(zones) >= 512) break;
+			if (!length(line) || substr(line, 0, 1) == '#') continue;
+			let fields = split(line, '\t'), name = fields[2];
+			if (type(name) != 'string' || !match(name, /^[A-Za-z0-9._+-]+\/[A-Za-z0-9._+\/-]+$/) ||
+			    index(name, '..') >= 0 || seen[name] ||
+			    filesystem.stat('/usr/share/zoneinfo/' + name)?.type != 'file') continue;
+			seen[name] = true; push(zones, name);
+		}
+		cached = zones;
+		return [ ...cached ];
+	};
+	return {
+		list: list_zones,
+		resolve: (name, timestamp) => {
+			if (type(name) != 'string' || type(timestamp) != 'int' || timestamp < 0 ||
+			    index(list_zones(), name) < 0) return null;
+			if (name == 'UTC') return { name, from: timestamp, until: timestamp + 1,
+				initial_offset: 0, transitions: [] };
+			let process = require('fs').popen('/usr/bin/env TZ=' + name +
+				' /bin/date -d @' + timestamp + ' +%z', 'r');
+			if (process == null) return null;
+			let output = '', chunk;
+			while ((chunk = process.read(32)) != null && length(chunk)) {
+				output += chunk;
+				if (length(output) > 16) { process.close(); return null; }
+			}
+			let status = process.close(), value = trim(output);
+			if (status != 0 || !match(value, /^[+-][0-9]{4}$/)) return null;
+			let sign = substr(value, 0, 1) == '-' ? -1 : 1;
+			let offset = sign * (int(substr(value, 1, 2)) * 3600 + int(substr(value, 3, 2)) * 60);
+			return { name, from: timestamp, until: timestamp + 1,
+				initial_offset: offset, transitions: [] };
+		}
+	};
+};
+
+function device_observers(filesystem, clock) {
+	function observed(data) {
+		return { observed_at: int(clock.now() / 1000), data };
+	};
+	function capture(command) {
+		let process = require('fs').popen(command, 'r');
+		if (process == null) return null;
+		let output = '', chunk;
+		while ((chunk = process.read(4096)) != null && length(chunk)) {
+			output += chunk;
+			if (length(output) > 1048576) { process.close(); fail('RESPONSE_TOO_LARGE'); }
+		}
+		return process.close() == 0 ? output : null;
+	};
+	return {
+		dhcp_leases: () => {
+			let data = filesystem.readfile('/tmp/dhcp.leases') ?? '';
+			if (length(data) > 1048576) fail('RESPONSE_TOO_LARGE');
+			return observed(data);
+		},
+		neighbors: (family) => {
+			if (family != 'ipv4' && family != 'ipv6') fail('INVALID_ARGUMENT');
+			let data = capture('/usr/sbin/ip -j ' + (family == 'ipv4' ? '-4' : '-6') +
+				' neigh show');
+			return observed(data ?? '[]');
+		}
+	};
+};
+
+function mutation_identity(filesystem) {
+	let boot = trim(filesystem.readfile('/proc/sys/kernel/random/boot_id') ?? '');
+	let stat = filesystem.readfile('/proc/self/stat') ?? '';
+	let close = rindex(stat, ')'), first = index(stat, ' ');
+	let pid = first > 0 ? int(substr(stat, 0, first)) : null;
+	let fields = close > 0 ? split(trim(substr(stat, close + 1)), /[ \t]+/) : [];
+	let start = length(fields) >= 20 ? int(fields[19]) : null;
+	if (!match(boot, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/) ||
+	    type(pid) != 'int' || pid < 1 || type(start) != 'int' || start < 1)
+		return null;
+	return { boot, pid, start };
+};
+
+function private_runtime_directories(filesystem) {
+	for (let path in [ '/etc/miclash', '/tmp/miclash', '/var/run/miclash' ]) {
+		let stat = filesystem.lstat(path);
+		if (stat == null) {
+			if (filesystem.mkdir(path) !== true) fail('INTERNAL');
+			stat = filesystem.lstat(path);
+		}
+		let canonical = filesystem.realpath(path);
+		if (stat?.type != 'directory' || stat.uid != 0 ||
+		    (path == '/var/run/miclash'
+			? index([ path, '/run/miclash', '/tmp/run/miclash' ], canonical) < 0
+			: canonical != path) || filesystem.chmod(path, 0o700) !== true)
+			fail('INTERNAL');
+	}
+	return true;
+};
+
 export function create(overrides) {
 	let filesystem = fs_adapter();
 	let digest = digest_adapter();
@@ -403,6 +508,19 @@ export function create(overrides) {
 		runtime.process = process_adapter();
 	if (runtime.http == null)
 		runtime.http = create_http_adapter(runtime.clock, require('socket'));
+	private_runtime_directories(runtime.fs);
+	if (runtime.secure_fs == null)
+		runtime.secure_fs = secure_fs.create(runtime);
+	if (runtime.rulesets == null)
+		runtime.rulesets = rulesets.create(runtime);
+	if (runtime.timezones == null)
+		runtime.timezones = installed_timezones(runtime.fs);
+	if (!length(keys(runtime.observers ?? {})))
+		runtime.observers = device_observers(runtime.fs, runtime.clock);
+	if (runtime.mutation_lock_self == null)
+		runtime.mutation_lock_self = mutation_identity(runtime.fs);
+	if (overrides?.core_available == null)
+		runtime.core_available = runtime.fs.stat('/opt/clash/bin/clash')?.type == 'file';
 
 	return runtime;
 };
