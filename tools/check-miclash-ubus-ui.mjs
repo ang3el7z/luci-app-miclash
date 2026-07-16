@@ -123,8 +123,10 @@ assert.match(ui, /downloadChunks\(/);
 
 const replies = new Map();
 const calls = [];
+const declarations = [];
 const rpcMock = {
 	declare(spec) {
+		declarations.push(spec);
 		return async (...args) => {
 			calls.push({ method: spec.method, args });
 			const handler = replies.get(spec.method);
@@ -146,11 +148,17 @@ const moduleApi = new Function('rpc', 'window', 'TextEncoder', 'Uint8Array', 'Ar
 
 replies.set('service_start', { error: { code: 'BUSY', message: 'Busy' } });
 const errorClient = moduleApi.create();
+assert.deepEqual(declarations.slice(0, fixture.methods.length), fixture.methods.map((method) => ({
+	object: 'miclash', method: method.name, params: method.params, expect: { '': {} }, reject: true
+})), 'every rpc declaration must use exact object/method/params/expect/reject semantics');
 await assert.rejects(errorClient.service_start('config.yaml', 'luci'),
 	(error) => error.code === 'BUSY' && error.message === 'Busy');
 replies.set('service_start', { operation_id: '../invalid' });
 await assert.rejects(errorClient.service_start('config.yaml', 'luci'),
 	(error) => error.code === 'INVALID_RESPONSE');
+replies.set('health', async () => { throw { code: 'PERMISSION_DENIED', message: 'Denied' }; });
+await assert.rejects(errorClient.health(),
+	(error) => error instanceof Error && error.code === 'PERMISSION_DENIED' && error.message === 'Denied');
 
 replies.set('operation_get', { operation: { id: 'op_1', state: 'running' } });
 let watched = 0;
@@ -194,6 +202,97 @@ replies.set('transfer_read', (id, seq) => {
 const downloadedBytes = await transferClient.downloadChunks('report', 'rpt_' + 'c'.repeat(32),
 	{ format: 'text' });
 assert.equal(Buffer.from(downloadedBytes).toString(), 'diagnostic');
+assert.equal(calls.filter((call) => call.method === 'transfer_read').length, 3,
+	'download must use exactly ceil(size/chunk_size) reads');
+
+// Destroying a view aborts already-begun transfers through the raw declaration,
+// even though public wrappers reject after destroy.
+let releaseWrite;
+replies.set('transfer_begin', { transfer_id: 'd'.repeat(64), chunk_size: 4, expires_at: 1 });
+replies.set('transfer_write', () => new Promise((resolve) => { releaseWrite = resolve; }));
+const destroyTransferClient = moduleApi.create();
+const pendingUpload = destroyTransferClient.uploadChunks('backup', {}, new Uint8Array([1, 2, 3]));
+while (!releaseWrite) await new Promise((resolve) => setImmediate(resolve));
+const abortsBeforeDestroy = calls.filter((call) => call.method === 'transfer_abort').length;
+destroyTransferClient.destroy();
+await new Promise((resolve) => setImmediate(resolve));
+assert.ok(calls.filter((call) => call.method === 'transfer_abort').length > abortsBeforeDestroy,
+	'destroy did not best-effort abort its active transfer');
+releaseWrite({ next_seq: 1, received: 3 });
+await assert.rejects(pendingUpload, (error) => error.code === 'CANCELLED');
+
+let releaseBegin;
+replies.set('transfer_begin', () => new Promise((resolve) => { releaseBegin = resolve; }));
+const destroyBeginClient = moduleApi.create();
+const pendingBegin = destroyBeginClient.uploadChunks('backup', {}, new Uint8Array([9]));
+while (!releaseBegin) await new Promise((resolve) => setImmediate(resolve));
+destroyBeginClient.destroy();
+const abortsBeforeBeginRelease = calls.filter((call) => call.method === 'transfer_abort').length;
+releaseBegin({ transfer_id: '2'.repeat(64), chunk_size: 4, expires_at: 1 });
+await assert.rejects(pendingBegin, (error) => error.code === 'CANCELLED');
+assert.ok(calls.filter((call) => call.method === 'transfer_abort').length > abortsBeforeBeginRelease,
+	'destroy during transfer_begin leaked the returned transfer authority');
+
+async function expectDownloadAbort(beginReply, readHandler, predicate) {
+	const before = calls.filter((call) => call.method === 'transfer_abort').length;
+	replies.set('transfer_begin', beginReply);
+	replies.set('transfer_read', readHandler);
+	const value = moduleApi.create().downloadChunks('report', 'rpt_' + 'e'.repeat(32), {});
+	await assert.rejects(value, predicate);
+	assert.ok(calls.filter((call) => call.method === 'transfer_abort').length > before,
+		'failed download did not abort');
+}
+await expectDownloadAbort({ transfer_id: 'BAD', chunk_size: 4, size: 1, sha256: 'a'.repeat(64) },
+	() => ({}), (error) => error.code === 'INVALID_RESPONSE');
+for (const chunkSize of [0, 1.5, 49153])
+	await expectDownloadAbort({ transfer_id: 'e'.repeat(64), chunk_size: chunkSize,
+		size: 1, sha256: 'a'.repeat(64) }, () => ({}),
+		(error) => error.code === 'INVALID_RESPONSE');
+await expectDownloadAbort({ transfer_id: 'e'.repeat(64), chunk_size: 4,
+	size: 5, sha256: 'a'.repeat(64) },
+	(id, seq) => ({ seq, next_seq: seq + 1, data: Buffer.from('x').toString('base64'), eof: false }),
+	(error) => error.code === 'INVALID_RESPONSE');
+await expectDownloadAbort({ transfer_id: 'e'.repeat(64), chunk_size: 4,
+	size: 1, sha256: 'a'.repeat(64) },
+	(id, seq) => ({ seq, next_seq: seq + 1, data: 'YQ===', eof: true }),
+	(error) => error.code === 'INVALID_RESPONSE');
+await expectDownloadAbort({ transfer_id: 'e'.repeat(64), chunk_size: 4,
+	size: 1, sha256: 'a'.repeat(64) },
+	(id, seq) => ({ seq: seq + 1, next_seq: seq + 1,
+		data: Buffer.from('x').toString('base64'), eof: true }),
+	(error) => error.code === 'INVALID_RESPONSE');
+await expectDownloadAbort({ transfer_id: 'e'.repeat(64), chunk_size: 4,
+	size: 1, sha256: 'a'.repeat(64) },
+	(id, seq) => ({ seq, next_seq: seq + 1,
+		data: Buffer.from('x').toString('base64'), eof: false }),
+	(error) => error.code === 'INVALID_RESPONSE');
+await expectDownloadAbort({ transfer_id: 'e'.repeat(64), chunk_size: 4,
+	size: 1, sha256: 'a'.repeat(64) },
+	(id, seq) => ({ seq, next_seq: seq + 1,
+		data: Buffer.from('x').toString('base64'), eof: true }),
+	(error) => error.code === 'VALIDATION_FAILED');
+
+let releaseRead;
+replies.set('transfer_begin', { transfer_id: '1'.repeat(64), chunk_size: 4, size: 1,
+	sha256: 'a'.repeat(64) });
+replies.set('transfer_read', () => new Promise((resolve) => { releaseRead = resolve; }));
+const destroyDownloadClient = moduleApi.create();
+const pendingDownload = destroyDownloadClient.downloadChunks('report', 'rpt_' + '1'.repeat(32), {});
+while (!releaseRead) await new Promise((resolve) => setImmediate(resolve));
+const abortsBeforeDownloadDestroy = calls.filter((call) => call.method === 'transfer_abort').length;
+destroyDownloadClient.destroy();
+await new Promise((resolve) => setImmediate(resolve));
+assert.ok(calls.filter((call) => call.method === 'transfer_abort').length > abortsBeforeDownloadDestroy,
+	'destroy did not abort an active download');
+releaseRead({ seq: 0, next_seq: 1, data: Buffer.from('x').toString('base64'), eof: true });
+await assert.rejects(pendingDownload, (error) => error.code === 'CANCELLED');
+let zeroReads = 0;
+replies.set('transfer_begin', { transfer_id: 'f'.repeat(64), chunk_size: 4, size: 0,
+	sha256: Buffer.from(await webcrypto.subtle.digest('SHA-256', new Uint8Array())).toString('hex') });
+replies.set('transfer_read', () => { zeroReads++; return {}; });
+replies.set('transfer_finish', { completed: true });
+await moduleApi.create().downloadChunks('report', 'rpt_' + 'f'.repeat(32), {});
+assert.equal(zeroReads, 0, 'zero-sized download must finalize without a read');
 
 const destroyClient = moduleApi.create();
 destroyClient.watchOperation('op_1', () => {});

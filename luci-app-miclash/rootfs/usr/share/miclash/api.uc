@@ -17,6 +17,7 @@ const TRANSFER_ROOT = '/tmp/miclash/transfers';
 const TRANSFER_TTL = 300000;
 const TRANSFER_CHUNK = 49152;
 const TRANSFER_LIMIT = 8;
+const TRANSFER_UPLOAD_LIMIT = 1;
 const TRANSFER_MAX = 16777216;
 const REPORT_MAX = 262144;
 
@@ -65,12 +66,6 @@ function safe_text(value, maximum) {
 	if (type(value) != 'string' || length(value) < 1 || length(value) > maximum ||
 		match(value, /[[:cntrl:]]/))
 		errors.fail('INVALID_ARGUMENT');
-	return value;
-};
-
-function safe_url(value) {
-	value = safe_text(value, 4096);
-	if (!match(value, /^https?:\/\//)) errors.fail('INVALID_ARGUMENT');
 	return value;
 };
 
@@ -188,15 +183,30 @@ function write_all(runtime, handle, content) {
 	}
 };
 
+function transfer_result(value) {
+	if (type(value) != 'object' || type(value) == 'array') errors.fail('INVALID_RESPONSE');
+	let names = keys(value);
+	if (length(names) != 1) errors.fail('INVALID_RESPONSE');
+	if (names[0] == 'import_id' && type(value.import_id) == 'string' &&
+		match(value.import_id, /^i-[0-9]{13}-[0-9a-f]{32}$/))
+		return { import_id: value.import_id };
+	if (names[0] == 'inspection_id' && type(value.inspection_id) == 'string' &&
+		match(value.inspection_id, /^x-[0-9]{13}-[0-9a-f]{32}$/))
+		return { inspection_id: value.inspection_id };
+	errors.fail('INVALID_RESPONSE');
+};
+
 export function create_transfers(dependencies) {
 	let runtime = dependencies?.runtime;
 	if (type(runtime?.fs) != 'object' || type(runtime?.clock?.now) != 'function' ||
+		type(runtime?.clock?.set_timeout) != 'function' ||
 		type(runtime?.random?.hex) != 'function' || type(runtime?.digest?.sha256) != 'function' ||
 		type(runtime?.digest?.sha256_file) != 'function' || runtime?.paths?.tmp != '/tmp/miclash' ||
 		type(dependencies?.uploads) != 'object' || type(dependencies?.downloads) != 'object')
 		errors.fail('INVALID_ARGUMENT');
 	ensure_directory(runtime, runtime.paths.tmp);
 	let root = ensure_directory(runtime, TRANSFER_ROOT), records = {};
+	let expiry_timer = null, expiry_due = null, closed = false;
 
 	function verify_root() {
 		root = secure_directory(runtime, TRANSFER_ROOT, root);
@@ -243,10 +253,35 @@ export function create_transfers(dependencies) {
 		try { safe_unlink(record); } catch (error) {}
 		delete records[record.id];
 	};
+	function cancel_expiry() {
+		if (expiry_timer?.cancel != null) expiry_timer.cancel();
+		expiry_timer = null;
+		expiry_due = null;
+	};
 	function prune() {
 		let now = runtime.clock.now();
-		for (let id, record in records)
+		for (let record in values(records))
 			if (now >= record.expires_at) dispose(record);
+	};
+	function schedule_expiry() {
+		if (closed) return cancel_expiry();
+		let earliest = null;
+		for (let id, record in records)
+			if (earliest == null || record.expires_at < earliest) earliest = record.expires_at;
+		if (earliest == null) return cancel_expiry();
+		if (expiry_timer != null && expiry_due == earliest) return;
+		cancel_expiry();
+		let timer;
+		timer = runtime.clock.set_timeout(max(0, earliest - runtime.clock.now()), () => {
+			if (expiry_timer !== timer || closed) return;
+			expiry_timer = null;
+			expiry_due = null;
+			prune();
+			schedule_expiry();
+		});
+		if (timer == null || type(timer.cancel) != 'function') errors.fail('INTERNAL');
+		expiry_timer = timer;
+		expiry_due = earliest;
 	};
 	function acquire(id, direction) {
 		prune();
@@ -260,6 +295,9 @@ export function create_transfers(dependencies) {
 			let handle_identity = runtime.fs.fstat(record.handle);
 			if (!same_file(record.identity, path_identity) ||
 				!same_file(record.identity, handle_identity) ||
+				path_identity.mode != 0o600 || handle_identity.mode != 0o600 ||
+				(path_identity.uid != null && path_identity.uid != 0) ||
+				(handle_identity.uid != null && handle_identity.uid != 0) ||
 				runtime.fs.realpath(record.path) != record.path)
 				errors.fail('INTERNAL');
 		}
@@ -275,6 +313,7 @@ export function create_transfers(dependencies) {
 		errors.fail('BUSY');
 	};
 	function begin(arguments) {
+		if (closed) errors.fail('HEALTH_FAILED');
 		prune();
 		verify_root();
 		if (length(keys(records)) >= TRANSFER_LIMIT) errors.fail('BUSY');
@@ -285,10 +324,15 @@ export function create_transfers(dependencies) {
 		});
 		let metadata = transfer_metadata(arguments.metadata), id = allocate_id();
 		if (arguments.direction == 'upload') {
+			let upload_count = 0, reserved = 0;
+			for (let record in values(records))
+				if (record.direction == 'upload') { upload_count++; reserved += record.size; }
 			if (arguments.kind != 'backup' || type(dependencies.uploads.backup) != 'function' ||
 				length(arguments.object_id ?? '') || arguments.size < 1 || arguments.size > TRANSFER_MAX ||
 				!match(arguments.sha256, /^[0-9a-f]{64}$/))
 				errors.fail('INVALID_ARGUMENT');
+			if (upload_count >= TRANSFER_UPLOAD_LIMIT || reserved + arguments.size > TRANSFER_MAX)
+				errors.fail('BUSY');
 			let path = TRANSFER_ROOT + '/' + id, handle = runtime.fs.open(path, 'wx', 0o600);
 			if (handle == null) errors.fail('INTERNAL');
 			let identity = runtime.fs.fstat(handle), path_identity = runtime.fs.lstat(path);
@@ -305,6 +349,7 @@ export function create_transfers(dependencies) {
 			records[id] = { id, direction: 'upload', kind: arguments.kind, metadata,
 				size: arguments.size, sha256: arguments.sha256, received: 0, next_seq: 0,
 				expires_at: runtime.clock.now() + TRANSFER_TTL, path, handle, identity };
+			schedule_expiry();
 			return { transfer_id: id, chunk_size: TRANSFER_CHUNK,
 				expires_at: records[id].expires_at };
 		}
@@ -315,7 +360,8 @@ export function create_transfers(dependencies) {
 			type(arguments.object_id) != 'string')
 			errors.fail('INVALID_ARGUMENT');
 		if ((arguments.kind == 'report' && !match(arguments.object_id, /^rpt_[0-9a-f]{32}$/)) ||
-			(arguments.kind == 'backup' && !match(arguments.object_id, /^b_[0-9a-f]{32}$/)))
+			(arguments.kind == 'backup' &&
+			 !match(arguments.object_id, /^b-[0-9]{13}-[0-9a-f]{32}$/)))
 			errors.fail('INVALID_ARGUMENT');
 		let source = dependencies.downloads[arguments.kind](arguments.object_id, metadata);
 		let maximum = arguments.kind == 'report' ? REPORT_MAX : TRANSFER_MAX;
@@ -329,6 +375,7 @@ export function create_transfers(dependencies) {
 		records[id] = { id, direction: 'download', kind: arguments.kind, metadata,
 			size: source.size, sha256: source.sha256, offset: 0, next_seq: 0,
 			expires_at: runtime.clock.now() + TRANSFER_TTL, source };
+		schedule_expiry();
 		return { transfer_id: id, chunk_size: TRANSFER_CHUNK, size: source.size,
 			sha256: source.sha256, expires_at: records[id].expires_at };
 	};
@@ -366,14 +413,17 @@ export function create_transfers(dependencies) {
 		if (record.direction == 'download') {
 			record = acquire(id, 'download');
 			if (record.offset != record.size) errors.fail('VALIDATION_FAILED');
-			let verified = false;
-			try { verified = record.source.finish(record.offset, record.sha256) === true; }
-			catch (error) {}
-			if (!verified) {
+			let measured = null;
+			try { measured = record.source.finish(); } catch (error) {}
+			if (type(measured) != 'object' || length(keys(measured)) != 2 ||
+				!exists(measured, 'size') || !exists(measured, 'sha256') ||
+				measured.size != record.size || measured.sha256 != record.sha256) {
 				dispose(record);
+				schedule_expiry();
 				errors.fail('VALIDATION_FAILED');
 			}
 			dispose(record);
+			schedule_expiry();
 			return { completed: true };
 		}
 		record = acquire(id, 'upload');
@@ -389,6 +439,7 @@ export function create_transfers(dependencies) {
 			runtime.digest.sha256_file(record.path) != record.sha256 ||
 			!same_file(before, after = runtime.fs.lstat(record.path)) || after.size != before.size) {
 			dispose(record);
+			schedule_expiry();
 			errors.fail('VALIDATION_FAILED');
 		}
 		let reader = runtime.fs.open(record.path, 're');
@@ -415,15 +466,24 @@ export function create_transfers(dependencies) {
 		if (runtime.fs.close(reader) !== true) failure = 'INTERNAL';
 		if (!same_file(record.identity, runtime.fs.lstat(record.path))) failure = 'INTERNAL';
 		dispose(record);
+		schedule_expiry();
 		if (failure != null) errors.fail(failure);
-		return { completed: true, result: redact.value('transfer_result', result ?? {}) };
+		return { completed: true, result: transfer_result(result) };
 	};
 	function abort(arguments) {
 		exact(arguments, { transfer_id: { type: 'string', required: true } });
 		let id = transfer_id(arguments.transfer_id), record = records[id];
 		if (record == null) errors.fail('NOT_FOUND');
 		dispose(record);
+		schedule_expiry();
 		return { aborted: true };
+	};
+	function close() {
+		if (closed) return true;
+		closed = true;
+		cancel_expiry();
+		for (let record in values(records)) dispose(record);
+		return true;
 	};
 	function safe(callback) {
 		return (arguments) => {
@@ -433,7 +493,7 @@ export function create_transfers(dependencies) {
 	};
 	recover_stale();
 	return { begin: safe(begin), write: safe(write), read: safe(read),
-		finish: safe(finish), abort: safe(abort) };
+		finish: safe(finish), abort: safe(abort), close };
 };
 
 export function method_table(app, transfers) {
@@ -593,7 +653,7 @@ export function method_table(app, transfers) {
 			exact(arguments, { profile: { type: 'string' },
 				url: { type: 'string', required: true }, source: { type: 'string' } });
 			return domain_operation('subscription_set', { profile: profile(arguments),
-				url: safe_url(arguments.url), source: source(arguments) });
+				url: schema.url(arguments.url), source: source(arguments) });
 		}),
 		subscription_update: method(service_policy, (arguments) => {
 			exact(arguments, { profile: { type: 'string' }, source: { type: 'string' } });
@@ -604,7 +664,7 @@ export function method_table(app, transfers) {
 			exact(arguments, { profile: { type: 'string' },
 				url: { type: 'string', required: true } });
 			return domain_read('subscription_probe', { profile: profile(arguments),
-				url: safe_url(arguments.url) });
+				url: schema.url(arguments.url) });
 		}),
 		update_release: method({ kind: '', channel: '' }, (arguments) => {
 			exact(arguments, { kind: { type: 'string', required: true },

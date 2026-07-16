@@ -80,6 +80,15 @@ function normalizeReply(reply, operation) {
 	return reply;
 }
 
+function normalizeFailure(error) {
+	if (error instanceof Error && typeof error.code === 'string') return error;
+	const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]*$/.test(error.code)
+		? error.code : 'RPC_ERROR';
+	const message = typeof error?.message === 'string' && error.message.length
+		? error.message : 'RPC request failed';
+	return apiError(code, message);
+}
+
 function bytesOf(value) {
 	if (value instanceof Uint8Array) return value;
 	if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -102,6 +111,8 @@ function decodeBase64(value) {
 	if (binary.length > MAX_CHUNK) throw apiError('INVALID_RESPONSE', 'Oversized transfer chunk');
 	const bytes = new Uint8Array(binary.length);
 	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	if (encodeBase64(bytes) !== value)
+		throw apiError('INVALID_RESPONSE', 'Non-canonical transfer chunk');
 	return bytes;
 }
 
@@ -116,6 +127,8 @@ function createClient(options) {
 	options = options || {};
 	const timers = new Set();
 	const calls = {};
+	const rawCalls = {};
+	const activeTransfers = new Set();
 	const timerSet = options.setTimeout || window.setTimeout.bind(window);
 	const timerClear = options.clearTimeout || window.clearTimeout.bind(window);
 	const cryptoProvider = options.crypto || window.crypto;
@@ -123,11 +136,22 @@ function createClient(options) {
 
 	for (const spec of METHOD_SPECS) {
 		const declared = rpc.declare({ object: 'miclash', method: spec.name,
-			params: spec.params, expect: {} });
+			params: spec.params, expect: { '': {} }, reject: true });
+		rawCalls[spec.name] = declared;
 		calls[spec.name] = (...args) => {
 			if (destroyed) return Promise.reject(apiError('CANCELLED', 'View destroyed'));
-			return Promise.resolve(declared(...args)).then((reply) => normalizeReply(reply, spec.operation));
+			return Promise.resolve(declared(...args))
+				.then((reply) => normalizeReply(reply, spec.operation))
+				.catch((error) => { throw normalizeFailure(error); });
 		};
+	}
+	function abortTransfer(transferId) {
+		activeTransfers.delete(transferId);
+		const call = destroyed ? rawCalls.transfer_abort : calls.transfer_abort;
+		return Promise.resolve(call(transferId)).catch(() => null);
+	}
+	function ensureActive() {
+		if (destroyed) throw apiError('CANCELLED', 'View destroyed');
 	}
 
 	const client = {
@@ -136,6 +160,9 @@ function createClient(options) {
 			destroyed = true;
 			for (const timer of timers) timerClear(timer);
 			timers.clear();
+			for (const transferId of activeTransfers)
+				Promise.resolve(rawCalls.transfer_abort(transferId)).catch(() => null);
+			activeTransfers.clear();
 		},
 
 		watchOperation(operationId, callback, interval) {
@@ -187,23 +214,28 @@ function createClient(options) {
 				const begun = await client.transfer_begin('upload', kind, '', bytes.length, hash,
 					metadata || {});
 				transferId = begun.transfer_id;
-				const chunkSize = Math.min(MAX_CHUNK, Number(begun.chunk_size) || 0);
-				if (!transferId || chunkSize < 1)
+				ensureActive();
+				const chunkSize = begun.chunk_size;
+				if (typeof transferId !== 'string' || !/^[0-9a-f]{64}$/.test(transferId) ||
+					!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK)
 					throw apiError('INVALID_RESPONSE', 'Invalid transfer declaration');
+				activeTransfers.add(transferId);
 				let seq = 0;
 				for (let offset = 0; offset < bytes.length; offset += chunkSize) {
 					const chunk = bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize));
 					const reply = await client.transfer_write(transferId, seq, encodeBase64(chunk));
+					ensureActive();
 					if (reply.next_seq !== seq + 1)
 						throw apiError('INVALID_RESPONSE', 'Invalid transfer sequence');
 					seq++;
 				}
 				const result = await client.transfer_finish(transferId);
+				activeTransfers.delete(transferId);
 				transferId = null;
 				return result;
 			} catch (error) {
 				if (transferId) {
-					try { await client.transfer_abort(transferId); } catch (ignore) {}
+					await abortTransfer(transferId);
 				}
 				throw error;
 			}
@@ -214,32 +246,40 @@ function createClient(options) {
 			try {
 				const begun = await client.transfer_begin('download', kind, opaqueId, 0, '', metadata || {});
 				transferId = begun.transfer_id;
-				if (!transferId || !Number.isInteger(begun.size) || begun.size < 0 ||
-					begun.size > MAX_TRANSFER || !/^[0-9a-f]{64}$/.test(begun.sha256 || ''))
+				ensureActive();
+				const chunkSize = begun.chunk_size;
+				if (typeof transferId !== 'string' || !/^[0-9a-f]{64}$/.test(transferId) ||
+					!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK ||
+					!Number.isInteger(begun.size) || begun.size < 0 || begun.size > MAX_TRANSFER ||
+					!/^[0-9a-f]{64}$/.test(begun.sha256 || ''))
 					throw apiError('INVALID_RESPONSE', 'Invalid transfer declaration');
+				activeTransfers.add(transferId);
 				const output = new Uint8Array(begun.size);
-				let offset = 0, seq = 0, eof = false;
-				while (!eof) {
+				let offset = 0;
+				const reads = Math.ceil(begun.size / chunkSize);
+				for (let seq = 0; seq < reads; seq++) {
 					const reply = await client.transfer_read(transferId, seq);
+					ensureActive();
 					if (reply.seq !== seq || reply.next_seq !== seq + 1)
 						throw apiError('INVALID_RESPONSE', 'Invalid transfer sequence');
 					const chunk = decodeBase64(reply.data);
-					if (offset + chunk.length > output.length)
-						throw apiError('INVALID_RESPONSE', 'Transfer exceeds declared size');
+					const expected = Math.min(chunkSize, output.length - offset);
+					if (chunk.length !== expected || reply.eof !== (seq === reads - 1))
+						throw apiError('INVALID_RESPONSE', 'Invalid transfer chunk length');
 					output.set(chunk, offset);
 					offset += chunk.length;
-					eof = reply.eof === true;
-					if (!eof && !chunk.length) throw apiError('INVALID_RESPONSE', 'Empty transfer chunk');
-					seq++;
 				}
-				if (offset !== output.length || await sha256(output, cryptoProvider) !== begun.sha256)
+				let measuredHash = await sha256(output, cryptoProvider);
+				ensureActive();
+				if (offset !== output.length || measuredHash !== begun.sha256)
 					throw apiError('VALIDATION_FAILED', 'Transfer digest mismatch');
 				await client.transfer_finish(transferId);
+				activeTransfers.delete(transferId);
 				transferId = null;
 				return output;
 			} catch (error) {
 				if (transferId) {
-					try { await client.transfer_abort(transferId); } catch (ignore) {}
+					await abortTransfer(transferId);
 				}
 				throw error;
 			}

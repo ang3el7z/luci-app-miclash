@@ -6,6 +6,23 @@ import * as fakes from 'fakes';
 function json_equal(actual, expected, message) {
 	assert_equal(sprintf('%J', actual), sprintf('%J', expected), message);
 };
+function structural_equal(actual, expected) {
+	if (type(actual) != type(expected)) return false;
+	if (type(actual) == 'array') {
+		if (length(actual) != length(expected)) return false;
+		for (let index = 0; index < length(actual); index++)
+			if (!structural_equal(actual[index], expected[index])) return false;
+		return true;
+	}
+	if (type(actual) == 'object') {
+		let left = sort(keys(actual)), right = sort(keys(expected));
+		if (sprintf('%J', left) != sprintf('%J', right)) return false;
+		for (let name in left)
+			if (!structural_equal(actual[name], expected[name])) return false;
+		return true;
+	}
+	return actual === expected;
+};
 
 let submitted = [];
 let records = {};
@@ -342,12 +359,114 @@ assert_equal(operation_subscriber, null);
 
 // The canonical fixture is the single parity contract shared with the Node UI check.
 let canonical = json(require('fs').readfile('tests/fixtures/api/methods.json')).methods;
+let transfer_fixture = json(require('fs').readfile('tests/fixtures/api/transfers.json'));
 json_equal(sort(map(canonical, (entry) => entry.name)), names);
 for (let entry in canonical)
 	json_equal(sort(keys(methods[entry.name].args)), sort(entry.params),
 		entry.name + ' backend policy differs from canonical params');
 assert_equal(invoke('transfer_abort', { transfer_id: sprintf('%064x', 1) }).error.code,
 	'HEALTH_FAILED');
+
+// Every canonical method executes through exactly one typed delegate. The same
+// table proves unknown fields are rejected before any delegate is reached and
+// operation/read reply shapes follow the fixture operation flag.
+function valid_contract_arguments(entry) {
+	let values = {
+		operation_id: 'op-valid', state: 'queued', kind: 'service.start', source: 'luci',
+		arguments: { profile: 'config.yaml' }, profile: 'config.yaml', content: 'mode: rule\n',
+		settings: {}, limit: 10, from_revision: 'rev-from', to_revision: 'rev-to',
+		revision: 'rev-one', url: 'https://example.test/subscription', channel: 'stable',
+		target: 'example.test', device: 'AA:BB:CC:DD:EE:FF', interface: 'lan', options: {},
+		backup_id: 'b-0000000005000-' + sprintf('%032x', 4),
+		inspection_id: 'x-0000000005000-' + sprintf('%032x', 5),
+		policy: { mac: 'AA:BB:CC:DD:EE:FF', mode: 'proxy' },
+		mac: 'aa:bb:cc:dd:ee:ff', direction: 'upload', object_id: '', size: 1,
+		sha256: sprintf('%064x', 7), metadata: {}, transfer_id: sprintf('%064x', 8),
+		seq: 0, data: b64enc('x')
+	};
+	if (entry.name == 'update_release') values.kind = 'miclash';
+	let arguments = {};
+	for (let name in entry.params) arguments[name] = values[name];
+	return arguments;
+};
+function expected_delegate_arguments(name, arguments) {
+	if (name == 'status' || name == 'health' || name == 'config_list' ||
+		name == 'settings_get' || name == 'telegram_status' ||
+		name == 'telegram_settings' || name == 'telegram_test') return [];
+	if (name == 'operation_get') return [ arguments.operation_id ];
+	if (name == 'operation_list') return [ arguments ];
+	if (index(name, 'service_') == 0) return [ arguments.profile, arguments.source ];
+	if (name == 'config_read') return [ arguments.profile ];
+	if (name == 'config_validate' || name == 'config_apply')
+		return [ arguments.profile, arguments.content, arguments.source ];
+	if (name == 'settings_set') return [ arguments.settings, arguments.source ];
+	if (name == 'devices_policy_delete')
+		return [ { mac: uc(arguments.mac), source: arguments.source } ];
+	return [ arguments ];
+};
+let delegation = [], contract_sequence = 100;
+let contract_app = { ...app };
+function contract_delegate(name, operation) {
+	return (...args) => {
+		push(delegation, { name, args });
+		if (name == 'telegram_test') return true;
+		if (operation)
+			return { id: sprintf('0000000005000-%08d-0123456789abcdef', ++contract_sequence) };
+		if (name == 'config_list') return [];
+		if (name == 'config_read') return 'mode: rule\n';
+		return { ok: true, state: 'running' };
+	};
+};
+for (let entry in canonical) {
+	if (index(entry.name, 'transfer_') == 0) continue;
+	contract_app[entry.name] = contract_delegate(entry.name, entry.operation);
+}
+let contract_transfers = {};
+function transfer_delegate(method_name) {
+	return (arguments) => {
+		push(delegation, { name: 'transfer_' + method_name, args: [ arguments ] });
+		return { delegated: method_name };
+	};
+};
+for (let method_name in [ 'begin', 'write', 'read', 'finish', 'abort' ])
+	contract_transfers[method_name] = transfer_delegate(method_name);
+let contract_methods = api.method_table(contract_app, contract_transfers);
+for (let entry in canonical) {
+	let arguments = valid_contract_arguments(entry), before = length(delegation);
+	let reply = contract_methods[entry.name].call({ args: arguments });
+	assert_equal(length(delegation), before + 1, entry.name + ' delegate count');
+	assert_equal(delegation[before].name, entry.name, entry.name + ' delegate name');
+	assert_true(structural_equal(delegation[before].args,
+		expected_delegate_arguments(entry.name, arguments)),
+		entry.name + ' normalized delegate arguments');
+	if (entry.operation) json_equal(keys(reply), [ 'operation_id' ], entry.name + ' operation reply');
+	else assert_equal(exists(reply, 'operation_id'), false, entry.name + ' read returned operation ID');
+	let invalid = { ...arguments, unexpected: true };
+	let rejected = contract_methods[entry.name].call({ args: invalid });
+	assert_equal(rejected.error.code, 'INVALID_ARGUMENT', entry.name + ' accepted unknown field');
+	assert_equal(length(delegation), before + 1, entry.name + ' delegated unknown field');
+}
+assert_equal(contract_methods.operation_start.call({ args: {
+	kind: 'arbitrary.shell', arguments: {}, source: 'luci'
+} }).error.code, 'INVALID_ARGUMENT');
+assert_equal(contract_methods.subscription_set.call({ args: {
+	profile: 'config.yaml', url: 'http://', source: 'luci'
+} }).error.code, 'INVALID_ARGUMENT');
+assert_equal(contract_methods.subscription_probe.call({ args: {
+	profile: 'config.yaml', url: 'https://user@example.test/path'
+} }).error.code, 'INVALID_ARGUMENT');
+assert_equal(contract_methods.devices_policy_delete.call({ args: {
+	mac: 'not-a-mac', source: 'luci'
+} }).error.code, 'INVALID_ARGUMENT');
+assert_equal(contract_methods.history_list.call({ args: {
+	profile: 'config.yaml', limit: 101
+} }).error.code, 'INVALID_ARGUMENT');
+assert_equal(contract_methods.diagnostics_route_test.call({ args: {
+	target: sprintf('%0513d', 0), device: '', interface: ''
+} }).error.code, 'INVALID_ARGUMENT');
+assert_equal(contract_methods.backup_create.call({ args: {
+	options: { note: sprintf('%05000d', 0) }, source: 'luci'
+} }).error.code, 'RESPONSE_TOO_LARGE');
 
 // Chunk transfers are a bounded, pathless adapter: the caller receives only a
 // 256-bit opaque ID and the upload domain receives only a reader capability.
@@ -366,23 +485,34 @@ let transfer = api.create_transfers({
 			while (length(chunk = staged.read(4))) content += chunk;
 			imported = { content, kind: staged.kind, metadata: staged.metadata,
 				size: staged.size, sha256: staged.sha256 };
-			return { inspection_id: 'i_' + sprintf('%032x', 1) };
+			return { import_id: 'i-0000000005000-' + sprintf('%032x', 1) };
 		}
 	},
 	downloads: {
 		report: (id, metadata) => {
-			if (id != 'rpt_' + sprintf('%032x', 2)) die('NOT_FOUND');
-			let content = 'diagnostic';
+			if (id != transfer_fixture.report_id) die('NOT_FOUND');
+			let content = 'diagnostic', served = '';
 			return {
 				size: length(content), sha256: transfer_runtime.digest.sha256(content),
-				read: (offset, amount) => substr(content, offset, amount),
-				finish: (size, sha256) => {
-					download_verified = size == length(content) &&
-						sha256 == transfer_runtime.digest.sha256(content);
-					return download_verified;
+				read: (offset, amount) => {
+					let chunk = substr(content, offset, amount); served += chunk; return chunk;
+				},
+				finish: () => {
+					download_verified = served == content;
+					return { size: length(served), sha256: transfer_runtime.digest.sha256(served) };
 				},
 				close: () => true
 			};
+		},
+		backup: (id) => {
+			if (id != transfer_fixture.backup_id) die('NOT_FOUND');
+			let content = 'backup', served = '';
+			return { size: length(content), sha256: transfer_runtime.digest.sha256(content),
+				read: (offset, amount) => {
+					let chunk = substr(content, offset, amount); served += chunk; return chunk;
+				},
+				finish: () => ({ size: length(served),
+					sha256: transfer_runtime.digest.sha256(served) }), close: () => true };
 		}
 	}
 });
@@ -400,28 +530,37 @@ json_equal(transfer.write({ transfer_id: begun.transfer_id, seq: 1,
 	data: b64enc('world') }), { next_seq: 2, received: 11 });
 let finalized = transfer.finish({ transfer_id: begun.transfer_id });
 assert_equal(finalized.completed, true);
-assert_equal(finalized.result.inspection_id, 'i_' + sprintf('%032x', 1));
+assert_equal(finalized.result.import_id, 'i-0000000005000-' + sprintf('%032x', 1));
 assert_equal(imported.content, payload);
 assert_equal(imported.kind, 'backup');
 assert_equal(imported.metadata.secrets, false);
 assert_equal(imported.sha256, payload_hash);
 assert_equal(index(sprintf('%J', finalized), '/tmp/'), -1);
 
-// Replay, wrong sequence, size/hash mismatch, overflow and expiry all fail closed.
+// Replay, wrong sequence, real same-size hash mismatch, overflow and expiry all fail closed.
 assert_equal(transfer.finish({ transfer_id: begun.transfer_id }).error.code, 'NOT_FOUND');
 let mismatch = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
 	size: 3, sha256: transfer_runtime.digest.sha256('bad'), metadata: {} });
 assert_equal(transfer.write({ transfer_id: mismatch.transfer_id, seq: 0,
 	data: b64enc('good') }).error.code, 'RESPONSE_TOO_LARGE');
 assert_equal(transfer.abort({ transfer_id: mismatch.transfer_id }).aborted, true);
+let bad_hash = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 3, sha256: transfer_runtime.digest.sha256('bad'), metadata: {} });
+assert_equal(transfer.write({ transfer_id: bad_hash.transfer_id, seq: 0,
+	data: b64enc('bag') }).received, 3);
+assert_equal(transfer.finish({ transfer_id: bad_hash.transfer_id }).error.code,
+	'VALIDATION_FAILED');
 let expired = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
 	size: 1, sha256: transfer_runtime.digest.sha256('x'), metadata: {} });
+let expired_path = transfer_fs.calls.open[length(transfer_fs.calls.open) - 1].path;
 transfer_clock.advance(300001);
+assert_true(transfer_fs.lstat(expired_path) == null,
+	'expiry timer did not proactively remove staging without another RPC');
 assert_equal(transfer.write({ transfer_id: expired.transfer_id, seq: 0,
 	data: b64enc('x') }).error.code, 'NOT_FOUND');
 
 // Download authority is a daemon-created report ID, never a path supplied by LuCI.
-let report_id = 'rpt_' + sprintf('%032x', 2);
+let report_id = transfer_fixture.report_id;
 let download = transfer.begin({ direction: 'download', kind: 'report', object_id: report_id,
 	size: 0, sha256: '', metadata: { format: 'text' } });
 assert_match(download.transfer_id, /^[0-9a-f]{64}$/);
@@ -433,6 +572,14 @@ assert_equal(transfer.read({ transfer_id: download.transfer_id, seq: 0 }).error.
 	'INVALID_ARGUMENT');
 assert_equal(transfer.finish({ transfer_id: download.transfer_id }).completed, true);
 assert_equal(download_verified, true, 'download source did not verify finalized size/hash');
+let backup_download = transfer.begin({ direction: 'download', kind: 'backup',
+	object_id: transfer_fixture.backup_id, size: 0, sha256: '', metadata: {} });
+assert_match(backup_download.transfer_id, /^[0-9a-f]{64}$/);
+assert_equal(transfer.abort({ transfer_id: backup_download.transfer_id }).aborted, true);
+for (let invalid_id in transfer_fixture.invalid_backup_ids)
+	assert_equal(transfer.begin({ direction: 'download', kind: 'backup',
+		object_id: invalid_id, size: 0, sha256: '', metadata: {} }).error.code,
+		'INVALID_ARGUMENT', 'accepted invalid backup ID: ' + invalid_id);
 assert_equal(transfer.begin({ direction: 'download', kind: 'config', object_id: report_id,
 	size: 0, sha256: '', metadata: {} }).error.code, 'INVALID_ARGUMENT');
 
@@ -446,20 +593,96 @@ transfer_fs.set_symlink(stage_path, '/tmp/miclash/foreign');
 assert_equal(transfer.write({ transfer_id: raced.transfer_id, seq: 0,
 	data: b64enc('z') }).error.code, 'INTERNAL');
 assert_equal(transfer_fs.readfile('/tmp/miclash/foreign'), 'foreign');
+assert_equal(transfer.abort({ transfer_id: raced.transfer_id }).aborted, true);
 
-// Active transfer state is fixed-size; malformed chunks cannot consume a slot
-// silently and a ninth concurrent transfer is rejected.
-let slots = [];
-for (let index = 0; index < 7; index++) {
-	let slot = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
-		size: 1, sha256: transfer_runtime.digest.sha256('q'), metadata: {} });
-	push(slots, slot.transfer_id);
-}
+// Only one upload reservation (and at most 16 MiB aggregate staging) exists.
+let reserved = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 16777216, sha256: transfer_runtime.digest.sha256('reserved'), metadata: {} });
 assert_equal(transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
 	size: 1, sha256: transfer_runtime.digest.sha256('q'), metadata: {} }).error.code, 'BUSY');
-assert_equal(transfer.write({ transfer_id: slots[0], seq: 0, data: '%%%%' }).error.code,
+assert_equal(transfer.write({ transfer_id: reserved.transfer_id, seq: 0, data: '%%%%' }).error.code,
 	'INVALID_ARGUMENT');
-for (let id in slots) assert_equal(transfer.abort({ transfer_id: id }).aborted, true);
+assert_equal(transfer.abort({ transfer_id: reserved.transfer_id }).aborted, true);
+
+// Domain completion replies are an exact opaque-ID shape, never a generic
+// object that can leak a path or an unclassified secret.
+let unsafe_fs = fakes.fs({}), unsafe_runtime = { fs: unsafe_fs, clock: fakes.clock(0),
+	random: fakes.entropy(), digest: fakes.digest(unsafe_fs), paths: { tmp: '/tmp/miclash' } };
+let unsafe_transfer = api.create_transfers({ runtime: unsafe_runtime,
+	uploads: { backup: (staged) => {
+		while (length(staged.read(16))) {}
+		return { import_id: 'i-0000000000000-' + sprintf('%032x', 9),
+			path: '/tmp/private', secret: 'domain-secret' };
+	} }, downloads: {} });
+let unsafe = unsafe_transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 1, sha256: unsafe_runtime.digest.sha256('u'), metadata: {} });
+unsafe_transfer.write({ transfer_id: unsafe.transfer_id, seq: 0, data: b64enc('u') });
+let unsafe_reply = unsafe_transfer.finish({ transfer_id: unsafe.transfer_id });
+assert_equal(unsafe_reply.error.code, 'INVALID_RESPONSE');
+assert_equal(index(sprintf('%J', unsafe_reply), 'domain-secret'), -1);
+assert_equal(index(sprintf('%J', unsafe_reply), '/tmp/private'), -1);
+
+// Random collisions retry without aliasing authority and exhaust after the
+// fixed attempt bound. Exactly one expiry timer remains active for all records.
+function empty_download(runtime) {
+	let served = '';
+	return { size: 0, sha256: runtime.digest.sha256(''),
+		read: (offset, amount) => '',
+		finish: () => ({ size: length(served), sha256: runtime.digest.sha256(served) }),
+		close: () => true };
+};
+let collision_fs = fakes.fs({}), collision_clock = fakes.clock(0);
+let token_a = sprintf('%064x', 41), token_b = sprintf('%064x', 42);
+let collision_values = [ token_a, token_a, token_b ], collision_calls = 0;
+let collision_runtime = { fs: collision_fs, clock: collision_clock,
+	random: { hex: (bytes) => { collision_calls++; return shift(collision_values); } },
+	digest: fakes.digest(collision_fs), paths: { tmp: '/tmp/miclash' } };
+let collision_transfer = api.create_transfers({ runtime: collision_runtime, uploads: {},
+	downloads: { report: (id) => empty_download(collision_runtime) } });
+let collision_first = collision_transfer.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 21), size: 0, sha256: '', metadata: {} });
+let collision_second = collision_transfer.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 22), size: 0, sha256: '', metadata: {} });
+assert_equal(collision_first.transfer_id, token_a);
+assert_equal(collision_second.transfer_id, token_b);
+assert_equal(collision_calls, 3);
+assert_equal(length(filter(collision_clock.timers, (timer) => timer.active)), 1,
+	'exactly one transfer expiry timer must be active');
+assert_equal(collision_transfer.close(), true);
+assert_equal(length(filter(collision_clock.timers, (timer) => timer.active)), 0);
+assert_equal(collision_transfer.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 25), size: 0, sha256: '', metadata: {} }).error.code,
+	'HEALTH_FAILED');
+let exhaust_fs = fakes.fs({}), exhaust_runtime = { fs: exhaust_fs, clock: fakes.clock(0),
+	random: { hex: (bytes) => token_a }, digest: fakes.digest(exhaust_fs),
+	paths: { tmp: '/tmp/miclash' } };
+let exhaust = api.create_transfers({ runtime: exhaust_runtime, uploads: {},
+	downloads: { report: (id) => empty_download(exhaust_runtime) } });
+let held = exhaust.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 23), size: 0, sha256: '', metadata: {} });
+assert_equal(exhaust.begin({ direction: 'download', kind: 'report',
+	object_id: 'rpt_' + sprintf('%032x', 24), size: 0, sha256: '', metadata: {} }).error.code,
+	'BUSY');
+exhaust.abort({ transfer_id: held.transfer_id });
+
+// Link, owner and mode drift invalidate the open staging capability before any
+// additional caller bytes are written.
+for (let mutation in [ 'hardlink', 'owner', 'mode' ]) {
+	let drift_fs = fakes.fs({}), drift_runtime = { fs: drift_fs, clock: fakes.clock(0),
+		random: fakes.entropy(), digest: fakes.digest(drift_fs), paths: { tmp: '/tmp/miclash' } };
+	let drift = api.create_transfers({ runtime: drift_runtime,
+		uploads: { backup: (staged) => ({ import_id: 'i-0000000000000-' + sprintf('%032x', 6) }) },
+		downloads: {} });
+	let drift_begin = drift.begin({ direction: 'upload', kind: 'backup', object_id: '',
+		size: 1, sha256: drift_runtime.digest.sha256('d'), metadata: {} });
+	let drift_path = drift_fs.calls.open[length(drift_fs.calls.open) - 1].path;
+	if (mutation == 'hardlink') drift_fs.set_nlink(drift_path, 2);
+	else if (mutation == 'owner') drift_fs.set_uid(drift_path, 1000);
+	else drift_fs.set_mode(drift_path, 0o644);
+	assert_equal(drift.write({ transfer_id: drift_begin.transfer_id, seq: 0,
+		data: b64enc('d') })?.error?.code, 'INTERNAL', mutation + ' drift was accepted');
+	drift.abort({ transfer_id: drift_begin.transfer_id });
+}
 
 // A daemon restart removes only authenticated stale transfer leaves. Unknown
 // entries in the private staging authority stop startup and are never deleted.
