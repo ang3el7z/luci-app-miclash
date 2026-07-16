@@ -321,6 +321,35 @@ assert_true(index(public_bytes, 'manifest.json') > index(public_bytes, 'settings
 for (let secret in [ 'controller-password', 'telegram-secret', 'user:pass', 'subscription_url' ])
 	assert_true(index(public_bytes, secret) < 0, 'default archive leaked ' + secret);
 
+let ruleset_90 = '', ruleset_91 = '';
+for (let i = 0; i < 86; i++) ruleset_90 += 'a';
+for (let i = 0; i < 87; i++) ruleset_91 += 'a';
+ruleset_90 += '.txt'; ruleset_91 += '.txt';
+let boundary_ruleset = make_app();
+let boundary_path = '/opt/clash/lst/' + ruleset_90;
+boundary_ruleset.filesystem.files[boundary_path] = 'DOMAIN,boundary.test\n';
+boundary_ruleset.filesystem.bump_inode(boundary_path);
+boundary_ruleset.filesystem.set_mode(boundary_path, 0o600);
+boundary_ruleset.filesystem.set_uid(boundary_path, 0);
+boundary_ruleset.filesystem.set_nlink(boundary_path, 1);
+let boundary_backup = backup.create(boundary_ruleset.app);
+assert_true(index(boundary_ruleset.filesystem.readfile('/etc/miclash/backups/' +
+	boundary_backup.id + '.tar'), 'rulesets/' + ruleset_90) >= 0,
+	'90-byte ruleset leaf was not archived');
+
+let oversized_ruleset = make_app();
+let oversized_path = '/opt/clash/lst/' + ruleset_91;
+oversized_ruleset.filesystem.files[oversized_path] = 'DOMAIN,oversized.test\n';
+oversized_ruleset.filesystem.bump_inode(oversized_path);
+oversized_ruleset.filesystem.set_mode(oversized_path, 0o600);
+oversized_ruleset.filesystem.set_uid(oversized_path, 0);
+oversized_ruleset.filesystem.set_nlink(oversized_path, 1);
+assert_throws(() => backup.create(oversized_ruleset.app), 'INVALID_ARGUMENT');
+assert_equal(length(oversized_ruleset.filesystem.lsdir('/etc/miclash/backups') ?? []), 0,
+	'91-byte ruleset created a backup artifact');
+assert_equal(length(oversized_ruleset.filesystem.lsdir('/tmp/miclash/backup-transactions') ?? []), 0,
+	'91-byte ruleset reached transaction admission');
+
 let explicit = make_app(), secret_backup = backup.create(explicit.app,
 	{ include_secrets: true }, 'system');
 let secret_path = '/etc/miclash/backups/' + secret_backup.id + '.tar';

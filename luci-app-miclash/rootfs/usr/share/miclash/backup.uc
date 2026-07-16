@@ -194,7 +194,10 @@ function canonical_member_name(name) {
 function safe_ruleset_name(name) {
 	try { schema.archive_name(name); }
 	catch (error) { return false; }
-	return length(name) >= 5 && match(name, /^[a-z0-9][a-z0-9_-]*\.txt$/);
+	if (length(name) < 5 || !match(name, /^[a-z0-9][a-z0-9_-]*\.txt$/)) return false;
+	// Strict no-prefix USTAR allows 99 bytes; "rulesets/" consumes nine.
+	if (length(name) > 90) invalid();
+	return true;
 };
 
 function sorted(values) {
