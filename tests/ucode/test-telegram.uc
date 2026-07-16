@@ -1,4 +1,4 @@
-import { assert_equal, assert_match, assert_true } from './testlib.uc';
+import { assert_equal, assert_match, assert_throws, assert_true } from './testlib.uc';
 import * as api from 'miclash.api';
 import * as fakes from './fakes.uc';
 import * as notify from 'miclash.notify';
@@ -26,19 +26,28 @@ function update(id, text, sender, chat_type) {
 	};
 };
 
+function active_timers(clock) {
+	let count = 0;
+	for (let timer in clock.timers)
+		if (timer.active)
+			count++;
+	return count;
+};
+
 function environment(changes) {
 	let options = changes ?? {};
 	let filesystem = options.filesystem ?? fakes.fs();
-	for (let directory in [ '/var', '/var/run', '/var/run/miclash' ])
+	for (let directory in [ '/etc', '/etc/miclash', '/var', '/var/run', '/var/run/miclash' ])
 		if (filesystem.lstat(directory) == null)
 			filesystem.mkdir(directory);
+	filesystem.set_mode('/etc/miclash', 0o700);
 	let clock = options.clock ?? fakes.clock(1710000000000);
 	let runtime = {
 		fs: filesystem,
 		digest: fakes.digest(filesystem),
 		clock,
 		random: fakes.entropy(),
-		paths: { run: '/var/run/miclash', tmp: '/tmp/miclash' }
+		paths: { etc: '/etc/miclash', run: '/var/run/miclash', tmp: '/tmp/miclash' }
 	};
 	let settings = options.settings ?? {
 		telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42' }
@@ -70,29 +79,54 @@ function environment(changes) {
 			return record;
 		}
 	};
-	function operation(kind, context) {
-		return operations.submit(kind, 'telegram', context ?? {}, () => null);
+	function record_call(method, args) {
+		push(domain_calls, { method, args: clone(args) });
+	};
+	function operation(method, kind, args, source, context) {
+		record_call(method, args);
+		return operations.submit(kind, source, context ?? {}, () => null);
 	};
 	let app = {
 		runtime,
 		http,
 		operations,
 		settings_get: () => clone(settings),
-		status: () => ({ service: { state: 'running' }, token: 'status-secret' }),
-		health: () => ({ state: 'ok', detail: 'healthy' }),
-		memory_status: () => ({ used_percent: 47, token: 'memory-secret' }),
-		diagnostics_summary: () => ({ state: 'ok', url: 'https://example.test/?token=diag-secret' }),
-		logs_read: () => 'ready\nAuthorization: Bearer log-secret\n' + sprintf('%05000d', 0),
-		service_start: (profile, source) => operation('service.start', { profile }),
-		service_stop: (profile, source) => operation('service.stop', { profile }),
-		service_restart: (profile, source) => operation('service.restart', { profile }),
-		service_reload: (profile, source) => operation('service.reload', { profile }),
-		reboot: () => push(domain_calls, { method: 'reboot' }),
-		subscription_update: (url, source) => operation('subscription.update', { url }),
-		update_miclash: (source) => operation('updates.miclash'),
-		update_mihomo: (source) => operation('updates.mihomo'),
-		settings_set: (patch, source) => operation('settings.set', { patch }),
-		backup_create: (source) => operation('backup.create'),
+		status: () => {
+			record_call('status', []);
+			return { service: { state: 'running' }, token: 'status-secret' };
+		},
+		health: () => { record_call('health', []); return { state: 'ok', detail: 'healthy' }; },
+		memory_status: () => {
+			record_call('memory_status', []);
+			return { used_percent: 47, token: 'memory-secret' };
+		},
+		diagnostics_summary: () => {
+			record_call('diagnostics_summary', []);
+			return { state: 'ok', url: 'https://example.test/?token=diag-secret' };
+		},
+		logs_read: () => {
+			record_call('logs_read', []);
+			return 'ready\nAuthorization: Bearer log-secret\n' + sprintf('%05000d', 0);
+		},
+		service_start: (profile, source) => operation('service_start', 'service.start',
+			[ profile, source ], source, { profile }),
+		service_stop: (profile, source) => operation('service_stop', 'service.stop',
+			[ profile, source ], source, { profile }),
+		service_restart: (profile, source) => operation('service_restart', 'service.restart',
+			[ profile, source ], source, { profile }),
+		service_reload: (profile, source) => operation('service_reload', 'service.reload',
+			[ profile, source ], source, { profile }),
+		reboot: () => record_call('reboot', []),
+		subscription_update: (url, source) => operation('subscription_update',
+			'subscription.update', [ url, source ], source, { url }),
+		update_miclash: (source) => operation('update_miclash', 'updates.miclash',
+			[ source ], source),
+		update_mihomo: (source) => operation('update_mihomo', 'updates.mihomo',
+			[ source ], source),
+		settings_set: (patch, source) => operation('settings_set', 'settings.set',
+			[ patch, source ], source, { patch }),
+		backup_create: (source) => operation('backup_create', 'backup.create',
+			[ source ], source),
 		audit: (event) => push(audit, clone(event)),
 		logger: {
 			info: (message) => push(logs, message),
@@ -104,16 +138,12 @@ function environment(changes) {
 		submitted, domain_calls, audit, logs };
 };
 
-function last_request(env) {
-	return env.requests[length(env.requests) - 1];
-};
-
-function sent_text(env) {
-	let request = last_request(env);
-	return request?.url ?? '';
-};
-
 assert_equal(type(telegram.create), 'function');
+
+// The command test double must preserve caller arguments instead of manufacturing telegram.
+let source_probe = environment();
+source_probe.app.service_start('config2.yaml', 'luci');
+assert_equal(source_probe.submitted[0].source, 'luci');
 
 // Disabled or incomplete settings never poll, send, or expose credentials.
 for (let settings in [
@@ -173,6 +203,10 @@ for (let command in commands) {
 	}
 	else
 		assert_equal(length(env.submitted), 0, command.text);
+	if (command.text == '/reboot')
+		env.submitted[0].worker({ stage: () => null });
+	let expected_calls = command.call == null ? [] : [ command.call ];
+	assert_equal(sprintf('%J', env.domain_calls), sprintf('%J', expected_calls), command.text);
 	let output = sprintf('%J', env.requests);
 	for (let secret in [ 'status-secret', 'memory-secret', 'diag-secret',
 		'log-secret', 'url-secret' ])
@@ -187,7 +221,7 @@ for (let text in [ '/status now', '/status@miclash_bot', '/subscription',
 	assert_equal(exact_controller.handle_update(update(++command_id, text)), false, text);
 assert_equal(length(exact_env.submitted), 0);
 
-// Offset advances atomically after every consumed update and survives recreation.
+// Offset advances atomically under the persistent private authority and survives reboot.
 let poll_env = environment({ poll_replies: [ {
 	status: 200, headers: {}, body: fixture_fs.readfile('tests/fixtures/telegram/poll-updates.json')
 } ] });
@@ -196,12 +230,71 @@ assert_equal(poll_controller.poll_once(), true);
 assert_match(poll_env.requests[0].url, /\/getUpdates\?offset=0&timeout=20/);
 assert_equal(poll_env.requests[0].timeout_ms, 30000);
 assert_equal(poll_controller.status().last_update_id, 702);
-let persisted = json(poll_env.filesystem.readfile('/var/run/miclash/telegram-offset.json'));
+let offset_path = '/etc/miclash/telegram-offset.json';
+let persisted_bytes = poll_env.filesystem.readfile(offset_path);
+assert_true(type(persisted_bytes) == 'string', 'durable Telegram offset was not persisted');
+let persisted = json(persisted_bytes);
 assert_equal(persisted.last_update_id, 702);
+assert_equal(poll_env.filesystem.lstat(offset_path).mode, 0o600);
+assert_equal(poll_env.filesystem.lstat(offset_path).uid, 0);
+assert_equal(poll_env.filesystem.lstat(offset_path).nlink, 1);
+assert_equal(poll_env.filesystem.realpath(offset_path), offset_path);
+assert_equal(poll_env.filesystem.readfile('/var/run/miclash/telegram-offset.json'), null);
 let recreated = environment({ filesystem: poll_env.filesystem });
 let recreated_controller = telegram.create(recreated.app);
 assert_equal(recreated_controller.poll_once(), true);
 assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=20/);
+
+// Simulated reboot clears /var/run but preserves flash state; an approved reboot update
+// is still at-most-once and cannot submit a second system operation after boot.
+let before_reboot = environment();
+let before_reboot_controller = telegram.create(before_reboot.app);
+assert_equal(before_reboot_controller.handle_update(duplicate), true);
+let durable_bytes = before_reboot.filesystem.readfile(offset_path);
+let after_reboot_fs = fakes.fs({ [offset_path]: durable_bytes });
+let after_reboot = environment({ filesystem: after_reboot_fs });
+let after_reboot_controller = telegram.create(after_reboot.app);
+assert_equal(after_reboot_controller.handle_update(duplicate), false);
+assert_equal(length(after_reboot.submitted), 0);
+assert_equal(after_reboot_controller.status().last_update_id, duplicate.update_id);
+
+// Existing durable state and its authority are authenticated before trust.
+let corrupt_offset = environment({ filesystem: fakes.fs({ [offset_path]: '{broken' }) });
+assert_throws(() => telegram.create(corrupt_offset.app), 'CORRUPT_STATE');
+let wide_offset = environment({ filesystem: fakes.fs({
+	[offset_path]: '{"last_update_id":702}\n'
+}) });
+wide_offset.filesystem.set_mode(offset_path, 0o640);
+assert_throws(() => telegram.create(wide_offset.app), 'CORRUPT_STATE');
+let foreign_offset = environment({ filesystem: fakes.fs({
+	[offset_path]: '{"last_update_id":702}\n'
+}) });
+foreign_offset.filesystem.set_uid(offset_path, 1000);
+assert_throws(() => telegram.create(foreign_offset.app), 'CORRUPT_STATE');
+let linked_offset = environment({ filesystem: fakes.fs({
+	'/tmp/foreign-offset': '{"last_update_id":702}\n'
+}) });
+linked_offset.filesystem.set_symlink(offset_path, '/tmp/foreign-offset');
+assert_throws(() => telegram.create(linked_offset.app), 'CORRUPT_STATE');
+let unsafe_authority = environment();
+unsafe_authority.filesystem.set_mode('/etc/miclash', 0o755);
+assert_throws(() => telegram.create(unsafe_authority.app), 'INVALID_ARGUMENT');
+let swapped_offset = environment({ filesystem: fakes.fs({
+	[offset_path]: '{"last_update_id":702}\n'
+}) });
+swapped_offset.filesystem.on_lstat = (path, count) => {
+	if (path == offset_path && count == 2)
+		swapped_offset.filesystem.bump_inode(path);
+};
+assert_throws(() => telegram.create(swapped_offset.app), 'CORRUPT_STATE');
+let write_authority_swap = environment();
+let write_authority_swap_controller = telegram.create(write_authority_swap.app);
+write_authority_swap.filesystem.on_lstat = (path, count) => {
+	if (path == offset_path && count == 4)
+		write_authority_swap.filesystem.bump_inode('/etc/miclash');
+};
+assert_equal(write_authority_swap_controller.handle_update(update(703, '/reboot')), false);
+assert_equal(length(write_authority_swap.submitted), 0);
 
 // Telegram 429 honors retry_after; network failures back off exponentially.
 let limited_poll = environment({ poll_replies: [ {
@@ -230,6 +323,43 @@ assert_true(length(lifecycle.requests) >= 1);
 assert_equal(lifecycle_controller.stop(), true);
 assert_equal(lifecycle_controller.stop(), false);
 assert_equal(lifecycle_controller.status().running, false);
+
+// A live controller becomes inactive without a tight loop when settings are disabled/incomplete.
+for (let change in [ 'disabled', 'incomplete' ]) {
+	let inactive = environment();
+	let inactive_controller = telegram.create(inactive.app);
+	assert_equal(inactive_controller.start(), true);
+	if (change == 'disabled')
+		inactive.settings.telegram.enabled = false;
+	else
+		inactive.settings.telegram.token = '';
+	inactive.clock.advance(0);
+	assert_equal(inactive_controller.status().running, false, change);
+	assert_equal(active_timers(inactive.clock), 0, change);
+	assert_equal(length(inactive.requests), 0, change);
+	inactive.clock.advance(60000);
+	assert_equal(active_timers(inactive.clock), 0, change + ' rescheduled');
+	assert_equal(length(inactive.requests), 0, change + ' polled');
+}
+
+// A settings read error remains distinguishable and retries with bounded backoff, not 10ms.
+let settings_error = environment();
+let settings_error_controller = telegram.create(settings_error.app);
+assert_equal(settings_error_controller.start(), true);
+settings_error.app.settings_get = () => die('INTERNAL');
+settings_error.clock.advance(0);
+assert_equal(settings_error_controller.status().running, true);
+assert_equal(settings_error_controller.status().last_error, 'SETTINGS_UNAVAILABLE');
+assert_equal(settings_error_controller.status().retry_after_ms, 1000);
+assert_equal(active_timers(settings_error.clock), 1);
+assert_equal(length(settings_error.requests), 0);
+settings_error.clock.advance(999);
+assert_equal(active_timers(settings_error.clock), 1);
+assert_equal(length(settings_error.requests), 0);
+settings_error.clock.advance(1);
+assert_equal(settings_error_controller.status().retry_after_ms, 2000);
+assert_equal(active_timers(settings_error.clock), 1);
+assert_equal(length(settings_error.requests), 0);
 
 // The authorized command limiter is bounded and audited without IDs, token, URL, or text.
 let rate = environment();
@@ -262,6 +392,34 @@ let public_state = sprintf('%J', masking_controller.status());
 for (let secret in [ 'telegram-secret', 'event-secret', 'context-secret', 'user:pass', '42' ])
 	assert_equal(index(public_state, secret), -1, 'public state leaked ' + secret);
 assert_true(length(masking.logs) == 0 || index(sprintf('%J', masking.logs), 'telegram-secret') < 0);
+
+// Every notification family has a concise, redacted and URL-adapter-bounded format.
+let notification_cases = [
+	[ 'failure', 'Failure' ],
+	[ 'recovery', 'Recovery' ],
+	[ 'update_outcome', 'Update' ],
+	[ 'subscription_outcome', 'Subscription' ],
+	[ 'memory_outcome', 'Memory' ],
+	[ 'guard_outage', 'Guard%20outage' ]
+];
+for (let item in notification_cases) {
+	let family = environment();
+	let family_controller = telegram.create(family.app);
+	assert_equal(family_controller.send_event({
+		type: item[0], severity: 'warning', component: 'test',
+		title: 'Family title',
+		message: 'Family message https://user:pass@example.test/?token=family-secret ' +
+			sprintf('%01000d', 0),
+		dedupe_key: 'family/test', occurred_at: 1710000000000,
+		recovery_of: null, context: { authorization: 'Bearer context-secret' }
+	}), true, item[0]);
+	let request_url = family.requests[0].url;
+	assert_true(index(request_url, 'text=' + item[1] + '%3A%20') >= 0,
+		item[0] + ': ' + request_url);
+	assert_true(length(request_url) <= 2048, item[0] + ' was not bounded');
+	for (let secret in [ 'family-secret', 'context-secret', 'user:pass' ])
+		assert_equal(index(request_url, secret), -1, item[0] + ' leaked ' + secret);
+}
 
 // Notification subscription formats supported events and isolates Telegram failure.
 let notify_env = environment({ send_failure: true });

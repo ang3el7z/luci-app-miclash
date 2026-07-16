@@ -3,7 +3,7 @@ import * as redact from 'miclash.redact';
 import * as schema from 'miclash.schema';
 import * as storage from 'miclash.storage';
 
-const OFFSET_PATH = '/var/run/miclash/telegram-offset.json';
+const OFFSET_NAME = 'telegram-offset.json';
 const POLL_TIMEOUT_SECONDS = 20;
 const REQUEST_TIMEOUT_MS = 30000;
 const CONNECT_TIMEOUT_MS = 5000;
@@ -18,10 +18,61 @@ const HELP = '/status /health /memory /diagnostics /logs /help /start /stop ' +
 	'/update_miclash /update_mihomo /guard_on /guard_off /backup';
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
+function corrupt() { errors.fail('CORRUPT_STATE'); };
 
-function clone(value) {
-	try { return json(sprintf('%J', value)); }
-	catch (error) { invalid(); }
+function same_node(left, right) {
+	return left?.type != null && left.type == right?.type &&
+		left.inode == right?.inode && left.dev?.major == right.dev?.major &&
+		left.dev?.minor == right.dev?.minor && left.nlink == right.nlink &&
+		left.size == right.size && left.mode == right.mode && left.uid == right.uid;
+};
+
+function persistent_authority(runtime) {
+	let authority = runtime.fs.lstat(runtime.paths.etc);
+	if (authority?.type != 'directory' || authority.mode != 0o700 ||
+	    (authority.uid != null && authority.uid != 0) ||
+	    runtime.fs.realpath(runtime.paths.etc) != runtime.paths.etc)
+		invalid();
+	return authority;
+};
+
+function offset_path(runtime) {
+	return runtime.paths.etc + '/' + OFFSET_NAME;
+};
+
+function offset_identity(runtime, authority) {
+	let path = offset_path(runtime);
+	let identity = runtime.fs.lstat(path);
+	if (identity == null)
+		return null;
+	if (identity.type != 'file' || identity.mode != 0o600 || identity.nlink != 1 ||
+	    (identity.uid != null && identity.uid != 0) ||
+	    runtime.fs.realpath(path) != path ||
+	    identity.dev?.major != authority.dev?.major ||
+	    identity.dev?.minor != authority.dev?.minor)
+		corrupt();
+	return identity;
+};
+
+function read_offset(runtime) {
+	let authority = persistent_authority(runtime);
+	let before = offset_identity(runtime, authority);
+	let source = runtime.fs.readfile(offset_path(runtime));
+	let after = offset_identity(runtime, authority);
+	let current_authority = persistent_authority(runtime);
+	if (!same_node(authority, current_authority) ||
+	    (before == null ? source != null || after != null :
+		(type(source) != 'string' || !same_node(before, after))))
+		corrupt();
+	if (source == null)
+		return -1;
+	let offset;
+	try { offset = json(source); }
+	catch (error) { corrupt(); }
+	if (type(offset) != 'object' || length(keys(offset)) != 1 ||
+	    type(offset.last_update_id) != 'int' || offset.last_update_id < 0)
+		corrupt();
+	return offset.last_update_id;
 };
 
 function normalized_id(value) {
@@ -39,16 +90,24 @@ function normalized_id(value) {
 	return length(input) ? input : null;
 };
 
-function configured(app) {
+function configuration(app) {
 	let all;
 	try { all = app.settings_get(); }
-	catch (error) { return { enabled: false, configured: false, token: null, user_id: null }; }
+	catch (error) {
+		return {
+			available: false, enabled: false, configured: false,
+			token: null, user_id: null
+		};
+	}
 	let value = all?.telegram;
 	let enabled = type(value?.enabled) == 'bool' && value.enabled;
 	let token = type(value?.token) == 'string' &&
 		match(value.token, /^[0-9]{1,20}:[A-Za-z0-9_-]{8,128}$/) ? value.token : null;
 	let user_id = normalized_id(value?.user_id);
-	return { enabled, configured: token != null && user_id != null, token, user_id };
+	return {
+		available: true, enabled, configured: token != null && user_id != null,
+		token, user_id
+	};
 };
 
 function percent_encode(value) {
@@ -79,7 +138,7 @@ function bounded_text(value) {
 function operation_message(record) {
 	if (type(record?.id) != 'string' || type(record?.kind) != 'string')
 		return 'Command accepted';
-	return bounded_text('Queued ' + record.kind + ' (' + record.id + ')');
+	return 'Queued ' + record.kind + ' (' + record.id + ')';
 };
 
 function retry_seconds(reply, document) {
@@ -114,13 +173,14 @@ function event_text(event) {
 	let label = labels[event?.type] ?? 'MiClash';
 	let details = type(event?.message) == 'string' ? event.message :
 		(type(event?.title) == 'string' ? event.title : 'State changed');
-	return bounded_text(label + ': ' + details);
+	return label + ': ' + details;
 };
 
 export function create(app) {
 	if (type(app) != 'object' || type(app.runtime?.fs) != 'object' ||
 	    type(app.runtime?.digest) != 'object' || type(app.runtime?.clock?.now) != 'function' ||
 	    type(app.runtime?.clock?.set_timeout) != 'function' ||
+	    app.runtime?.paths?.etc != '/etc/miclash' ||
 	    app.runtime?.paths?.run != '/var/run/miclash' ||
 	    type(app.http?.request) != 'function' || type(app.settings_get) != 'function' ||
 	    type(app.operations?.submit) != 'function')
@@ -144,16 +204,7 @@ export function create(app) {
 	let timer = null;
 	let command_times = [];
 
-	let stored = app.runtime.fs.readfile(OFFSET_PATH);
-	if (stored != null) {
-		let offset;
-		try { offset = json(stored); }
-		catch (error) { errors.fail('CORRUPT_STATE'); }
-		if (type(offset) != 'object' || length(keys(offset)) != 1 ||
-		    type(offset.last_update_id) != 'int' || offset.last_update_id < 0)
-			errors.fail('CORRUPT_STATE');
-		state.last_update_id = offset.last_update_id;
-	}
+	state.last_update_id = read_offset(app.runtime);
 
 	function log_failure(message) {
 		try { app.logger?.warn(message); } catch (error) {}
@@ -171,7 +222,21 @@ export function create(app) {
 	};
 
 	function persist_offset(update_id) {
-		storage.write_json(app.runtime, OFFSET_PATH, { last_update_id: update_id }, 0o600);
+		let authority = persistent_authority(app.runtime);
+		let path = offset_path(app.runtime);
+		storage.write_json(app.runtime, path, { last_update_id: update_id }, 0o600);
+		let identity = offset_identity(app.runtime, authority);
+		if (identity == null)
+			errors.fail('INTERNAL');
+		let persisted;
+		try { persisted = json(app.runtime.fs.readfile(path)); }
+		catch (error) { errors.fail('INTERNAL'); }
+		let verified = offset_identity(app.runtime, authority);
+		let current_authority = persistent_authority(app.runtime);
+		if (!same_node(authority, current_authority) || !same_node(identity, verified) ||
+		    type(persisted) != 'object' ||
+		    length(keys(persisted)) != 1 || persisted.last_update_id != update_id)
+			errors.fail('INTERNAL');
 		state.last_update_id = update_id;
 	};
 
@@ -193,8 +258,8 @@ export function create(app) {
 	};
 
 	function send_message(text) {
-		let settings = configured(app);
-		if (!settings.enabled || !settings.configured)
+		let settings = configuration(app);
+		if (!settings.available || !settings.enabled || !settings.configured)
 			return false;
 		try {
 			let reply = api_request('sendMessage', {
@@ -250,15 +315,15 @@ export function create(app) {
 
 	function dispatch(command) {
 		if (command.name == 'status')
-			return bounded_text(app.status());
+			return app.status();
 		if (command.name == 'health')
-			return bounded_text(app.health());
+			return app.health();
 		if (command.name == 'memory')
-			return bounded_text(app.memory_status());
+			return app.memory_status();
 		if (command.name == 'diagnostics')
-			return bounded_text(app.diagnostics_summary());
+			return app.diagnostics_summary();
 		if (command.name == 'logs')
-			return bounded_text(app.logs_read());
+			return app.logs_read();
 		if (command.name == 'help')
 			return HELP;
 		if (command.name == 'start')
@@ -295,7 +360,7 @@ export function create(app) {
 
 	let controller = {};
 	controller.status = () => {
-		let settings = configured(app);
+		let settings = configuration(app);
 		return {
 			running: state.running,
 			enabled: settings.enabled,
@@ -309,8 +374,9 @@ export function create(app) {
 		};
 	};
 	controller.handle_update = (update) => {
-		let settings = configured(app);
-		if (!settings.enabled || !settings.configured || type(update) != 'object' ||
+		let settings = configuration(app);
+		if (!settings.available || !settings.enabled || !settings.configured ||
+		    type(update) != 'object' ||
 		    type(update.update_id) != 'int' || update.update_id < 0 ||
 		    update.update_id <= state.last_update_id)
 			return false;
@@ -349,9 +415,24 @@ export function create(app) {
 		return true;
 	};
 	controller.poll_once = () => {
-		let settings = configured(app);
-		if (!settings.enabled || !settings.configured)
+		let settings = configuration(app);
+		if (!settings.available) {
+			state.failures++;
+			state.last_error = 'SETTINGS_UNAVAILABLE';
+			state.retry_after_ms = min(MAX_BACKOFF_MS,
+				1000 * (1 << min(state.failures - 1, 6)));
 			return false;
+		}
+		if (!settings.enabled || !settings.configured) {
+			state.running = false;
+			if (timer?.cancel != null)
+				timer.cancel();
+			timer = null;
+			state.last_error = null;
+			state.retry_after_ms = 0;
+			state.failures = 0;
+			return false;
+		}
 		state.last_poll_at = app.runtime.clock.now();
 		try {
 			let reply = api_request('getUpdates', {
@@ -393,12 +474,14 @@ export function create(app) {
 			if (!state.running)
 				return;
 			controller.poll_once();
+			if (!state.running)
+				return;
 			schedule(state.retry_after_ms > 0 ? state.retry_after_ms : SUCCESS_DELAY_MS);
 		});
 	};
 	controller.start = () => {
-		let settings = configured(app);
-		if (state.running || !settings.enabled || !settings.configured)
+		let settings = configuration(app);
+		if (state.running || !settings.available || !settings.enabled || !settings.configured)
 			return false;
 		state.running = true;
 		schedule(0);
