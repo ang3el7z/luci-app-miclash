@@ -21,6 +21,11 @@ function clone(value) {
 	catch (error) { errors.fail('INVALID_ARGUMENT'); }
 };
 
+function same(left, right) {
+	try { return sprintf('%J', left) == sprintf('%J', right); }
+	catch (error) { errors.fail('INVALID_ARGUMENT'); }
+};
+
 function utc_timezones(injected) {
 	if (injected != null) {
 		if (type(injected.list) != 'function' || type(injected.resolve) != 'function')
@@ -115,6 +120,14 @@ export function compose(runtime, overrides) {
 		let notifier = modules.notify.create(runtime, notification_config(notification_settings));
 		let producer = modules.notify.producer(runtime);
 		let notifications_closed = false;
+		function prepare_notification_settings(next) {
+			if (notifications_closed) errors.fail('HEALTH_FAILED');
+			let configured = clone(next);
+			let notifier_settings = notification_config(configured);
+			if (type(notifier.prepare) == 'function')
+				notifier_settings = notifier.prepare(notifier_settings);
+			return { settings: configured, notifier: notifier_settings };
+		};
 		let notifications_domain = {
 			settings: () => clone(notification_settings),
 			test: (channel) => {
@@ -122,12 +135,16 @@ export function compose(runtime, overrides) {
 				if (channel == 'telegram') return false;
 				return notifier.test(channel) === true;
 			},
+			prepare: prepare_notification_settings,
 			configure: (next) => {
 				if (notifications_closed) errors.fail('HEALTH_FAILED');
-				let configured = clone(next);
-				let replacement = modules.notify.create(runtime, notification_config(configured));
-				notification_settings = configured;
-				notifier = replacement;
+				let prepared = next?.settings != null && next?.notifier != null
+					? next : prepare_notification_settings(next);
+				if (type(notifier.configure) == 'function')
+					notifier.configure(prepared.notifier);
+				else
+					notifier = modules.notify.create(runtime, prepared.notifier);
+				notification_settings = clone(prepared.settings);
 				return clone(notification_settings);
 			},
 			close: () => {
@@ -143,6 +160,11 @@ export function compose(runtime, overrides) {
 			catch (error) { return false; }
 		});
 		let memory_enabled = false, memory_timer = null, memory_closed = false;
+		function prepare_memory_settings(next) {
+			if (memory_closed) errors.fail('HEALTH_FAILED');
+			memory_options(next);
+			return clone(next);
+		};
 		function cancel_memory_timer() {
 			if (memory_timer == null) return false;
 			let current = memory_timer; memory_timer = null;
@@ -167,11 +189,16 @@ export function compose(runtime, overrides) {
 			status: () => guard.status(),
 			settings: () => ({ enabled: memory_enabled, ...guard.settings() }),
 			reset_baseline: () => guard.reset_baseline(),
+			prepare: prepare_memory_settings,
 			configure: (next) => {
 				if (memory_closed) errors.fail('HEALTH_FAILED');
-				guard.settings(memory_options(next));
+				next = prepare_memory_settings(next);
+				let wanted = memory_options(next), current = guard.settings();
+				let options_changed = !same(current, wanted);
+				let enabled_changed = memory_enabled != next.enabled;
+				if (options_changed) guard.settings(wanted);
 				memory_enabled = next.enabled;
-				schedule_memory_sample();
+				if (options_changed || enabled_changed) schedule_memory_sample();
 				return { enabled: memory_enabled, ...guard.settings() };
 			},
 			close: () => {

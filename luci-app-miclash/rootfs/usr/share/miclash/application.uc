@@ -1,5 +1,26 @@
 import * as errors from 'miclash.errors';
 
+function clone(value) {
+	try { return json(sprintf('%J', value)); }
+	catch (error) { errors.fail('INVALID_ARGUMENT'); }
+};
+
+function same(left, right) {
+	try { return sprintf('%J', left) == sprintf('%J', right); }
+	catch (error) { errors.fail('INVALID_ARGUMENT'); }
+};
+
+function effective(current, patch) {
+	let result = clone(current);
+	if (type(result) != 'object' || type(patch) != 'object') errors.fail('INVALID_ARGUMENT');
+	for (let section, values in patch) {
+		if (type(values) != 'object') errors.fail('INVALID_ARGUMENT');
+		result[section] ??= {};
+		for (let name, value in values) result[section][name] = clone(value);
+	}
+	return result;
+};
+
 export function create(dependencies) {
 	if (type(dependencies?.operations?.submit) != 'function' ||
 	    type(dependencies?.operations?.get) != 'function' ||
@@ -130,12 +151,48 @@ export function create(dependencies) {
 			writable();
 			patch = dependencies.settings.validate(patch);
 			return dependencies.operations.submit('settings.set', source, {}, (ctx) => {
+				let before = clone(dependencies.settings.get());
+				let wanted = effective(before, patch);
+				let memory_changed = !same(before.memory, wanted.memory);
+				let notifications_changed = !same(before.notifications, wanted.notifications);
+				let prepare_memory = type(dependencies.memory.prepare) == 'function'
+					? dependencies.memory.prepare : clone;
+				let prepare_notifications = type(dependencies.notifications.prepare) == 'function'
+					? dependencies.notifications.prepare : clone;
+				let next_memory = memory_changed ? prepare_memory(wanted.memory) : null;
+				let next_notifications = notifications_changed
+					? prepare_notifications(wanted.notifications) : null;
+				let prior_notifications = notifications_changed
+					? prepare_notifications(before.notifications) : null;
 				ctx.stage('settings', 20, '');
-				let saved = dependencies.settings.set(patch);
-				dependencies.memory.configure(saved.memory);
-				dependencies.notifications.configure(saved.notifications);
-				dependencies.state.set_desired(saved);
-				ctx.stage('saved', 100, '');
+				let persisted = false, notifications_attempted = false, failure = null;
+				try {
+					let saved = dependencies.settings.set(patch);
+					persisted = true;
+					ctx.stage('committing', 80, '');
+					dependencies.state.set_desired(saved);
+					if (notifications_changed) {
+						notifications_attempted = true;
+						dependencies.notifications.configure(next_notifications);
+					}
+					// This is deliberately the last fallible commit. The Guard validates
+					// and persists transactionally, so a failure preserves its baseline.
+					if (memory_changed) dependencies.memory.configure(next_memory);
+				}
+				catch (error) { failure = errors.normalize(error).code; }
+				if (failure != null) {
+					let rollback_failed = false;
+					if (persisted)
+						try { dependencies.settings.set(before); }
+						catch (error) { rollback_failed = true; }
+					if (notifications_attempted)
+						try { dependencies.notifications.configure(prior_notifications); }
+						catch (error) { rollback_failed = true; }
+					if (persisted)
+						try { dependencies.state.set_desired(before); }
+						catch (error) { rollback_failed = true; }
+					errors.fail(rollback_failed ? 'INTERNAL' : failure);
+				}
 			});
 		},
 		memory_status: () => dependencies.memory.status(),

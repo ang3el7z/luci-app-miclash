@@ -515,6 +515,11 @@ export function create(runtime, settings) {
 
 	let notifier = {};
 	notifier.history = () => clone(history);
+	notifier.prepare = (next) => clean_settings(next);
+	notifier.configure = (prepared) => {
+		configured = clean_settings(prepared);
+		return true;
+	};
 	notifier.emit = (input) => {
 		let event = normalized_event(runtime, input);
 		validate_restoration(runtime, event);

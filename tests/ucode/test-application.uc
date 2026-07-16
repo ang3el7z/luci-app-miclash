@@ -20,9 +20,13 @@ let service = {
 	restart_service: (profile) => push(actions, 'restart:' + profile),
 	wait_ready: (deadline, profile, options) => ({ ok: true })
 };
-let settings_value = { core: { proxy_mode: 'tproxy' } };
+let settings_value = {
+	core: { proxy_mode: 'tproxy' },
+	memory: { enabled: false, sample_interval_ms: 60000 },
+	notifications: { channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: true }
+};
 let validated = 0, saved = 0, fail_save = false;
-let desired = { core: { proxy_mode: 'tproxy' } };
+let desired = json(sprintf('%J', settings_value));
 let settings = {
 	get: () => settings_value,
 	validate: (patch) => { validated++; return patch; },
@@ -30,8 +34,11 @@ let settings = {
 		saved++;
 		if (fail_save)
 			die('INTERNAL');
-		settings_value = patch;
-		return patch;
+		for (let section, values in patch) {
+			settings_value[section] ??= {};
+			for (let name, value in values) settings_value[section][name] = value;
+		}
+		return json(sprintf('%J', settings_value));
 	}
 };
 let config = {
@@ -66,6 +73,7 @@ let memory = {
 	status: () => ({ phase: 'monitoring' }),
 	settings: () => ({ sample_interval_ms: 60000 }),
 	reset_baseline: () => push(management_calls, [ 'memory.reset' ]),
+	prepare: (value) => value,
 	configure: (value) => push(management_calls, [ 'memory.configure', value ])
 };
 let backup = {
@@ -85,6 +93,7 @@ let devices = {
 let notifications = {
 	settings: () => ({ channels: [ 'syslog' ], events: [ 'failure' ] }),
 	test: (channel) => channel == 'syslog',
+	prepare: (value) => value,
 	configure: (value) => push(management_calls, [ 'notifications.configure', value ])
 };
 let app = application.create({
@@ -159,9 +168,22 @@ assert_equal(saved, 0);
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(saved, 1);
 assert_equal(desired.core.proxy_mode, 'tun');
-assert_equal(management_calls[length(management_calls) - 2][0], 'memory.configure');
-assert_equal(management_calls[length(management_calls) - 1][0], 'notifications.configure');
+assert_equal(length(management_calls), 4);
 assert_equal(setting_record.id, submitted[length(submitted) - 1].record.id);
+
+let memory_setting = app.settings_set({ memory: {
+	enabled: true, sample_interval_ms: 60000
+} }, 'luci');
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(memory_setting.id, submitted[length(submitted) - 1].record.id);
+assert_equal(management_calls[length(management_calls) - 1][0], 'memory.configure');
+
+let notification_setting = app.settings_set({ notifications: {
+	channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: false
+} }, 'luci');
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(notification_setting.id, submitted[length(submitted) - 1].record.id);
+assert_equal(management_calls[length(management_calls) - 1][0], 'notifications.configure');
 
 fail_save = true;
 let failed_setting = app.settings_set({ core: { proxy_mode: 'mixed' } }, 'luci');
@@ -169,6 +191,112 @@ assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null 
 assert_equal(failed_setting.id, submitted[length(submitted) - 1].record.id);
 assert_equal(desired.core.proxy_mode, 'tun');
 fail_save = false;
+
+let atomic_value = {
+	core: { proxy_mode: 'tproxy' },
+	memory: { enabled: false, sample_interval_ms: 60000 },
+	notifications: { channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: true },
+	telegram: { enabled: false, token: '', user_id: '' }
+};
+let atomic_set_calls = 0, fail_memory_prepare = false, fail_notify_prepare = false;
+let fail_memory_configure = false, fail_notify_configure = false, fail_state_commit = false;
+let atomic_memory = json(sprintf('%J', atomic_value.memory));
+let atomic_notifications = json(sprintf('%J', atomic_value.notifications));
+let atomic_desired = json(sprintf('%J', atomic_value));
+let atomic_memory_configures = 0, atomic_notify_configures = 0;
+let atomic_settings = {
+	get: () => json(sprintf('%J', atomic_value)),
+	validate: (patch) => json(sprintf('%J', patch)),
+	set: (patch) => {
+		atomic_set_calls++;
+		for (let section, values in patch) {
+			atomic_value[section] ??= {};
+			for (let name, value in values) atomic_value[section][name] = value;
+		}
+		return json(sprintf('%J', atomic_value));
+	}
+};
+let atomic_memory_domain = {
+	status: memory.status, settings: () => atomic_memory, reset_baseline: memory.reset_baseline,
+	prepare: (value) => { if (fail_memory_prepare) die('INVALID_ARGUMENT'); return json(sprintf('%J', value)); },
+	configure: (value) => {
+		atomic_memory_configures++;
+		if (fail_memory_configure) die('INTERNAL');
+		atomic_memory = json(sprintf('%J', value)); return atomic_memory;
+	}
+};
+let atomic_notification_domain = {
+	settings: () => atomic_notifications, test: notifications.test,
+	prepare: (value) => { if (fail_notify_prepare) die('INVALID_ARGUMENT'); return json(sprintf('%J', value)); },
+	configure: (value) => {
+		atomic_notify_configures++;
+		if (fail_notify_configure) die('INTERNAL');
+		atomic_notifications = json(sprintf('%J', value)); return atomic_notifications;
+	}
+};
+let atomic_state = {
+	snapshot: state.snapshot, health: state.health,
+	set_desired: (value) => {
+		if (fail_state_commit) die('INTERNAL');
+		atomic_desired = json(sprintf('%J', value)); return true;
+	}
+};
+let atomic_app = application.create({
+	operations, service, settings: atomic_settings, config, history, state: atomic_state,
+	memory: atomic_memory_domain, backup, devices, notifications: atomic_notification_domain,
+	clock: { now: () => 1000 }
+});
+function run_last() { return submitted[length(submitted) - 1].worker({ stage: () => null }); };
+
+fail_memory_prepare = true;
+atomic_app.settings_set({ memory: { enabled: true } }, 'luci');
+assert_throws(run_last, 'INVALID_ARGUMENT');
+assert_equal(atomic_set_calls, 0);
+fail_memory_prepare = false;
+fail_notify_prepare = true;
+atomic_app.settings_set({ notifications: { auto_hide: false } }, 'luci');
+assert_throws(run_last, 'INVALID_ARGUMENT');
+assert_equal(atomic_set_calls, 0);
+fail_notify_prepare = false;
+
+fail_notify_configure = true;
+atomic_app.settings_set({
+	memory: { enabled: true }, notifications: { auto_hide: false }
+}, 'luci');
+assert_throws(run_last, 'INTERNAL');
+assert_equal(atomic_set_calls, 2);
+assert_equal(atomic_value.memory.enabled, false);
+assert_equal(atomic_value.notifications.auto_hide, true);
+assert_equal(atomic_memory.enabled, false);
+assert_equal(atomic_notifications.auto_hide, true);
+assert_equal(atomic_desired.memory.enabled, false);
+fail_notify_configure = false;
+
+let memory_before_unrelated = atomic_memory_configures;
+let notify_before_unrelated = atomic_notify_configures;
+atomic_app.settings_set({ telegram: { enabled: false } }, 'luci');
+run_last();
+assert_equal(atomic_memory_configures, memory_before_unrelated);
+assert_equal(atomic_notify_configures, notify_before_unrelated);
+
+fail_memory_configure = true;
+atomic_app.settings_set({ memory: { enabled: true } }, 'luci');
+assert_throws(run_last, 'INTERNAL');
+assert_equal(atomic_value.memory.enabled, false);
+assert_equal(atomic_memory.enabled, false);
+assert_equal(atomic_desired.memory.enabled, false);
+fail_memory_configure = false;
+
+fail_state_commit = true;
+atomic_app.settings_set({
+	memory: { enabled: true }, notifications: { auto_hide: false }
+}, 'luci');
+assert_throws(run_last, 'INTERNAL');
+assert_equal(atomic_value.memory.enabled, false);
+assert_equal(atomic_value.notifications.auto_hide, true);
+assert_equal(atomic_memory.enabled, false);
+assert_equal(atomic_notifications.auto_hide, true);
+fail_state_commit = false;
 
 app.set_draining(true);
 for (let mutation in [

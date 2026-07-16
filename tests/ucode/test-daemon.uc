@@ -140,9 +140,13 @@ let integrated_state = {
 	set_desired: (value) => desired = value, observe: () => null,
 	close: () => { push(integrated_closes, 'state'); return true; }, flush: () => true
 };
+let guard_settings_calls = 0;
 let guard = {
 	status: () => ({ phase: 'monitoring', current_rss_kb: 64000 }),
-	settings: (value) => value ?? { sample_interval_ms: 60000 },
+	settings: (value) => {
+		if (value != null) guard_settings_calls++;
+		return value ?? { sample_interval_ms: 60000 };
+	},
 	reset_baseline: () => true, sample: () => true
 };
 let notifier = {
@@ -213,6 +217,9 @@ let integrated_runtime = {
 	secure_fs: {}, fs: {}, digest: {}, random: {}, uci: {}, process: { run: () => ({ code: 0 }) }
 };
 let integrated = daemon.compose(integrated_runtime, integrated_factories);
+assert_equal(guard_settings_calls, 0);
+integrated.app.settings_set({ core: { proxy_mode: 'tun' } }, 'luci');
+assert_equal(guard_settings_calls, 0);
 assert_equal(integration_methods.memory_status.call({ args: {} }).phase, 'monitoring');
 assert_equal(length(integration_methods.backup_list.call({ args: {} })), 1);
 assert_equal(integration_methods.devices_timezones.call({ args: {} })[0], 'UTC');
@@ -247,10 +254,30 @@ let production_connection = {
 	disconnect: () => { production_disconnects++; return true; }
 };
 let production_clock = fakes.clock(1700000000000);
+let persisted_memory = sprintf('%J\n', {
+	version: 2,
+	settings: {
+		sample_interval_ms: 60000, sustained_samples: 5, warmup_ms: 900000,
+		baseline_samples: 6, anomaly_percent: 150, anomaly_growth_kb: 16384,
+		reserve_percent: 10, reserve_min_kb: 16384, reserve_max_kb: 65536,
+		drop_percent: 10, drop_min_kb: 8192, success_cooldown_ms: 21600000,
+		failure_cooldown_ms: 86400000, normal_rearm_ms: 1800000
+	},
+	state: {
+		phase: 'monitoring', pid: 321, start_time: 200, manual_generation: null,
+		baseline_started_at: 1699999000000, baseline_rss_kb: 64000,
+		current_rss_kb: 65000, pressure_samples: 0, cooldown_until: 0,
+		normal_since: null, last_action: null, last_result: null,
+		last_sample_at: 1699999999000, mem_total_kb: 262144,
+		recovery_sequence: 0, recovery_id: null, active_stage: null
+	},
+	baseline_samples: []
+});
 let production_fs = fakes.fs({
 	'/proc/sys/kernel/random/boot_id': '11111111-1111-1111-1111-111111111111\n',
 	'/proc/self/stat': '123 (ucode) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 200 21 22\n',
 	'/proc/123/stat': '123 (ucode) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 200 21 22\n',
+	'/var/run/miclash/memory.json': persisted_memory,
 	'/var/run/miclash/.keep': '', '/tmp/miclash/.keep': '',
 	'/etc/miclash/.keep': '', '/opt/clash/.keep': '',
 	'/opt/clash/config.yaml': 'external-controller: 127.0.0.1:9090\n',
@@ -287,6 +314,7 @@ assert_true(type(production_runtime.rulesets?.validate) == 'function');
 assert_true(type(production_runtime.reconcile?.run) == 'function');
 assert_true(type(production_methods?.settings_get?.call) == 'function');
 assert_true(type(production_methods?.transfer_begin?.call) == 'function');
+assert_equal(production_methods.memory_status.call({ args: {} }).baseline_rss_kb, 64000);
 assert_equal(production_methods.devices_timezones.call({ args: {} })[0], 'UTC');
 assert_equal(length(production_methods.backup_list.call({ args: {} })), 0);
 let create_record = production_methods.backup_create.call({ args: {

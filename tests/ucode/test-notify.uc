@@ -982,3 +982,20 @@ for (let i = 0; i < 201; i++)
 assert_equal(length(bounded_center.history()), 200);
 assert_equal(bounded_center.history()[0].dedupe_key, 'updates/outcome/1');
 assert_equal(bounded_center.history()[199].dedupe_key, 'updates/outcome/200');
+
+// Reconfiguration is prepared before commit and preserves history, dedupe and
+// optional channel subscriptions on the same notifier instance.
+let reconfigure_env = make_runtime(5000);
+let reconfigured = notify.create(reconfigure_env.runtime, settings());
+let reconfigured_channel = [];
+reconfigured.subscribe({
+	name: 'telegram', minimum_severity: 'info', types: [], components: [],
+	send: (event) => { push(reconfigured_channel, clone(event)); return true; }
+});
+assert_equal(reconfigured.emit(make_event({ occurred_at: 5000 })), true);
+let prepared_notify = reconfigured.prepare(settings({ dedupe_window_ms: 2000 }));
+assert_equal(reconfigured.configure(prepared_notify), true);
+assert_equal(length(reconfigured.history()), 1);
+assert_equal(reconfigured.emit(make_event({ occurred_at: 5001 })), false);
+assert_equal(length(reconfigured.history()), 1);
+assert_equal(length(reconfigured_channel), 1);
