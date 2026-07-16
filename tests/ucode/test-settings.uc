@@ -3,14 +3,41 @@ import * as runtime from 'miclash.runtime';
 import * as settings from 'miclash.settings';
 import * as redact from 'miclash.redact';
 import * as fakes from './fakes.uc';
+import { with_lock } from 'miclash.mutation_lock';
+
+const BOOT = '12345678-1234-1234-1234-123456789abc';
+let next_pid = 6000;
 
 function fixture(name) {
 	return require('fs').readfile('tests/fixtures/settings/' + name);
 };
 
+function process_stat(pid, started) {
+	return pid + ' (settings test) S ' +
+		join(' ', [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, started ]) + '\n';
+};
+function lock_filesystem(identities) {
+	let initial = { '/proc/sys/kernel/random/boot_id': BOOT + '\n' };
+	for (let identity in identities) initial['/proc/' + identity.pid + '/stat'] =
+		process_stat(identity.pid, identity.start);
+	let filesystem = fakes.fs(initial);
+	for (let path in [ '/var', '/var/run', '/var/run/miclash' ]) filesystem.mkdir(path);
+	filesystem.set_mode('/var/run/miclash', 0o700);
+	return filesystem;
+};
+function runtime_for(cursor, filesystem, identity) {
+	let rt = runtime.create({ uci: { cursor: () => cursor }, fs: filesystem,
+		digest: fakes.digest(filesystem), clock: fakes.clock(1000), random: fakes.entropy() });
+	rt.mutation_lock_self = { boot: BOOT, pid: identity.pid, start: identity.start };
+	return rt;
+};
 function fake_runtime(initial) {
-	let cursor = fakes.uci(initial);
-	return { rt: runtime.create({ uci: { cursor: () => cursor } }), cursor };
+	let seeded = initial ?? { miclash: {} };
+	seeded.miclash ??= {};
+	for (let section in [ 'core', 'interfaces', 'guard', 'memory', 'updates', 'telegram',
+		'notifications', 'backup', 'meta' ]) seeded.miclash[section] ??= { '.type': section };
+	let cursor = fakes.uci(seeded), identity = { pid: next_pid++, start: 400 };
+	return { rt: runtime_for(cursor, lock_filesystem([ identity ]), identity), cursor };
 };
 
 function assert_json_equal(actual, expected) {
@@ -125,6 +152,23 @@ assert_throws(() => settings.save(failed_commit_env.rt, {
 assert_equal(failed_commit_env.cursor.set_calls, 1);
 assert_equal(failed_commit_env.cursor.commit_calls, 1);
 
+// Guard writes share the central normal mutation domain. A different runtime
+// cannot flip Guard while an owner holds the policy/settings lease, while the
+// same already-held lease remains non-deadlocking for backup restore.
+let shared_cursor = fakes.uci({ miclash: { guard: { '.type': 'guard', enabled: '0' } } });
+let owner_identity = { pid: 6101, start: 501 }, contender_identity = { pid: 6102, start: 502 };
+let shared_fs = lock_filesystem([ owner_identity, contender_identity ]);
+let owner_rt = runtime_for(shared_cursor, shared_fs, owner_identity);
+let contender_rt = runtime_for(shared_cursor, shared_fs, contender_identity);
+with_lock(owner_rt, { barrier: 'normal', wait_ms: 0 }, () => {
+	assert_throws(() => settings.save(contender_rt, { guard: { enabled: true } }), 'BUSY');
+	assert_equal(shared_cursor.commit_calls, 0, 'blocked Guard writer cannot commit');
+	settings.save(owner_rt, { guard: { enabled: false } });
+});
+assert_equal(shared_cursor.commit_calls, 1, 'held owner can save without nested-lock deadlock');
+settings.save(contender_rt, { guard: { enabled: true } });
+assert_equal(shared_cursor.commit_calls, 2, 'Guard writer commits after lease release');
+
 assert_throws(() => settings.migrate_legacy(fake_runtime().rt, fixture('legacy-malformed')), 'INVALID_ARGUMENT');
 assert_throws(() => settings.migrate_legacy(fake_runtime().rt,
 	'SUBSCRIPTION_URL=https://safe.example/sub\nnot-an-assignment'), 'INVALID_ARGUMENT');
@@ -132,11 +176,8 @@ assert_throws(() => settings.migrate_legacy(fake_runtime().rt,
 	'SUBSCRIPTION_URL=https://safe.example/' + sprintf('%c', 1)), 'INVALID_ARGUMENT');
 
 let process_fake = fakes.process();
-let hostile_cursor = fakes.uci();
-let hostile_rt = runtime.create({
-	process: process_fake,
-	uci: { cursor: () => hostile_cursor }
-});
+let hostile_env = fake_runtime(), hostile_rt = hostile_env.rt;
+hostile_rt.process = process_fake;
 let hostile = settings.migrate_legacy(hostile_rt,
 	'PROXY_MODE=$(touch /tmp/pwned)\nHWID_USER_AGENT=`id`\n');
 assert_equal(hostile.core.proxy_mode, 'tproxy');

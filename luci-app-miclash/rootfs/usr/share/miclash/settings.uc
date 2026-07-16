@@ -1,4 +1,5 @@
 import { fail } from 'miclash.errors';
+import { with_lock } from 'miclash.mutation_lock';
 
 const CONFIG = 'miclash';
 
@@ -259,18 +260,22 @@ export function validate_patch(patch) {
 
 export function save(runtime, patch) {
 	let normalized_patch = validate_patch(patch);
+	let persist = () => {
+		let uci = cursor(runtime);
+		for (let section, values in normalized_patch)
+			for (let option, value in values) {
+				let kind = FIELDS[section][option];
+				if (uci.set(CONFIG, section, option, encoded(kind, value)) !== true)
+					fail('INTERNAL');
+			}
 
-	let uci = cursor(runtime);
-	for (let section, values in normalized_patch)
-		for (let option, value in values) {
-			let kind = FIELDS[section][option];
-			if (uci.set(CONFIG, section, option, encoded(kind, value)) !== true)
-				fail('INTERNAL');
-		}
-
-	if (uci.commit(CONFIG) !== true)
-		fail('INTERNAL');
-	return load_cursor(uci);
+		if (uci.commit(CONFIG) !== true)
+			fail('INTERNAL');
+		return load_cursor(uci);
+	};
+	return exists(normalized_patch, 'guard')
+		? with_lock(runtime, { barrier: 'normal', wait_ms: 0 }, persist)
+		: persist();
 };
 
 function legacy_boolean(value, fallback, default_unless_false) {

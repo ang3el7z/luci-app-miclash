@@ -492,15 +492,28 @@ export function uci(initial) {
 			push(fake.calls, { operation: 'set', config, section, option, value: clone(value) });
 			if (fake.fail_set_at == fake.set_calls) return null;
 			values[config] ??= {};
-			values[config][section] ??= {};
+			if (value == null) {
+				if (type(option) != 'string' || !length(option) ||
+				    !match(section, /^[A-Za-z0-9_]+$/)) return null;
+				values[config][section] = { '.type': option };
+				dirty[config] = true;
+				return true;
+			}
+			if (option == '.type' || values[config][section] == null) return null;
 			values[config][section][option] = clone(value);
 			dirty[config] = true;
 			return true;
 		};
 		cursor.delete = (config, section, option) => {
 			push(fake.calls, { operation: 'delete', config, section, option });
-			if (values[config]?.[section] == null || !exists(values[config][section], option))
+			if (values[config]?.[section] == null)
 				return false;
+			if (option == null) {
+				delete values[config][section];
+				dirty[config] = true;
+				return true;
+			}
+			if (option == '.type' || !exists(values[config][section], option)) return false;
 			delete values[config][section][option];
 			dirty[config] = true;
 			return true;

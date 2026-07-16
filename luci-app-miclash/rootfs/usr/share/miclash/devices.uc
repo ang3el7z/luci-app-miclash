@@ -14,6 +14,14 @@ const MAX_LINES = 512;
 const MAX_LINE = 512;
 const MAX_DEVICES = 256;
 const MAX_ADDRESSES = 32;
+const MAX_INTERFACES = 16;
+const MAX_EVIDENCE = 16;
+const MAX_CONFLICTS = MAX_ADDRESSES * 2 + 2;
+const MAX_POLICIES = 256;
+const MAX_POLICY_OPTIONS = 10;
+const MAX_POLICY_OPTION_BYTES = 512;
+const MAX_POLICY_SECTION_BYTES = 1024;
+const MAX_JOURNAL_BYTES = 524288;
 const HISTORY_SECONDS = 7 * 86400;
 
 function invalid(code) { fail(code ?? 'INVALID_ARGUMENT'); };
@@ -26,6 +34,21 @@ function exact(value, allowed, required) {
 };
 function has(values, wanted) { for (let value in values ?? []) if (value == wanted) return true; return false; };
 function add_unique(values, value) { if (value != null && !has(values, value)) push(values, value); };
+function canonical_strings(values) {
+	let seen = {}, output = [];
+	for (let value in values) if (!seen[value]) { seen[value] = true; push(output, value); }
+	return sort(output);
+};
+function conflict(reason, subject, evidence) {
+	let all = canonical_strings(evidence), bounded = [];
+	for (let i = 0; i < min(length(all), MAX_EVIDENCE); i++) push(bounded, all[i]);
+	return { reason, subject, evidence: bounded, total: length(all), truncated: length(all) > MAX_EVIDENCE };
+};
+function add_conflict(item, reason, subject, evidence) {
+	for (let existing in item.conflicts)
+		if (existing.reason == reason && existing.subject == subject) return;
+	if (length(item.conflicts) < MAX_CONFLICTS) push(item.conflicts, conflict(reason, subject, evidence));
+};
 function integer(value, minimum, maximum, code) {
 	if (type(value) != 'int' || value < minimum || value > maximum) invalid(code);
 	return value;
@@ -48,7 +71,7 @@ function local_mac(value) { return (int(substr(value, 0, 2), 16) & 2) != 0; };
 function observed_mac(value) {
 	if (value == null) return { mac: null, reason: 'mac_unavailable' };
 	if (type(value) != 'string' || !match(value, /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/))
-		return { mac: null, reason: 'invalid_mac' };
+		invalid('INVALID_RESPONSE');
 	return { mac: mac(value, 'INVALID_RESPONSE'), reason: null };
 };
 function ipv4(value) {
@@ -97,7 +120,7 @@ function ipv6_groups(value) {
 	return groups;
 };
 function ipv6(value) {
-	let groups = ipv6_groups(value);
+	let groups = type(value) == 'array' ? value : ipv6_groups(value);
 	if (groups == null) return null;
 	let best_at = -1, best_length = 0;
 	for (let at = 0; at < 8;) {
@@ -115,9 +138,23 @@ function ipv6(value) {
 	for (let at = best_at + best_length; at < 8; at++) push(right, sprintf('%x', groups[at]));
 	return join(':', left) + '::' + join(':', right);
 };
-function address(value, code) {
-	let v4 = ipv4(value); if (v4 != null) return { address: v4, family: 'ipv4' };
-	let v6 = ipv6(value); if (v6 != null) return { address: v6, family: 'ipv6' };
+function address(value, code, iface) {
+	let v4 = ipv4(value);
+	if (v4 != null) {
+		let octets = split(v4, '.'), first = int(octets[0]);
+		// Private RFC1918 hosts are valid. Link-local requires interface evidence.
+		if (first == 0 || first == 127 || first >= 224 ||
+		    (first == 169 && int(octets[1]) == 254 && iface == null)) invalid(code);
+		return { address: v4, family: 'ipv4' };
+	}
+	let groups = ipv6_groups(value), v6 = groups == null ? null : ipv6(groups);
+	if (v6 != null) {
+		let all_zero = true; for (let group in groups) if (group != 0) all_zero = false;
+		// Global/private/link-local unicast are valid; link-local is interface scoped.
+		if (all_zero || (groups[0] & 0xff00) == 0xff00 ||
+		    ((groups[0] & 0xffc0) == 0xfe80 && iface == null)) invalid(code);
+		return { address: v6, family: 'ipv6' };
+	}
 	invalid(code);
 };
 function hostname(value, code) {
@@ -146,16 +183,17 @@ function cache_device(cache, identity, normalized_mac, host, identity_reason) {
 				reason: normalized_mac == null ? (identity_reason ?? 'mac_unavailable') :
 					(low ? 'locally_administered_mac' : 'stable_mac') },
 			mac: normalized_mac, hostname: host, addresses: [], last_seen: 0,
-			sources: [], interfaces: [], conflicts: []
+			sources: [], interfaces: [], interface_total: 0, interfaces_truncated: false,
+			conflicts: []
 		};
 	}
 	if (host != null && item.hostname == null) item.hostname = host;
 	else if (host != null && item.hostname != host)
-		push(item.conflicts, { reason: 'hostname_changed', evidence: [ item.hostname, host ] });
+		add_conflict(item, 'hostname_changed', item.hostname, [ item.hostname, host ]);
 	return item;
 };
 function add_observation(cache, normalized_mac, ip, host, source, iface, seen, current, identity_reason) {
-	let parsed = address(ip, 'INVALID_RESPONSE');
+	let parsed = address(ip, 'INVALID_RESPONSE', iface);
 	let identity;
 	if (normalized_mac == null) {
 		cache.ephemeral_sequence++;
@@ -168,15 +206,18 @@ function add_observation(cache, normalized_mac, ip, host, source, iface, seen, c
 	if (existing == null) {
 		if (length(item.addresses) >= MAX_ADDRESSES) invalid('RESPONSE_TOO_LARGE');
 		existing = { address: parsed.address, family: parsed.family, current: false,
-			last_seen: seen, source, interface: iface };
+			last_seen: seen, source, interfaces: [], interface_total: 0,
+			interfaces_truncated: false };
 		push(item.addresses, existing);
 	}
 	existing.last_seen = max(existing.last_seen, seen);
 	existing.current = existing.current || current;
 	if (source == 'neighbor' || existing.source != 'neighbor') existing.source = source;
-	if (iface != null) existing.interface = iface;
+	add_unique(existing.interfaces, iface);
+	existing.interfaces = sort(existing.interfaces);
 	item.last_seen = max(item.last_seen, seen);
 	add_unique(item.sources, source); add_unique(item.interfaces, iface);
+	item.sources = sort(item.sources); item.interfaces = sort(item.interfaces);
 };
 function parse_dhcp(cache, observed, now) {
 	let lines = split(observed.data, '\n');
@@ -201,9 +242,9 @@ function parse_neighbors(cache, observed, family) {
 	if (length(values) > MAX_LINES) invalid('RESPONSE_TOO_LARGE');
 	for (let value in values) {
 		exact(value, { dst: true, dev: true, lladdr: true, state: true }, { dst: true, dev: true, state: true });
-		let parsed = address(value.dst, 'INVALID_RESPONSE');
-		if (parsed.family != family) invalid('INVALID_RESPONSE');
 		let iface = interface_name(value.dev, 'INVALID_RESPONSE');
+		let parsed = address(value.dst, 'INVALID_RESPONSE', iface);
+		if (parsed.family != family) invalid('INVALID_RESPONSE');
 		if (type(value.state) != 'array' || !length(value.state) || length(value.state) > 8)
 			invalid('INVALID_RESPONSE');
 		for (let state in value.state)
@@ -223,12 +264,58 @@ function conflict_pass(devices) {
 			push(addresses[address.family + ':' + address.address], key);
 		}
 	}
-	for (let host, identities in hosts) if (length(identities) > 1)
+	for (let host, identities in hosts) if (length(identities) > 1) {
+		identities = sort(identities);
 		for (let identity in identities)
-			push(devices[identity].conflicts, { reason: 'duplicate_hostname', evidence: [ host, ...identities ] });
-	for (let ip, identities in addresses) if (length(identities) > 1)
+			add_conflict(devices[identity], 'duplicate_hostname', host, identities);
+	}
+	for (let ip, identities in addresses) if (length(identities) > 1) {
+		identities = sort(identities);
 		for (let identity in identities)
-			push(devices[identity].conflicts, { reason: 'shared_address', evidence: [ ip, ...identities ] });
+			add_conflict(devices[identity], 'shared_address', ip, identities);
+	}
+	for (let identity, item in devices) {
+		let all_device_interfaces = canonical_strings(item.interfaces), bounded_device_interfaces = [];
+		item.interface_total = length(all_device_interfaces);
+		item.interfaces_truncated = item.interface_total > MAX_INTERFACES;
+		for (let i = 0; i < min(item.interface_total, MAX_INTERFACES); i++)
+			push(bounded_device_interfaces, all_device_interfaces[i]);
+		item.interfaces = bounded_device_interfaces;
+		for (let item_address in item.addresses) {
+			let all_interfaces = canonical_strings(item_address.interfaces), bounded_interfaces = [];
+			if (length(all_interfaces) > 1)
+				add_conflict(item, 'address_interfaces', item_address.address, all_interfaces);
+			item_address.interface_total = length(all_interfaces);
+			item_address.interfaces_truncated = item_address.interface_total > MAX_INTERFACES;
+			for (let i = 0; i < min(item_address.interface_total, MAX_INTERFACES); i++)
+				push(bounded_interfaces, all_interfaces[i]);
+			item_address.interfaces = bounded_interfaces;
+		}
+		item.conflicts = sort(item.conflicts, (a, b) =>
+			a.reason + ':' + (a.subject ?? '') < b.reason + ':' + (b.subject ?? '') ? -1 : 1);
+	}
+};
+
+let compile_device;
+function validate_cache_state(value, now) {
+	if (type(value) != 'object' || type(value) == 'array') invalid('CORRUPT_STATE');
+	let names = keys(value);
+	if (!length(names)) return { last_now: null, ephemeral_sequence: 0, devices: {} };
+	let allowed = { last_now: true, ephemeral_sequence: true, devices: true };
+	for (let name in value) if (!exists(allowed, name)) invalid('CORRUPT_STATE');
+	for (let name in allowed) if (!exists(value, name)) invalid('CORRUPT_STATE');
+	if (type(value.last_now) != 'int' || value.last_now < 0 || value.last_now > MAX_TIMESTAMP ||
+	    type(value.ephemeral_sequence) != 'int' || value.ephemeral_sequence < 0 ||
+	    value.ephemeral_sequence > MAX_DEVICES || type(value.devices) != 'object' ||
+	    type(value.devices) == 'array' || length(keys(value.devices)) > MAX_DEVICES)
+		invalid('CORRUPT_STATE');
+	for (let key, item in value.devices) {
+		try { compile_device(item, now); }
+		catch (error) { invalid('CORRUPT_STATE'); }
+		let expected = item.identity.kind == 'mac' ? 'mac:' + item.mac : item.identity.value;
+		if (key != expected) invalid('CORRUPT_STATE');
+	}
+	return clone(value);
 };
 
 export function discover(app) {
@@ -236,11 +323,11 @@ export function discover(app) {
 	    type(app?.observers?.neighbors) != 'function') invalid();
 	let now_ms = app.clock.now();
 	if (type(now_ms) != 'int' || now_ms < 0) invalid('CORRUPT_STATE');
-	let now = int(now_ms / 1000), cache = app.device_cache;
+	let now = int(now_ms / 1000), original = app.device_cache;
 	if (now > MAX_TIMESTAMP) invalid('CORRUPT_STATE');
-	if (type(cache) != 'object' || type(cache) == 'array') invalid();
+	let cache = validate_cache_state(original, now);
 	if (cache.last_now != null && now < cache.last_now) invalid('CORRUPT_STATE');
-	cache.last_now = now; cache.devices ??= {}; cache.ephemeral_sequence = 0;
+	cache.last_now = now; cache.ephemeral_sequence = 0;
 	for (let key, item in cache.devices) {
 		if (item.identity?.kind == 'ip') { delete cache.devices[key]; continue; }
 		item.conflicts = [];
@@ -258,6 +345,7 @@ export function discover(app) {
 	}
 	conflict_pass(cache.devices);
 	let output = []; for (let key, item in cache.devices) push(output, clone(item));
+	app.device_cache = cache;
 	return output;
 };
 
@@ -275,7 +363,7 @@ function schedule_spec(value) {
 	return clone(value);
 };
 function policy_id(value) {
-	if (type(value) != 'string' || length(value) > 64 || !match(value, /^dp-[0-9]+-[0-9a-f]{16}$/)) invalid();
+	if (type(value) != 'string' || length(value) > 64 || !match(value, /^dp_[0-9]+_[0-9a-f]{16}$/)) invalid();
 	return value;
 };
 function normalized_policy(value) {
@@ -308,7 +396,18 @@ function cursor(app) {
 function persisted(id, section) {
 	let allowed = { '.type': true, '.name': true, '.anonymous': true, '.index': true,
 		revision: true, scope: true, mac: true, interface: true, action: true, schedule: true };
-	for (let name in section) if (!exists(allowed, name)) invalid('CORRUPT_STATE');
+	let option_count = 0, option_bytes = length(id);
+	for (let name, value in section) {
+		option_count++;
+		if (option_count > MAX_POLICY_OPTIONS) invalid('RESPONSE_TOO_LARGE');
+		option_bytes += length(name);
+		if (type(value) == 'string') {
+			if (length(value) > MAX_POLICY_OPTION_BYTES) invalid('RESPONSE_TOO_LARGE');
+			option_bytes += length(value);
+		}
+		if (option_bytes > MAX_POLICY_SECTION_BYTES) invalid('RESPONSE_TOO_LARGE');
+		if (!exists(allowed, name)) invalid('CORRUPT_STATE');
+	}
 	if (section['.name'] != null && section['.name'] != id) invalid('CORRUPT_STATE');
 	if (section['.anonymous'] != null && type(section['.anonymous']) != 'bool') invalid('CORRUPT_STATE');
 	if (section['.index'] != null && type(section['.index']) != 'int') invalid('CORRUPT_STATE');
@@ -330,8 +429,11 @@ function persisted(id, section) {
 };
 function list_from(uci) {
 	let config = uci.get_all(CONFIG) ?? {}, result = [], macs = {}, interfaces = {}, global = null;
+	let policy_count = 0;
 	for (let id, section in config) {
 		if (section?.['.type'] != POLICY_TYPE) continue;
+		policy_count++;
+		if (policy_count > MAX_POLICIES) invalid('RESPONSE_TOO_LARGE');
 		try { policy_id(id); } catch (error) { invalid('CORRUPT_STATE'); }
 		let item = persisted(id, section);
 		if (item.scope == 'device') { if (macs[item.mac]) invalid('CORRUPT_STATE'); macs[item.mac] = true; }
@@ -342,13 +444,21 @@ function list_from(uci) {
 	return sort(result, (a, b) => a.id < b.id ? -1 : (a.id > b.id ? 1 : 0));
 };
 function journal(app, document) { storage.write_json(app, JOURNAL, document, 0o600); };
-function journal_state(app, current, recover) {
-	let value;
-	try { value = storage.read_json(app, JOURNAL); }
-	catch (error) {
-		if ((error?.code ?? error?.message) == 'NOT_FOUND') return;
+function read_journal(app) {
+	let info = app?.fs?.lstat(JOURNAL);
+	if (info == null) return null;
+	if (info.type != 'file' || type(info.size) != 'int' || info.size < 1)
 		invalid('CORRUPT_STATE');
-	}
+	if (info.size > MAX_JOURNAL_BYTES) invalid('RESPONSE_TOO_LARGE');
+	let source = app.fs.readfile(JOURNAL);
+	if (type(source) != 'string' || length(source) != info.size) invalid('CORRUPT_STATE');
+	if (length(source) > MAX_JOURNAL_BYTES) invalid('RESPONSE_TOO_LARGE');
+	try { return json(source); }
+	catch (error) { invalid('CORRUPT_STATE'); }
+};
+function journal_state(app, current, recover) {
+	let value = read_journal(app);
+	if (value == null) return;
 	if (type(value) != 'object' || type(value) == 'array' || value.version != 1 ||
 	    value.owner != 'miclash-device-policies' ||
 	    (value.state != 'stable' && value.state != 'prepared'))
@@ -358,6 +468,9 @@ function journal_state(app, current, recover) {
 		: { version: true, owner: true, state: true, before: true, after: true };
 	for (let name in value) if (!exists(allowed, name)) invalid('CORRUPT_STATE');
 	for (let name in allowed) if (!exists(value, name)) invalid('CORRUPT_STATE');
+	for (let policies in value.state == 'stable' ? [ value.policies ] : [ value.before, value.after ])
+		if (type(policies) != 'array' || length(policies) > MAX_POLICIES)
+			invalid(type(policies) == 'array' ? 'RESPONSE_TOO_LARGE' : 'CORRUPT_STATE');
 	if (value.state == 'stable' && same(value.policies, current)) return;
 	if (value.state == 'prepared' && (same(value.before, current) || same(value.after, current))) {
 		if (recover) journal(app, { version: 1, owner: 'miclash-device-policies', state: 'stable', policies: current });
@@ -379,15 +492,15 @@ function guard_cursor(uci) {
 	return null;
 };
 function write_section(uci, item) {
-	let values = { '.type': POLICY_TYPE, revision: sprintf('%d', item.revision), scope: item.scope,
+	if (uci.set(CONFIG, item.id, POLICY_TYPE) !== true) invalid('INTERNAL');
+	let values = { revision: sprintf('%d', item.revision), scope: item.scope,
 		action: item.action, schedule: item.schedule == null ? '' : sprintf('%J', item.schedule) };
 	if (item.mac != null) values.mac = item.mac;
 	if (item.interface != null) values.interface = item.interface;
 	for (let name, value in values) if (uci.set(CONFIG, item.id, name, value) !== true) invalid('INTERNAL');
 };
 function delete_section(uci, id) {
-	for (let name in [ 'mac', 'interface', 'schedule', 'action', 'scope', 'revision', '.type' ])
-		if (uci.get(CONFIG, id, name) != null && uci.delete(CONFIG, id, name) !== true) invalid('INTERNAL');
+	if (uci.delete(CONFIG, id) !== true) invalid('INTERNAL');
 };
 
 export function policy_list(app) {
@@ -413,7 +526,7 @@ export function policy_set(app, policy) {
 			for (let attempt = 0; attempt < 16; attempt++) {
 				let suffix = app.random.hex(8);
 				if (!match(suffix, /^[0-9a-f]{16}$/)) invalid('INTERNAL');
-				let candidate = 'dp-' + now + '-' + suffix;
+				let candidate = 'dp_' + now + '_' + suffix;
 				if (!occupied[candidate]) { wanted.id = candidate; break; }
 			}
 			if (wanted.id == null) invalid('INTERNAL');
@@ -453,9 +566,13 @@ export function policy_delete(app, id, expected_revision) {
 };
 
 function subject(value) {
-	exact(value, { mac: true, interface: true, timestamp: true }, { timestamp: true });
-	return { mac: value.mac == null ? null : mac(value.mac),
-		interface: value.interface == null ? null : interface_name(value.interface),
+	exact(value, { mac: true, interface: true, interfaces: true, timestamp: true }, { timestamp: true });
+	if (value.interface != null && value.interfaces != null) invalid();
+	let interfaces = value.interfaces ?? (value.interface == null ? [] : [ value.interface ]);
+	if (type(interfaces) != 'array' || length(interfaces) > MAX_INTERFACES) invalid();
+	let normalized_interfaces = [];
+	for (let iface in interfaces) add_unique(normalized_interfaces, interface_name(iface));
+	return { mac: value.mac == null ? null : mac(value.mac), interfaces: sort(normalized_interfaces),
 		timestamp: integer(value.timestamp, 0, MAX_TIMESTAMP) };
 };
 function policy_active(app, policy, timestamp) {
@@ -478,16 +595,30 @@ function safe_action(app, action, policy_id) {
 	return { action, safety: 'ordinary' };
 };
 export function effective(app, input) {
-	let wanted = subject(input), policies = policy_list(app), selected = null;
+	let wanted = subject(input), policies = policy_list(app), active = [], selected = null;
 	for (let scope in [ 'device', 'interface', 'global' ]) {
 		for (let policy in policies) {
 			if (policy.scope != scope || (scope == 'device' && policy.mac != wanted.mac) ||
-			    (scope == 'interface' && policy.interface != wanted.interface) ||
-			    !policy_active(app, policy, wanted.timestamp) || policy.action == 'inherit') continue;
-			selected = policy; break;
+			    (scope == 'interface' && !has(wanted.interfaces, policy.interface)) ||
+			    !policy_active(app, policy, wanted.timestamp)) continue;
+			push(active, policy);
 		}
+	}
+	for (let scope in [ 'device', 'interface', 'global' ]) {
+		for (let policy in active)
+			if (policy.scope == scope && policy.action == 'block') { selected = policy; break; }
 		if (selected != null) break;
 	}
+	if (selected == null)
+		for (let scope in [ 'device', 'interface', 'global' ]) {
+			for (let policy in active) {
+				if (policy.scope != scope || policy.action == 'inherit') continue;
+				if (selected == null || (scope == 'interface' &&
+				    ((policy.action == 'proxy' ? 2 : 1) > (selected.action == 'proxy' ? 2 : 1) ||
+				     (policy.action == selected.action && policy.id < selected.id)))) selected = policy;
+			}
+			if (selected != null) break;
+		}
 	let safety = safe_action(app, selected?.action ?? 'inherit', selected?.id);
 	return { action: safety.action, policy_id: selected?.id ?? null,
 		scope: selected?.scope ?? null, safety: safety.safety,
@@ -504,15 +635,17 @@ function bounded_strings(values, maximum, allowed) {
 	}
 	return values;
 };
-function compile_device(value, timestamp) {
+compile_device = function(value, timestamp) {
 	exact(value, { identity: true, mac: true, hostname: true, last_seen: true, sources: true,
-		interfaces: true, conflicts: true, addresses: true });
+		interfaces: true, interface_total: true, interfaces_truncated: true,
+		conflicts: true, addresses: true });
+	value = clone(value);
 	exact(value.identity, { kind: true, value: true, confidence: true,
 		persistent_policy_eligible: true, reason: true });
 	if (!has([ 'mac', 'ip' ], value.identity.kind) ||
 	    !has([ 'high', 'low', 'ephemeral' ], value.identity.confidence) ||
 	    type(value.identity.persistent_policy_eligible) != 'bool' ||
-	    !has([ 'stable_mac', 'locally_administered_mac', 'mac_unavailable', 'invalid_mac' ],
+	    !has([ 'stable_mac', 'locally_administered_mac', 'mac_unavailable' ],
 		value.identity.reason)) invalid();
 	if (value.identity.kind == 'mac') {
 		let normalized = mac(value.mac);
@@ -527,18 +660,30 @@ function compile_device(value, timestamp) {
 	}
 	if (value.hostname != null) hostname(value.hostname);
 	integer(value.last_seen, 0, timestamp);
-	bounded_strings(value.sources, 2, [ 'dhcp', 'neighbor' ]);
-	if (type(value.interfaces) != 'array' || length(value.interfaces) > 16) invalid();
-	let seen_interfaces = {};
-	for (let iface in value.interfaces) {
-		interface_name(iface); if (seen_interfaces[iface]) invalid(); seen_interfaces[iface] = true;
-	}
-	if (type(value.conflicts) != 'array' || length(value.conflicts) > 64) invalid();
+	if (type(value.sources) != 'array' || length(value.sources) > 2) invalid();
+	for (let source in value.sources) if (!has([ 'dhcp', 'neighbor' ], source)) invalid();
+	value.sources = canonical_strings(value.sources);
+	if (type(value.interfaces) != 'array' || length(value.interfaces) > MAX_INTERFACES) invalid();
+	for (let iface in value.interfaces) interface_name(iface);
+	value.interfaces = canonical_strings(value.interfaces);
+	integer(value.interface_total, length(value.interfaces), MAX_LINES);
+	if (type(value.interfaces_truncated) != 'bool' ||
+	    value.interfaces_truncated != (value.interface_total > length(value.interfaces))) invalid();
+	if (type(value.conflicts) != 'array' || length(value.conflicts) > MAX_CONFLICTS) invalid();
 	for (let conflict in value.conflicts) {
-		exact(conflict, { reason: true, evidence: true });
-		if (!has([ 'hostname_changed', 'duplicate_hostname', 'shared_address' ], conflict.reason)) invalid();
-		bounded_strings(conflict.evidence, 16, null);
+		exact(conflict, { reason: true, subject: true, evidence: true, total: true, truncated: true });
+		if (!has([ 'hostname_changed', 'duplicate_hostname', 'shared_address', 'address_interfaces' ],
+		    conflict.reason) || type(conflict.subject) != 'string' || !length(conflict.subject) ||
+		    length(conflict.subject) > 128 || type(conflict.truncated) != 'bool') invalid();
+		if (type(conflict.evidence) != 'array' || length(conflict.evidence) > MAX_EVIDENCE) invalid();
+		for (let evidence in conflict.evidence)
+			if (type(evidence) != 'string' || !length(evidence) || length(evidence) > 128) invalid();
+		conflict.evidence = canonical_strings(conflict.evidence);
+		integer(conflict.total, length(conflict.evidence), MAX_LINES);
+		if (conflict.truncated != (conflict.total > length(conflict.evidence))) invalid();
 	}
+	value.conflicts = sort(value.conflicts, (a, b) =>
+		a.reason + ':' + a.subject < b.reason + ':' + b.subject ? -1 : 1);
 	if (type(value.addresses) != 'array' || length(value.addresses) > MAX_ADDRESSES) invalid();
 	return value;
 };
@@ -549,38 +694,68 @@ function rank(decision) {
 	if (decision.action == 'direct') return 1;
 	return 0;
 };
+function scope_rank(scope) {
+	return scope == 'device' ? 3 : (scope == 'interface' ? 2 : (scope == 'global' ? 1 : 0));
+};
+function candidate_before(left, right) {
+	let left_rank = rank(left.decision), right_rank = rank(right.decision);
+	if (left_rank != right_rank) return left_rank > right_rank;
+	let left_scope = scope_rank(left.decision.scope), right_scope = scope_rank(right.decision.scope);
+	if (left_scope != right_scope) return left_scope > right_scope;
+	let left_policy = left.decision.policy_id ?? '~', right_policy = right.decision.policy_id ?? '~';
+	if (left_policy != right_policy) return left_policy < right_policy;
+	return left.identity < right.identity;
+};
 export function compile_sets(app, input) {
 	exact(input, { timestamp: true, devices: true });
 	let timestamp = integer(input.timestamp, 0, MAX_TIMESTAMP);
 	if (type(input.devices) != 'array' || length(input.devices) > MAX_DEVICES) invalid();
-	let candidates = {}, reasoning = [];
+	let observations = {};
 	for (let raw in input.devices) {
 		let device = compile_device(raw, timestamp);
 		for (let item in device.addresses) {
-			exact(item, { address: true, family: true, current: true, last_seen: true, source: true, interface: true });
+			exact(item, { address: true, family: true, current: true, last_seen: true, source: true,
+				interfaces: true, interface_total: true, interfaces_truncated: true });
 			if (type(item.current) != 'bool' || !has([ 'dhcp', 'neighbor' ], item.source)) invalid();
 			integer(item.last_seen, 0, timestamp);
-			if (item.interface != null) interface_name(item.interface);
-			let parsed = address(item.address);
+			if (type(item.interfaces) != 'array' || length(item.interfaces) > MAX_INTERFACES) invalid();
+			let canonical_interfaces = [];
+			for (let iface in item.interfaces) add_unique(canonical_interfaces, interface_name(iface));
+			canonical_interfaces = sort(canonical_interfaces);
+			item.interfaces = canonical_interfaces;
+			integer(item.interface_total, length(item.interfaces), MAX_LINES);
+			if (type(item.interfaces_truncated) != 'bool' ||
+			    item.interfaces_truncated != (item.interface_total > length(item.interfaces))) invalid();
+			let parsed = address(item.address, null, item.interfaces[0]);
 			if (parsed.family != item.family) invalid();
 			if (!item.current) continue;
-			let decision = effective(app, { mac: device.mac, interface: item.interface, timestamp });
 			let key = parsed.family + ':' + parsed.address;
-			candidates[key] ??= [];
-			push(candidates[key], { device: device.identity?.value ?? 'ephemeral', decision });
+			observations[key] ??= {};
+			let identity = device.identity.value;
+			observations[key][identity] ??= { identity, mac: device.mac, interfaces: [] };
+			for (let iface in item.interfaces)
+				add_unique(observations[key][identity].interfaces, iface);
 		}
 	}
 	let result = { ipv4: { block: [], proxy: [], direct: [] },
 		ipv6: { block: [], proxy: [], direct: [] }, reasoning: [] };
-	for (let key, values in candidates) {
+	let observation_keys = sort(keys(observations));
+	for (let key in observation_keys) {
+		let identity_keys = sort(keys(observations[key])), values = [];
+		for (let identity in identity_keys) {
+			let observation = observations[key][identity];
+			observation.interfaces = sort(observation.interfaces);
+			push(values, { identity, decision: effective(app, { mac: observation.mac,
+				interfaces: observation.interfaces, timestamp }) });
+		}
 		let winner = values[0];
-		for (let candidate in values) if (rank(candidate.decision) > rank(winner.decision)) winner = candidate;
+		for (let candidate in values) if (candidate_before(candidate, winner)) winner = candidate;
 		let at = index(key, ':'), family = substr(key, 0, at), ip = substr(key, at + 1);
 		if (winner.decision.action != 'inherit') push(result[family][winner.decision.action], ip);
 		if (length(result.reasoning) < 1024) push(result.reasoning, {
 			address: ip, family, action: winner.decision.action, policy_id: winner.decision.policy_id,
 			safety: winner.decision.safety, conflict: length(values) > 1,
-			identities: map(values, (item) => item.device)
+			identities: identity_keys
 		});
 	}
 	for (let family in [ 'ipv4', 'ipv6' ])

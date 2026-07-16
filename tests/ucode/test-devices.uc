@@ -50,6 +50,19 @@ function spec(days, start, end, timezone) {
 	return { days, start, end, timezone: timezone ?? 'Etc/UTC' };
 };
 
+// The fake must model native ucode UCI named-section lifecycle exactly.
+let uci_contract = fakes.uci({ miclash: {} }), uci_contract_cursor = uci_contract.cursor();
+assert_equal(uci_contract_cursor.set('miclash', 'dp-invalid', 'device_policy'), null,
+	'invalid native UCI named-section identifiers are rejected');
+assert_equal(uci_contract_cursor.set('miclash', 'dp_1_0000000000000001', 'device_policy'), true);
+assert_equal(uci_contract_cursor.get_all('miclash', 'dp_1_0000000000000001')['.type'],
+	'device_policy', 'three-argument set creates a named typed section');
+assert_equal(uci_contract_cursor.set('miclash', 'dp_1_0000000000000001', '.type', 'forged'), null,
+	'.type metadata is read-only');
+assert_equal(uci_contract_cursor.delete('miclash', 'dp_1_0000000000000001'), true,
+	'two-argument delete removes the whole section');
+assert_equal(uci_contract_cursor.get_all('miclash', 'dp_1_0000000000000001'), null);
+
 // UTC, exact boundaries, weekdays, overnight association, and closed schemas.
 assert_true(schedule.active(spec([ 1 ], '09:00', '10:00'), 1704099600, utc_zone()), 'Monday start inclusive');
 assert_true(schedule.active(spec([ 1 ], '09:00', '10:00'), 1704103199, utc_zone()), 'end-minus-one active');
@@ -97,6 +110,52 @@ assert_true(!ephemeral.identity.persistent_policy_eligible, 'IP-only identity ca
 let duplicate_host = filter(found, (item) => item.hostname == 'kitchen');
 assert_equal(length(duplicate_host), 2, 'duplicate hostname never merges MACs');
 assert_true(length(duplicate_host[0].conflicts) > 0, 'duplicate hostname conflict is explicit');
+function interface_discovery(order) {
+	let entries = map(order, (iface) => ({ dst: '192.168.1.42', dev: iface,
+		lladdr: 'ac:bb:cc:dd:ee:42', state: [ 'REACHABLE' ] }));
+	return devices.discover(runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: (family) => ({ observed_at: 1710000000,
+			data: family == 'ipv4' ? sprintf('%J', entries) : '[]' })
+	} }));
+};
+let multi_interface = interface_discovery([ 'wlan0', 'br-lan' ]);
+assert_equal(enc(multi_interface[0].addresses[0].interfaces), enc([ 'br-lan', 'wlan0' ]),
+	'address retains canonical multi-interface evidence');
+assert_true(length(filter(multi_interface[0].conflicts,
+	(item) => item.reason == 'address_interfaces')) == 1, 'multi-interface conflict is explicit');
+assert_equal(enc(multi_interface), enc(interface_discovery([ 'br-lan', 'wlan0' ])),
+	'observer interface order cannot change discovery output');
+
+// Observer objects are read-only inputs, and a late invalid observer cannot
+// partially publish DHCP/neighbor changes into the cache.
+let observer_dhcp = fixture('dhcp'), observer_v4 = fixture('neighbors4'), observer_v6 = fixture('neighbors6');
+let observer_snapshot = enc([ observer_dhcp, observer_v4, observer_v6 ]);
+let immutable_observers = runtime({ observers: {
+	dhcp_leases: () => observer_dhcp,
+	neighbors: (family) => family == 'ipv4' ? observer_v4 : observer_v6
+} });
+devices.discover(immutable_observers);
+assert_equal(enc([ observer_dhcp, observer_v4, observer_v6 ]), observer_snapshot,
+	'discovery never mutates injected observer objects');
+let committed_cache = enc(immutable_observers.device_cache);
+immutable_observers.observers.dhcp_leases = () => ({ observed_at: 1710000000,
+	data: '1710003600 ac:bb:cc:dd:ee:10 192.168.1.200 changed *\n' });
+immutable_observers.observers.neighbors = (family) => ({ observed_at: 1710000000,
+	data: family == 'ipv4' ? '[]' : '[{"dst":"::","dev":"br-lan","state":["STALE"]}]' });
+let late_error = null;
+try { devices.discover(immutable_observers); } catch (error) { late_error = error; }
+assert_equal(late_error?.code ?? late_error?.message, 'INVALID_RESPONSE');
+assert_equal(enc(immutable_observers.device_cache), committed_cache,
+	'late observer rejection leaves cache byte-equivalent');
+let corrupt_cache = runtime({ observers: {
+	dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+	neighbors: () => ({ observed_at: 1710000000, data: '[]' })
+} });
+corrupt_cache.device_cache = { extra: true };
+let corrupt_cache_before = enc(corrupt_cache.device_cache);
+assert_throws(() => devices.discover(corrupt_cache), 'CORRUPT_STATE');
+assert_equal(enc(corrupt_cache.device_cache), corrupt_cache_before, 'invalid existing cache is not rewritten');
 
 // Stable MAC retains bounded history when its IP changes; expiry and rollback are deterministic.
 observed.observers.dhcp_leases = () => ({ observed_at: 1710000100,
@@ -111,7 +170,9 @@ observed.clock.advance(8 * 86400 * 1000);
 observed.observers.dhcp_leases = () => ({ observed_at: 1710691300, data: '' });
 observed.observers.neighbors = () => ({ observed_at: 1710691300, data: '[]' });
 assert_equal(length(devices.discover(observed)), 0, 'stale devices expire deterministically');
+let rollback_cache = enc(observed.device_cache);
 assert_throws(() => { observed.clock.advance(-1000); devices.discover(observed); }, 'CORRUPT_STATE');
+assert_equal(enc(observed.device_cache), rollback_cache, 'clock rollback cannot mutate cache');
 
 for (let invalid in [
 	'ff:ff:ff:ff:ff:ff', '01:00:5e:00:00:01', '00:00:00:00:00:00'
@@ -138,19 +199,74 @@ let invalid_mac_observation = runtime({ observers: {
 	neighbors: (family) => ({ observed_at: 1710000000, data: family == 'ipv4' ?
 		'[{"dst":"192.168.1.88","dev":"br-lan","lladdr":"not-a-mac","state":["STALE"]}]' : '[]' })
 } });
-let invalid_identity = devices.discover(invalid_mac_observation)[0];
-assert_equal(invalid_identity.identity.kind, 'ip', 'syntactically invalid observed MAC is explicit ephemeral identity');
-assert_equal(invalid_identity.identity.reason, 'invalid_mac', 'invalid MAC evidence is not hidden');
+assert_throws(() => devices.discover(invalid_mac_observation), 'INVALID_RESPONSE');
 let unrelated_ip_only = runtime({ observers: {
-	dhcp_leases: () => ({ observed_at: 1710000000,
-		data: '1710003600 invalid-mac 192.168.1.88 guest *\n' }),
+	dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
 	neighbors: (family) => ({ observed_at: 1710000000, data: family == 'ipv4' ?
-		'[{"dst":"192.168.1.88","dev":"br-lan","state":["STALE"]}]' : '[]' })
+		'[{"dst":"192.168.1.88","dev":"br-lan","state":["STALE"]},' +
+		'{"dst":"192.168.1.88","dev":"br-lan","state":["STALE"]}]' : '[]' })
 } });
 let unrelated = devices.discover(unrelated_ip_only);
 assert_equal(length(unrelated), 2, 'unrelated observations never merge by shared IP');
 assert_true(unrelated[0].identity.value != unrelated[1].identity.value,
 	'ephemeral identities carry distinct observation evidence');
+for (let hazardous_ip in [ '0.1.2.3', '127.0.0.1', '224.0.0.1', '255.255.255.255',
+	'::', 'ff02::1', 'fe80::1%br-lan' ]) {
+	let bad_ip = runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: (family) => ({ observed_at: 1710000000, data:
+			(family == (index(hazardous_ip, ':') >= 0 ? 'ipv6' : 'ipv4')) ?
+				'[{"dst":"' + hazardous_ip + '","dev":"br-lan","state":["STALE"]}]' : '[]' })
+	} });
+	assert_throws(() => devices.discover(bad_ip), 'INVALID_RESPONSE');
+}
+function lease_lines(count, duplicate_hostname) {
+	let lines = [];
+	for (let i = 1; i <= count; i++) {
+		let mac_value = duplicate_hostname ? sprintf('ac:bb:cc:dd:00:%02x', i) : 'ac:bb:cc:dd:ee:60';
+		push(lines, '1710003600 ' + mac_value + ' 192.168.2.' + i +
+			' ' + (duplicate_hostname ? 'crowded' : 'bounded') + ' *');
+	}
+	return join('\n', lines) + (length(lines) ? '\n' : '');
+};
+function leases_runtime(count, duplicate_hostname) {
+	return runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: lease_lines(count, duplicate_hostname) }),
+		neighbors: () => ({ observed_at: 1710000000, data: '[]' })
+	} });
+};
+let address_max_app = leases_runtime(32, false), address_max = devices.discover(address_max_app);
+assert_equal(length(address_max[0].addresses), 32, 'exact address history maximum is accepted');
+devices.compile_sets(address_max_app, { timestamp: 1710000000, devices: address_max });
+let address_over_app = leases_runtime(33, false), address_over_before = enc(address_over_app.device_cache);
+assert_throws(() => devices.discover(address_over_app), 'RESPONSE_TOO_LARGE');
+assert_equal(enc(address_over_app.device_cache), address_over_before, 'max+1 address failure is transactional');
+let evidence_app = leases_runtime(20, true), evidence_devices = devices.discover(evidence_app);
+let crowded_conflict = filter(evidence_devices[0].conflicts,
+	(item) => item.reason == 'duplicate_hostname')[0];
+assert_equal(length(crowded_conflict.evidence), 16, 'evidence is deterministically bounded');
+assert_equal(crowded_conflict.total, 20, 'evidence retains total count');
+assert_true(crowded_conflict.truncated, 'evidence truncation is explicit');
+devices.compile_sets(evidence_app, { timestamp: 1710000000, devices: evidence_devices });
+function many_interfaces(count) {
+	let entries = [];
+	for (let i = 0; i < count; i++)
+		push(entries, { dst: '192.168.3.9', dev: 'if' + i,
+			lladdr: 'ac:bb:cc:dd:ee:61', state: [ 'REACHABLE' ] });
+	let app = runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: (family) => ({ observed_at: 1710000000,
+			data: family == 'ipv4' ? sprintf('%J', entries) : '[]' })
+	} });
+	return { app, devices: devices.discover(app) };
+};
+let interface_max = many_interfaces(16);
+devices.compile_sets(interface_max.app, { timestamp: 1710000000, devices: interface_max.devices });
+let interface_over = many_interfaces(17), interface_over_address = interface_over.devices[0].addresses[0];
+assert_equal(length(interface_over_address.interfaces), 16, 'max+1 interfaces truncate to output budget');
+assert_equal(interface_over_address.interface_total, 17, 'interface total survives truncation');
+assert_true(interface_over_address.interfaces_truncated, 'interface truncation is explicit');
+devices.compile_sets(interface_over.app, { timestamp: 1710000000, devices: interface_over.devices });
 let far_clock = runtime({ observers: {
 	dhcp_leases: () => ({ observed_at: 4102444799, data: '' }),
 	neighbors: () => ({ observed_at: 4102444799, data: '[]' })
@@ -162,7 +278,7 @@ function set_policy(app, value) { return devices.policy_set(app, value); };
 let policies = runtime({ guard: false });
 let direct = set_policy(policies, { scope: 'device', mac: 'AC:BB:CC:DD:EE:10',
 	action: 'direct', schedule: null });
-assert_match(direct.id, /^dp-[0-9]+-[0-9a-f]{16}$/, 'opaque generated policy ID');
+assert_match(direct.id, /^dp_[0-9]+_[0-9a-f]{16}$/, 'opaque generated policy ID');
 assert_equal(direct.mac, 'ac:bb:cc:dd:ee:10', 'policy MAC normalized');
 assert_equal(direct.revision, 1, 'new policy revision');
 assert_equal(policies.uci_fake.commit_calls, 1, 'policy UCI committed');
@@ -182,6 +298,34 @@ policies.fs.writefile('/etc/miclash/device-policies.json', sprintf('%J\n', {
 	version: 1, owner: 'miclash-device-policies', state: 'stable', policies: [], extra: true
 }));
 assert_throws(() => devices.policy_list(policies), 'CORRUPT_STATE');
+function persisted_policies(count) {
+	let sections = { guard: { '.type': 'guard', enabled: '0' } };
+	for (let i = 0; i < count; i++) {
+		let id = 'dp_1_' + sprintf('%016x', i + 1);
+		sections[id] = { '.type': 'device_policy', revision: '1', scope: 'device',
+			mac: sprintf('ac:bb:cc:dd:%02x:%02x', int(i / 256), i % 256),
+			action: 'proxy', schedule: '' };
+	}
+	return runtime({ guard: false, uci: { miclash: sections } });
+};
+assert_equal(length(devices.policy_list(persisted_policies(256))), 256,
+	'exact persisted policy maximum is accepted');
+let too_many_policies = persisted_policies(257);
+assert_throws(() => devices.policy_list(too_many_policies), 'RESPONSE_TOO_LARGE');
+assert_equal(too_many_policies.uci_fake.commit_calls, 0, 'oversized UCI state cannot mutate');
+let oversized_option = persisted_policies(1);
+oversized_option.uci_fake.values.miclash['dp_1_0000000000000001'].schedule = sprintf('%0513d', 0);
+assert_throws(() => devices.policy_list(oversized_option), 'RESPONSE_TOO_LARGE');
+let journal_bound = runtime({ guard: false });
+let stable_empty = sprintf('%J', { version: 1, owner: 'miclash-device-policies',
+	state: 'stable', policies: [] });
+journal_bound.fs.writefile('/etc/miclash/device-policies.json', stable_empty +
+	sprintf('%' + (524288 - length(stable_empty)) + 's', ''));
+assert_equal(length(devices.policy_list(journal_bound)), 0, 'exact raw journal maximum is accepted');
+journal_bound.fs.writefile('/etc/miclash/device-policies.json', stable_empty +
+	sprintf('%' + (524289 - length(stable_empty)) + 's', ''));
+assert_throws(() => devices.policy_list(journal_bound), 'RESPONSE_TOO_LARGE');
+assert_equal(journal_bound.uci_fake.commit_calls, 0, 'oversized journal cannot mutate UCI');
 assert_throws(() => set_policy(runtime({ guard: true }), { scope: 'device',
 	mac: 'ac:bb:cc:dd:ee:10', action: 'direct', schedule: null }), 'VALIDATION_FAILED');
 
@@ -208,6 +352,53 @@ let scheduled = set_policy(precedence, { id: device_policy.id, expected_revision
 	schedule: spec([ 1 ], '09:00', '10:00') });
 assert_equal(devices.effective(precedence, { mac: device_policy.mac, interface: 'br-lan',
 	timestamp: 1710000000 }).policy_id, global_policy.id, 'inactive schedule behaves as inherit');
+
+function precedence_runtime(device_action, interface_action, global_action, guard_enabled) {
+	return runtime({ guard: guard_enabled, uci: { miclash: {
+		guard: { '.type': 'guard', enabled: guard_enabled ? '1' : '0' },
+		'dp_1_0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
+			mac: 'ac:bb:cc:dd:ee:10', action: device_action, schedule: '' },
+		'dp_1_0000000000000002': { '.type': 'device_policy', revision: '1', scope: 'interface',
+			interface: 'br-lan', action: interface_action, schedule: '' },
+		'dp_1_0000000000000003': { '.type': 'device_policy', revision: '1', scope: 'global',
+			action: global_action, schedule: '' }
+	} } });
+};
+for (let device_action in [ 'block', 'proxy', 'direct', 'inherit' ])
+	for (let interface_action in [ 'block', 'proxy', 'direct', 'inherit' ])
+		for (let global_action in [ 'block', 'proxy', 'direct', 'inherit' ]) {
+			let expected = (device_action == 'block' || interface_action == 'block' ||
+				global_action == 'block') ? 'block' :
+				(device_action != 'inherit' ? device_action :
+				 (interface_action != 'inherit' ? interface_action : global_action));
+			let table_decision = devices.effective(
+				precedence_runtime(device_action, interface_action, global_action, false),
+				{ mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan', timestamp: 1710000000 });
+			assert_equal(table_decision.action, expected,
+				'precedence table ' + device_action + '/' + interface_action + '/' + global_action);
+		}
+let guard_lower_block = devices.effective(precedence_runtime('direct', 'inherit', 'block', true),
+	{ mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan', timestamp: 1710000000 });
+assert_equal(guard_lower_block.action, 'block', 'Guard-safe DIRECT override cannot mask lower BLOCK');
+assert_equal(guard_lower_block.policy_id, 'dp_1_0000000000000003', 'BLOCK provenance is explicit');
+let all_blocks = devices.effective(precedence_runtime('block', 'block', 'block', false),
+	{ mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan', timestamp: 1710000000 });
+assert_equal(all_blocks.policy_id, 'dp_1_0000000000000001', 'most-specific BLOCK provenance wins');
+let interface_candidates = runtime({ guard: false, uci: { miclash: {
+	guard: { '.type': 'guard', enabled: '0' },
+	'dp_1_0000000000000004': { '.type': 'device_policy', revision: '1', scope: 'interface',
+		interface: 'wlan0', action: 'direct', schedule: '' },
+	'dp_1_0000000000000005': { '.type': 'device_policy', revision: '1', scope: 'interface',
+		interface: 'br-lan', action: 'proxy', schedule: '' }
+} } });
+let interface_forward = devices.effective(interface_candidates, { mac: 'ac:bb:cc:dd:ee:10',
+	interfaces: [ 'wlan0', 'br-lan' ], timestamp: 1710000000 });
+let interface_reverse = devices.effective(interface_candidates, { mac: 'ac:bb:cc:dd:ee:10',
+	interfaces: [ 'br-lan', 'wlan0' ], timestamp: 1710000000 });
+assert_equal(interface_forward.action, 'proxy', 'multi-interface fallback uses conservative action');
+assert_equal(enc(interface_forward), enc(interface_reverse), 'interface fallback is order-independent');
+assert_equal(interface_forward.policy_id, 'dp_1_0000000000000005',
+	'equal/action provenance is canonical');
 let restarted = runtime({ uci: precedence.uci_fake.values, guard: false });
 assert_throws(() => set_policy(restarted, { scope: 'device', mac: device_policy.mac,
 	action: 'proxy', schedule: null }), 'VALIDATION_FAILED');
@@ -215,20 +406,20 @@ assert_throws(() => set_policy(restarted, { scope: 'device', mac: device_policy.
 // Tampered persisted DIRECT never bypasses Guard; unavailable core becomes BLOCK.
 let guarded = runtime({ guard: true, core_available: false, uci: { miclash: {
 	guard: { '.type': 'guard', enabled: '1' },
-	'dp-1-0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
+	'dp_1_0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
 		mac: 'ac:bb:cc:dd:ee:10', action: 'direct', schedule: '' }
 } } });
 assert_equal(devices.effective(guarded, { mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan',
 	timestamp: 1710000000 }).action, 'block', 'tampered direct fails closed');
 let extra_uci = runtime({ uci: { miclash: {
 	guard: { '.type': 'guard', enabled: '0' },
-	'dp-1-0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
+	'dp_1_0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
 		mac: 'ac:bb:cc:dd:ee:10', action: 'proxy', schedule: '', extra: 'untrusted' }
 } } });
 assert_throws(() => devices.policy_list(extra_uci), 'CORRUPT_STATE');
 let unknown_guard = runtime({ core_available: true, uci: { miclash: {
 	guard: { '.type': 'guard', enabled: 'maybe' },
-	'dp-1-0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
+	'dp_1_0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
 		mac: 'ac:bb:cc:dd:ee:10', action: 'direct', schedule: '' }
 } } });
 let unknown_decision = devices.effective(unknown_guard, { mac: 'ac:bb:cc:dd:ee:10',
@@ -244,7 +435,7 @@ guard_race.uci_fake.on_cursor = (calls) => {
 assert_throws(() => set_policy(guard_race, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
 	action: 'direct', schedule: null }), 'VALIDATION_FAILED');
 // The mutation lock consumes entropy call 1; generated policy suffix starts at 2.
-let collision_id = 'dp-' + NOW + '-0000000000000002';
+let collision_id = 'dp_' + NOW + '_0000000000000002';
 let collision = runtime({ guard: false, uci: { miclash: {
 	guard: { '.type': 'guard', enabled: '0' },
 	[collision_id]: { '.type': 'device_policy', revision: '1', scope: 'device',
@@ -265,13 +456,17 @@ let compile_input = {
 		{ identity: { kind: 'mac', value: 'ac:bb:cc:dd:ee:10', confidence: 'high', persistent_policy_eligible: true,
 			reason: 'stable_mac' },
 			mac: 'ac:bb:cc:dd:ee:10', hostname: 'one', last_seen: 1710000000, sources: [ 'neighbor' ],
-			interfaces: [ 'br-lan' ], conflicts: [], addresses: [ { address: '192.168.1.50', family: 'ipv4',
-				current: true, last_seen: 1710000000, source: 'neighbor', interface: 'br-lan' } ] },
+			interfaces: [ 'br-lan' ], interface_total: 1, interfaces_truncated: false,
+			conflicts: [], addresses: [ { address: '192.168.1.50', family: 'ipv4', current: true,
+				last_seen: 1710000000, source: 'neighbor', interfaces: [ 'br-lan' ],
+				interface_total: 1, interfaces_truncated: false } ] },
 		{ identity: { kind: 'mac', value: 'ac:bb:cc:dd:ee:11', confidence: 'high', persistent_policy_eligible: true,
 			reason: 'stable_mac' },
 			mac: 'ac:bb:cc:dd:ee:11', hostname: 'two', last_seen: 1710000000, sources: [ 'neighbor' ],
-			interfaces: [ 'br-lan' ], conflicts: [], addresses: [ { address: '192.168.1.50', family: 'ipv4',
-				current: true, last_seen: 1710000000, source: 'neighbor', interface: 'br-lan' } ] }
+			interfaces: [ 'br-lan' ], interface_total: 1, interfaces_truncated: false,
+			conflicts: [], addresses: [ { address: '192.168.1.50', family: 'ipv4', current: true,
+				last_seen: 1710000000, source: 'neighbor', interfaces: [ 'br-lan' ],
+				interface_total: 1, interfaces_truncated: false } ] }
 	]
 };
 let compiled = devices.compile_sets(precedence, compile_input);
@@ -281,6 +476,59 @@ assert_true(length(compiled.reasoning) > 0, 'shared-IP conflict reasoning explic
 assert_equal(length(precedence.process.calls), 0, 'compiler never calls firewall/processes');
 assert_equal(enc(compiled), enc(devices.compile_sets(precedence, compile_input)),
 	'compiled output deterministic');
+function compiled_device(mac_value, iface, duplicate) {
+	let address_value = { address: '192.168.9.9', family: 'ipv4', current: true,
+		last_seen: 1710000000, source: 'neighbor', interfaces: [ iface ],
+		interface_total: 1, interfaces_truncated: false };
+	return { identity: { kind: 'mac', value: mac_value, confidence: 'high',
+		persistent_policy_eligible: true, reason: 'stable_mac' }, mac: mac_value,
+		hostname: null, last_seen: 1710000000, sources: [ 'neighbor' ], interfaces: [ iface ],
+		interface_total: 1, interfaces_truncated: false, conflicts: [],
+		addresses: duplicate ? [ address_value, json(enc(address_value)) ] : [ address_value ] };
+};
+function deterministic_app(reverse) {
+	let sections = { guard: { '.type': 'guard', enabled: '0' } };
+	let device_section = { '.type': 'device_policy', revision: '1', scope: 'device',
+		mac: 'ac:bb:cc:dd:ee:70', action: 'proxy', schedule: '' };
+	let interface_section = { '.type': 'device_policy', revision: '1', scope: 'interface',
+		interface: 'br-alt', action: 'proxy', schedule: '' };
+	if (reverse) {
+		sections['dp_1_0000000000000002'] = interface_section;
+		sections['dp_1_0000000000000003'] = device_section;
+	}
+	else {
+		sections['dp_1_0000000000000003'] = device_section;
+		sections['dp_1_0000000000000002'] = interface_section;
+	}
+	return runtime({ guard: false, uci: { miclash: sections } });
+};
+let deterministic_one = compiled_device('ac:bb:cc:dd:ee:70', 'wlan0', true);
+let deterministic_two = compiled_device('ac:bb:cc:dd:ee:71', 'br-alt', false);
+let deterministic_a = devices.compile_sets(deterministic_app(false), {
+	timestamp: 1710000000, devices: [ deterministic_one, deterministic_two ] });
+let reversed_one = json(enc(deterministic_one));
+reversed_one.addresses = [ reversed_one.addresses[1], reversed_one.addresses[0] ];
+let deterministic_b = devices.compile_sets(deterministic_app(true), {
+	timestamp: 1710000000, devices: [ deterministic_two, reversed_one ] });
+assert_equal(enc(deterministic_a), enc(deterministic_b),
+	'device/address/policy permutations compile byte-identically');
+assert_equal(deterministic_a.reasoning[0].policy_id, 'dp_1_0000000000000003',
+	'equal-action shared IP chooses more-specific policy provenance');
+assert_equal(enc(deterministic_a.reasoning[0].identities),
+	enc([ 'ac:bb:cc:dd:ee:70', 'ac:bb:cc:dd:ee:71' ]), 'identities are sorted unique');
+let duplicate_only = devices.compile_sets(deterministic_app(false), {
+	timestamp: 1710000000, devices: [ deterministic_one ] });
+assert_true(!duplicate_only.reasoning[0].conflict,
+	'duplicate same-device address is deduplicated, not a shared-identity conflict');
+let uncanonical = json(enc(deterministic_one));
+uncanonical.interfaces = [ 'wlan0', 'br-lan', 'wlan0' ];
+uncanonical.interface_total = 2;
+uncanonical.addresses[0].interfaces = [ 'wlan0', 'br-lan', 'wlan0' ];
+uncanonical.addresses[0].interface_total = 2;
+let canonicalized_compile = devices.compile_sets(deterministic_app(false), {
+	timestamp: 1710000000, devices: [ uncanonical ] });
+assert_equal(enc(canonicalized_compile), enc(duplicate_only),
+	'compile canonicalizes duplicate and unsorted interface metadata');
 let malformed_compile = json(enc(compile_input));
 malformed_compile.devices[0].identity.extra = 'untrusted';
 assert_throws(() => devices.compile_sets(precedence, malformed_compile), 'INVALID_ARGUMENT');

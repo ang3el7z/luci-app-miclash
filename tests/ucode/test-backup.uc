@@ -3,7 +3,12 @@ import * as backup from 'miclash.backup';
 import * as fakes from 'fakes';
 import * as operations_domain from 'miclash.operations';
 import * as settings from 'miclash.settings';
+import { with_lock } from 'miclash.mutation_lock';
 import { rand } from 'math';
+
+const LOCK_BOOT = '12345678-1234-1234-1234-123456789abc';
+const LOCK_PID = 7000;
+const LOCK_START = 500;
 
 for (let method in [ 'list', 'create', 'inspect', 'restore', 'prune' ])
 	assert_equal(type(backup[method]), 'function', method + ' is exported');
@@ -285,11 +290,16 @@ function secure_fs(filesystem) {
 };
 
 function make_app() {
-	let filesystem = fakes.fs({
+	let initial_files = {
+		'/proc/sys/kernel/random/boot_id': LOCK_BOOT + '\n',
 		'/opt/clash/config.yaml': 'port: 7890\nsecret: controller-password\n',
 		'/opt/clash/config2.yaml': 'port: 7891\n',
 		'/opt/clash/lst/local.txt': 'DOMAIN-SUFFIX,example.test\n'
-	});
+	};
+	initial_files['/proc/' + LOCK_PID + '/stat'] = LOCK_PID + ' (backup test) S ' +
+		join(' ', [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			LOCK_START ]) + '\n';
+	let filesystem = fakes.fs(initial_files);
 	mkdirs(filesystem, [ '/etc', '/etc/miclash', '/opt', '/opt/clash', '/opt/clash/lst',
 		'/tmp', '/tmp/miclash', '/var', '/var/run', '/var/run/miclash' ]);
 	for (let path in [ '/opt/clash/config.yaml', '/opt/clash/config2.yaml',
@@ -302,12 +312,18 @@ function make_app() {
 		digest: fakes.digest(filesystem),
 		uci: fakes.uci({ miclash: {
 			core: { '.type': 'core', subscription_url: 'https://user:pass@example.test/sub' },
+			interfaces: { '.type': 'interfaces' },
 			guard: { '.type': 'guard', enabled: '1' },
+			memory: { '.type': 'memory' },
+			updates: { '.type': 'updates' },
 			telegram: { '.type': 'telegram', enabled: '1', token: 'telegram-secret', user_id: '42' },
+			notifications: { '.type': 'notifications' },
+			backup: { '.type': 'backup' },
 			meta: { '.type': 'meta', schema_version: '1' }
 		} }),
 		paths: { etc: '/etc/miclash', tmp: '/tmp/miclash', run: '/var/run/miclash' }
 	};
+	runtime.mutation_lock_self = { boot: LOCK_BOOT, pid: LOCK_PID, start: LOCK_START };
 	let config = { fail: false, calls: [], validate_in_operation: function(ctx, profile, content) {
 		push(this.calls, { profile, content }); return this.fail ? { ok: false } : { ok: true };
 	} };
@@ -320,7 +336,7 @@ function make_app() {
 		return { kind, source, context, result: worker(ctx) };
 	} };
 	let lock = { calls: [], with_lock: function(runtime, options, worker) {
-		push(this.calls, clone(options)); return worker();
+		push(this.calls, clone(options)); return with_lock(runtime, options, worker);
 	} };
 	let reconcile = { calls: [], run: function(reason) {
 		push(this.calls, reason); return { state: 'queued' };
@@ -336,6 +352,7 @@ function controlled_clock(start) {
 	let current = start, timers = [];
 	return {
 		now: () => current,
+		sleep: (milliseconds) => current += milliseconds,
 		set_timeout: (milliseconds, callback) => {
 			let timer = { due: current + milliseconds, callback, active: true };
 			timer.cancel = () => timer.active = false;
