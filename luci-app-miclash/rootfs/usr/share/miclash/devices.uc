@@ -22,6 +22,8 @@ const MAX_POLICY_OPTIONS = 10;
 const MAX_POLICY_OPTION_BYTES = 512;
 const MAX_POLICY_SECTION_BYTES = 1024;
 const MAX_JOURNAL_BYTES = 524288;
+const MAX_REVISION = 2147483647;
+const MAX_REASONING = 1024;
 const HISTORY_SECONDS = 7 * 86400;
 
 function invalid(code) { fail(code ?? 'INVALID_ARGUMENT'); };
@@ -46,8 +48,15 @@ function conflict(reason, subject, evidence) {
 };
 function add_conflict(item, reason, subject, evidence) {
 	for (let existing in item.conflicts)
-		if (existing.reason == reason && existing.subject == subject) return;
-	if (length(item.conflicts) < MAX_CONFLICTS) push(item.conflicts, conflict(reason, subject, evidence));
+		if (existing.reason == reason && existing.subject == subject) {
+			existing.evidence = canonical_strings([ ...existing.evidence, ...evidence ]);
+			existing.total = length(existing.evidence); existing.truncated = false;
+			return;
+		}
+	if (length(item.conflicts) < MAX_CONFLICTS) push(item.conflicts, {
+		reason, subject, evidence: canonical_strings(evidence),
+		total: length(canonical_strings(evidence)), truncated: false
+	});
 };
 function integer(value, minimum, maximum, code) {
 	if (type(value) != 'int' || value < minimum || value > maximum) invalid(code);
@@ -138,24 +147,62 @@ function ipv6(value) {
 	for (let at = best_at + best_length; at < 8; at++) push(right, sprintf('%x', groups[at]));
 	return join(':', left) + '::' + join(':', right);
 };
+function validate_ipv4_host(value, code, iface) {
+	let octets = split(value, '.'), first = int(octets[0]);
+	if (first == 0 || first == 127 || first >= 224 ||
+	    (first == 169 && int(octets[1]) == 254 && iface == null)) invalid(code);
+	return value;
+};
 function address(value, code, iface) {
 	let v4 = ipv4(value);
 	if (v4 != null) {
-		let octets = split(v4, '.'), first = int(octets[0]);
 		// Private RFC1918 hosts are valid. Link-local requires interface evidence.
-		if (first == 0 || first == 127 || first >= 224 ||
-		    (first == 169 && int(octets[1]) == 254 && iface == null)) invalid(code);
+		validate_ipv4_host(v4, code, iface);
 		return { address: v4, family: 'ipv4' };
 	}
 	let groups = ipv6_groups(value), v6 = groups == null ? null : ipv6(groups);
 	if (v6 != null) {
 		let all_zero = true; for (let group in groups) if (group != 0) all_zero = false;
+		let mapped = true;
+		for (let at = 0; at < 5; at++) if (groups[at] != 0) mapped = false;
+		if (groups[5] != 0xffff) mapped = false;
+		let compatible = true;
+		for (let at = 0; at < 6; at++) if (groups[at] != 0) compatible = false;
+		if (mapped) {
+			let embedded = sprintf('%d.%d.%d.%d', groups[6] >> 8, groups[6] & 0xff,
+				groups[7] >> 8, groups[7] & 0xff);
+			validate_ipv4_host(embedded, code, iface);
+		}
 		// Global/private/link-local unicast are valid; link-local is interface scoped.
-		if (all_zero || (groups[0] & 0xff00) == 0xff00 ||
+		if (all_zero || compatible || (groups[0] & 0xff00) == 0xff00 ||
 		    ((groups[0] & 0xffc0) == 0xfe80 && iface == null)) invalid(code);
 		return { address: v6, family: 'ipv6' };
 	}
 	invalid(code);
+};
+function strict_sorted_strings(values, maximum, validator) {
+	if (type(values) != 'array' || length(values) > maximum) invalid();
+	let previous = null;
+	for (let value in values) {
+		validator(value);
+		if (previous != null && value <= previous) invalid();
+		previous = value;
+	}
+	return values;
+};
+function validate_address_record(value, timestamp) {
+	exact(value, { address: true, family: true, current: true, last_seen: true, source: true,
+		interfaces: true, interface_total: true, interfaces_truncated: true });
+	if (type(value.current) != 'bool' || !has([ 'dhcp', 'neighbor' ], value.source)) invalid();
+	integer(value.last_seen, 0, timestamp);
+	strict_sorted_strings(value.interfaces, MAX_INTERFACES, interface_name);
+	integer(value.interface_total, length(value.interfaces), MAX_LINES);
+	if (type(value.interfaces_truncated) != 'bool' ||
+	    value.interfaces_truncated != (value.interface_total > length(value.interfaces))) invalid();
+	let interface_evidence = value.interfaces[0] ?? (value.interface_total > 0 ? 'truncated' : null);
+	let parsed = address(value.address, null, interface_evidence);
+	if (parsed.family != value.family || parsed.address != value.address) invalid();
+	return value;
 };
 function hostname(value, code) {
 	if (value == '*') return null;
@@ -188,8 +235,10 @@ function cache_device(cache, identity, normalized_mac, host, identity_reason) {
 		};
 	}
 	if (host != null && item.hostname == null) item.hostname = host;
-	else if (host != null && item.hostname != host)
-		add_conflict(item, 'hostname_changed', item.hostname, [ item.hostname, host ]);
+	else if (host != null && item.hostname != host) {
+		add_conflict(item, 'hostname_changed', identity, [ item.hostname, host ]);
+		if (host < item.hostname) item.hostname = host;
+	}
 	return item;
 };
 function add_observation(cache, normalized_mac, ip, host, source, iface, seen, current, identity_reason) {
@@ -291,7 +340,11 @@ function conflict_pass(devices) {
 				push(bounded_interfaces, all_interfaces[i]);
 			item_address.interfaces = bounded_interfaces;
 		}
-		item.conflicts = sort(item.conflicts, (a, b) =>
+		let normalized_conflicts = [];
+		for (let item_conflict in item.conflicts)
+			push(normalized_conflicts, conflict(item_conflict.reason, item_conflict.subject,
+				item_conflict.evidence));
+		item.conflicts = sort(normalized_conflicts, (a, b) =>
 			a.reason + ':' + (a.subject ?? '') < b.reason + ':' + (b.subject ?? '') ? -1 : 1);
 	}
 };
@@ -372,7 +425,7 @@ function normalized_policy(value) {
 	exact(value, allowed, { scope: true, action: true });
 	if (value.id != null) policy_id(value.id);
 	if ((value.id == null) != (value.expected_revision == null)) invalid();
-	if (value.expected_revision != null) integer(value.expected_revision, 1, 2147483647);
+	if (value.expected_revision != null) integer(value.expected_revision, 1, MAX_REVISION);
 	if (!has([ 'device', 'interface', 'global' ], value.scope) ||
 	    !has([ 'block', 'proxy', 'direct', 'inherit' ], value.action)) invalid();
 	let normalized = { id: value.id ?? null, expected_revision: value.expected_revision ?? null,
@@ -443,7 +496,28 @@ function list_from(uci) {
 	}
 	return sort(result, (a, b) => a.id < b.id ? -1 : (a.id > b.id ? 1 : 0));
 };
-function journal(app, document) { storage.write_json(app, JOURNAL, document, 0o600); };
+function journal_size(document) {
+	let encoded;
+	try { encoded = sprintf('%J\n', document); }
+	catch (error) { invalid('INTERNAL'); }
+	if (length(encoded) > MAX_JOURNAL_BYTES) invalid('RESOURCE_EXHAUSTED');
+	return length(encoded);
+};
+function journal(app, document) {
+	journal_size(document);
+	storage.write_json(app, JOURNAL, document, 0o600);
+};
+function mutation_documents(before, after) {
+	if (type(after) != 'array' || length(after) > MAX_POLICIES)
+		invalid('RESOURCE_EXHAUSTED');
+	for (let item in after)
+		if (type(item.revision) != 'int' || item.revision < 1 || item.revision > MAX_REVISION)
+			invalid('RESOURCE_EXHAUSTED');
+	let prepared = { version: 1, owner: 'miclash-device-policies', state: 'prepared', before, after };
+	let stable = { version: 1, owner: 'miclash-device-policies', state: 'stable', policies: after };
+	journal_size(prepared); journal_size(stable);
+	return { prepared, stable };
+};
 function read_journal(app) {
 	let info = app?.fs?.lstat(JOURNAL);
 	if (info == null) return null;
@@ -519,6 +593,8 @@ export function policy_set(app, policy) {
 		let existing = null;
 		for (let item in before) if (item.id == wanted.id) existing = item;
 		if (wanted.id != null && (existing == null || existing.revision != wanted.expected_revision)) invalid('BUSY');
+		if (wanted.id == null && length(before) >= MAX_POLICIES) invalid('RESOURCE_EXHAUSTED');
+		if (existing != null && existing.revision >= MAX_REVISION) invalid('RESOURCE_EXHAUSTED');
 		if (wanted.id == null) {
 			let now = app.clock.now(), occupied = {};
 			if (type(now) != 'int' || now < 0 || now > 9007199254740991) invalid('INTERNAL');
@@ -540,16 +616,17 @@ export function policy_set(app, policy) {
 			action: wanted.action, schedule: wanted.schedule };
 		let after = []; for (let item in before) if (item.id != result.id) push(after, item); push(after, result);
 		after = sort(after, (a, b) => a.id < b.id ? -1 : (a.id > b.id ? 1 : 0));
-		journal(app, { version: 1, owner: 'miclash-device-policies', state: 'prepared', before, after });
+		let documents = mutation_documents(before, after);
+		journal(app, documents.prepared);
 		if (existing != null) delete_section(uci, existing.id);
 		write_section(uci, result);
 		if (uci.commit(CONFIG) !== true) { try { uci.revert(CONFIG); } catch (error) {} invalid('INTERNAL'); }
-		journal(app, { version: 1, owner: 'miclash-device-policies', state: 'stable', policies: after });
+		journal(app, documents.stable);
 		return clone(result);
 	});
 };
 export function policy_delete(app, id, expected_revision) {
-	policy_id(id); integer(expected_revision, 1, 2147483647);
+	policy_id(id); integer(expected_revision, 1, MAX_REVISION);
 	return with_lock(app, { barrier: 'normal', wait_ms: 0 }, () => {
 		let uci = cursor(app); for (let name in uci.changes(CONFIG) ?? {}) invalid('BUSY');
 		let before = list_from(uci); journal_state(app, before, true);
@@ -557,22 +634,31 @@ export function policy_delete(app, id, expected_revision) {
 		if (existing == null) invalid('NOT_FOUND');
 		if (existing.revision != expected_revision) invalid('BUSY');
 		let after = []; for (let item in before) if (item.id != id) push(after, item);
-		journal(app, { version: 1, owner: 'miclash-device-policies', state: 'prepared', before, after });
+		let documents = mutation_documents(before, after);
+		journal(app, documents.prepared);
 		delete_section(uci, id);
 		if (uci.commit(CONFIG) !== true) { try { uci.revert(CONFIG); } catch (error) {} invalid('INTERNAL'); }
-		journal(app, { version: 1, owner: 'miclash-device-policies', state: 'stable', policies: after });
+		journal(app, documents.stable);
 		return true;
 	});
 };
 
 function subject(value) {
-	exact(value, { mac: true, interface: true, interfaces: true, timestamp: true }, { timestamp: true });
+	exact(value, { mac: true, interface: true, interfaces: true, interface_total: true,
+		interfaces_truncated: true, timestamp: true }, { timestamp: true });
 	if (value.interface != null && value.interfaces != null) invalid();
 	let interfaces = value.interfaces ?? (value.interface == null ? [] : [ value.interface ]);
 	if (type(interfaces) != 'array' || length(interfaces) > MAX_INTERFACES) invalid();
 	let normalized_interfaces = [];
 	for (let iface in interfaces) add_unique(normalized_interfaces, interface_name(iface));
-	return { mac: value.mac == null ? null : mac(value.mac), interfaces: sort(normalized_interfaces),
+	normalized_interfaces = sort(normalized_interfaces);
+	let interface_total = value.interface_total ?? length(normalized_interfaces);
+	integer(interface_total, length(normalized_interfaces), MAX_LINES);
+	let interfaces_truncated = value.interfaces_truncated ?? false;
+	if (type(interfaces_truncated) != 'bool' ||
+	    interfaces_truncated != (interface_total > length(normalized_interfaces))) invalid();
+	return { mac: value.mac == null ? null : mac(value.mac), interfaces: normalized_interfaces,
+		interface_total, interfaces_truncated,
 		timestamp: integer(value.timestamp, 0, MAX_TIMESTAMP) };
 };
 function policy_active(app, policy, timestamp) {
@@ -595,7 +681,11 @@ function safe_action(app, action, policy_id) {
 	return { action, safety: 'ordinary' };
 };
 export function effective(app, input) {
-	let wanted = subject(input), policies = policy_list(app), active = [], selected = null;
+	let wanted = subject(input);
+	if (wanted.interfaces_truncated) return { action: 'block', policy_id: null, scope: null,
+		safety: 'interface_evidence_truncated',
+		reason: redact.text('interface evidence truncated; conservative block') };
+	let policies = policy_list(app), active = [], selected = null;
 	for (let scope in [ 'device', 'interface', 'global' ]) {
 		for (let policy in policies) {
 			if (policy.scope != scope || (scope == 'device' && policy.mac != wanted.mac) ||
@@ -651,40 +741,64 @@ compile_device = function(value, timestamp) {
 		let normalized = mac(value.mac);
 		if (value.identity.value != normalized ||
 		    (value.identity.confidence == 'high') != !local_mac(normalized) ||
-		    value.identity.persistent_policy_eligible != !local_mac(normalized)) invalid();
+		    value.identity.persistent_policy_eligible != !local_mac(normalized) ||
+		    value.identity.reason != (local_mac(normalized) ?
+			'locally_administered_mac' : 'stable_mac')) invalid();
 	}
 	else {
 		if (value.mac != null || value.identity.confidence != 'ephemeral' ||
-		    value.identity.persistent_policy_eligible || type(value.identity.value) != 'string' ||
+		    value.identity.persistent_policy_eligible || value.identity.reason != 'mac_unavailable' ||
+		    type(value.identity.value) != 'string' ||
 		    !match(value.identity.value, /^ephemeral:[0-9]+:[1-9][0-9]*:(dhcp|neighbor)$/)) invalid();
 	}
 	if (value.hostname != null) hostname(value.hostname);
 	integer(value.last_seen, 0, timestamp);
-	if (type(value.sources) != 'array' || length(value.sources) > 2) invalid();
-	for (let source in value.sources) if (!has([ 'dhcp', 'neighbor' ], source)) invalid();
-	value.sources = canonical_strings(value.sources);
-	if (type(value.interfaces) != 'array' || length(value.interfaces) > MAX_INTERFACES) invalid();
-	for (let iface in value.interfaces) interface_name(iface);
-	value.interfaces = canonical_strings(value.interfaces);
+	strict_sorted_strings(value.sources, 2, (source) => {
+		if (!has([ 'dhcp', 'neighbor' ], source)) invalid();
+	});
+	strict_sorted_strings(value.interfaces, MAX_INTERFACES, interface_name);
 	integer(value.interface_total, length(value.interfaces), MAX_LINES);
 	if (type(value.interfaces_truncated) != 'bool' ||
 	    value.interfaces_truncated != (value.interface_total > length(value.interfaces))) invalid();
 	if (type(value.conflicts) != 'array' || length(value.conflicts) > MAX_CONFLICTS) invalid();
+	let identity_subject = value.identity.kind == 'mac' ? 'mac:' + value.mac : value.identity.value;
+	let prior_conflict = null;
 	for (let conflict in value.conflicts) {
 		exact(conflict, { reason: true, subject: true, evidence: true, total: true, truncated: true });
 		if (!has([ 'hostname_changed', 'duplicate_hostname', 'shared_address', 'address_interfaces' ],
 		    conflict.reason) || type(conflict.subject) != 'string' || !length(conflict.subject) ||
 		    length(conflict.subject) > 128 || type(conflict.truncated) != 'bool') invalid();
-		if (type(conflict.evidence) != 'array' || length(conflict.evidence) > MAX_EVIDENCE) invalid();
-		for (let evidence in conflict.evidence)
+		strict_sorted_strings(conflict.evidence, MAX_EVIDENCE, (evidence) => {
 			if (type(evidence) != 'string' || !length(evidence) || length(evidence) > 128) invalid();
-		conflict.evidence = canonical_strings(conflict.evidence);
+		});
 		integer(conflict.total, length(conflict.evidence), MAX_LINES);
 		if (conflict.truncated != (conflict.total > length(conflict.evidence))) invalid();
+		if (conflict.reason == 'hostname_changed') {
+			if (conflict.subject != identity_subject) invalid();
+			for (let evidence in conflict.evidence) hostname(evidence);
+		}
+		else if (conflict.reason == 'duplicate_hostname') hostname(conflict.subject);
+		else if (conflict.reason == 'address_interfaces') {
+			for (let evidence in conflict.evidence) interface_name(evidence);
+			address(conflict.subject, null, conflict.evidence[0] ?? 'truncated');
+		}
+		else if (conflict.reason == 'shared_address') {
+			let at = index(conflict.subject, ':'), family = substr(conflict.subject, 0, at);
+			let parsed = address(substr(conflict.subject, at + 1), null, 'shared');
+			if (family != parsed.family) invalid();
+		}
+		let conflict_key = conflict.reason + ':' + conflict.subject;
+		if (prior_conflict != null && conflict_key <= prior_conflict) invalid();
+		prior_conflict = conflict_key;
 	}
-	value.conflicts = sort(value.conflicts, (a, b) =>
-		a.reason + ':' + a.subject < b.reason + ':' + b.subject ? -1 : 1);
 	if (type(value.addresses) != 'array' || length(value.addresses) > MAX_ADDRESSES) invalid();
+	let newest_address = null;
+	for (let item in value.addresses) {
+		validate_address_record(item, timestamp);
+		if (item.last_seen > value.last_seen) invalid();
+		newest_address = newest_address == null ? item.last_seen : max(newest_address, item.last_seen);
+	}
+	if (length(value.addresses) && newest_address != value.last_seen) invalid();
 	return value;
 };
 function rank(decision) {
@@ -706,6 +820,9 @@ function candidate_before(left, right) {
 	if (left_policy != right_policy) return left_policy < right_policy;
 	return left.identity < right.identity;
 };
+function safety_conflict(summary) {
+	return summary.conflict || !has([ 'ordinary', 'block' ], summary.safety);
+};
 export function compile_sets(app, input) {
 	exact(input, { timestamp: true, devices: true });
 	let timestamp = integer(input.timestamp, 0, MAX_TIMESTAMP);
@@ -714,45 +831,47 @@ export function compile_sets(app, input) {
 	for (let raw in input.devices) {
 		let device = compile_device(raw, timestamp);
 		for (let item in device.addresses) {
-			exact(item, { address: true, family: true, current: true, last_seen: true, source: true,
-				interfaces: true, interface_total: true, interfaces_truncated: true });
-			if (type(item.current) != 'bool' || !has([ 'dhcp', 'neighbor' ], item.source)) invalid();
-			integer(item.last_seen, 0, timestamp);
-			if (type(item.interfaces) != 'array' || length(item.interfaces) > MAX_INTERFACES) invalid();
-			let canonical_interfaces = [];
-			for (let iface in item.interfaces) add_unique(canonical_interfaces, interface_name(iface));
-			canonical_interfaces = sort(canonical_interfaces);
-			item.interfaces = canonical_interfaces;
-			integer(item.interface_total, length(item.interfaces), MAX_LINES);
-			if (type(item.interfaces_truncated) != 'bool' ||
-			    item.interfaces_truncated != (item.interface_total > length(item.interfaces))) invalid();
-			let parsed = address(item.address, null, item.interfaces[0]);
-			if (parsed.family != item.family) invalid();
+			validate_address_record(item, timestamp);
 			if (!item.current) continue;
-			let key = parsed.family + ':' + parsed.address;
+			let key = item.family + ':' + item.address;
 			observations[key] ??= {};
 			let identity = device.identity.value;
-			observations[key][identity] ??= { identity, mac: device.mac, interfaces: [] };
+			observations[key][identity] ??= { identity, mac: device.mac, interfaces: [],
+				interface_total: 0, interfaces_truncated: false };
+			let observation = observations[key][identity];
 			for (let iface in item.interfaces)
-				add_unique(observations[key][identity].interfaces, iface);
+				add_unique(observation.interfaces, iface);
+			observation.interface_total = max(observation.interface_total,
+				max(item.interface_total, device.interface_total));
+			observation.interfaces_truncated = observation.interfaces_truncated ||
+				item.interfaces_truncated || device.interfaces_truncated;
 		}
 	}
 	let result = { ipv4: { block: [], proxy: [], direct: [] },
-		ipv6: { block: [], proxy: [], direct: [] }, reasoning: [] };
+		ipv6: { block: [], proxy: [], direct: [] }, reasoning: [],
+		reasoning_total: 0, reasoning_truncated: false,
+		safety_conflicts_total: 0, safety_conflicts_truncated: false };
+	let summaries = [];
 	let observation_keys = sort(keys(observations));
 	for (let key in observation_keys) {
 		let identity_keys = sort(keys(observations[key])), values = [];
 		for (let identity in identity_keys) {
 			let observation = observations[key][identity];
 			observation.interfaces = sort(observation.interfaces);
+			if (observation.interfaces_truncated &&
+			    observation.interface_total <= length(observation.interfaces))
+				observation.interface_total = length(observation.interfaces) + 1;
+			else if (!observation.interfaces_truncated)
+				observation.interface_total = length(observation.interfaces);
 			push(values, { identity, decision: effective(app, { mac: observation.mac,
-				interfaces: observation.interfaces, timestamp }) });
+				interfaces: observation.interfaces, interface_total: observation.interface_total,
+				interfaces_truncated: observation.interfaces_truncated, timestamp }) });
 		}
 		let winner = values[0];
 		for (let candidate in values) if (candidate_before(candidate, winner)) winner = candidate;
 		let at = index(key, ':'), family = substr(key, 0, at), ip = substr(key, at + 1);
 		if (winner.decision.action != 'inherit') push(result[family][winner.decision.action], ip);
-		if (length(result.reasoning) < 1024) push(result.reasoning, {
+		push(summaries, {
 			address: ip, family, action: winner.decision.action, policy_id: winner.decision.policy_id,
 			safety: winner.decision.safety, conflict: length(values) > 1,
 			identities: identity_keys
@@ -760,6 +879,20 @@ export function compile_sets(app, input) {
 	}
 	for (let family in [ 'ipv4', 'ipv6' ])
 		for (let action in [ 'block', 'proxy', 'direct' ]) result[family][action] = sort(result[family][action]);
-	result.reasoning = sort(result.reasoning, (a, b) => a.family + ':' + a.address < b.family + ':' + b.address ? -1 : 1);
+	summaries = sort(summaries, (a, b) => {
+		let a_safety = safety_conflict(a), b_safety = safety_conflict(b);
+		if (a_safety != b_safety) return a_safety ? -1 : 1;
+		let a_key = a.family + ':' + a.address, b_key = b.family + ':' + b.address;
+		return a_key < b_key ? -1 : (a_key > b_key ? 1 : 0);
+	});
+	result.reasoning_total = length(summaries);
+	result.reasoning_truncated = result.reasoning_total > MAX_REASONING;
+	for (let summary in summaries) if (safety_conflict(summary)) result.safety_conflicts_total++;
+	let retained_safety = 0;
+	for (let at = 0; at < min(length(summaries), MAX_REASONING); at++) {
+		push(result.reasoning, summaries[at]);
+		if (safety_conflict(summaries[at])) retained_safety++;
+	}
+	result.safety_conflicts_truncated = retained_safety < result.safety_conflicts_total;
 	return result;
 };

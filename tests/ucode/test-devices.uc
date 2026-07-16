@@ -157,6 +157,84 @@ let corrupt_cache_before = enc(corrupt_cache.device_cache);
 assert_throws(() => devices.discover(corrupt_cache), 'CORRUPT_STATE');
 assert_equal(enc(corrupt_cache.device_cache), corrupt_cache_before, 'invalid existing cache is not rewritten');
 
+function corrupt_cached_record(label, mutate) {
+	let box = runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: () => ({ observed_at: 1710000000, data: '[]' })
+	} });
+	box.device_cache = json(committed_cache);
+	let item = box.device_cache.devices[keys(box.device_cache.devices)[0]];
+	mutate(item.addresses[0], item);
+	let before = enc(box.device_cache);
+	assert_throws(() => devices.discover(box), 'CORRUPT_STATE', label);
+	assert_equal(enc(box.device_cache), before, label + ' preserves cache bytes');
+};
+for (let sample in [
+	[ 'address extra key', (record) => record.extra = true ],
+	[ 'address missing field', (record) => delete record.source ],
+	[ 'family mismatch', (record) => record.family = record.family == 'ipv4' ? 'ipv6' : 'ipv4' ],
+	[ 'noncanonical address', (record) => { record.address = '192.168.001.010'; record.family = 'ipv4'; } ],
+	[ 'hazardous cached address', (record) => { record.address = '127.0.0.1'; record.family = 'ipv4'; } ],
+	[ 'nonboolean current', (record) => record.current = 1 ],
+	[ 'negative address timestamp', (record) => record.last_seen = -1 ],
+	[ 'future address timestamp', (record) => record.last_seen = 1710000001 ],
+	[ 'invalid address source', (record) => record.source = 'foreign' ],
+	[ 'duplicate address interfaces', (record) => {
+		record.interfaces = [ 'br-lan', 'br-lan' ]; record.interface_total = 2;
+	} ],
+	[ 'unsorted address interfaces', (record) => {
+		record.interfaces = [ 'wlan0', 'br-lan' ]; record.interface_total = 2;
+	} ],
+	[ 'address interface counter mismatch', (record) => record.interface_total = 3 ],
+	[ 'address interface counter below retained', (record) => record.interface_total = 0 ],
+	[ 'address interface counter over bound', (record) => record.interface_total = 513 ],
+	[ 'address truncation mismatch', (record) => record.interfaces_truncated = true ],
+	[ 'address truncation wrong type', (record) => record.interfaces_truncated = 'true' ],
+	[ 'duplicate device sources', (record, item) => item.sources = [ 'neighbor', 'neighbor' ] ],
+	[ 'unsorted device sources', (record, item) => item.sources = [ 'neighbor', 'dhcp' ] ],
+	[ 'device extra key', (record, item) => item.extra = true ],
+	[ 'identity extra key', (record, item) => item.identity.extra = true ],
+	[ 'identity reason mismatch', (record, item) => item.identity.reason = 'locally_administered_mac' ],
+	[ 'device interface counter mismatch', (record, item) => item.interface_total = 17 ],
+	[ 'device truncation wrong type', (record, item) => item.interfaces_truncated = 'false' ],
+	[ 'conflict extra key', (record, item) => {
+		item.conflicts[0] ??= { reason: 'address_interfaces', subject: record.address,
+			evidence: [ 'br-lan' ], total: 1, truncated: false };
+		item.conflicts[0].extra = true;
+	} ],
+	[ 'conflict evidence counter mismatch', (record, item) => {
+		item.conflicts[0] ??= { reason: 'address_interfaces', subject: record.address,
+			evidence: [ 'br-lan' ], total: 1, truncated: false };
+		item.conflicts[0].total++;
+	} ],
+	[ 'conflict invalid reason', (record, item) => {
+		item.conflicts[0] ??= { reason: 'address_interfaces', subject: record.address,
+			evidence: [ 'br-lan' ], total: 1, truncated: false };
+		item.conflicts[0].reason = 'foreign';
+	} ],
+	[ 'conflict duplicate evidence', (record, item) => {
+		item.conflicts[0] = { reason: 'address_interfaces', subject: record.address,
+			evidence: [ 'br-lan', 'br-lan' ], total: 2, truncated: false };
+	} ]
+]) corrupt_cached_record(sample[0], sample[1]);
+
+function hostname_history(order) {
+	let lines = map(order, (host) => '1710003600 ac:bb:cc:dd:ee:44 192.168.1.44 ' + host + ' *');
+	return devices.discover(runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: join('\n', lines) + '\n' }),
+		neighbors: () => ({ observed_at: 1710000000, data: '[]' })
+	} }))[0];
+};
+let hostname_abc = hostname_history([ 'alpha', 'beta', 'gamma' ]);
+let hostname_cab = hostname_history([ 'gamma', 'alpha', 'beta' ]);
+assert_equal(enc(hostname_abc), enc(hostname_cab), 'hostname history permutations are byte-identical');
+let hostname_conflict = filter(hostname_abc.conflicts, (item) => item.reason == 'hostname_changed')[0];
+assert_equal(hostname_conflict.subject, 'mac:ac:bb:cc:dd:ee:44',
+	'hostname conflict subject is the stable identity');
+assert_equal(enc(hostname_conflict.evidence), enc([ 'alpha', 'beta', 'gamma' ]));
+assert_equal(hostname_conflict.total, 3);
+assert_true(!hostname_conflict.truncated);
+
 // Stable MAC retains bounded history when its IP changes; expiry and rollback are deterministic.
 observed.observers.dhcp_leases = () => ({ observed_at: 1710000100,
 	data: '1710003700 ac:bb:cc:dd:ee:10 192.168.1.77 kitchen *\n' });
@@ -211,7 +289,10 @@ assert_equal(length(unrelated), 2, 'unrelated observations never merge by shared
 assert_true(unrelated[0].identity.value != unrelated[1].identity.value,
 	'ephemeral identities carry distinct observation evidence');
 for (let hazardous_ip in [ '0.1.2.3', '127.0.0.1', '224.0.0.1', '255.255.255.255',
-	'::', 'ff02::1', 'fe80::1%br-lan' ]) {
+	'::', '::1', 'ff02::1', 'fe80::1%br-lan',
+	'::ffff:0.0.0.0', '::ffff:127.0.0.1', '::ffff:7f00:1',
+	'0:0:0:0:0:ffff:e000:1', '::ffff:255.255.255.255',
+	'::192.168.1.1', '::c0a8:101' ]) {
 	let bad_ip = runtime({ observers: {
 		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
 		neighbors: (family) => ({ observed_at: 1710000000, data:
@@ -220,6 +301,21 @@ for (let hazardous_ip in [ '0.1.2.3', '127.0.0.1', '224.0.0.1', '255.255.255.255
 	} });
 	assert_throws(() => devices.discover(bad_ip), 'INVALID_RESPONSE');
 }
+function discovered_ipv6(value) {
+	let box = runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: (family) => ({ observed_at: 1710000000, data: family == 'ipv6' ?
+			'[{' + '"dst":"' + value + '","dev":"br-lan",' +
+			'"lladdr":"ac:bb:cc:dd:ee:45","state":["REACHABLE"]}]' : '[]' })
+	} });
+	return devices.discover(box)[0].addresses[0].address;
+};
+assert_equal(discovered_ipv6('fd00::1'), 'fd00::1', 'ULA remains valid');
+assert_equal(discovered_ipv6('fe80::1'), 'fe80::1', 'link-local with interface evidence remains valid');
+assert_equal(discovered_ipv6('::ffff:192.168.1.10'), '::ffff:c0a8:10a',
+	'valid mapped IPv4 canonicalizes as IPv6');
+assert_equal(discovered_ipv6('::ffff:c0a8:10a'), discovered_ipv6('0:0:0:0:0:ffff:192.168.1.10'),
+	'mapped dotted and hexadecimal forms canonicalize equivalently');
 function lease_lines(count, duplicate_hostname) {
 	let lines = [];
 	for (let i = 1; i <= count; i++) {
@@ -248,11 +344,12 @@ assert_equal(length(crowded_conflict.evidence), 16, 'evidence is deterministical
 assert_equal(crowded_conflict.total, 20, 'evidence retains total count');
 assert_true(crowded_conflict.truncated, 'evidence truncation is explicit');
 devices.compile_sets(evidence_app, { timestamp: 1710000000, devices: evidence_devices });
-function many_interfaces(count) {
+function many_interfaces(count, reverse) {
 	let entries = [];
 	for (let i = 0; i < count; i++)
 		push(entries, { dst: '192.168.3.9', dev: 'if' + i,
 			lladdr: 'ac:bb:cc:dd:ee:61', state: [ 'REACHABLE' ] });
+	if (reverse) entries = sort(entries, (a, b) => a.dev < b.dev ? 1 : -1);
 	let app = runtime({ observers: {
 		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
 		neighbors: (family) => ({ observed_at: 1710000000,
@@ -261,12 +358,33 @@ function many_interfaces(count) {
 	return { app, devices: devices.discover(app) };
 };
 let interface_max = many_interfaces(16);
-devices.compile_sets(interface_max.app, { timestamp: 1710000000, devices: interface_max.devices });
+devices.policy_set(interface_max.app, { scope: 'global', action: 'proxy', schedule: null });
+let interface_max_compiled = devices.compile_sets(interface_max.app,
+	{ timestamp: 1710000000, devices: interface_max.devices });
+assert_equal(enc(interface_max_compiled.ipv4.proxy), enc([ '192.168.3.9' ]),
+	'exact interface evidence maximum follows the policy normally');
 let interface_over = many_interfaces(17), interface_over_address = interface_over.devices[0].addresses[0];
 assert_equal(length(interface_over_address.interfaces), 16, 'max+1 interfaces truncate to output budget');
 assert_equal(interface_over_address.interface_total, 17, 'interface total survives truncation');
 assert_true(interface_over_address.interfaces_truncated, 'interface truncation is explicit');
-devices.compile_sets(interface_over.app, { timestamp: 1710000000, devices: interface_over.devices });
+devices.policy_set(interface_over.app, { scope: 'global', action: 'proxy', schedule: null });
+let interface_over_compiled = devices.compile_sets(interface_over.app,
+	{ timestamp: 1710000000, devices: interface_over.devices });
+assert_equal(enc(interface_over_compiled.ipv4.block), enc([ '192.168.3.9' ]),
+	'truncated interface evidence enforces conservative BLOCK');
+assert_equal(length(interface_over_compiled.ipv4.proxy), 0, 'truncated interface BLOCK stays disjoint');
+assert_equal(interface_over_compiled.reasoning[0].safety, 'interface_evidence_truncated',
+	'truncation safety provenance is explicit');
+let interface_over_reverse = many_interfaces(17, true);
+devices.policy_set(interface_over_reverse.app, { scope: 'global', action: 'proxy', schedule: null });
+assert_equal(enc(interface_over_compiled), enc(devices.compile_sets(interface_over_reverse.app,
+	{ timestamp: 1710000000, devices: interface_over_reverse.devices })),
+	'truncated interface enforcement is observer-order independent');
+let explicit_truncated = devices.effective(interface_over.app, { mac: 'ac:bb:cc:dd:ee:61',
+	interfaces: interface_over_address.interfaces, interface_total: 17,
+	interfaces_truncated: true, timestamp: 1710000000 });
+assert_equal(explicit_truncated.action, 'block');
+assert_equal(explicit_truncated.safety, 'interface_evidence_truncated');
 let far_clock = runtime({ observers: {
 	dhcp_leases: () => ({ observed_at: 4102444799, data: '' }),
 	neighbors: () => ({ observed_at: 4102444799, data: '[]' })
@@ -310,6 +428,35 @@ function persisted_policies(count) {
 };
 assert_equal(length(devices.policy_list(persisted_policies(256))), 256,
 	'exact persisted policy maximum is accepted');
+let create_at_max = persisted_policies(256), create_at_max_uci = enc(create_at_max.uci_fake.values);
+assert_throws(() => devices.policy_set(create_at_max, { scope: 'device',
+	mac: 'ac:bb:cc:dd:01:00', action: 'proxy', schedule: null }), 'RESOURCE_EXHAUSTED');
+assert_equal(create_at_max.uci_fake.commit_calls, 0, 'capacity failure cannot commit UCI');
+assert_equal(create_at_max.uci_fake.set_calls, 0, 'capacity failure cannot stage UCI');
+assert_equal(create_at_max.fs.lstat('/etc/miclash/device-policies.json'), null,
+	'capacity failure cannot publish a journal');
+assert_equal(enc(create_at_max.uci_fake.values), create_at_max_uci,
+	'capacity failure preserves persisted policy bytes');
+let create_to_max = persisted_policies(255);
+devices.policy_set(create_to_max, { scope: 'device', mac: 'ac:bb:cc:dd:00:ff',
+	action: 'proxy', schedule: null });
+assert_equal(length(devices.policy_list(create_to_max)), 256,
+	'creating the exact policy maximum succeeds and restarts readably');
+let max_revision = runtime({ guard: false, uci: { miclash: {
+	guard: { '.type': 'guard', enabled: '0' },
+	'dp_1_0000000000000001': { '.type': 'device_policy', revision: '2147483647',
+		scope: 'device', mac: 'ac:bb:cc:dd:ee:01', action: 'proxy', schedule: '' }
+} } });
+let max_revision_uci = enc(max_revision.uci_fake.values);
+assert_throws(() => devices.policy_set(max_revision, { id: 'dp_1_0000000000000001',
+	expected_revision: 2147483647, scope: 'device', mac: 'ac:bb:cc:dd:ee:01',
+	action: 'block', schedule: null }), 'RESOURCE_EXHAUSTED');
+assert_equal(max_revision.uci_fake.commit_calls, 0, 'revision overflow cannot commit UCI');
+assert_equal(max_revision.uci_fake.set_calls, 0, 'revision overflow cannot stage UCI');
+assert_equal(max_revision.fs.lstat('/etc/miclash/device-policies.json'), null,
+	'revision overflow cannot publish a journal');
+assert_equal(enc(max_revision.uci_fake.values), max_revision_uci,
+	'revision overflow preserves persisted policy bytes');
 let too_many_policies = persisted_policies(257);
 assert_throws(() => devices.policy_list(too_many_policies), 'RESPONSE_TOO_LARGE');
 assert_equal(too_many_policies.uci_fake.commit_calls, 0, 'oversized UCI state cannot mutate');
@@ -525,10 +672,70 @@ uncanonical.interfaces = [ 'wlan0', 'br-lan', 'wlan0' ];
 uncanonical.interface_total = 2;
 uncanonical.addresses[0].interfaces = [ 'wlan0', 'br-lan', 'wlan0' ];
 uncanonical.addresses[0].interface_total = 2;
-let canonicalized_compile = devices.compile_sets(deterministic_app(false), {
-	timestamp: 1710000000, devices: [ uncanonical ] });
-assert_equal(enc(canonicalized_compile), enc(duplicate_only),
-	'compile canonicalizes duplicate and unsorted interface metadata');
+assert_throws(() => devices.compile_sets(deterministic_app(false), {
+	timestamp: 1710000000, devices: [ uncanonical ] }), 'INVALID_ARGUMENT');
 let malformed_compile = json(enc(compile_input));
 malformed_compile.devices[0].identity.extra = 'untrusted';
 assert_throws(() => devices.compile_sets(precedence, malformed_compile), 'INVALID_ARGUMENT');
+
+function reasoning_devices(all_truncated) {
+	let output = [], address_number = 0;
+	for (let device_number = 0; device_number < 34; device_number++) {
+		let truncated = all_truncated || device_number == 33, addresses = [];
+		let count = device_number == 33 ? 1 : 32;
+		for (let at = 0; at < count; at++) {
+			address_number++;
+			let ip = device_number == 33 ? '10.255.255.254' :
+				sprintf('10.%d.%d.%d', int(address_number / 65536),
+					int((address_number % 65536) / 256), address_number % 256);
+			push(addresses, { address: ip, family: 'ipv4', current: true,
+				last_seen: 1710000000, source: 'neighbor', interfaces: [ 'br-lan' ],
+				interface_total: truncated ? 17 : 1, interfaces_truncated: truncated });
+		}
+		let mac_value = sprintf('ac:bb:cc:dd:%02x:%02x', int(device_number / 256),
+			device_number % 256);
+		push(output, { identity: { kind: 'mac', value: mac_value, confidence: 'high',
+			persistent_policy_eligible: true, reason: 'stable_mac' }, mac: mac_value,
+			hostname: null, last_seen: 1710000000, sources: [ 'neighbor' ],
+			interfaces: [ 'br-lan' ], interface_total: truncated ? 17 : 1,
+			interfaces_truncated: truncated, conflicts: [], addresses });
+	}
+	return output;
+};
+function reverse_reasoning_devices(input) {
+	let output = [];
+	for (let at = length(input) - 1; at >= 0; at--) {
+		let device = json(enc(input[at])), addresses = [];
+		for (let address_at = length(device.addresses) - 1; address_at >= 0; address_at--)
+			push(addresses, device.addresses[address_at]);
+		device.addresses = addresses; push(output, device);
+	}
+	return output;
+};
+let reasoning_input = reasoning_devices(false), reasoning_app = runtime({ guard: false });
+let bounded_reasoning = devices.compile_sets(reasoning_app,
+	{ timestamp: 1710000000, devices: reasoning_input });
+assert_equal(bounded_reasoning.reasoning_total, 1057, 'reasoning reports exact unique total');
+assert_equal(length(bounded_reasoning.reasoning), 1024, 'reasoning retention is bounded');
+assert_true(bounded_reasoning.reasoning_truncated, 'reasoning truncation is explicit');
+assert_equal(bounded_reasoning.safety_conflicts_total, 1, 'late safety conflict is counted');
+assert_true(!bounded_reasoning.safety_conflicts_truncated,
+	'priority retention preserves the sole late safety conflict');
+assert_equal(length(filter(bounded_reasoning.reasoning,
+	(item) => item.safety == 'interface_evidence_truncated')), 1,
+	'late safety conflict is prioritized into retained reasoning');
+assert_equal(enc(sort(keys(bounded_reasoning))), enc([ 'ipv4', 'ipv6', 'reasoning',
+	'reasoning_total', 'reasoning_truncated', 'safety_conflicts_total',
+	'safety_conflicts_truncated' ]), 'compiled output schema is exact');
+assert_equal(enc(sort(keys(bounded_reasoning.reasoning[0]))), enc([ 'action', 'address',
+	'conflict', 'family', 'identities', 'policy_id', 'safety' ]),
+	'reasoning summary schema is exact');
+assert_equal(enc(bounded_reasoning), enc(devices.compile_sets(runtime({ guard: false }),
+	{ timestamp: 1710000000, devices: reverse_reasoning_devices(reasoning_input) })),
+	'large reasoning output is byte-identical under device/address permutations');
+let all_safety = devices.compile_sets(runtime({ guard: false }),
+	{ timestamp: 1710000000, devices: reasoning_devices(true) });
+assert_equal(all_safety.safety_conflicts_total, 1057, 'all safety conflicts are counted');
+assert_true(all_safety.safety_conflicts_truncated, 'omitted safety evidence is explicit');
+assert_equal(length(all_safety.reasoning), 1024);
+assert_equal(length(all_safety.ipv4.block), 1057, 'reasoning bounds never weaken BLOCK enforcement');
