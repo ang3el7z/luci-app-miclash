@@ -22,7 +22,8 @@ function mkdirs(filesystem, paths) {
 function same_file_identity(left, right) {
 	return left?.type == right?.type && left?.inode == right?.inode &&
 		left?.dev?.major == right?.dev?.major && left?.dev?.minor == right?.dev?.minor &&
-		left?.uid == right?.uid && left?.mode == right?.mode && left?.nlink == right?.nlink;
+		left?.uid == right?.uid && left?.mode == right?.mode && left?.nlink == right?.nlink &&
+		left?.size == right?.size;
 };
 
 function same_directory_identity(left, right) {
@@ -114,6 +115,7 @@ function secure_fs(filesystem) {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
 		hook('before', 'create_exclusive', parent, name, options);
+		directory(parent.opaque, parent.identity);
 		if (filesystem.lstat(path) != null) die('INTERNAL');
 		filesystem.files[path] = content; filesystem.bump_inode(path);
 		filesystem.set_mode(path, options.mode); filesystem.set_uid(path, options.uid);
@@ -127,6 +129,7 @@ function secure_fs(filesystem) {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
 		hook('before', 'replace_atomic', parent, name, { expected, options });
+		directory(parent.opaque, parent.identity);
 		let current = filesystem.lstat(path);
 		if (expected == null ? current != null : !same_file_identity(current, expected)) die('INTERNAL');
 		let replacement = {
@@ -145,7 +148,7 @@ function secure_fs(filesystem) {
 		hook('after', 'replace_rename', parent, name, { expected, options, identity });
 		hook('after', 'replace_parent_fsync', parent, name, { expected, options, identity });
 		hook('after', 'replace_atomic', parent, name, { expected, options, identity });
-		return identity;
+		return clone(file(path, identity, { ...options, nlink: 1 }));
 	};
 	capability.with_admission_lock = (worker) => {
 		if (capability.admission_held) die('BUSY');
