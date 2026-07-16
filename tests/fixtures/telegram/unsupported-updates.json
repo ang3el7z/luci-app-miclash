@@ -1,0 +1,25 @@
+[
+  {
+    "update_id": 105,
+    "edited_message": {
+      "from": { "id": 42 },
+      "chat": { "id": 42, "type": "private" },
+      "text": "/reboot"
+    }
+  },
+  {
+    "update_id": 106,
+    "channel_post": {
+      "chat": { "id": -10042, "type": "channel" },
+      "text": "/reboot"
+    }
+  },
+  {
+    "update_id": 107,
+    "callback_query": {
+      "id": "callback-secret",
+      "from": { "id": 42 },
+      "data": "/reboot"
+    }
+  }
+]

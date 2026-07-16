@@ -52,7 +52,7 @@ function expandedBasenames(label) {
 const experimental = [
 	'backup.uc', 'devices.uc', 'diagnostics.uc', 'diff.uc', 'health.uc', 'http.uc',
 	'memory.uc', 'notify.uc', 'reconcile.uc', 'route-test.uc', 'schedule.uc',
-	'scheduler.uc', 'subscription.uc', 'updates.uc'
+	'scheduler.uc', 'subscription.uc', 'telegram.uc', 'updates.uc'
 ].sort();
 assert.deepEqual(expandedBasenames('UNSHIPPED'), experimental,
 	'the explicit unshipped list must contain every Plan 2/3 module held for final cutover');

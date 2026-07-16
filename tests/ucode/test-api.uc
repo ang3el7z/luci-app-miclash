@@ -190,6 +190,11 @@ let app = {
 			state_model.set_desired(settings_domain.set(patch));
 		});
 	},
+	telegram_status: () => ({
+		running: true, configured: true, token: 'telegram-secret', user_id: '42'
+	}),
+	telegram_settings: () => settings_domain.get().telegram,
+	telegram_test: () => true,
 	set_draining: (value) => application_draining = value
 };
 let methods = api.method_table(app);
@@ -198,11 +203,25 @@ json_equal(names, sort([
 	'status', 'health', 'operation_get', 'operation_list',
 	'service_start', 'service_stop', 'service_reload', 'service_restart',
 	'config_list', 'config_read', 'config_validate', 'config_apply',
-	'settings_get', 'settings_set'
+	'settings_get', 'settings_set',
+	'telegram_status', 'telegram_settings', 'telegram_test'
 ]));
 assert_equal(api.register(connection, app).registered, true);
 assert_equal(published.name, 'miclash');
 json_equal(sort(keys(published.methods)), names);
+
+// Before the Task 7 one-jump cutover, the transport publishes safe Telegram
+// reads/test=false without requiring daemon/application composition.
+let unwired_app = { ...app };
+delete unwired_app.telegram_status;
+delete unwired_app.telegram_settings;
+delete unwired_app.telegram_test;
+let unwired_methods = api.method_table(unwired_app);
+assert_equal(unwired_methods.telegram_status.call({ args: {} }).running, false);
+assert_equal(unwired_methods.telegram_status.call({ args: {} }).configured, true);
+assert_equal(unwired_methods.telegram_settings.call({ args: {} }).token, '[REDACTED]');
+assert_equal(unwired_methods.telegram_settings.call({ args: {} }).user_id, '[REDACTED]');
+json_equal(unwired_methods.telegram_test.call({ args: {} }), { sent: false });
 
 function invoke(name, args) {
 	return methods[name].call({ args: args ?? {} });
@@ -214,6 +233,9 @@ json_equal(methods.operation_get.args, { operation_id: '' });
 json_equal(methods.service_start.args, { profile: '', source: '' });
 json_equal(methods.config_validate.args, { profile: '', content: '', source: '' });
 json_equal(methods.settings_set.args, { settings: {}, source: '' });
+json_equal(methods.telegram_status.args, {});
+json_equal(methods.telegram_settings.args, {});
+json_equal(methods.telegram_test.args, {});
 for (let name in names) {
 	assert_equal(type(methods[name].call), 'function');
 	assert_equal(type(methods[name].args), 'object');
@@ -236,6 +258,10 @@ for (let secret in [ 'telegram-secret', 'controller-secret', 'config-secret' ])
 	assert_equal(index(sprintf('%J', [ status_reply, settings_reply ]), secret), -1);
 settings_reply.core.proxy_mode = 'tampered';
 assert_equal(invoke('settings_get').core.proxy_mode, 'tproxy');
+assert_equal(index(sprintf('%J', invoke('telegram_status')), 'telegram-secret'), -1);
+assert_equal(invoke('telegram_status').user_id, '[REDACTED]');
+assert_equal(invoke('telegram_settings').token, '[REDACTED]');
+json_equal(invoke('telegram_test'), { sent: true });
 
 // Domain config mutations already submit; the transport returns only their durable ID.
 let before_submits = length(submitted);

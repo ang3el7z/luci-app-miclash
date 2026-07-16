@@ -69,6 +69,37 @@ assert_equal(http.request(existing_secure.runtime, {
 	url: 'https://subscriptions.example.test/config.yaml'
 }).status, 200);
 
+// Managed callers may explicitly inspect a bounded non-success status without
+// changing the default fail-closed download contract.
+let accepted_429 = http_environment({
+	headers: 'HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\n\r\n',
+	body: '{"ok":false,"error_code":429}'
+});
+let accepted_429_result = http.request(accepted_429.runtime, {
+	url: 'https://api.telegram.org/bot123456:test/getUpdates',
+	managed: true,
+	accept_statuses: [ 429 ],
+	max_redirects: 0,
+	max_bytes: 65536
+});
+assert_equal(accepted_429_result.status, 429);
+assert_equal(accepted_429_result.headers['retry-after'], '7');
+let rejected_429 = http_environment({
+	headers: 'HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\n\r\n',
+	body: '{"ok":false,"error_code":429}'
+});
+assert_throws(() => http.request(rejected_429.runtime, {
+	url: 'https://api.telegram.org/bot123456:test/getUpdates', managed: true
+}), 'DOWNLOAD_FAILED');
+assert_throws(() => http.request(http_environment().runtime, {
+	url: 'https://api.telegram.org/bot123456:test/getUpdates',
+	accept_statuses: [ 429 ]
+}), 'INVALID_ARGUMENT');
+assert_throws(() => http.request(http_environment().runtime, {
+	url: 'https://api.telegram.org/bot123456:test/getUpdates', managed: true,
+	accept_statuses: [ 500 ]
+}), 'INVALID_ARGUMENT');
+
 // Both the runtime parent and HTTP child are root-owned private authorities.
 // Existing foreign directories, symlinks, ineffective chmod, and identity
 // replacement during hardening all fail before curl is invoked.

@@ -6,7 +6,8 @@ const HTTP_ROOT = '/tmp/miclash/http';
 const HEADER_LIMIT = 65536;
 const OPTION_FIELDS = {
 	url: true, headers: true, connect_timeout_ms: true, timeout_ms: true,
-	max_redirects: true, max_bytes: true, managed: true, allow_insecure_http: true
+	max_redirects: true, max_bytes: true, managed: true, allow_insecure_http: true,
+	accept_statuses: true
 };
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
@@ -169,7 +170,7 @@ function response_block(block) {
 	return { status: int(found[1]), headers };
 };
 
-function parse_headers(input, original_url, maximum_redirects) {
+function parse_headers(input, original_url, maximum_redirects, accepted_statuses) {
 	let chunks = split(input, '\r\n\r\n'), blocks = [];
 	for (let chunk in chunks)
 		if (length(chunk))
@@ -205,7 +206,8 @@ function parse_headers(input, original_url, maximum_redirects) {
 			errors.fail('INVALID_RESPONSE');
 	}
 	let final = blocks[length(blocks) - 1];
-	if (final.status < 200 || final.status >= 300)
+	if ((final.status < 200 || final.status >= 300) &&
+	    index(accepted_statuses, final.status) < 0)
 		errors.fail('DOWNLOAD_FAILED');
 	return final;
 };
@@ -247,7 +249,19 @@ function clean_options(runtime, options) {
 			invalid();
 		seen_headers[normalized] = true;
 	}
-	return { url, connect, total, redirects, maximum, headers, insecure };
+	let accepted_statuses = options.accept_statuses ?? [];
+	if (type(accepted_statuses) != 'array' || length(accepted_statuses) > 1 ||
+	    length(accepted_statuses) && options.managed !== true)
+		invalid();
+	let seen_statuses = {};
+	for (let status in accepted_statuses) {
+		if (type(status) != 'int' || status != 429 ||
+		    exists(seen_statuses, status))
+			invalid();
+		seen_statuses[status] = true;
+	}
+	return { url, connect, total, redirects, maximum, headers, insecure,
+		accepted_statuses };
 };
 
 export function request(runtime, options) {
@@ -288,7 +302,7 @@ export function request(runtime, options) {
 		if (reply.code != 0)
 			errors.fail('DOWNLOAD_FAILED');
 		let parsed = parse_headers(read_bounded(runtime, header, HEADER_LIMIT),
-			clean.url, clean.redirects);
+			clean.url, clean.redirects, clean.accepted_statuses);
 		let body = read_bounded(runtime, output, clean.maximum);
 		result = { status: parsed.status, headers: parsed.headers, body,
 			url: clean.url, insecure: clean.insecure };

@@ -316,6 +316,21 @@ export function producer(runtime) {
 	};
 };
 
+export function telegram_channel(telegram) {
+	if (type(telegram?.send_event) != 'function')
+		invalid();
+	return {
+		name: 'telegram',
+		minimum_severity: 'info',
+		types: [],
+		components: [],
+		send: (event) => {
+			try { return telegram.send_event(event) === true; }
+			catch (error) { return false; }
+		}
+	};
+};
+
 function clean_filter(value, luci) {
 	exact(value, luci ? LUCI_FIELDS : FILTER_FIELDS, luci ? 5 : 4);
 	if (type(value.enabled) != 'bool')

@@ -51,6 +51,35 @@ function method(policy, callback) {
 	return { args: policy, call: guarded(callback) };
 };
 
+function telegram_settings_value(app) {
+	let settings = type(app.telegram_settings) == 'function' ? app.telegram_settings() :
+		app.settings_get()?.telegram;
+	if (type(settings) != 'object')
+		settings = {};
+	settings = redact.value('telegram', settings);
+	if (exists(settings, 'user_id'))
+		settings.user_id = redact.MASK;
+	return settings;
+};
+
+function telegram_status_value(app) {
+	if (type(app.telegram_status) == 'function') {
+		let status = redact.value('telegram_status', app.telegram_status());
+		if (type(status) != 'object')
+			errors.fail('INTERNAL');
+		if (exists(status, 'user_id'))
+			status.user_id = redact.MASK;
+		return status;
+	}
+	let settings = app.settings_get()?.telegram;
+	return {
+		running: false,
+		enabled: settings?.enabled === true,
+		configured: type(settings?.token) == 'string' && length(settings.token) > 0 &&
+			type(settings?.user_id) == 'string' && length(settings.user_id) > 0
+	};
+};
+
 export function method_table(app) {
 	for (let name in [
 		'status', 'health', 'operation_get', 'operation_list',
@@ -147,6 +176,19 @@ export function method_table(app) {
 				settings: { type: 'object', required: true }, source: { type: 'string' }
 			});
 			return operation_reply(app.settings_set(arguments.settings, source(arguments)));
+		}),
+		telegram_status: method(empty, (arguments) => {
+			exact(arguments, {});
+			return telegram_status_value(app);
+		}),
+		telegram_settings: method(empty, (arguments) => {
+			exact(arguments, {});
+			return telegram_settings_value(app);
+		}),
+		telegram_test: method(empty, (arguments) => {
+			exact(arguments, {});
+			return { sent: type(app.telegram_test) == 'function' &&
+				app.telegram_test() === true };
 		})
 	};
 };

@@ -33,7 +33,8 @@ MICLASH_UNSHIPPED_UCODE:= \
 	./rootfs/usr/share/miclash/notify.uc \
 	./rootfs/usr/share/miclash/backup.uc \
 	./rootfs/usr/share/miclash/devices.uc \
-	./rootfs/usr/share/miclash/schedule.uc
+	./rootfs/usr/share/miclash/schedule.uc \
+	./rootfs/usr/share/miclash/telegram.uc
 MICLASH_PACKAGE_UCODE:=$(filter-out $(MICLASH_UNSHIPPED_UCODE),$(wildcard ./rootfs/usr/share/miclash/*.uc))
 
 include $(INCLUDE_DIR)/package.mk

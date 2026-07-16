@@ -1,0 +1,20 @@
+[
+  { "text": "/status", "kind": null },
+  { "text": "/health", "kind": null },
+  { "text": "/memory", "kind": null },
+  { "text": "/diagnostics", "kind": null },
+  { "text": "/logs", "kind": null },
+  { "text": "/help", "kind": null },
+  { "text": "/start", "kind": "service.start" },
+  { "text": "/stop", "kind": "service.stop" },
+  { "text": "/restart", "kind": "service.restart" },
+  { "text": "/reload", "kind": "service.reload" },
+  { "text": "/reboot", "kind": "system.reboot" },
+  { "text": "/subscription https://subscriptions.example.test/config.yaml?token=url-secret", "kind": "subscription.update" },
+  { "text": "/update_subscription", "kind": "subscription.update" },
+  { "text": "/update_miclash", "kind": "updates.miclash" },
+  { "text": "/update_mihomo", "kind": "updates.mihomo" },
+  { "text": "/guard_on", "kind": "settings.set" },
+  { "text": "/guard_off", "kind": "settings.set" },
+  { "text": "/backup", "kind": "backup.create" }
+]
