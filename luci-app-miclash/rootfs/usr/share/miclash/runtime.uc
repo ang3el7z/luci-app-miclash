@@ -6,6 +6,7 @@ import * as dns from 'miclash.dns';
 import * as routing from 'miclash.routing';
 import * as nft from 'miclash.firewall.nft';
 import * as iptables from 'miclash.firewall.iptables';
+import * as guard_latch from 'miclash.guard-latch';
 
 const PROCESS_FIELDS = {
 	command: true,
@@ -550,8 +551,11 @@ function guard_control_adapter(runtime) {
 	};
 	return {
 		protect: () => action('guard_start') && action('guard_verify_protected'),
-		disable: () => action('guard_finalize') && action('guard_verify_off'),
-		verify: (enabled) => runtime.observers.guard(enabled)?.ready === true
+		disable: () => action('guard_disable') && action('guard_verify_off'),
+		verify: (enabled) => runtime.observers.guard(enabled)?.ready === true,
+		latch_set: () => action('guard_latch_set'),
+		latch_clear: () => action('guard_latch_clear'),
+		is_latched: () => guard_latch.is_set(runtime)
 	};
 };
 

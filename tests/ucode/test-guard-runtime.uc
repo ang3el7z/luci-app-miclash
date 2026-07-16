@@ -1,5 +1,6 @@
 import { assert_equal, assert_true } from './testlib.uc';
 import * as runtime_guard from 'miclash.guard_runtime';
+import * as guard from 'miclash.guard';
 
 const TABLE = 'miclash_guard';
 const CHAIN = 'forward';
@@ -8,6 +9,13 @@ const RESERVED4 = [ '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8',
 	'192.168.0.0/16', '198.51.100.0/24', '203.0.113.0/24', '224.0.0.0/4',
 	'240.0.0.0/4', '255.255.255.255/32' ];
 const RESERVED6 = [ '::/128', '::1/128', 'fc00::/7', 'fe80::/10', 'ff00::/8' ];
+
+let emergency_batch = guard.nft_ruleset('miclash_guard_emergency_v1', false);
+assert_true(index(emergency_batch, 'protected_direct_drop_v1') >= 0 &&
+	index(emergency_batch, 'priority -310') >= 0 &&
+	index(emergency_batch, 'meta nfproto ipv4 drop') >= 0 &&
+	index(emergency_batch, 'meta nfproto ipv6 drop') >= 0,
+	'interface-independent emergency owner is not a structural dual-stack fail-closed barrier');
 
 function clone(value) { return json(sprintf('%J', value)); };
 function match(left, op, right) { return { match: { left, op, right } }; };

@@ -385,7 +385,8 @@ define Package/$(PKG_NAME)/postrm
 						exit 1
 					}
 					[ ! -e "$$BARRIER" ] && [ ! -L "$$BARRIER" ] || exit 1
-					rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json || exit 1
+					rm -f /etc/miclash/guard-bootstrap.json /var/run/miclash/guard-bootstrap.json \
+						/etc/miclash/guard-safety-latch || exit 1
 					[ ! -e "$$RELEASE_CLEANUP" ] && [ ! -L "$$RELEASE_CLEANUP" ] || exit 1
 					mv "$$RELEASE_DIR" "$$RELEASE_CLEANUP" || {
 						echo "MiClash package removal release authority remains retryable" >&2

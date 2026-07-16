@@ -2,6 +2,7 @@ import { assert_equal, assert_throws, assert_true } from 'testlib';
 import * as daemon from 'miclash.daemon';
 import * as real_api from 'miclash.api';
 import * as real_application from 'miclash.application';
+import * as real_reconcile_adapter from 'miclash.reconcile-adapter';
 import * as runtime_module from 'miclash.runtime';
 import * as fakes from './fakes.uc';
 
@@ -188,12 +189,17 @@ let integrated_connection = {
 };
 let operation_sequence = 0, operation_records = {}, integrated_operation_listener = null;
 let integrated_operation_unsubscribes = 0;
+let reconcile_queue = [];
 let integrated_operations = {
 	recover_interrupted: () => true,
 	submit: (kind, source, context, worker) => {
 		let id = 'operation-' + (++operation_sequence);
 		let record = { id, kind, source, context, state: 'running' };
 		operation_records[id] = record;
+		if (kind == 'system.reconcile') {
+			record.state = 'queued'; record.worker = worker;
+			push(reconcile_queue, id); return { id };
+		}
 		try {
 			let result = worker({ id, stage: () => true });
 			record.state = 'success'; record.result = result;
@@ -220,9 +226,10 @@ let desired = {
 	telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42' }
 };
 let guard_persist_failures = 0, guard_on_persist_failures = 0;
+let integrated_state_updates = 0;
 let integrated_state = {
 	snapshot: () => ({ desired }), health: () => ({ ready: true }),
-	set_desired: (value) => desired = value, observe: () => null,
+	set_desired: (value) => { integrated_state_updates++; desired = value; }, observe: () => null,
 	close: () => { push(integrated_closes, 'state'); return true; }, flush: () => true
 };
 let guard_settings_calls = 0;
@@ -258,11 +265,19 @@ let auto_backup_attempts = 0, auto_backup_prunes = 0, auto_backup_options = [];
 let fail_next_auto_backup = true;
 let failed_auto_prune = false, backup_list_calls = 0;
 let fake_transfers = null;
+let guard_actual = false, guard_latched = false, guard_failure_mode = null, guard_backend_calls = [];
+let guard_protect_failures = 0;
 let integrated_factories = {
 	operations: { create: () => integrated_operations },
 	service: { create: () => ({
 		start: () => true, stop: () => true, reload: () => true,
-		restart_service: () => true, wait_ready: () => ({ ok: true })
+		restart_service: () => true, wait_ready: () => ({ ok: guard_actual == desired.guard.enabled,
+			components: [
+				{ component: 'guard', ready: guard_actual == desired.guard.enabled,
+					enabled: guard_actual, observed_at: 1700000000000, generation: 1 },
+				{ component: 'dns', ready: true, observed_at: 1700000000000 },
+				{ component: 'forward', ready: true, observed_at: 1700000000000 }
+			] })
 	}) },
 	history: { create: () => ({
 		list: () => [], diff: () => ({ text: '' }), open_draft: () => ({ id: 'operation-history' }),
@@ -360,6 +375,7 @@ let integrated_factories = {
 		policy_delete: () => true
 	},
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
+	reconcile_adapter: real_reconcile_adapter,
 	api: {
 		create_transfers: (dependencies) => {
 			fake_transfers = {
@@ -377,9 +393,6 @@ let integrated_factories = {
 	}
 };
 let integrated_clock = fakes.clock(1700000000000);
-let guard_actual = false, guard_failure_mode = null, guard_backend_calls = [];
-let guard_protect_failures = 0;
-let integrated_reconciles = 0;
 let integrated_runtime = {
 	ubus: { connect: () => integrated_connection },
 	clock: integrated_clock,
@@ -390,24 +403,38 @@ let integrated_runtime = {
 	guard_control: {
 		protect: () => {
 			push(guard_backend_calls, 'protect');
+			// A refined/capture failure occurs only after the minimal emergency
+			// barrier has already been installed and structurally verified.
+			guard_actual = true;
 			if (guard_protect_failures > 0) { guard_protect_failures--; return false; }
 			if (guard_failure_mode == 'protect') return false;
-			guard_actual = true; return true;
+			return true;
 		},
 		disable: () => {
-			push(guard_backend_calls, 'disable'); guard_actual = false;
+			push(guard_backend_calls, 'disable'); guard_latched = false; guard_actual = false;
 			return guard_failure_mode != 'disable_after_remove';
 		},
 		verify: (enabled) => {
 			push(guard_backend_calls, 'verify_' + enabled);
 			if (guard_failure_mode == 'verify_' + enabled) return false;
 			return guard_actual == enabled && desired.guard?.enabled == enabled;
-		}
+		},
+		latch_set: () => { push(guard_backend_calls, 'latch_set'); guard_latched = true; return true; },
+		latch_clear: () => { push(guard_backend_calls, 'latch_clear'); guard_latched = false; return true; },
+		is_latched: () => guard_latched
 	},
-	reconcile: { run: () => { integrated_reconciles++; return { id: 'guard-reconcile' }; } },
 	events: fakes.events()
 };
 let integrated = daemon.compose(integrated_runtime, integrated_factories);
+function drain_reconcile() {
+	let id = shift(reconcile_queue), record = operation_records[id];
+	assert_true(record != null, 'no queued real reconcile operation');
+	record.state = 'running';
+	try { record.result = record.worker({ stage: () => true }); record.state = 'success'; }
+	catch (error) { record.state = 'failure'; record.error = error?.code ?? error?.message; }
+	delete record.worker;
+	return record;
+};
 assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 1,
 	'backup cleanup owns more than one lifecycle timer');
 assert_equal(guard_settings_calls, 0);
@@ -425,11 +452,15 @@ let clean_ui_guard_on = integration_methods.guard_transition.call({ args: { enab
 assert_equal(operation_records[clean_ui_guard_on.operation_id].state, 'success');
 assert_equal(desired.guard.enabled, true);
 assert_equal(guard_actual, true);
+assert_equal(guard_latched, false);
+assert_true(index(guard_backend_calls, 'latch_set') >= 0 && index(guard_backend_calls, 'latch_clear') >= 0,
+	'Guard ON did not bracket risky work with the durable safety latch');
 let telegram_guard_record = telegram_facade.guard_transition(false, 'telegram');
 assert_equal(operation_records[telegram_guard_record.id].kind, 'guard.transition');
 assert_equal(operation_records[telegram_guard_record.id].state, 'success');
 assert_equal(desired.guard.enabled, false);
 assert_equal(guard_actual, false);
+assert_equal(guard_latched, false);
 assert_true(index(guard_backend_calls, 'protect') >= 0 && index(guard_backend_calls, 'verify_true') >= 0);
 let ui_guard_on = integration_methods.guard_transition.call({ args: { enabled: true, source: 'luci' } });
 assert_equal(operation_records[ui_guard_on.operation_id].state, 'success');
@@ -443,8 +474,11 @@ let failed_guard_off = integration_methods.guard_transition.call({ args: { enabl
 assert_equal(operation_records[failed_guard_off.operation_id].state, 'failure');
 assert_equal(desired.guard.enabled, true);
 assert_equal(guard_actual, true);
-assert_true(integrated_reconciles >= 1);
+assert_true(length(reconcile_queue) >= 1);
 guard_failure_mode = null;
+let first_guard_reconcile = drain_reconcile();
+assert_equal(first_guard_reconcile.state, 'success', sprintf('reconcile error: %J desired=%J actual=%J latch=%J calls=%J',
+	first_guard_reconcile.error, desired.guard, guard_actual, guard_latched, guard_backend_calls));
 
 // A pre-enable backend failure still persists fail-closed repair intent,
 // emits a critical Guard incident and never reports success.
@@ -462,20 +496,40 @@ guard_failure_mode = 'protect';
 let failed_guard_on = integration_methods.guard_transition.call({ args: { enabled: true, source: 'luci' } });
 assert_equal(operation_records[failed_guard_on.operation_id].state, 'failure');
 assert_equal(desired.guard.enabled, true);
-assert_equal(guard_actual, false);
+assert_equal(guard_actual, true);
+assert_equal(guard_latched, true);
 assert_true(length(filter(integrated_runtime.events.items, (event) => event.type == 'failure')) >= 1);
 guard_failure_mode = null;
 guard_actual = true;
+assert_equal(drain_reconcile().state, 'success');
 
 // Canonical persistence failures are retried boundedly; the operation fails,
 // but real protection and ON repair intent survive.
 let prepare_guard_off = integration_methods.guard_transition.call({ args: { enabled: false, source: 'luci' } });
 assert_equal(operation_records[prepare_guard_off.operation_id].state, 'success');
-guard_persist_failures = 2;
+guard_persist_failures = 100;
 let failed_guard_persist = integration_methods.guard_transition.call({ args: { enabled: true, source: 'luci' } });
 assert_equal(operation_records[failed_guard_persist.operation_id].state, 'failure');
+assert_equal(desired.guard.enabled, false);
+assert_equal(guard_actual, true);
+assert_equal(guard_latched, true);
+let disables_before_failed_reconcile = length(filter(guard_backend_calls, (name) => name == 'disable'));
+assert_equal(drain_reconcile().state, 'failure');
+assert_equal(guard_latched, true);
+assert_equal(guard_actual, true);
+assert_equal(desired.guard.enabled, false);
+assert_equal(length(filter(guard_backend_calls, (name) => name == 'disable')),
+	disables_before_failed_reconcile, 'ordinary reconcile invoked Guard finalization while latched');
+assert_equal(length(reconcile_queue), 0, 'failed real reconcile created a busy retry loop');
+guard_persist_failures = 0;
+let state_updates_before_repair = integrated_state_updates;
+assert_equal(integrated_runtime.reconcile.run('storage-recovered').id != null, true);
+assert_equal(drain_reconcile().state, 'success');
 assert_equal(desired.guard.enabled, true);
 assert_equal(guard_actual, true);
+assert_equal(guard_latched, false);
+assert_true(integrated_state_updates > state_updates_before_repair,
+	'reconcile repaired UCI without refreshing daemon desired state');
 
 // Failure of the final ON proof cannot become false success.
 guard_failure_mode = 'verify_true';
@@ -484,6 +538,7 @@ assert_equal(operation_records[failed_guard_verify_on.operation_id].state, 'fail
 assert_equal(desired.guard.enabled, true);
 assert_equal(guard_actual, true);
 guard_failure_mode = null;
+assert_equal(drain_reconcile().state, 'success');
 
 // Failure after successful OFF mutation but before final OFF proof rolls back
 // canonical UCI ON and reinstalls exact protection.
@@ -493,16 +548,34 @@ assert_equal(operation_records[failed_guard_verify_off.operation_id].state, 'fai
 assert_equal(desired.guard.enabled, true);
 assert_equal(guard_actual, true);
 guard_failure_mode = null;
+assert_equal(drain_reconcile().state, 'success');
 
 // Even if canonical ON cannot be restored after OFF already removed Guard,
 // the physical protection must be reinstalled before the failure is returned.
 guard_failure_mode = 'disable_after_remove';
-guard_on_persist_failures = 2;
+guard_on_persist_failures = 100;
 let failed_guard_uci_rollback = integration_methods.guard_transition.call({ args: { enabled: false, source: 'luci' } });
 assert_equal(operation_records[failed_guard_uci_rollback.operation_id].state, 'failure');
 assert_equal(guard_actual, true,
 	'rollback UCI failure skipped physical fail-closed Guard restoration');
+assert_equal(guard_latched, true);
 guard_failure_mode = null;
+let disables_before_off_reconcile = length(filter(guard_backend_calls, (name) => name == 'disable'));
+assert_equal(drain_reconcile().state, 'failure');
+assert_equal(guard_latched, true);
+assert_equal(guard_actual, true);
+assert_equal(desired.guard.enabled, false);
+assert_equal(length(filter(guard_backend_calls, (name) => name == 'disable')),
+	disables_before_off_reconcile, 'OFF rollback reconcile removed Guard while latch was active');
+guard_on_persist_failures = 0;
+assert_true(integrated_runtime.reconcile.run('off-storage-recovered').id != null);
+assert_equal(drain_reconcile().state, 'success');
+assert_equal(desired.guard.enabled, true);
+assert_equal(guard_latched, false);
+let successful_guard_off = integration_methods.guard_transition.call({ args: { enabled: false, source: 'luci' } });
+assert_equal(operation_records[successful_guard_off.operation_id].state, 'success');
+assert_equal(guard_latched, false, 'explicit successful OFF retained the safety latch');
+assert_equal(guard_actual, false);
 let healthy_memory_set_timeout = integrated_clock.set_timeout;
 let timers_before_failed_memory = length(filter(integrated_clock.timers, (timer) => timer.active));
 integrated_clock.set_timeout = () => die('timer failed');

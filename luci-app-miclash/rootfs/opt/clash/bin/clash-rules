@@ -73,6 +73,7 @@ readonly RESERVED_NETWORKS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.2
 readonly RESERVED_NETWORKS6="::/128 ::1/128 fc00::/7 fe80::/10 ff00::/8"
 readonly GUARD_NFT_TABLE="miclash_guard"
 readonly GUARD_FORWARD_CHAIN="MICLASH_GUARD_FORWARD"
+readonly GUARD_SAFETY_LATCH="/etc/miclash/guard-safety-latch"
 # Fake-ip whitelist IP-CIDR technical list (used only by the firewall, not by config.yaml)
 readonly FAKEIP_WHITELIST_FILE="/opt/clash/lst/fakeip-whitelist-ipcidr.txt"
 readonly FAKEIP_IPSET_NAME="clash_fakeip_whitelist"
@@ -1547,6 +1548,24 @@ guard_emergency_release() {
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc release
 }
 
+guard_safety_latched() {
+	# Any object at the backend-owned latch path is fail-closed. Only the
+	# atomic latch backend is authorized to validate and remove it.
+	[ -e "$GUARD_SAFETY_LATCH" ] || [ -L "$GUARD_SAFETY_LATCH" ]
+}
+
+guard_effective_enabled() {
+	[ "$INTERNET_ONLY_MICLASH" = "true" ] || guard_safety_latched
+}
+
+guard_safety_latch_set() {
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc latch-set
+}
+
+guard_safety_latch_clear() {
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc latch-clear
+}
+
 guard_bootstrap_disable() {
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc disable || return 1
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-bootstrap.uc disable
@@ -1619,6 +1638,7 @@ guard_verify_protected() {
 guard_verify_off() {
 	load_all_settings_once
 	[ "$INTERNET_ONLY_MICLASH" = "false" ] || return 1
+	guard_safety_latched && return 1
 	verify_guard_absent || return 1
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc verify-bootstrap-off
 }
@@ -1778,9 +1798,11 @@ apply_iptables_guard_rules() {
 }
 
 apply_guard_rules() {
+	# Install and exactly verify the interface-independent emergency owner first.
+	# Capture/refinement may fail afterwards, but direct forwarding stays blocked.
+	guard_emergency_protect || return 1
 	guard_expected_captured=false
 	capture_guard_expected_interfaces || return 1
-	guard_emergency_protect || return 1
 
 	# Migration cleanup: remove stale pre-client-only iptables guard state even when nftables is active.
 	remove_iptables_legacy_output_guard_rules || {
@@ -1822,7 +1844,7 @@ remove_guard_rules() {
 
 refresh_guard_rules() {
     load_all_settings_once
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+    if guard_effective_enabled; then
         apply_guard_rules
     else
         remove_guard_rules
@@ -1830,12 +1852,15 @@ refresh_guard_rules() {
 }
 
 finalize_guard_rules() {
+	local controlled_off="${1:-false}"
 	load_all_settings_once
-	if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-		# Enabled finalization is deliberately verification-only: the forced
-		# Guard remains intact across procd registration and is never rebuilt.
-		verify_guard_rules || {
+	if guard_effective_enabled &&
+	   { [ "$controlled_off" != "true" ] || [ "$INTERNET_ONLY_MICLASH" = "true" ]; }; then
+		# Enabled finalization refines and verifies the forced Guard without
+		# removing its independent emergency barrier during procd registration.
+		apply_guard_rules && guard_verify_protected || {
 			msg "ERROR: Enabled client forwarding guard could not be proven"
+			guard_emergency_protect >/dev/null 2>&1 || true
 			return 1
 		}
 		msg "Client forwarding guard finalization verified enabled state"
@@ -1859,6 +1884,17 @@ finalize_guard_rules() {
 		return 1
 	fi
 	msg "ERROR: Guard removal failed; verified emergency Guard retained"
+	return 1
+}
+
+guard_controlled_disable() {
+	# Retain the durable latch through terminal physical removal. If this process
+	# dies, the next boot/finalize sees it and restores fail-closed protection.
+	if finalize_guard_rules true && guard_safety_latch_clear && guard_verify_off; then
+		return 0
+	fi
+	guard_safety_latch_set >/dev/null 2>&1 || true
+	guard_emergency_protect >/dev/null 2>&1 || true
 	return 1
 }
 
@@ -3573,7 +3609,7 @@ start() {
 
     if [ "$preserve_guard" = "true" ]; then
 		:
-    elif [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+    elif guard_effective_enabled; then
         apply_guard_rules || {
             msg "ERROR: Failed to apply client forwarding guard"
             return 1
@@ -3713,7 +3749,7 @@ stop() {
 
 	if [ "$preserve_guard" = "true" ]; then
 		:
-	elif [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+	elif guard_effective_enabled; then
         apply_guard_rules || warn "Failed to refresh client forwarding guard during stop"
     else
         remove_guard_rules
@@ -3770,15 +3806,19 @@ case "$1" in
         remove_guard_rules
         ;;
     guard_refresh)
-        load_all_settings_once
-        if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
-            apply_guard_rules
-        else
-            remove_guard_rules
-        fi
+		refresh_guard_rules
         ;;
 	guard_finalize)
 		finalize_guard_rules
+		;;
+	guard_disable)
+		guard_controlled_disable
+		;;
+	guard_latch_set)
+		guard_safety_latch_set
+		;;
+	guard_latch_clear)
+		guard_safety_latch_clear
 		;;
 	guard_verify_on)
 		guard_verify_on
@@ -3861,7 +3901,7 @@ case "$1" in
         exit $?
         ;;
     *)
-		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|guard_finalize|guard_verify_on|guard_verify_off|guard_verify_protected|package_guard_start|package_guard_verify|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
+		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|guard_finalize|guard_disable|guard_latch_set|guard_latch_clear|guard_verify_on|guard_verify_off|guard_verify_protected|package_guard_start|package_guard_verify|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
         exit 1
         ;;
 esac

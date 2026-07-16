@@ -147,7 +147,7 @@ let guard_process = { calls: guard_process_calls, run: (request) => {
 	let action = request.args[0], code = 1;
 	if (action == 'guard_start') { guard_actual = true; code = 0; }
 	else if (action == 'guard_verify_protected') code = guard_actual ? 0 : 1;
-	else if (action == 'guard_finalize') {
+	else if (action == 'guard_disable') {
 		if (!guard_canonical) { guard_actual = false; code = 0; }
 	}
 	else if (action == 'guard_verify_on') code = guard_canonical && guard_actual ? 0 : 1;
@@ -160,6 +160,10 @@ let guard_runtime = runtime.create({
 	clock: guard_clock, process: guard_process, uci: fakes.uci({}),
 	ubus: { connect: () => null }, http: { request: () => null }
 });
+assert_true(type(guard_runtime.guard_control.latch_set) == 'function' &&
+	type(guard_runtime.guard_control.latch_clear) == 'function' &&
+	type(guard_runtime.guard_control.is_latched) == 'function',
+	'production Guard adapter is missing the persistent safety latch');
 assert_equal(guard_runtime.guard_control.protect(), true,
 	'production Guard adapter did not establish exact protection before UCI ON');
 guard_canonical = true;

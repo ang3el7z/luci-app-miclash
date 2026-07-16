@@ -41,10 +41,11 @@ function ordered(source, names, message) {
 }
 
 const apply = body(rules, 'apply_guard_rules');
-ordered(apply, [ 'guard_emergency_protect || return 1',
+ordered(apply, [ 'guard_emergency_protect || return 1', 'guard_expected_captured=false',
+	'capture_guard_expected_interfaces',
 	'remove_iptables_legacy_output_guard_rules', 'apply_nft_guard_rules',
 	'verify_nft_guard_rules', 'guard_emergency_release' ],
-	'Guard rebuild must protect, mutate, prove, then release');
+	'Guard rebuild must independently protect before interface capture, mutate, prove, then release');
 check((apply.match(/guard_emergency_protect/g) || []).length >= 3,
 	'every rebuild failure class must freshly re-prove retained emergency protection');
 check(apply.includes('guard_emergency_release || {') &&
@@ -85,6 +86,27 @@ const finalize = body(rules, 'finalize_guard_rules');
 ordered(finalize, [ 'guard_emergency_protect ||', 'remove_guard_rules_strict',
 	'verify_guard_absent', 'guard_bootstrap_disable' ],
 	'explicit disable must prove protection and runtime absence before release');
+
+const effective = body(rules, 'guard_effective_enabled');
+check(effective.includes('INTERNET_ONLY_MICLASH') && effective.includes('guard_safety_latched'),
+	'effective Guard must be canonical UCI OR the backend-owned safety latch');
+for (const name of [ 'refresh_guard_rules', 'finalize_guard_rules', 'start', 'stop' ])
+	check(body(rules, name).includes('guard_effective_enabled'),
+		`${name} must honor the effective Guard safety latch`);
+check(body(rules, 'guard_verify_off').includes('guard_safety_latched') &&
+	body(rules, 'guard_verify_off').includes('return 1'),
+	'OFF proof must reject a still-armed safety latch');
+const controlledOff = body(rules, 'guard_controlled_disable');
+ordered(controlledOff, [ 'finalize_guard_rules true', 'guard_safety_latch_clear',
+	'guard_verify_off' ], 'controlled OFF must retain the latch until terminal physical removal succeeds');
+check(body(rules, 'finalize_guard_rules').includes('controlled_off') &&
+	body(rules, 'finalize_guard_rules').includes('guard_effective_enabled'),
+	'ordinary finalize must honor the latch while only controlled OFF may bypass it');
+check(controlledOff.includes('guard_safety_latch_set') &&
+	controlledOff.includes('guard_emergency_protect'),
+	'failed controlled OFF must re-arm the latch and freshly prove emergency protection');
+check(rules.includes('guard_disable)') && rules.includes('guard_controlled_disable'),
+	'production Guard adapter needs one locked controlled OFF entrypoint');
 
 const disable = ucBody(entry, 'disable_bootstrap');
 const mutateAt = disable.indexOf('mutate_terminal(runtime, lease, nft');

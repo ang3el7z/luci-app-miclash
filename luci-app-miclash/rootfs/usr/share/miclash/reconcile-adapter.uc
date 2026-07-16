@@ -10,11 +10,15 @@ export function create(app) {
 	if (type(app?.operations?.submit) != 'function' ||
 	    type(app?.service?.restart_service) != 'function' ||
 	    type(app?.service?.wait_ready) != 'function' ||
-	    type(app?.settings?.get) != 'function' || type(app?.clock?.now) != 'function')
+	    type(app?.settings?.get) != 'function' || type(app?.settings?.set) != 'function' ||
+	    type(app?.guard?.is_latched) != 'function' || type(app?.guard?.latch_set) != 'function' ||
+	    type(app?.guard?.protect) != 'function' ||
+	    type(app?.guard?.verify) != 'function' || type(app?.guard?.latch_clear) != 'function' ||
+	    type(app?.clock?.now) != 'function')
 		fail('INVALID_ARGUMENT');
 	if (app.events != null && type(app.events.emit) != 'function')
 		fail('INVALID_ARGUMENT');
-	let failure_sequence = 0, active_failure = null;
+	let failure_sequence = 0, active_failure = null, active_component = null;
 	function component(records, name) {
 		for (let record in records ?? [])
 			if (record?.component == name) return record;
@@ -47,8 +51,21 @@ export function create(app) {
 		run: (trigger) => {
 			trigger = reason(trigger);
 			return app.operations.submit('system.reconcile', 'system', { trigger }, (ctx) => {
-				let desired = app.settings.get(), ready = null;
+				let desired = app.settings.get(), ready = null, failure_component = 'mihomo';
 				try {
+					if (app.guard.is_latched()) {
+						failure_component = 'guard';
+						ctx.stage('guard-protect', 10, 'Maintaining fail-closed Guard protection');
+						if (app.guard.protect() !== true) fail('HEALTH_FAILED');
+						ctx.stage('guard-settings', 15, 'Repairing canonical Guard setting');
+						desired = app.settings.set({ guard: { enabled: true } });
+						if (desired?.guard?.enabled !== true || app.guard.verify(true) !== true)
+							fail('HEALTH_FAILED');
+						ctx.stage('guard-latch', 20, 'Releasing repaired Guard safety latch');
+						if (app.guard.latch_clear() !== true || app.guard.is_latched())
+							fail('HEALTH_FAILED');
+						failure_component = 'mihomo';
+					}
 					ctx.stage('restart', 25, 'Restarting Mihomo after configuration change');
 					app.service.restart_service('config.yaml');
 					ctx.stage('health', 70, 'Waiting for Mihomo and routing health');
@@ -59,12 +76,20 @@ export function create(app) {
 					if (ready?.ok !== true) fail('HEALTH_FAILED');
 				}
 				catch (error) {
+					if (failure_component == 'guard') {
+						// Latch and physical recovery are independent best-effort actions.
+						// A partial latch-clear failure must never become an unlatched error.
+						try { app.guard.latch_set(); } catch (latch_error) {}
+						try { app.guard.protect(); } catch (protect_error) {}
+					}
 					if (active_failure == null)
 						active_failure = sprintf('failure-%d-%d', ++failure_sequence,
 							app.clock.now());
-					let data = { failure_id: active_failure, component: 'mihomo', reason: trigger };
+					active_component = failure_component;
+					let data = { failure_id: active_failure, component: failure_component, reason: trigger };
 					emit('failure', data);
-					if (desired?.guard?.enabled === true) emit('fail_closed', data);
+					if (desired?.guard?.enabled === true || app.guard.is_latched())
+						emit('fail_closed', data);
 					fail(error?.code ?? error?.message ?? 'HEALTH_FAILED');
 				}
 				if (active_failure != null) {
@@ -75,8 +100,9 @@ export function create(app) {
 					// closes fail-closed; the ordinary recovery closes the base failure.
 					if (desired?.guard?.enabled === true)
 						emit('recovery', { failure_id: active_failure,
-							component: 'mihomo', reason: trigger });
+							component: active_component ?? 'mihomo', reason: trigger });
 					active_failure = null;
+					active_component = null;
 				}
 				ctx.stage('complete', 100, 'Reconciliation complete');
 				return { trigger, guard_preserved: desired?.guard?.enabled === true };

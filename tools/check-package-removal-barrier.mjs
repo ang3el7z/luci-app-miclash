@@ -163,6 +163,10 @@ for (const authority of [ '/var/run/miclash/routing-ownership.json',
 check(postrm.indexOf('rm -f /etc/miclash/guard-bootstrap.json') >
 	postrm.indexOf('valid_release_proof "$$BARRIER/complete"'),
 	'postrm must preserve Guard ownership state unless valid completion is proven');
+check(postrm.includes('/etc/miclash/guard-safety-latch') &&
+	postrm.indexOf('/etc/miclash/guard-safety-latch') >
+	postrm.indexOf('valid_release_proof "$$BARRIER/complete"'),
+	'postrm must remove the durable safety latch only after valid package completion proof');
 check(postrm.includes('RELEASE_DIR="/var/run/miclash/package-removal-release"') &&
 	postrm.includes('"$$RELEASE_DIR/helper" "$$RELEASE_DIR"') &&
 	postrm.includes('mv "$$RELEASE_DIR" "$$RELEASE_CLEANUP"') &&

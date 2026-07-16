@@ -133,10 +133,20 @@ export function compose(runtime, overrides) {
 			set: (patch) => modules.settings.save(runtime, patch)
 		};
 		let desired = settings_domain.get();
+		let reconcile_settings = {
+			get: settings_domain.get,
+			set: (patch) => {
+				let saved = settings_domain.set(patch);
+				desired = saved;
+				if (state_model != null) state_model.set_desired(saved);
+				return saved;
+			}
+		};
 		if (runtime.reconcile == null)
 			runtime.reconcile = modules.reconcile_adapter.create({
 				operations: operation_manager, service: service_adapter,
-				settings: settings_domain, clock: runtime.clock, events: runtime.events
+				settings: reconcile_settings, guard: runtime.guard_control,
+				clock: runtime.clock, events: runtime.events
 			});
 		let notification_settings = clone(desired.notifications);
 		let notifier = modules.notify.create(runtime, notification_config(notification_settings));
@@ -554,11 +564,27 @@ export function compose(runtime, overrides) {
 				errors.fail('HEALTH_FAILED');
 			return true;
 		};
+		function exact_latch_set() {
+			let control = runtime.guard_control;
+			if (type(control?.latch_set) != 'function' || control.latch_set() !== true ||
+			    type(control?.is_latched) != 'function' || control.is_latched() !== true)
+				errors.fail('HEALTH_FAILED');
+			return true;
+		};
+		function exact_latch_clear() {
+			let control = runtime.guard_control;
+			if (type(control?.latch_clear) != 'function' || control.latch_clear() !== true ||
+			    type(control?.is_latched) != 'function' || control.is_latched() !== false)
+				errors.fail('HEALTH_FAILED');
+			return true;
+		};
 		function guard_transition(enabled, source) {
 			if (type(enabled) != 'bool') errors.fail('INVALID_ARGUMENT');
 			return operation_manager.submit('guard.transition', source, { enabled }, (ctx) => {
 				let failure = 'HEALTH_FAILED', protected = false, persisted = false;
 				try {
+					ctx.stage('latch', 5, 'Arming durable fail-closed Guard latch');
+					exact_latch_set();
 					ctx.stage('protect', 10, 'Establishing fail-closed Guard');
 					exact_protection(); protected = true;
 					ctx.stage('settings', 35, 'Applying canonical Guard setting');
@@ -568,34 +594,29 @@ export function compose(runtime, overrides) {
 						if (type(runtime.guard_control?.disable) != 'function' ||
 						    runtime.guard_control.disable() !== true)
 							errors.fail('HEALTH_FAILED');
+						if (runtime.guard_control.is_latched() !== false)
+							errors.fail('HEALTH_FAILED');
 						protected = false;
 					}
 					ctx.stage('verify', 90, 'Verifying applied Guard state');
 					exact_guard(enabled);
+					if (enabled) exact_latch_clear();
 					ctx.stage('ready', 100, 'Guard transition complete');
 					return { enabled, guard_preserved: enabled };
 				}
 				catch (error) {
 					failure = errors.normalize(error).code;
-					if (enabled) {
-						// Preserve canonical repair intent even when protection could not be
-						// established; any successful protection remains installed.
-						if (!persisted) try { persist_guard(true); } catch (intent_error) {}
-						if (protected) try { exact_protection(); } catch (protect_error) { protected = false; }
-					}
-					else {
-						// OFF is never allowed to fail open. Restore canonical ON first,
-						// reinstall exact protection, then prove both before returning failure.
-						try { persist_guard(true); }
-						catch (rollback_error) { failure = 'INTERNAL'; }
-						// Physical fail-closed recovery is independent from UCI recovery:
-						// a broken config store must never skip emergency protection.
-						try { exact_protection(); protected = true; }
-						catch (protect_error) { protected = false; failure = 'INTERNAL'; }
-						if (protected)
-							try { exact_guard(true); }
-							catch (verify_error) { failure = 'INTERNAL'; }
-					}
+					// Every failed transition is durable fail-closed. Latch persistence,
+					// physical emergency recovery and UCI repair are independent so one
+					// broken backend cannot skip the others.
+					try { exact_latch_set(); } catch (latch_error) { failure = 'INTERNAL'; }
+					try { exact_protection(); protected = true; }
+					catch (protect_error) { protected = false; failure = 'INTERNAL'; }
+					try { persist_guard(true); persisted = true; }
+					catch (intent_error) { failure = 'INTERNAL'; }
+					if (protected && persisted)
+						try { exact_guard(true); }
+						catch (verify_error) { failure = 'INTERNAL'; }
 					guard_failure(protected, enabled ? 'enable-transition' : 'disable-transition');
 					errors.fail(failure);
 				}
