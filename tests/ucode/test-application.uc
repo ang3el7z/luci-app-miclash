@@ -46,7 +46,10 @@ let config = {
 		operations.submit('config.apply', source, { profile }, () => null)
 };
 let history = {
-	list: (profile, limit) => [ { revision: 'rev-1', profile, limit } ],
+	list: (profile, limit) => [
+		{ revision: 'rev-1', profile }, { revision: 'rev-2', profile },
+		{ revision: 'rev-3', profile }, { revision: 'rev-4', profile }
+	],
 	diff: (profile, from_revision, to_revision) => ({ profile, from_revision, to_revision }),
 	open_draft: (profile, revision, source) =>
 		operations.submit('history.open_draft', source, { profile, revision }, () => null),
@@ -69,7 +72,10 @@ assert_equal(app.operation_list({})[0].id, 'listed');
 assert_equal(app.config_list()[0], 'config.yaml');
 assert_equal(app.config_read('config.yaml'), 'exact-active\n');
 assert_equal(app.config_read_draft('config.yaml'), 'exact-draft\n');
-assert_equal(app.history_list({ profile: 'config.yaml', limit: 5 })[0].limit, 5);
+let limited_history = app.history_list({ profile: 'config.yaml', limit: 2 });
+assert_equal(length(limited_history), 2);
+assert_equal(limited_history[0].revision, 'rev-4');
+assert_equal(limited_history[1].revision, 'rev-3');
 assert_equal(app.history_diff({ profile: 'config.yaml', from_revision: 'a', to_revision: 'b' }).to_revision, 'b');
 assert_equal(app.settings_get().core.proxy_mode, 'tproxy');
 

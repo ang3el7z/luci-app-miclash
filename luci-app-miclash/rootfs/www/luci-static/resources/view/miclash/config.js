@@ -46,10 +46,13 @@ let draftActions = null;
 let historyPanel = null;
 let editorChangeCleanup = null;
 let pageHideHandler = null;
+let visibilityChangeHandler = null;
+let subscriptionUpdateBusy = false;
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
 });
+const configDraftLifecycle = view_miclash_editor.createLifecycleOwner();
 
 view_miclash_utils.bumpRpcTimeout();
 
@@ -1526,14 +1529,18 @@ async function loadDraftProfile(profile) {
 	if (loaded.conflict) {
 		showModal({
 			title: _('Unsaved local Draft found'),
-			body: _('A browser crash copy differs from the router Draft. Choose which content to open; neither copy will be deleted.'),
+			body: _('A browser crash copy differs from the router Draft. Choose the local copy to keep it, or keep the router Draft and discard the local crash copy.'),
 			buttons: [
 				{ label: _('Open local copy'), className: 'cbi-button cbi-button-apply',
 					onClick: async function(ctx) {
 						setDraftEditorContent(draftController.useCrashCopy(loaded.crash));
 						ctx.closeModal();
 					} },
-				{ label: _('Keep router Draft'), className: 'cbi-button cbi-button-neutral' }
+				{ label: _('Keep router Draft'), className: 'cbi-button cbi-button-neutral',
+					onClick: async function(ctx) {
+						draftController.keepRouterCopy();
+						ctx.closeModal();
+					} }
 			]
 		});
 	}
@@ -1546,11 +1553,34 @@ async function saveRouterDraft() {
 }
 
 async function validateDraft() {
+	if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 	return draftActions.validate();
 }
 
 async function applyDraft() {
+	if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 	return draftActions.apply();
+}
+
+function releaseConfigDraftRuntime() {
+	subscriptionUpdateBusy = false;
+	if (pageHideHandler) window.removeEventListener('pagehide', pageHideHandler);
+	pageHideHandler = null;
+	if (visibilityChangeHandler) document.removeEventListener('visibilitychange', visibilityChangeHandler);
+	visibilityChangeHandler = null;
+	if (editorChangeCleanup) editorChangeCleanup();
+	editorChangeCleanup = null;
+	if (historyPanel) historyPanel.destroy();
+	historyPanel = null;
+	if (draftController) draftController.destroy();
+	draftController = null; draftActions = null;
+	if (editor) { try { editor.destroy(); } catch (error) {} editor = null; }
+	if (configApi) configApi.destroy();
+	configApi = null;
+}
+
+function destroyConfigDraftRuntime() {
+	configDraftLifecycle.destroy();
 }
 
 function resizeConfigEditor() {
@@ -2747,9 +2777,10 @@ function bindControlAndHeaderEvents() {
 }
 
 async function switchConfigProfile(profileName) {
-	if (draftActions?.isBusy()) throw new Error(_('An operation is already running.'));
+	if (draftActions?.isBusy() || subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 	const selected = normalizeConfigProfileName(profileName);
 	if (draftController && selected !== appState.selectedConfigName) await saveRouterDraft();
+	if (historyPanel && selected !== appState.selectedConfigName) historyPanel.invalidate(selected);
 	const url = await readSubscriptionUrl(selected);
 	let content = '';
 	if (configApi && draftController) {
@@ -2885,8 +2916,9 @@ function bindConfigEvents() {
 			const url = String(subInput?.value || '').trim();
 			if (!url) throw new Error(_('Subscription URL is empty.'));
 			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
-
-			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
+			if (subscriptionUpdateBusy || draftActions?.isBusy()) throw new Error(_('An operation is already running.'));
+			subscriptionUpdateBusy = true;
+			return draftActions.runExternal(async ({ profile: selectedConfig }) => {
 			setOperationStatus('running', _('Saving subscription URL...'));
 			await saveSubscriptionUrl(url, selectedConfig);
 			appState.subscriptionUrl = url;
@@ -2910,10 +2942,7 @@ function bindConfigEvents() {
 
 			const freshConfig = await readConfigFileByName(selectedConfig);
 			appState.configContent = String(freshConfig || '');
-			if (editor) {
-				editor.setValue(appState.configContent, -1);
-				editor.clearSelection();
-			}
+			notify('info', _('Active configuration changed; Draft preserved.'));
 
 			let serviceReloaded = false;
 			if (selectedConfig === MAIN_CONFIG_NAME) {
@@ -2936,11 +2965,13 @@ function bindConfigEvents() {
 				setOperationSuccess(_('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
 				notify('info', _('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
 			}
+			});
 		}).catch((e) => {
 			setOperationError(e);
 			logUiAction('err', 'Failed to apply subscription: ' + e.message);
 			notify('error', _('Failed to apply subscription: %s').format(e.message));
 		}).finally(async () => {
+			subscriptionUpdateBusy = false;
 			await view_miclash_subscription.cleanupTemp();
 		}));
 	}
@@ -2999,6 +3030,7 @@ function bindConfigEvents() {
 	const historyBtn = pageRoot.querySelector('#sbox-history');
 	if (historyBtn) {
 		historyBtn.addEventListener('click', () => withButtons(historyBtn, async () => {
+			if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 			await saveRouterDraft();
 			await historyPanel.open(appState.selectedConfigName);
 		}).catch((error) => notify('error', _('Failed to open history: %s').format(error.message))));
@@ -3098,6 +3130,7 @@ return view.extend({
 	},
 
 	render: async function(data) {
+		destroyConfigDraftRuntime();
 		await ensureConfigProfilesReady(data[0] || '');
 		appState.configProfiles = CONFIG_PROFILES.slice();
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
@@ -3124,9 +3157,7 @@ return view.extend({
 		]);
 
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
-		if (historyPanel) historyPanel.destroy();
-		if (draftController) draftController.destroy();
-		if (configApi) configApi.destroy();
+		configDraftLifecycle.replace({ destroy: releaseConfigDraftRuntime });
 		configApi = view_miclash_api.create();
 		draftController = view_miclash_editor.createDraftController({
 			profile: appState.selectedConfigName,
@@ -3137,6 +3168,11 @@ return view.extend({
 			controller: draftController,
 			getProfile: () => appState.selectedConfigName,
 			getContent: () => editor ? editor.getValue() : draftController.getContent(),
+			onProgress: (update) => {
+				const labels = { save_draft: _('Saving Draft'), validate: _('Validating Draft'), apply: _('Applying Draft') };
+				setOperationStatus('running', '%s — %s (%d%%)'.format(
+					labels[update.phase] || update.phase, update.stage || '', update.percent));
+			},
 			onApplied: async (active) => {
 				appState.configContent = String(active?.content || '');
 			}
@@ -3144,8 +3180,16 @@ return view.extend({
 		historyPanel = view_miclash_history_panel.create({
 			api: configApi,
 			profile: appState.selectedConfigName,
-			onDraft: async (content) => setDraftEditorContent(content),
-			onRestored: async () => loadDraftProfile(appState.selectedConfigName)
+			onDraft: async (content, record, token) => {
+				if (token.profile !== appState.selectedConfigName ||
+					token.profile !== draftController?.getProfile()) return;
+				setDraftEditorContent(content);
+			},
+			onRestored: async (record, token) => {
+				if (token.profile !== appState.selectedConfigName ||
+					token.profile !== draftController?.getProfile()) return;
+				await loadDraftProfile(token.profile);
+			}
 		});
 
 		try {
@@ -3175,7 +3219,7 @@ return view.extend({
 		};
 		window.addEventListener('pagehide', pageHideHandler);
 
-		document.addEventListener('visibilitychange', () => {
+		visibilityChangeHandler = () => {
 			if (document.hidden) {
 				stopLogPolling();
 			} else if (appState.activeCfgTab === 'logs') {
@@ -3185,23 +3229,14 @@ return view.extend({
 			if (!document.hidden) {
 				refreshReleaseMeta({ force: false }).catch(() => {});
 			}
-		});
+		};
+		document.addEventListener('visibilitychange', visibilityChangeHandler);
 
 		return pageRoot;
 	},
 
 	unload: function() {
 		diagnosticsOwner.destroy();
-		if (pageHideHandler) window.removeEventListener('pagehide', pageHideHandler);
-		pageHideHandler = null;
-		if (editorChangeCleanup) editorChangeCleanup();
-		editorChangeCleanup = null;
-		if (draftController) draftController.destroy();
-		draftController = null;
-		draftActions = null;
-		if (historyPanel) historyPanel.destroy();
-		historyPanel = null;
-		if (configApi) configApi.destroy();
-		configApi = null;
+		destroyConfigDraftRuntime();
 	}
 });

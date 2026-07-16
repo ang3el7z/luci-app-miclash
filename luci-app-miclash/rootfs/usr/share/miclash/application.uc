@@ -81,7 +81,13 @@ export function create(dependencies) {
 			writable();
 			return dependencies.config.apply(profile, content, source);
 		},
-		history_list: (arguments) => dependencies.history.list(arguments.profile, arguments.limit),
+		history_list: (arguments) => {
+			let records = dependencies.history.list(arguments.profile), output = [];
+			for (let index = length(records) - 1;
+			     index >= 0 && length(output) < arguments.limit; index--)
+				push(output, records[index]);
+			return output;
+		},
 		history_diff: (arguments) => dependencies.history.diff(arguments.profile,
 			arguments.from_revision, arguments.to_revision),
 		history_open_draft: (arguments) => {

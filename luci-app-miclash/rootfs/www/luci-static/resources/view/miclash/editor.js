@@ -152,9 +152,10 @@ function createDraftController(options) {
 	let profile = String(opts.profile || 'config.yaml');
 	let revision = String(opts.revision || '');
 	let content = String(opts.content || '');
-	let routerHash = String(opts.routerHash || contentHash(content));
+	let routerContent = String(opts.routerContent ?? content);
 	let timer = null;
 	let destroyed = false;
+	let pendingConflict = null;
 
 	function key(name) { return CRASH_PREFIX + encodeURIComponent(String(name || 'config.yaml')); }
 	function safeStorage(callback, fallback) {
@@ -175,7 +176,8 @@ function createDraftController(options) {
 			safeStorage(() => storage.removeItem(entry.name));
 	}
 	function flushLocal() {
-		if (destroyed || content.length > MAX_CRASH_CONTENT) return false;
+		if (timer != null) { timerClear(timer); timer = null; }
+		if (destroyed || pendingConflict || content.length > MAX_CRASH_CONTENT) return false;
 		const record = { version: 1, profile, revision, content,
 			hash: contentHash(content), savedAt: Date.now() };
 		return safeStorage(() => {
@@ -185,6 +187,7 @@ function createDraftController(options) {
 		}, false);
 	}
 	function scheduleLocal() {
+		if (pendingConflict) return;
 		if (timer != null) timerClear(timer);
 		timer = timerSet(() => { timer = null; flushLocal(); }, debounceMs);
 	}
@@ -195,11 +198,12 @@ function createDraftController(options) {
 	}
 	function crashCopy(name) {
 		return safeStorage(() => {
-			const parsed = JSON.parse(storage.getItem(key(name)) || 'null');
+			const raw = storage.getItem(key(name));
+			const parsed = JSON.parse(raw || 'null');
 			if (!parsed || parsed.version !== 1 || parsed.profile !== name ||
 				typeof parsed.content !== 'string' || parsed.content.length > MAX_CRASH_CONTENT ||
 				parsed.hash !== contentHash(parsed.content)) return null;
-			return parsed;
+			return { record: parsed, raw };
 		}, null);
 	}
 	async function load(name, activeReply, draftReply) {
@@ -208,43 +212,55 @@ function createDraftController(options) {
 		const draft = draftReply?.content == null ? active : String(draftReply.content);
 		revision = String(draftReply?.revision || activeReply?.revision || '');
 		content = draft;
-		routerHash = contentHash(draft);
+		routerContent = draft;
 		const crash = crashCopy(profile);
+		pendingConflict = crash && crash.record.content !== draft ?
+			{ profile, key: key(profile), raw: crash.raw, record: crash.record } : null;
 		return { profile, active, draft, revision, content: draft,
-			crash: crash && crash.hash !== routerHash ? crash : null,
-			conflict: !!(crash && crash.hash !== routerHash) };
+			crash: pendingConflict?.record || null, conflict: pendingConflict != null };
 	}
 	async function saveRouter(api, nextContent) {
 		if (nextContent != null) content = String(nextContent);
 		flushLocal();
 		const nextHash = contentHash(content);
-		if (nextHash === routerHash) return { changed: false, hash: nextHash };
+		if (content === routerContent) return { changed: false, hash: nextHash };
 		const savedProfile = profile;
 		const reply = await api.configSaveDraft(savedProfile, content, 'luci');
-		return { changed: true, hash: nextHash, profile: savedProfile,
+		return { changed: true, hash: nextHash, content, profile: savedProfile,
 			operation_id: reply.operation_id };
 	}
 	function confirmRouterSaved(saved) {
-		if (saved?.changed === true && saved.profile === profile && saved.hash === contentHash(content)) {
-			routerHash = saved.hash;
+		if (saved?.changed === true && saved.profile === profile && saved.content === content) {
+			routerContent = saved.content;
 			return true;
 		}
 		return false;
 	}
 	function useCrashCopy(record) {
-		if (!record || record.profile !== profile || record.hash !== contentHash(record.content))
+		if (!pendingConflict || record !== pendingConflict.record || record.profile !== profile ||
+			record.hash !== contentHash(record.content))
 			throw new Error('Invalid local Draft copy');
 		content = record.content;
+		pendingConflict = null;
 		scheduleLocal();
 		return content;
+	}
+	function keepRouterCopy() {
+		if (!pendingConflict || pendingConflict.profile !== profile) return false;
+		const conflict = pendingConflict;
+		pendingConflict = null;
+		safeStorage(() => storage.removeItem(conflict.key));
+		scheduleLocal();
+		return true;
 	}
 	function destroy() {
 		if (destroyed) return;
 		if (timer != null) { timerClear(timer); timer = null; }
-		flushLocal();
+		if (!pendingConflict) flushLocal();
 		destroyed = true;
 	}
-	return { hash: contentHash, setContent, flushLocal, load, saveRouter, confirmRouterSaved, useCrashCopy,
+	return { hash: contentHash, setContent, flushLocal, load, saveRouter, confirmRouterSaved,
+		useCrashCopy, keepRouterCopy, hasPendingConflict: () => pendingConflict != null,
 		getContent: () => content, getProfile: () => profile, destroy };
 }
 
@@ -253,36 +269,49 @@ function createDraftActions(options) {
 	const api = opts.api;
 	const controller = opts.controller;
 	let busy = false;
-	function wait(operationId) {
+	function progress(phase, percent, stage) {
+		if (typeof opts.onProgress !== 'function') return;
+		opts.onProgress({ phase: String(phase || '').slice(0, 24),
+			percent: Math.max(0, Math.min(100, Math.round(Number(percent) || 0))),
+			stage: String(stage || '').slice(0, 80) });
+	}
+	function wait(operationId, phase, start, end) {
 		return new Promise((resolve, reject) => {
-			let cancel = null;
+			let cancel = null, pendingCancel = false, settled = false;
+			const finish = () => { if (cancel) cancel(); else pendingCancel = true; };
 			cancel = api.watchOperation(operationId, (operation, error) => {
-				if (error) { if (cancel) cancel(); reject(error); return; }
+				if (settled) return;
+				if (error) { settled = true; finish(); reject(error); return; }
+				const measured = Math.max(0, Math.min(100,
+					Number(operation?.percent ?? operation?.progress ?? 0) || 0));
+				progress(phase, start + ((end - start) * measured / 100), operation?.stage || phase);
 				if (!operation || !/^(success|failure|interrupted)$/.test(operation.state || '')) return;
-				if (cancel) cancel();
-				if (operation.state === 'success') resolve(operation);
+				settled = true; finish();
+				if (operation.state === 'success') { progress(phase, end, 'complete'); resolve(operation); }
 				else {
 					const failure = new Error(operation.error?.message || 'Operation failed');
 					failure.code = operation.error?.code || 'OPERATION_FAILED';
 					reject(failure);
 				}
 			});
+			if (pendingCancel && cancel) cancel();
 		});
 	}
 	async function saveSnapshot(profile, content) {
+		progress('save_draft', 0, 'save_draft');
 		if (controller.getProfile() !== profile) throw new Error('Draft profile changed');
 		controller.setContent(content);
 		const saved = await controller.saveRouter(api, content);
 		if (saved.changed) {
-			await wait(saved.operation_id);
+			await wait(saved.operation_id, 'save_draft', 0, 30);
 			controller.confirmRouterSaved(saved);
-		}
+		} else progress('save_draft', 30, 'unchanged');
 		return saved;
 	}
 	async function validateSnapshot(profile, content) {
 		await saveSnapshot(profile, content);
 		const accepted = await api.config_validate(profile, content, 'luci');
-		await wait(accepted.operation_id);
+		await wait(accepted.operation_id, 'validate', 30, 100);
 		return { content };
 	}
 	async function exclusive(callback) {
@@ -301,21 +330,43 @@ function createDraftActions(options) {
 	async function apply() {
 		const profile = String(opts.getProfile()), content = String(opts.getContent());
 		return exclusive(async () => {
-			const validated = await validateSnapshot(profile, content);
-			const accepted = await api.config_apply(profile, validated.content, 'luci');
-			await wait(accepted.operation_id);
+			await saveSnapshot(profile, content);
+			const accepted = await api.config_apply(profile, content, 'luci');
+			await wait(accepted.operation_id, 'apply', 30, 100);
 			const active = await api.config_read(profile);
 			if (typeof opts.onApplied === 'function' && String(opts.getProfile()) === profile)
 				await opts.onApplied(active);
 			return active;
 		});
 	}
-	return { save, validate, apply, waitOperation: wait, isBusy: () => busy };
+	async function runExternal(callback) {
+		const profile = String(opts.getProfile()), content = String(opts.getContent());
+		return exclusive(async () => {
+			await saveSnapshot(profile, content);
+			return callback({ profile, content });
+		});
+	}
+	return { save, validate, apply, runExternal, waitOperation: wait, isBusy: () => busy };
+}
+
+function createLifecycleOwner() {
+	let current = null;
+	function destroy() {
+		if (!current) return false;
+		const owned = current; current = null;
+		if (typeof owned.destroy === 'function') owned.destroy();
+		return true;
+	}
+	function replace(next) {
+		destroy(); current = next || null; return current;
+	}
+	return { replace, destroy, get: () => current };
 }
 
 return L.Class.extend({
 	createEditor: createEditor,
 	createDraftController: createDraftController,
 	createDraftActions: createDraftActions,
+	createLifecycleOwner: createLifecycleOwner,
 	contentHash: contentHash
 });

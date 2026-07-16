@@ -1598,3 +1598,48 @@ msgstr "无法打开历史：%s"
 
 msgid "An operation is already running."
 msgstr "已有操作正在运行。"
+
+msgid "A browser crash copy differs from the router Draft. Choose the local copy to keep it, or keep the router Draft and discard the local crash copy."
+msgstr "浏览器崩溃副本与路由器草稿不同。选择本地副本以保留它，或保留路由器草稿并丢弃本地崩溃副本。"
+
+msgid "Active configuration changed; Draft preserved."
+msgstr "活动配置已更改；草稿已保留。"
+
+msgid "Saving Draft"
+msgstr "正在保存草稿"
+
+msgid "Validating Draft"
+msgstr "正在验证草稿"
+
+msgid "Applying Draft"
+msgstr "正在应用草稿"
+
+msgid "Automatic"
+msgstr "自动"
+
+msgid "LuCI"
+msgstr "LuCI"
+
+msgid "System"
+msgstr "系统"
+
+msgid "Corrupt revision"
+msgstr "损坏的版本"
+
+msgid "Unknown source"
+msgstr "未知来源"
+
+msgid "Operation cancelled"
+msgstr "操作已取消"
+
+msgid "Selected revision is the newest retained revision."
+msgstr "所选版本是最新保留版本。"
+
+msgid "Compared with newest retained revision:"
+msgstr "与最新保留版本比较："
+
+msgid "No differences between the selected retained revisions."
+msgstr "所选保留版本之间没有差异。"
+
+msgid "This revision is corrupt and cannot be opened or restored."
+msgstr "此版本已损坏，无法打开或恢复。"

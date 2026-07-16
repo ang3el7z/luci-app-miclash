@@ -1651,3 +1651,48 @@ msgstr "Не удалось открыть историю: %s"
 
 msgid "An operation is already running."
 msgstr "Операция уже выполняется."
+
+msgid "A browser crash copy differs from the router Draft. Choose the local copy to keep it, or keep the router Draft and discard the local crash copy."
+msgstr "Аварийная копия браузера отличается от черновика на роутере. Выберите локальную копию, чтобы сохранить её, либо оставьте черновик роутера и удалите локальную аварийную копию."
+
+msgid "Active configuration changed; Draft preserved."
+msgstr "Активная конфигурация изменилась; черновик сохранён."
+
+msgid "Saving Draft"
+msgstr "Сохранение черновика"
+
+msgid "Validating Draft"
+msgstr "Проверка черновика"
+
+msgid "Applying Draft"
+msgstr "Применение черновика"
+
+msgid "Automatic"
+msgstr "Автоматически"
+
+msgid "LuCI"
+msgstr "LuCI"
+
+msgid "System"
+msgstr "Система"
+
+msgid "Corrupt revision"
+msgstr "Повреждённая версия"
+
+msgid "Unknown source"
+msgstr "Неизвестный источник"
+
+msgid "Operation cancelled"
+msgstr "Операция отменена"
+
+msgid "Selected revision is the newest retained revision."
+msgstr "Выбранная версия является новейшей сохранённой версией."
+
+msgid "Compared with newest retained revision:"
+msgstr "Сравнение с новейшей сохранённой версией:"
+
+msgid "No differences between the selected retained revisions."
+msgstr "Между выбранными сохранёнными версиями нет различий."
+
+msgid "This revision is corrupt and cannot be opened or restored."
+msgstr "Эта версия повреждена, её нельзя открыть или восстановить."

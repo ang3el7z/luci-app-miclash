@@ -24,6 +24,11 @@ for (const token of ['Draft', 'Validate', 'Apply', 'History'])
 assert.match(editor, /config_validate/);
 assert.match(editor, /config_apply/);
 assert.match(config, /draftActions\.save\(editor\.getValue\(\)\)/);
+assert.match(config, /destroyConfigDraftRuntime/);
+assert.match(config, /Active configuration changed; Draft preserved\./);
+const subscriptionBlock = config.slice(config.indexOf("const updateUrlBtn ="), config.indexOf("const clearUrlBtn ="));
+assert.doesNotMatch(subscriptionBlock, /freshConfig[\s\S]{0,300}editor\.setValue/,
+	'subscription success must not silently replace Draft editor content');
 assert.match(editor, /localStorage/);
 assert.match(editor, /draft/i);
 assert.match(css, /sbox-history-layout/);
@@ -67,8 +72,9 @@ const ui = { showModal(title, body) { modalCalls.push({ title, body }); }, hideM
 const historyModule = new Function('ui', 'E', '_', panel)(ui, E, _);
 const calls = [];
 const revisions = [
-	{ revision: 'newest', timestamp: 2, source: 'manual', validation_result: 'success', activation_result: 'success' },
-	{ revision: 'older', timestamp: 1, source: '<img src=x onerror=alert(1)>', validation_result: 'success' }
+	{ revision: '0000000000001-aaaaaaaaaaaaaaaa', timestamp: 1, source: '<img src=x onerror=alert(1)>', validation_result: 'success' },
+	{ revision: '0000000000002-bbbbbbbbbbbbbbbb', timestamp: 2, source: 'manual', validation_result: 'success', activation_result: 'success' },
+	{ revision: 'corrupt', timestamp: 3, source: 'system', corrupt: true }
 ];
 const api = {
 	async historyList(...args) { calls.push(['historyList', ...args]); return revisions; },
@@ -85,25 +91,90 @@ const modalBody = await history.open('config.yaml');
 assert.equal(modalCalls[0].title, 'Configuration history');
 assert.equal(calls[0][0], 'historyList');
 const items = modalBody.querySelectorAll('.sbox-history-item');
-assert.equal(items.length, 2);
-assert.match(modalBody.textContent, /<img src=x onerror=alert\(1\)>/);
+assert.equal(items.length, 3);
+assert.equal(items[0].getAttribute('data-revision'), '0000000000002-bbbbbbbbbbbbbbbb',
+	'ascending domain history was not normalized newest-first');
+assert.match(modalBody.textContent, /Unknown source/);
 assert.equal(modalBody.querySelector('img'), null, 'malicious history metadata created an element');
 items[1].click(); await new Promise((resolve) => setImmediate(resolve));
 assert.deepEqual(calls.find((call) => call[0] === 'historyDiff'),
-	['historyDiff', 'config.yaml', 'older', 'newest']);
+	['historyDiff', 'config.yaml', '0000000000001-aaaaaaaaaaaaaaaa', '0000000000002-bbbbbbbbbbbbbbbb']);
 assert.equal(modalBody.querySelector('img'), null, 'malicious diff created an element');
 modalBody.querySelector('[data-action="open-draft"]').click();
 await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve));
 assert.deepEqual(calls.find((call) => call[0] === 'historyOpenDraft'),
-	['historyOpenDraft', 'config.yaml', 'older', 'luci']);
+	['historyOpenDraft', 'config.yaml', '0000000000001-aaaaaaaaaaaaaaaa', 'luci']);
 assert.equal(openedDraft, 'opened Draft\n', 'open revision must update Draft callback only');
 modalBody.querySelector('[data-action="restore"]').click();
 await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve));
 assert.deepEqual(calls.find((call) => call[0] === 'historyRestore'),
-	['historyRestore', 'config.yaml', 'older', 'luci']);
+	['historyRestore', 'config.yaml', '0000000000001-aaaaaaaaaaaaaaaa', 'luci']);
 assert.equal(restores, 1, 'manual restore did not refresh Active owner');
 assert.equal(calls.filter((call) => call[0] === 'historyRestore').length, 1,
 	'restore must use the existing modal action without a second token/confirmation call');
+const currentItems = modalBody.querySelectorAll('.sbox-history-item');
+currentItems.at(-1).click(); await new Promise((resolve) => setImmediate(resolve));
+assert.match(modalBody.textContent, /Corrupt revision/);
+assert.equal(modalBody.querySelector('[data-action="open-draft"]'), null,
+	'corrupt revision exposed Open Draft action');
+assert.equal(modalBody.querySelector('[data-action="restore"]'), null,
+	'corrupt revision exposed Restore action');
+
+let releaseOldOpen, lateDrafts = 0, raceRestoreCalls = 0;
+const raceApi = {
+	async historyList() { return [revisions[1]]; },
+	async historyDiff() { return { text: '' }; },
+	historyOpenDraft() { return new Promise((resolve) => { releaseOldOpen = resolve; }); },
+	async historyRestore() { raceRestoreCalls++; return { operation_id: 'race-restore' }; },
+	async configReadDraft() { return { content: 'A late Draft\n' }; },
+	watchOperation(id, callback) { callback({ id, state: 'success' }); return () => {}; }
+};
+const raceHistory = historyModule.create({ api: raceApi, profile: 'config.yaml', onDraft() { lateDrafts++; } });
+const raceBody = await raceHistory.open('config.yaml');
+raceBody.querySelector('[data-action="open-draft"]').click();
+raceBody.querySelector('[data-action="restore"]').click();
+assert.equal(raceRestoreCalls, 0, 'history mutations were not mutually exclusive');
+raceHistory.invalidate('config2.yaml');
+releaseOldOpen({ operation_id: 'old-open' });
+await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve));
+assert.equal(lateDrafts, 0, 'late Open Draft reply mutated a different profile/editor generation');
+raceHistory.destroy();
+let pendingCallback = null, pendingCancelled = 0, pendingRestored = 0;
+const pendingApi = {
+	async historyList() { return [revisions[1]]; }, async historyDiff() { return { text: '' }; },
+	async historyOpenDraft() { return { operation_id: 'pending-open' }; },
+	async historyRestore() { return { operation_id: 'pending-restore' }; },
+	async configReadDraft() { return { content: 'too late\n' }; },
+	watchOperation(id, callback) { pendingCallback = callback; return () => { pendingCancelled++; }; }
+};
+const pendingHistory = historyModule.create({ api: pendingApi, onDraft() { pendingRestored++; } });
+const pendingBody = await pendingHistory.open('config.yaml');
+pendingBody.querySelector('[data-action="open-draft"]').click();
+await new Promise((resolve) => setImmediate(resolve));
+pendingHistory.destroy();
+assert.equal(pendingCancelled, 1, 'destroy did not cancel the owned history operation watcher');
+pendingCallback({ id: 'pending-open', state: 'success' });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pendingRestored, 0, 'late watcher completion mutated destroyed history/editor state');
+let failedRestoreCallbacks = 0, preservedDraftMarker = 'exact Draft before restore';
+const restoreFailureApi = {
+	async historyList() { return [revisions[1]]; }, async historyDiff() { return { text: '' }; },
+	async historyOpenDraft() { return { operation_id: 'unused' }; },
+	async historyRestore() { return { operation_id: 'restore-failure' }; },
+	async configReadDraft() { return { content: preservedDraftMarker }; },
+	watchOperation(id, callback) {
+		callback({ id, state: 'failure', error: { code: 'HEALTH_FAILED', message: 'restore failed' } });
+		return () => {};
+	}
+};
+const restoreFailure = historyModule.create({ api: restoreFailureApi,
+	onRestored() { failedRestoreCallbacks++; preservedDraftMarker = 'changed'; } });
+const restoreFailureBody = await restoreFailure.open('config.yaml');
+restoreFailureBody.querySelector('[data-action="restore"]').click();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(failedRestoreCallbacks, 0, 'failed restore invoked Active/Draft refresh callback');
+assert.equal(preservedDraftMarker, 'exact Draft before restore', 'failed restore changed Draft content');
+restoreFailure.destroy();
 
 const storageData = new Map();
 const storage = { get length() { return storageData.size; }, key(index) { return [...storageData.keys()][index] || null; },
@@ -111,6 +182,13 @@ const storage = { get length() { return storageData.size; }, key(index) { return
 const windowMock = { localStorage: storage, setTimeout, clearTimeout };
 const L = { Class: { extend(value) { return value; } }, resource(value) { return value; } };
 const editorModule = new Function('L', 'E', 'window', 'document', editor)(L, E, windowMock, { head: new MiniNode('head') });
+const lifecycle = editorModule.createLifecycleOwner();
+let lifecycleDestroys = 0;
+lifecycle.replace({ destroy() { lifecycleDestroys++; } });
+lifecycle.replace({ destroy() { lifecycleDestroys++; } });
+assert.equal(lifecycleDestroys, 1, 'rerender did not destroy the prior Draft runtime exactly once');
+lifecycle.destroy(); lifecycle.destroy();
+assert.equal(lifecycleDestroys, 2, 'unload lifecycle was not idempotent');
 const draft = editorModule.createDraftController({ storage, profile: 'config.yaml', content: 'router\n', debounceMs: 250 });
 let saves = 0;
 const draftApi = { async configSaveDraft(profile, content, source) { saves++; calls.push(['configSaveDraft', profile, content, source]); return { operation_id: 'save-1' }; } };
@@ -124,12 +202,34 @@ assert.equal((await draft.saveRouter(draftApi, 'changed\n')).changed, true,
 assert.equal(saves, 2);
 assert.equal(draft.confirmRouterSaved(acceptedDraft), true);
 assert.equal((await draft.saveRouter(draftApi, 'changed\n')).changed, false);
+const originalCrashBytes = storage.getItem('miclash-draft-v1:config.yaml');
 const routerDraft = editorModule.createDraftController({ storage, profile: 'config.yaml', content: 'router\n' });
 const loaded = await routerDraft.load('config.yaml', { content: 'active\n', revision: 'active-1' },
 	{ content: 'router newer\n', revision: 'draft-2' });
 assert.equal(loaded.conflict, true, 'different crash copy was silently overwritten');
 assert.equal(loaded.content, 'router newer\n', 'router Draft must remain selected until explicit user choice');
+routerDraft.setContent('router newer\n');
+await new Promise((resolve) => setTimeout(resolve, 300));
+assert.equal(storage.getItem('miclash-draft-v1:config.yaml'), originalCrashBytes,
+	'pending conflict overwrote the original crash copy before user choice');
 assert.equal(routerDraft.useCrashCopy(loaded.crash), 'changed\n');
+storage.setItem('miclash-draft-v1:config2.yaml', JSON.stringify({ version: 1, profile: 'config2.yaml',
+	revision: 'old', content: 'local choice\n', hash: editorModule.contentHash('local choice\n'), savedAt: 1 }));
+const keepController = editorModule.createDraftController({ storage, profile: 'config2.yaml', content: 'active\n', debounceMs: 250 });
+const keepLoaded = await keepController.load('config2.yaml', { content: 'active\n' }, { content: 'router choice\n' });
+assert.equal(keepLoaded.conflict, true);
+assert.equal(keepController.keepRouterCopy(), true);
+await new Promise((resolve) => setTimeout(resolve, 300));
+assert.equal(JSON.parse(storage.getItem('miclash-draft-v1:config2.yaml')).content, 'router choice\n',
+	'Keep router choice did not deterministically replace the local crash copy');
+const collisionController = editorModule.createDraftController({ storage, profile: 'config2.yaml',
+	content: 'e703069b9c915dd3' });
+let collisionSaves = 0;
+const collisionReply = await collisionController.saveRouter({ async configSaveDraft() {
+	collisionSaves++; return { operation_id: 'collision-save' };
+} }, '121ffc58fd88877d');
+assert.equal(collisionReply.changed, true, 'hash collision incorrectly suppressed exact-byte Draft save');
+assert.equal(collisionSaves, 1);
 const brokenStorage = { length: 0, key() { throw new Error('denied'); }, getItem() { throw new Error('denied'); },
 	setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
 const isolated = editorModule.createDraftController({ storage: brokenStorage, profile: 'config2.yaml', content: 'safe\n' });
@@ -145,21 +245,57 @@ const failedApi = {
 	async config_apply() { applyCalls++; return { operation_id: 'must-not-run' }; },
 	async config_read() { throw new Error('must not read Active after failed validation'); },
 	watchOperation(id, callback) {
-		setImmediate(() => callback(id === 'validate-fail'
-			? { id, state: 'failure', error: { code: 'VALIDATION_FAILED', message: 'bad yaml' } }
-			: { id, state: 'success' }));
+		setImmediate(() => {
+			callback({ id, state: 'running', percent: 175, stage: 'x'.repeat(200) });
+			callback(id === 'validate-fail'
+				? { id, state: 'failure', error: { code: 'VALIDATION_FAILED', message: 'bad yaml' } }
+				: { id, state: 'success', percent: 100, stage: 'done' });
+		});
 		return () => {};
 	}
 };
 const failedActions = editorModule.createDraftActions({ api: failedApi, controller: failedController,
-	getProfile: () => 'config3.yaml', getContent: () => exactFailedContent });
-await assert.rejects(failedActions.apply(), (error) => error.code === 'VALIDATION_FAILED');
+	getProfile: () => 'config3.yaml', getContent: () => exactFailedContent,
+	onProgress(update) { calls.push(['progress', update.phase, update.percent, update.stage]); } });
+await assert.rejects(failedActions.validate(), (error) => error.code === 'VALIDATION_FAILED');
 assert.equal(applyCalls, 0, 'config_apply ran after validation failure');
 assert.equal(failedController.getContent(), exactFailedContent,
 	'failed validation changed exact editor/Draft content');
 failedController.flushLocal();
 const failedCrash = JSON.parse(storage.getItem('miclash-draft-v1:config3.yaml'));
 assert.equal(failedCrash.content, exactFailedContent, 'failed validation changed local crash copy');
-failedController.destroy(); isolated.destroy(); routerDraft.destroy(); draft.destroy(); history.destroy();
+assert.ok(calls.some((call) => call[0] === 'progress'), 'Draft actions did not expose progress updates');
+for (const call of calls.filter((item) => item[0] === 'progress')) {
+	assert.ok(call[2] >= 0 && call[2] <= 100, 'progress percent is unbounded');
+	assert.ok(String(call[3]).length <= 80, 'progress stage is unbounded');
+}
+let externalActive = 'old active\n';
+await failedActions.runExternal(async ({ profile, content }) => {
+	assert.equal(failedActions.isBusy(), true);
+	await assert.rejects(failedActions.validate(), (error) => error.code === 'BUSY');
+	externalActive = 'subscription active\n';
+	assert.equal(content, exactFailedContent); assert.equal(profile, 'config3.yaml');
+});
+assert.equal(externalActive, 'subscription active\n');
+assert.equal(failedController.getContent(), exactFailedContent,
+	'subscription success silently replaced exact Draft content');
+await assert.rejects(failedActions.runExternal(async () => { throw new Error('download failed'); }), /download failed/);
+assert.equal(failedController.getContent(), exactFailedContent,
+	'subscription failure changed exact Draft content');
+let applyValidateCalls = 0, successfulApplyCalls = 0;
+const applyController = editorModule.createDraftController({ storage, profile: 'config.yaml', content: 'apply exact\n' });
+const applyActions = editorModule.createDraftActions({ controller: applyController,
+	getProfile: () => 'config.yaml', getContent: () => 'apply exact\n', api: {
+		async configSaveDraft() { return { operation_id: 'save-apply' }; },
+		async config_validate() { applyValidateCalls++; return { operation_id: 'redundant' }; },
+		async config_apply() { successfulApplyCalls++; return { operation_id: 'apply-success' }; },
+		async config_read() { return { content: 'apply exact\n' }; },
+		watchOperation(id, callback) { callback({ id, state: 'success', percent: 100, stage: 'done' }); return () => {}; }
+	} });
+await applyActions.apply();
+assert.equal(applyValidateCalls, 0, 'Apply redundantly called config_validate before backend config_apply');
+assert.equal(successfulApplyCalls, 1);
+applyController.destroy();
+failedController.destroy(); collisionController.destroy(); keepController.destroy(); isolated.destroy(); routerDraft.destroy(); draft.destroy(); history.destroy();
 
 console.log('Draft and configuration history UI contract passed');
