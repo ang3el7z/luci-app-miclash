@@ -1,6 +1,7 @@
-import { assert_equal, assert_match, assert_true } from 'testlib';
+import { assert_equal, assert_match, assert_throws, assert_true } from 'testlib';
 import * as api from 'miclash.api';
 import * as state from 'miclash.state';
+import * as fakes from 'fakes';
 
 function json_equal(actual, expected, message) {
 	assert_equal(sprintf('%J', actual), sprintf('%J', expected), message);
@@ -200,11 +201,20 @@ let app = {
 let methods = api.method_table(app);
 let names = sort(keys(methods));
 json_equal(names, sort([
-	'status', 'health', 'operation_get', 'operation_list',
+	'status', 'health', 'operation_get', 'operation_list', 'operation_start',
 	'service_start', 'service_stop', 'service_reload', 'service_restart',
 	'config_list', 'config_read', 'config_validate', 'config_apply',
-	'settings_get', 'settings_set',
-	'telegram_status', 'telegram_settings', 'telegram_test'
+	'config_external_adopt', 'settings_get', 'settings_set',
+	'history_list', 'history_diff', 'history_open_draft', 'history_restore',
+	'subscription_get', 'subscription_set', 'subscription_update', 'subscription_probe',
+	'update_release', 'update_miclash', 'update_mihomo', 'update_rollback_mihomo',
+	'memory_status', 'memory_reset_baseline', 'memory_settings',
+	'diagnostics_summary', 'diagnostics_create_report', 'diagnostics_route_test',
+	'backup_list', 'backup_create', 'backup_inspect', 'backup_restore',
+	'telegram_status', 'telegram_settings', 'telegram_test',
+	'devices_list', 'devices_policy_list', 'devices_policy_set', 'devices_policy_delete',
+	'notifications_settings', 'notifications_test',
+	'transfer_begin', 'transfer_write', 'transfer_read', 'transfer_finish', 'transfer_abort'
 ]));
 assert_equal(api.register(connection, app).registered, true);
 assert_equal(published.name, 'miclash');
@@ -329,3 +339,160 @@ assert_true(invoke('status').desired != null);
 assert_true(invoke('operation_list').operations != null);
 state_model.close();
 assert_equal(operation_subscriber, null);
+
+// The canonical fixture is the single parity contract shared with the Node UI check.
+let canonical = json(require('fs').readfile('tests/fixtures/api/methods.json')).methods;
+json_equal(sort(map(canonical, (entry) => entry.name)), names);
+for (let entry in canonical)
+	json_equal(sort(keys(methods[entry.name].args)), sort(entry.params),
+		entry.name + ' backend policy differs from canonical params');
+assert_equal(invoke('transfer_abort', { transfer_id: sprintf('%064x', 1) }).error.code,
+	'HEALTH_FAILED');
+
+// Chunk transfers are a bounded, pathless adapter: the caller receives only a
+// 256-bit opaque ID and the upload domain receives only a reader capability.
+let transfer_fs = fakes.fs({}), transfer_clock = fakes.clock(5000);
+let transfer_runtime = {
+	fs: transfer_fs, clock: transfer_clock, random: fakes.entropy(),
+	digest: fakes.digest(transfer_fs), paths: { tmp: '/tmp/miclash' }
+};
+let imported = null;
+let download_verified = false;
+let transfer = api.create_transfers({
+	runtime: transfer_runtime,
+	uploads: {
+		backup: (staged) => {
+			let content = '', chunk;
+			while (length(chunk = staged.read(4))) content += chunk;
+			imported = { content, kind: staged.kind, metadata: staged.metadata,
+				size: staged.size, sha256: staged.sha256 };
+			return { inspection_id: 'i_' + sprintf('%032x', 1) };
+		}
+	},
+	downloads: {
+		report: (id, metadata) => {
+			if (id != 'rpt_' + sprintf('%032x', 2)) die('NOT_FOUND');
+			let content = 'diagnostic';
+			return {
+				size: length(content), sha256: transfer_runtime.digest.sha256(content),
+				read: (offset, amount) => substr(content, offset, amount),
+				finish: (size, sha256) => {
+					download_verified = size == length(content) &&
+						sha256 == transfer_runtime.digest.sha256(content);
+					return download_verified;
+				},
+				close: () => true
+			};
+		}
+	}
+});
+let payload = 'hello world', payload_hash = transfer_runtime.digest.sha256(payload);
+let begun = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: length(payload), sha256: payload_hash, metadata: { secrets: false } });
+assert_match(begun.transfer_id, /^[0-9a-f]{64}$/);
+assert_true(begun.chunk_size > 0 && begun.chunk_size <= 49152);
+assert_equal(transfer_runtime.random.calls[0], 32);
+json_equal(transfer.write({ transfer_id: begun.transfer_id, seq: 0,
+	data: b64enc('hello ') }), { next_seq: 1, received: 6 });
+assert_equal(transfer.write({ transfer_id: begun.transfer_id, seq: 2,
+	data: b64enc('world') }).error.code, 'INVALID_ARGUMENT');
+json_equal(transfer.write({ transfer_id: begun.transfer_id, seq: 1,
+	data: b64enc('world') }), { next_seq: 2, received: 11 });
+let finalized = transfer.finish({ transfer_id: begun.transfer_id });
+assert_equal(finalized.completed, true);
+assert_equal(finalized.result.inspection_id, 'i_' + sprintf('%032x', 1));
+assert_equal(imported.content, payload);
+assert_equal(imported.kind, 'backup');
+assert_equal(imported.metadata.secrets, false);
+assert_equal(imported.sha256, payload_hash);
+assert_equal(index(sprintf('%J', finalized), '/tmp/'), -1);
+
+// Replay, wrong sequence, size/hash mismatch, overflow and expiry all fail closed.
+assert_equal(transfer.finish({ transfer_id: begun.transfer_id }).error.code, 'NOT_FOUND');
+let mismatch = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 3, sha256: transfer_runtime.digest.sha256('bad'), metadata: {} });
+assert_equal(transfer.write({ transfer_id: mismatch.transfer_id, seq: 0,
+	data: b64enc('good') }).error.code, 'RESPONSE_TOO_LARGE');
+assert_equal(transfer.abort({ transfer_id: mismatch.transfer_id }).aborted, true);
+let expired = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 1, sha256: transfer_runtime.digest.sha256('x'), metadata: {} });
+transfer_clock.advance(300001);
+assert_equal(transfer.write({ transfer_id: expired.transfer_id, seq: 0,
+	data: b64enc('x') }).error.code, 'NOT_FOUND');
+
+// Download authority is a daemon-created report ID, never a path supplied by LuCI.
+let report_id = 'rpt_' + sprintf('%032x', 2);
+let download = transfer.begin({ direction: 'download', kind: 'report', object_id: report_id,
+	size: 0, sha256: '', metadata: { format: 'text' } });
+assert_match(download.transfer_id, /^[0-9a-f]{64}$/);
+assert_equal(download.size, 10);
+let downloaded = transfer.read({ transfer_id: download.transfer_id, seq: 0 });
+assert_equal(b64dec(downloaded.data), 'diagnostic');
+assert_equal(downloaded.eof, true);
+assert_equal(transfer.read({ transfer_id: download.transfer_id, seq: 0 }).error.code,
+	'INVALID_ARGUMENT');
+assert_equal(transfer.finish({ transfer_id: download.transfer_id }).completed, true);
+assert_equal(download_verified, true, 'download source did not verify finalized size/hash');
+assert_equal(transfer.begin({ direction: 'download', kind: 'config', object_id: report_id,
+	size: 0, sha256: '', metadata: {} }).error.code, 'INVALID_ARGUMENT');
+
+// Replacing the owned staging leaf with a symlink is detected and the foreign
+// target is not removed by abort cleanup.
+let raced = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 1, sha256: transfer_runtime.digest.sha256('z'), metadata: {} });
+let stage_path = transfer_fs.calls.open[length(transfer_fs.calls.open) - 1].path;
+transfer_fs.writefile('/tmp/miclash/foreign', 'foreign');
+transfer_fs.set_symlink(stage_path, '/tmp/miclash/foreign');
+assert_equal(transfer.write({ transfer_id: raced.transfer_id, seq: 0,
+	data: b64enc('z') }).error.code, 'INTERNAL');
+assert_equal(transfer_fs.readfile('/tmp/miclash/foreign'), 'foreign');
+
+// Active transfer state is fixed-size; malformed chunks cannot consume a slot
+// silently and a ninth concurrent transfer is rejected.
+let slots = [];
+for (let index = 0; index < 7; index++) {
+	let slot = transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+		size: 1, sha256: transfer_runtime.digest.sha256('q'), metadata: {} });
+	push(slots, slot.transfer_id);
+}
+assert_equal(transfer.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 1, sha256: transfer_runtime.digest.sha256('q'), metadata: {} }).error.code, 'BUSY');
+assert_equal(transfer.write({ transfer_id: slots[0], seq: 0, data: '%%%%' }).error.code,
+	'INVALID_ARGUMENT');
+for (let id in slots) assert_equal(transfer.abort({ transfer_id: id }).aborted, true);
+
+// A daemon restart removes only authenticated stale transfer leaves. Unknown
+// entries in the private staging authority stop startup and are never deleted.
+let stale_name = sprintf('%064x', 99), stale_path = '/tmp/miclash/transfers/' + stale_name;
+let stale_fs = fakes.fs({ [stale_path]: 'old' });
+api.create_transfers({
+	runtime: { fs: stale_fs, clock: fakes.clock(0), random: fakes.entropy(),
+		digest: fakes.digest(stale_fs), paths: { tmp: '/tmp/miclash' } },
+	uploads: {}, downloads: {}
+});
+assert_true(stale_fs.lstat(stale_path) == null, 'stale owned transfer survived restart');
+let foreign_transfer = fakes.fs({ '/tmp/miclash/transfers/foreign': 'keep' });
+assert_throws(() => api.create_transfers({
+	runtime: { fs: foreign_transfer, clock: fakes.clock(0), random: fakes.entropy(),
+		digest: fakes.digest(foreign_transfer), paths: { tmp: '/tmp/miclash' } },
+	uploads: {}, downloads: {}
+}), 'INTERNAL');
+assert_equal(foreign_transfer.readfile('/tmp/miclash/transfers/foreign'), 'keep');
+
+// The parent authority is re-authenticated after exclusive leaf creation, so
+// swapping the staging directory at that boundary cannot capture an upload.
+let parent_race_fs = fakes.fs({});
+let parent_race = api.create_transfers({
+	runtime: { fs: parent_race_fs, clock: fakes.clock(0), random: fakes.entropy(),
+		digest: fakes.digest(parent_race_fs), paths: { tmp: '/tmp/miclash' } },
+	uploads: { backup: () => ({}) }, downloads: {}
+});
+parent_race_fs.on_lstat = (path, count) => {
+	if (path == '/tmp/miclash/transfers' && count == 5)
+		parent_race_fs.bump_inode(path);
+};
+let parent_reply = parent_race.begin({ direction: 'upload', kind: 'backup', object_id: '',
+	size: 1, sha256: fakes.digest(parent_race_fs).sha256('x'), metadata: {} });
+assert_equal(parent_reply?.error?.code, 'INTERNAL');
+let parent_stage = parent_race_fs.calls.open[length(parent_race_fs.calls.open) - 1].path;
+assert_true(parent_race_fs.lstat(parent_stage) == null, 'raced staging leaf was not cleaned');
