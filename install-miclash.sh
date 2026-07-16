@@ -1,7 +1,7 @@
 #!/bin/sh
 # ================================================================
 #  MiClash Auto-Installer for OpenWrt
-#  Supported: 21.x / 23.05.x / 24.10.x / 25.12.x
+#  Supported: OpenWrt 24.10 and newer, including modern SNAPSHOT builds
 #  Installs:
 #  - MiClash package from GitHub Releases
 #  - required dependencies
@@ -123,36 +123,48 @@ normalize_version() {
     printf '%s' "$1" | sed 's/^v//; s/-r[0-9][0-9]*$//'
 }
 
+validate_openwrt_support() {
+    release="$1"
+
+    if [ "$release" != "SNAPSHOT" ]; then
+        printf '%s\n' "$release" | grep -Eq '^[0-9]+(\.[0-9]+)*(-rc[0-9]+)?$' \
+            || die "Неподдерживаемая версия OpenWrt: $release. Требуется OpenWrt 24.10 или новее"
+        release_major="${release%%.*}"
+        [ "$release_major" -ge 24 ] 2>/dev/null \
+            || die "OpenWrt $release не поддерживается. Требуется OpenWrt 24.10 или новее"
+    fi
+
+    command -v fw4 >/dev/null 2>&1 \
+        || die "Не найден firewall4 (fw4). Требуется OpenWrt 24.10 или новее"
+    case "$PKG_MGR" in
+        apk|opkg) ;;
+        *) die "Не найден поддерживаемый менеджер пакетов OpenWrt (apk или opkg)" ;;
+    esac
+}
+
 detect_openwrt() {
     [ -f /etc/openwrt_release ] || die "Не найден /etc/openwrt_release"
     . /etc/openwrt_release
 
     OW_RELEASE="${DISTRIB_RELEASE:-unknown}"
-    OW_MAJOR=$(echo "$OW_RELEASE" | cut -d. -f1)
     ARCH_PKG="${DISTRIB_ARCH:-}"
 
     info "OpenWrt: ${B}${OW_RELEASE}${N}"
     info "DISTRIB_ARCH: ${B}${ARCH_PKG}${N}"
 
-    # Detect the package manager by the actual installed binary. This is more
-    # reliable than DISTRIB_RELEASE because modern SNAPSHOT builds can report
-    # "SNAPSHOT" while already using apk.
+    # Detect the package manager from the installed binary. Modern SNAPSHOT
+    # builds may use either manager, so the release label must not decide it.
     if command -v apk >/dev/null 2>&1; then
         PKG_MGR="apk"
     elif command -v opkg >/dev/null 2>&1; then
         PKG_MGR="opkg"
-    elif [ "${OW_MAJOR:-0}" -ge 25 ] 2>/dev/null; then
-        PKG_MGR="apk"
     else
-        PKG_MGR="opkg"
+        die "Не найден поддерживаемый менеджер пакетов OpenWrt (apk или opkg)"
     fi
+    validate_openwrt_support "$OW_RELEASE"
     info "Package manager: ${B}${PKG_MGR}${N}"
 
-    if [ "${OW_MAJOR:-0}" -le 21 ] 2>/dev/null; then
-        TPROXY_PKG="iptables-mod-tproxy"
-    else
-        TPROXY_PKG="kmod-nft-tproxy"
-    fi
+    TPROXY_PKG="kmod-nft-tproxy"
 
     info "Transparent proxy pkg: ${B}${TPROXY_PKG}${N}"
 }

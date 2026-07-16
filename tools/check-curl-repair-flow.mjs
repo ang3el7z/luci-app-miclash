@@ -5,9 +5,11 @@ import { spawnSync } from 'node:child_process';
 
 const installerPath = 'install-miclash.sh';
 const updatePath = 'luci-app-miclash/rootfs/opt/clash/bin/miclash-update';
+const readmePaths = ['README.md', 'README.ru.md', 'README.zh-cn.md'];
 
 const installer = readFileSync(installerPath, 'utf8');
 const update = readFileSync(updatePath, 'utf8');
+const readmes = readmePaths.map((path) => ({ path, content: readFileSync(path, 'utf8') }));
 
 let failed = false;
 
@@ -80,6 +82,9 @@ function runShell(source, body, options = {}) {
 		writeFileSync(curlLog, '');
 		writeFileSync(installerLog, '');
 		writeFileSync(curlAttempts, '0');
+		if (options.modernFirewall) {
+			writeExecutable(join(bin, 'fw4'), '#!/bin/sh\nexit 0\n');
+		}
 		const mutationHelper = join(dir, 'mutation-lock-helper');
 		const shellMutationHelper = shellPath(mutationHelper);
 		writeExecutable(mutationHelper, `#!/bin/sh
@@ -215,6 +220,51 @@ ${body}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+}
+
+function runOpenWrtSupport(release, options = {}) {
+	return runShell(scriptWithoutMain(installer), `
+PKG_MGR=opkg
+validate_openwrt_support '${release}'
+`, options);
+}
+
+const oldReleaseResult = runOpenWrtSupport('23.05.5', { modernFirewall: true });
+check(oldReleaseResult.code !== 0 && /OpenWrt 24/.test(oldReleaseResult.stderr),
+	'install-miclash must reject numeric OpenWrt releases older than 24 with a clear error.');
+
+const supportedReleaseResult = runOpenWrtSupport('24.10.2', { modernFirewall: true });
+check(supportedReleaseResult.code === 0,
+	`install-miclash must accept OpenWrt 24.10: ${supportedReleaseResult.stderr || supportedReleaseResult.stdout}`);
+
+const snapshotResult = runOpenWrtSupport('SNAPSHOT', { modernFirewall: true });
+check(snapshotResult.code === 0,
+	`install-miclash must accept SNAPSHOT with the modern firewall stack: ${snapshotResult.stderr || snapshotResult.stdout}`);
+
+const legacySnapshotResult = runOpenWrtSupport('SNAPSHOT');
+check(legacySnapshotResult.code !== 0,
+	'install-miclash must reject SNAPSHOT when the modern firewall stack is unavailable.');
+
+const unknownReleaseResult = runOpenWrtSupport('rolling-custom', { modernFirewall: true });
+check(unknownReleaseResult.code !== 0,
+	'install-miclash must reject arbitrary non-numeric release labels instead of treating them as supported SNAPSHOT builds.');
+
+const detectOpenWrtStart = installer.indexOf('\ndetect_openwrt()');
+const ensureCurlStart = installer.indexOf('\nensure_curl()', detectOpenWrtStart);
+const detectOpenWrtBlock = detectOpenWrtStart >= 0 && ensureCurlStart > detectOpenWrtStart
+	? installer.slice(detectOpenWrtStart, ensureCurlStart)
+	: '';
+check(detectOpenWrtBlock.includes('validate_openwrt_support "$OW_RELEASE"'),
+	'install-miclash detect_openwrt must enforce the tested support gate before installation proceeds.');
+
+for (const { path, content } of [{ path: installerPath, content: installer }, ...readmes]) {
+	check(!/23\.05|21\.x|firewall3|iptables-mod-tproxy/i.test(content),
+		`${path} must not advertise OpenWrt 23.05/21.x or firewall3 compatibility.`);
+}
+
+for (const { path, content } of readmes) {
+	check(/OpenWrt 24\.10\+|OpenWrt 24 (?:and newer|и выше|及以上)/i.test(content),
+		`${path} must state the OpenWrt 24.10+/24-and-newer support floor.`);
 }
 
 const installerResult = runShell(scriptWithoutMain(installer), `

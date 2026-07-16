@@ -8,6 +8,8 @@
 
 LuCI-приложение для управления Mihomo/Clash на OpenWrt.
 
+Поддерживаемая платформа: OpenWrt 24.10+ с firewall4.
+
 ## Автоустановка
 
 Рекомендуемый вариант (`wget`, работает даже если установленный `curl` сломан):
@@ -40,7 +42,7 @@ apk add /tmp/luci-app-miclash.apk --allow-untrusted
 rm -f /tmp/luci-app-miclash.apk
 ```
 
-## OpenWrt 23.05.x - 24.10.x
+## OpenWrt 24.10+ (opkg)
 
 ```sh
 opkg update
@@ -52,8 +54,6 @@ curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${releas
 opkg install /tmp/luci-app-miclash.ipk
 rm -f /tmp/luci-app-miclash.ipk
 ```
-
-Для старых сборок OpenWrt с `firewall3` вместо `kmod-nft-tproxy` нужен `iptables-mod-tproxy`.
 
 ## Mihomo
 
@@ -89,7 +89,7 @@ rm -f /tmp/clash.gz
 # OpenWrt 25.x:
 apk del luci-app-miclash
 
-# OpenWrt 23.05.x - 24.10.x:
+# OpenWrt 24.10+ (opkg):
 opkg remove luci-app-miclash
 
 rm -rf /opt/clash

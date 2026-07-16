@@ -8,6 +8,8 @@
 
 用于在 OpenWrt 上管理 Mihomo/Clash 的 LuCI 应用。
 
+支持的平台：OpenWrt 24.10+（使用 firewall4）。
+
 ## 自动安装
 
 推荐方式（`wget`，即使已安装的 `curl` 损坏也可以使用）：
@@ -40,7 +42,7 @@ apk add /tmp/luci-app-miclash.apk --allow-untrusted
 rm -f /tmp/luci-app-miclash.apk
 ```
 
-## OpenWrt 23.05.x - 24.10.x
+## OpenWrt 24.10+（opkg）
 
 ```sh
 opkg update
@@ -52,8 +54,6 @@ curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${releas
 opkg install /tmp/luci-app-miclash.ipk
 rm -f /tmp/luci-app-miclash.ipk
 ```
-
-对于使用 `firewall3` 的旧版 OpenWrt，请安装 `iptables-mod-tproxy`，而不是 `kmod-nft-tproxy`。
 
 ## Mihomo
 
@@ -89,7 +89,7 @@ rm -f /tmp/clash.gz
 # OpenWrt 25.x:
 apk del luci-app-miclash
 
-# OpenWrt 23.05.x - 24.10.x:
+# OpenWrt 24.10+（opkg）：
 opkg remove luci-app-miclash
 
 rm -rf /opt/clash
