@@ -17,10 +17,13 @@ import * as schema from 'miclash.schema';
  *   read(dir, name, { maximum, mode, uid, nlink, expected? })
  *       -> { content, identity }
  *   create_exclusive(dir, name, bytes, { mode, uid }) -> identity
- *       (nofollow create, file fsync, parent fsync)
+ *       (nofollow hidden temp, complete write, file fsync, atomic no-replace
+ *        publication, parent fsync; on every failure the destination is
+ *        absent or complete and no hidden temp remains)
  *   replace_atomic(dir, name, expected|null, bytes, { mode, uid, nlink }) -> identity
  *       (CAS current identity/must-not-exist, distinct nofollow temp, temp
- *        fsync, atomic replace, parent fsync)
+ *        fsync, atomic replace, parent fsync; on every failure the destination
+ *        is the complete old or complete new file and no hidden temp remains)
  *   with_transaction_lease(callback) -> callback(opaque_lease) result
  *   rename(dir, from, to, expected, { mode, uid, nlink }) -> identity
  *   unlink(dir, name, expected) -> true

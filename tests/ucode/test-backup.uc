@@ -114,41 +114,78 @@ function secure_fs(filesystem) {
 	capability.create_exclusive = (parent, name, content, options) => {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
+		let temp_name = '.secure-create-' + capability.replacement_nonce++ + '.tmp';
+		let temp_path = parent.opaque + '/' + temp_name, published = false;
 		hook('before', 'create_exclusive', parent, name, options);
-		directory(parent.opaque, parent.identity);
-		if (filesystem.lstat(path) != null) die('INTERNAL');
-		filesystem.files[path] = content; filesystem.bump_inode(path);
-		filesystem.set_mode(path, options.mode); filesystem.set_uid(path, options.uid);
-		filesystem.set_nlink(path, 1);
-		hook('after', 'create_file_fsync', parent, name, options);
-		hook('after', 'create_parent_fsync', parent, name, options);
-		hook('after', 'create_exclusive', parent, name, options);
-		return clone(file(path, null, { ...options, nlink: 1 }));
+		try {
+			directory(parent.opaque, parent.identity);
+			if (filesystem.lstat(path) != null || filesystem.lstat(temp_path) != null)
+				die('INTERNAL');
+			filesystem.files[temp_path] = ''; filesystem.bump_inode(temp_path);
+			filesystem.set_mode(temp_path, options.mode); filesystem.set_uid(temp_path, options.uid);
+			filesystem.set_nlink(temp_path, 1);
+			hook('after', 'create_temp_create', parent, name, { options, temp_name });
+			filesystem.files[temp_path] = content;
+			hook('after', 'create_temp_write', parent, name, { options, temp_name });
+			hook('after', 'create_file_fsync', parent, name, { options, temp_name });
+			hook('after', 'create_temp_fsync', parent, name, { options, temp_name });
+			hook('before', 'create_publish', parent, name, { options, temp_name });
+			directory(parent.opaque, parent.identity);
+			if (filesystem.lstat(path) != null || filesystem.rename(temp_path, path) !== true)
+				die('INTERNAL');
+			published = true;
+			filesystem.set_mode(path, options.mode); filesystem.set_uid(path, options.uid);
+			filesystem.set_nlink(path, 1);
+			let identity = clone(file(path, null, { ...options, nlink: 1 }));
+			hook('after', 'create_publish', parent, name, { options, temp_name, identity });
+			hook('after', 'create_parent_fsync', parent, name, { options, temp_name, identity });
+			hook('after', 'create_exclusive', parent, name, { options, identity });
+			return clone(file(path, identity, { ...options, nlink: 1 }));
+		}
+		catch (error) {
+			if (!published && filesystem.lstat(temp_path) != null) filesystem.unlink(temp_path);
+			die(error);
+		}
 	};
 	capability.replace_atomic = (parent, name, expected, content, options) => {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
+		let temp_name = '.secure-replace-' + capability.replacement_nonce++ + '.tmp';
+		let temp_path = parent.opaque + '/' + temp_name, published = false;
 		hook('before', 'replace_atomic', parent, name, { expected, options });
-		directory(parent.opaque, parent.identity);
-		let current = filesystem.lstat(path);
-		if (expected == null ? current != null : !same_file_identity(current, expected)) die('INTERNAL');
-		let replacement = {
-			content, inode: 1000000 + capability.replacement_nonce++, mode: options.mode,
-			uid: options.uid, nlink: 1
-		};
-		hook('after', 'replace_temp_fsync', parent, name, { expected, options });
-		hook('before', 'replace_rename', parent, name, { expected, options });
-		current = filesystem.lstat(path);
-		if (expected == null ? current != null : !same_file_identity(current, expected)) die('INTERNAL');
-		filesystem.files[path] = replacement.content;
-		filesystem.bump_inode(path);
-		filesystem.set_mode(path, replacement.mode); filesystem.set_uid(path, replacement.uid);
-		filesystem.set_nlink(path, replacement.nlink);
-		let identity = clone(file(path, null, { ...options, nlink: 1 }));
-		hook('after', 'replace_rename', parent, name, { expected, options, identity });
-		hook('after', 'replace_parent_fsync', parent, name, { expected, options, identity });
-		hook('after', 'replace_atomic', parent, name, { expected, options, identity });
-		return clone(file(path, identity, { ...options, nlink: 1 }));
+		try {
+			directory(parent.opaque, parent.identity);
+			let current = filesystem.lstat(path);
+			if (expected == null ? current != null : !same_file_identity(current, expected))
+				die('INTERNAL');
+			if (filesystem.lstat(temp_path) != null) die('INTERNAL');
+			filesystem.files[temp_path] = ''; filesystem.bump_inode(temp_path);
+			filesystem.set_mode(temp_path, options.mode); filesystem.set_uid(temp_path, options.uid);
+			filesystem.set_nlink(temp_path, 1);
+			hook('after', 'replace_temp_create', parent, name, { expected, options, temp_name });
+			filesystem.files[temp_path] = content;
+			hook('after', 'replace_temp_write', parent, name, { expected, options, temp_name });
+			hook('after', 'replace_temp_fsync', parent, name, { expected, options, temp_name });
+			hook('before', 'replace_rename', parent, name, { expected, options, temp_name });
+			current = filesystem.lstat(path);
+			if (expected == null ? current != null : !same_file_identity(current, expected))
+				die('INTERNAL');
+			if (filesystem.rename(temp_path, path) !== true) die('INTERNAL');
+			published = true;
+			filesystem.set_mode(path, options.mode); filesystem.set_uid(path, options.uid);
+			filesystem.set_nlink(path, 1);
+			let identity = clone(file(path, null, { ...options, nlink: 1 }));
+			hook('after', 'replace_rename', parent, name,
+				{ expected, options, temp_name, identity });
+			hook('after', 'replace_parent_fsync', parent, name,
+				{ expected, options, temp_name, identity });
+			hook('after', 'replace_atomic', parent, name, { expected, options, identity });
+			return clone(file(path, identity, { ...options, nlink: 1 }));
+		}
+		catch (error) {
+			if (!published && filesystem.lstat(temp_path) != null) filesystem.unlink(temp_path);
+			die(error);
+		}
 	};
 	capability.with_transaction_lease = (worker) => {
 		if (capability.lease_held) die('BUSY');
@@ -303,6 +340,57 @@ assert_throws(() => backup.list(unsupported.app), 'INTERNAL');
 for (let primitive in [ 'create_exclusive', 'replace_atomic', 'with_transaction_lease' ]) {
 	let missing = make_app(); delete missing.app.secure_fs[primitive];
 	assert_throws(() => backup.list(missing.app), 'INTERNAL');
+}
+
+function assert_no_secure_temp(box, directory) {
+	for (let name in box.filesystem.lsdir(directory) ?? [])
+		assert_equal(match(name, /^\.secure-(create|replace)-.*\.tmp$/), null,
+			'orphan secure temp remained after primitive failure');
+};
+
+// Publication primitives model hidden temp creation/write/fsync and atomic
+// namespace publication. Faults at every boundary expose only no destination
+// or a complete destination, and never retain a hidden temp.
+for (let stage in [ 'create_temp_create', 'create_temp_write', 'create_file_fsync',
+	'create_temp_fsync', 'create_publish', 'create_parent_fsync', 'create_exclusive' ]) {
+	let box = make_app(), root = box.app.secure_fs.open('/tmp/miclash/atomic-create',
+		{ create: true, mode: 0o700, uid: 0 });
+	let fault = (operation, directory, name, extra) => {
+		if (operation == stage && name == 'value') die('atomic-create-fault');
+	};
+	box.app.secure_fs.before = fault; box.app.secure_fs.after = fault;
+	assert_throws(() => box.app.secure_fs.create_exclusive(root, 'value', 'complete-value',
+		{ mode: 0o600, uid: 0 }), 'atomic-create-fault');
+	let path = '/tmp/miclash/atomic-create/value', current = box.filesystem.lstat(path);
+	if (current != null) {
+		assert_equal(box.filesystem.readfile(path), 'complete-value');
+		assert_equal(current.mode, 0o600); assert_equal(current.uid, 0);
+		assert_equal(current.nlink, 1); assert_equal(current.size, 14);
+	}
+	assert_no_secure_temp(box, '/tmp/miclash/atomic-create');
+}
+
+for (let stage in [ 'replace_temp_create', 'replace_temp_write', 'replace_temp_fsync',
+	'replace_rename', 'replace_parent_fsync', 'replace_atomic' ]) {
+	let box = make_app(), root = box.app.secure_fs.open('/tmp/miclash/atomic-replace',
+		{ create: true, mode: 0o700, uid: 0 });
+	let path = '/tmp/miclash/atomic-replace/value';
+	box.filesystem.files[path] = 'old-complete'; box.filesystem.bump_inode(path);
+	box.filesystem.set_mode(path, 0o600); box.filesystem.set_uid(path, 0);
+	box.filesystem.set_nlink(path, 1);
+	let expected = box.app.secure_fs.stat(root, 'value');
+	let fault = (operation, directory, name, extra) => {
+		if (operation == stage && name == 'value') die('atomic-replace-fault');
+	};
+	box.app.secure_fs.before = fault; box.app.secure_fs.after = fault;
+	assert_throws(() => box.app.secure_fs.replace_atomic(root, 'value', expected,
+		'new-complete', { mode: 0o600, uid: 0, nlink: 1 }), 'atomic-replace-fault');
+	let content = box.filesystem.readfile(path), current = box.filesystem.lstat(path);
+	assert_equal(content == 'old-complete' || content == 'new-complete', true,
+		'replace exposed torn destination');
+	assert_equal(current.size, length(content)); assert_equal(current.mode, 0o600);
+	assert_equal(current.uid, 0); assert_equal(current.nlink, 1);
+	assert_no_secure_temp(box, '/tmp/miclash/atomic-replace');
 }
 
 let hardlinked_file = make_app();
