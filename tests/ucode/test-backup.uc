@@ -30,24 +30,44 @@ function same_directory_identity(left, right) {
 	return left?.type == 'directory' && right?.type == 'directory' &&
 		left?.inode == right?.inode && left?.dev?.major == right?.dev?.major &&
 		left?.dev?.minor == right?.dev?.minor && left?.uid == right?.uid &&
-		left?.mode == right?.mode;
+		left?.mode == right?.mode && left?.generation == right?.generation;
 };
 
 function secure_fs(filesystem) {
 	let capability = { before: null, after: null, calls: [], replacement_nonce: 0,
 		lease_held: false, lease_nonce: 0 };
+	let handle_bindings = {}, next_handle = 0;
 	function hook(which, operation, directory, name, extra) {
 		push(capability.calls, { which, operation, name });
 		let callback = capability[which];
 		if (type(callback) == 'function') callback(operation, directory, name, extra);
 	};
-	function directory(path, expected) {
+	function handle_path(handle) {
+		let binding = handle_bindings[handle?.token];
+		if (binding == null || binding.handle !== handle) die('INTERNAL');
+		let path = filesystem.path_for_object_generation(binding.object_generation);
+		if (type(path) != 'string') die('INTERNAL');
+		return path;
+	};
+	function directory(subject, expected) {
+		let path = type(subject) == 'object' ? handle_path(subject) : subject;
 		let current = filesystem.lstat(path);
+		let generation = filesystem.directory_owner(path);
 		if (current?.type != 'directory' || current.uid != 0 || current.mode != 0o700 ||
 		    type(current.nlink) != 'int' || current.nlink < 2 ||
-		    (expected != null && !same_directory_identity(current, expected)))
+		    type(generation) != 'string' || !match(generation, /^[0-9a-f]{64}$/))
 			die('INTERNAL');
+		current.generation = generation;
+		if (expected != null && !same_directory_identity(current, expected)) die('INTERNAL');
 		return current;
+	};
+	function directory_handle(path, identity) {
+		let object_generation = filesystem.object_generation(path);
+		if (type(object_generation) != 'int') die('INTERNAL');
+		let token = sprintf('handle-%d', ++next_handle);
+		let handle = { opaque: path, token, identity: clone(identity) };
+		handle_bindings[token] = { handle, object_generation };
+		return handle;
 	};
 	function file(path, expected, options) {
 		let current = filesystem.lstat(path);
@@ -63,45 +83,52 @@ function secure_fs(filesystem) {
 			filesystem.chmod(path, options.mode); filesystem.set_uid(path, options.uid);
 			filesystem.set_nlink(path, 2);
 		}
+		if (filesystem.claim_directory_owner(path) == null) die('INTERNAL');
 		let identity = directory(path, options?.expected);
 		hook('after', 'open', null, path, options);
 		identity = directory(path, identity);
-		return { opaque: path, identity: clone(identity) };
+		return directory_handle(path, identity);
 	};
 	capability.open_at = (parent, name, options) => {
-		directory(parent.opaque, parent.identity);
+		directory(parent, parent.identity);
 		if (!match(name, /^[A-Za-z0-9._-]+$/)) die('INTERNAL');
-		let path = parent.opaque + '/' + name;
+		let parent_path = handle_path(parent), path = parent_path + '/' + name;
 		hook('before', 'open_at', parent, name, options);
+		parent_path = handle_path(parent); path = parent_path + '/' + name;
 		if (filesystem.lstat(path) == null) {
 			if (options?.create !== true || filesystem.mkdir(path) !== true) die('INTERNAL');
 			filesystem.chmod(path, options.mode); filesystem.set_uid(path, options.uid);
 			filesystem.set_nlink(path, 2);
-			filesystem.set_nlink(parent.opaque, parent.identity.nlink + 1);
+			filesystem.set_nlink(parent_path, parent.identity.nlink + 1);
 		}
+		if (filesystem.claim_directory_owner(path) == null) die('INTERNAL');
 		let identity = directory(path, options?.expected);
 		hook('after', 'open_at', parent, name, options);
 		identity = directory(path, identity);
-		return { opaque: path, identity: clone(identity) };
+		return directory_handle(path, identity);
 	};
 	capability.stat = (parent, name) => {
-		directory(parent.opaque, parent.identity);
+		directory(parent, parent.identity);
 		hook('before', 'stat', parent, name, null);
-		let identity = clone(filesystem.lstat(parent.opaque + '/' + name));
+		let identity = clone(filesystem.lstat(handle_path(parent) + '/' + name));
+		if (identity?.type == 'directory') {
+			let path = handle_path(parent) + '/' + name;
+			identity.generation = filesystem.claim_directory_owner(path);
+		}
 		hook('after', 'stat', parent, name, identity);
 		return identity;
 	};
 	capability.list = (parent) => {
-		directory(parent.opaque, parent.identity);
+		directory(parent, parent.identity);
 		hook('before', 'list', parent, null, null);
-		let names = clone(filesystem.lsdir(parent.opaque));
+		let names = clone(filesystem.lsdir(handle_path(parent)));
 		hook('after', 'list', parent, null, null);
-		directory(parent.opaque, parent.identity);
+		directory(parent, parent.identity);
 		return names;
 	};
 	capability.read = (parent, name, options) => {
-		directory(parent.opaque, parent.identity);
-		let path = parent.opaque + '/' + name;
+		directory(parent, parent.identity);
+		let path = handle_path(parent) + '/' + name;
 		hook('before', 'read', parent, name, options);
 		let before = file(path, options?.expected, options);
 		if (before.size > options.maximum) die('INTERNAL');
@@ -112,13 +139,13 @@ function secure_fs(filesystem) {
 		return { content, identity: clone(after) };
 	};
 	capability.create_exclusive = (parent, name, content, options) => {
-		directory(parent.opaque, parent.identity);
-		let path = parent.opaque + '/' + name;
+		directory(parent, parent.identity);
+		let path = handle_path(parent) + '/' + name;
 		let temp_name = '.secure-create-' + capability.replacement_nonce++ + '.tmp';
-		let temp_path = parent.opaque + '/' + temp_name, published = false;
+		let temp_path = handle_path(parent) + '/' + temp_name, published = false;
 		hook('before', 'create_exclusive', parent, name, options);
 		try {
-			directory(parent.opaque, parent.identity);
+			directory(parent, parent.identity);
 			if (filesystem.lstat(path) != null || filesystem.lstat(temp_path) != null)
 				die('INTERNAL');
 			filesystem.files[temp_path] = ''; filesystem.bump_inode(temp_path);
@@ -130,7 +157,7 @@ function secure_fs(filesystem) {
 			hook('after', 'create_file_fsync', parent, name, { options, temp_name });
 			hook('after', 'create_temp_fsync', parent, name, { options, temp_name });
 			hook('before', 'create_publish', parent, name, { options, temp_name });
-			directory(parent.opaque, parent.identity);
+			directory(parent, parent.identity);
 			if (filesystem.lstat(path) != null || filesystem.rename(temp_path, path) !== true)
 				die('INTERNAL');
 			published = true;
@@ -148,13 +175,13 @@ function secure_fs(filesystem) {
 		}
 	};
 	capability.replace_atomic = (parent, name, expected, content, options) => {
-		directory(parent.opaque, parent.identity);
-		let path = parent.opaque + '/' + name;
+		directory(parent, parent.identity);
+		let path = handle_path(parent) + '/' + name;
 		let temp_name = '.secure-replace-' + capability.replacement_nonce++ + '.tmp';
-		let temp_path = parent.opaque + '/' + temp_name, published = false;
+		let temp_path = handle_path(parent) + '/' + temp_name, published = false;
 		hook('before', 'replace_atomic', parent, name, { expected, options });
 		try {
-			directory(parent.opaque, parent.identity);
+			directory(parent, parent.identity);
 			let current = filesystem.lstat(path);
 			if (expected == null ? current != null : !same_file_identity(current, expected))
 				die('INTERNAL');
@@ -198,8 +225,9 @@ function secure_fs(filesystem) {
 		return result;
 	};
 	capability.rename_noreplace = (parent, from, to, expected, options) => {
-		directory(parent.opaque, parent.identity);
-		let from_path = parent.opaque + '/' + from, to_path = parent.opaque + '/' + to;
+		directory(parent, parent.identity);
+		let parent_path = handle_path(parent);
+		let from_path = parent_path + '/' + from, to_path = parent_path + '/' + to;
 		hook('before', 'rename_noreplace', parent, from, { to, expected, options });
 		file(from_path, expected, options);
 		if (filesystem.lstat(to_path) != null || filesystem.rename(from_path, to_path) !== true)
@@ -210,8 +238,8 @@ function secure_fs(filesystem) {
 		return clone(file(to_path, identity, options));
 	};
 	capability.unlink_durable = (parent, name, expected) => {
-		directory(parent.opaque, parent.identity);
-		let path = parent.opaque + '/' + name;
+		directory(parent, parent.identity);
+		let path = handle_path(parent) + '/' + name;
 		hook('before', 'unlink_durable', parent, name, expected);
 		if (!same_file_identity(filesystem.lstat(path), expected)) die('INTERNAL');
 		if (filesystem.unlink(path) !== true) die('INTERNAL');
@@ -220,10 +248,10 @@ function secure_fs(filesystem) {
 		return true;
 	};
 	capability.rmdir_durable = (parent, name, expected) => {
-		directory(parent.opaque, parent.identity);
-		let path = parent.opaque + '/' + name;
+		directory(parent, parent.identity);
+		let path = handle_path(parent) + '/' + name;
 		hook('before', 'rmdir_durable', parent, name, expected);
-		if (!same_directory_identity(filesystem.lstat(path), expected)) die('INTERNAL');
+		directory(path, expected);
 		if (filesystem.rmdir(path) !== true) die('INTERNAL');
 		hook('after', 'rmdir_durable', parent, name, expected);
 		hook('after', 'rmdir_parent_fsync', parent, name, expected);
@@ -455,6 +483,51 @@ for (let primitive in [ 'unlink', 'rmdir' ])
 		assert_equal(box.filesystem.lstat(path) != null, fault[0] == 'before',
 			'durable removal persisted a partial namespace state');
 	}
+
+// Opaque directory handles follow their object generation across a namespace
+// rename and never retarget a replacement installed at the original path.
+let opaque_box = make_app(), opaque_path = '/tmp/miclash/opaque-owned';
+let opaque_handle = opaque_box.app.secure_fs.open(opaque_path,
+	{ create: true, mode: 0o700, uid: 0 });
+opaque_box.filesystem.files[opaque_path + '/owned'] = 'owner-data';
+opaque_box.filesystem.bump_inode(opaque_path + '/owned');
+opaque_box.filesystem.set_mode(opaque_path + '/owned', 0o600);
+opaque_box.filesystem.set_uid(opaque_path + '/owned', 0);
+opaque_box.filesystem.set_nlink(opaque_path + '/owned', 1);
+let opaque_inode = opaque_handle.identity.inode;
+assert_equal(opaque_box.filesystem.rename(opaque_path, opaque_path + '-moved'), true);
+assert_equal(opaque_box.filesystem.mkdir(opaque_path), true);
+opaque_box.filesystem.set_inode(opaque_path, opaque_inode);
+opaque_box.filesystem.set_mode(opaque_path, 0o700); opaque_box.filesystem.set_uid(opaque_path, 0);
+opaque_box.filesystem.set_nlink(opaque_path, 2);
+let replacement_handle = opaque_box.app.secure_fs.open(opaque_path,
+	{ create: true, mode: 0o700, uid: 0 });
+let opaque_names = opaque_box.app.secure_fs.list(opaque_handle);
+assert_equal(sprintf('%J', opaque_names), sprintf('%J', [ 'owned' ]),
+	'opaque handle retargeted the replacement pathname: ' + sprintf('%J', opaque_names));
+assert_equal(length(opaque_box.app.secure_fs.list(replacement_handle)), 0);
+assert_equal(opaque_handle.identity.inode, replacement_handle.identity.inode,
+	'test did not exercise inode reuse');
+assert_equal(opaque_handle.identity.generation == replacement_handle.identity.generation,
+	false, 'replacement reused the capability-owned generation');
+assert_throws(() => opaque_box.app.secure_fs.list(clone(opaque_handle)), 'INTERNAL');
+
+// Deletion invalidates the object-bound handle even if a new directory reuses
+// every forgeable stat field at the same pathname.
+let stale_box = make_app(), stale_path = '/tmp/miclash/stale-owned';
+let stale_handle = stale_box.app.secure_fs.open(stale_path,
+	{ create: true, mode: 0o700, uid: 0 });
+let stale_inode = stale_handle.identity.inode;
+assert_equal(stale_box.filesystem.rmdir(stale_path), true);
+assert_equal(stale_box.filesystem.mkdir(stale_path), true);
+stale_box.filesystem.set_inode(stale_path, stale_inode);
+stale_box.filesystem.set_mode(stale_path, 0o700); stale_box.filesystem.set_uid(stale_path, 0);
+stale_box.filesystem.set_nlink(stale_path, 2);
+let new_stale_handle = stale_box.app.secure_fs.open(stale_path,
+	{ create: true, mode: 0o700, uid: 0 });
+assert_equal(stale_handle.identity.inode, new_stale_handle.identity.inode);
+assert_equal(stale_handle.identity.generation == new_stale_handle.identity.generation, false);
+assert_throws(() => stale_box.app.secure_fs.list(stale_handle), 'INTERNAL');
 
 let hardlinked_file = make_app();
 hardlinked_file.filesystem.set_nlink('/opt/clash/lst/local.txt', 2);
@@ -1136,6 +1209,10 @@ let intermediate_path = '/tmp/miclash/backup-inspected/' +
 assert_equal(intermediate_swap.filesystem.unlink(intermediate_path + '/settings.json'), true);
 assert_equal(intermediate_swap.filesystem.rmdir(intermediate_path), true);
 assert_equal(intermediate_swap.filesystem.mkdir(intermediate_path), true);
+intermediate_swap.filesystem.set_inode(intermediate_path,
+	intermediate_journal.directories[0].identity.inode);
+intermediate_swap.filesystem.set_device(intermediate_path,
+	intermediate_journal.directories[0].identity.dev_minor);
 intermediate_swap.filesystem.set_mode(intermediate_path, 0o700);
 intermediate_swap.filesystem.set_uid(intermediate_path, 0);
 intermediate_swap.filesystem.set_nlink(intermediate_path, 2);
@@ -1143,6 +1220,9 @@ let intermediate_foreign = intermediate_swap.filesystem.lstat(intermediate_path)
 assert_throws(() => backup.list(intermediate_swap.app), 'INTERNAL');
 assert_equal(intermediate_swap.filesystem.lstat(intermediate_path).inode,
 	intermediate_foreign.inode, 'foreign intermediate directory was removed');
+assert_equal(intermediate_swap.filesystem.directory_owner(intermediate_path) ==
+	intermediate_journal.directories[0].identity.generation, false,
+	'foreign intermediate reused the persistent owner generation');
 
 inspect_order.runtime.clock.advance(900001);
 backup.list(inspect_order.app);

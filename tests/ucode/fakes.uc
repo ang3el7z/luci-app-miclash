@@ -69,6 +69,11 @@ export function fs(initial) {
 	let mtimes = {};
 	let links = {};
 	let symlinks = {};
+	let object_generations = { '/': 1 };
+	let generation_paths = { '1': '/' };
+	let directory_owners = {};
+	let next_object_generation = 2;
+	let next_directory_owner = 1;
 	let next_inode = 100;
 	let next_fd = 10;
 	let created = [];
@@ -102,6 +107,9 @@ export function fs(initial) {
 	fake.mkdir = (path) => {
 		if (exists(files, path) || exists(directories, path) || exists(symlinks, path)) return null;
 		directories[path] = true;
+		let generation = next_object_generation++;
+		object_generations[path] = generation;
+		generation_paths[sprintf('%d', generation)] = path;
 		inodes[path] = next_inode++;
 		mtimes[path] = 0;
 		if (type(fake.on_mkdir) == 'function') fake.on_mkdir(path);
@@ -124,14 +132,23 @@ export function fs(initial) {
 		let current = parent(path);
 		while (current != '/') {
 			directories[current] = true;
+			if (object_generations[current] == null) {
+				let generation = next_object_generation++;
+				object_generations[current] = generation;
+				generation_paths[sprintf('%d', generation)] = current;
+			}
 			current = parent(current);
 		}
 	};
 
 	for (let path in files)
 		remember_directories(path);
-	for (let path in files)
+	for (let path in files) {
 		inodes[path] = next_inode++;
+		let generation = next_object_generation++;
+		object_generations[path] = generation;
+		generation_paths[sprintf('%d', generation)] = path;
+	}
 
 	function resolve(path) {
 		for (let link, target in symlinks)
@@ -269,6 +286,8 @@ export function fs(initial) {
 		let present = exists(files, actual) || exists(symlinks, actual);
 		delete modes[path];
 		delete inodes[actual];
+		delete generation_paths[sprintf('%d', object_generations[actual])];
+		delete object_generations[actual];
 		delete files[actual];
 		delete symlinks[actual];
 		return present;
@@ -287,6 +306,9 @@ export function fs(initial) {
 		delete inodes[path];
 		delete mtimes[path];
 		delete modes[path];
+		delete generation_paths[sprintf('%d', object_generations[path])];
+		delete object_generations[path];
+		delete directory_owners[path];
 		return true;
 	};
 	fake.rename = (from, to) => {
@@ -303,7 +325,8 @@ export function fs(initial) {
 			return null;
 		if (exists(directories, from)) {
 			if (exists(files, to) || exists(directories, to) || exists(symlinks, to)) return null;
-			let mappings = [ directories, files, modes, owners, devices, inodes, links, mtimes ];
+			let mappings = [ directories, files, modes, owners, devices, inodes, links, mtimes,
+				object_generations, directory_owners ];
 			for (let values in mappings) {
 				let moved = {};
 				for (let path, value in values)
@@ -314,6 +337,8 @@ export function fs(initial) {
 						delete values[path];
 				for (let path, value in moved) values[path] = value;
 			}
+			for (let path, generation in object_generations)
+				generation_paths[sprintf('%d', generation)] = path;
 			if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
 			if (fake.throw_after_rename_once_matching != null &&
 			    index(to, fake.throw_after_rename_once_matching) >= 0) {
@@ -327,9 +352,12 @@ export function fs(initial) {
 		files[actual_to] = files[actual_from];
 		modes[actual_to] = modes[actual_from];
 		inodes[actual_to] = inodes[actual_from];
+		object_generations[actual_to] = object_generations[actual_from];
+		generation_paths[sprintf('%d', object_generations[actual_to])] = actual_to;
 		delete files[actual_from];
 		delete modes[actual_from];
 		delete inodes[actual_from];
+		delete object_generations[actual_from];
 		if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
 		if (fake.throw_after_rename_once_matching != null &&
 		    index(to, fake.throw_after_rename_once_matching) >= 0) {
@@ -373,11 +401,38 @@ export function fs(initial) {
 	fake.set_uid = (path, uid) => owners[path] = uid;
 	fake.set_mode = (path, mode) => modes[path] = mode;
 	fake.set_mtime = (path, mtime) => mtimes[path] = mtime;
-	fake.bump_inode = (path) => inodes[resolve(path)] = next_inode++;
+	fake.bump_inode = (path) => {
+		let resolved = resolve(path);
+		inodes[resolved] = next_inode++;
+		if (object_generations[resolved] == null) {
+			let generation = next_object_generation++;
+			object_generations[resolved] = generation;
+			generation_paths[sprintf('%d', generation)] = resolved;
+		}
+	};
+	fake.set_inode = (path, inode) => inodes[resolve(path)] = inode;
+	fake.object_generation = (path) => object_generations[resolve(path)];
+	fake.path_for_object_generation = (generation) =>
+		generation_paths[sprintf('%d', generation)] ?? null;
+	fake.claim_directory_owner = (path) => {
+		let resolved = resolve(path);
+		if (!exists(directories, resolved)) return null;
+		if (directory_owners[resolved] == null)
+			directory_owners[resolved] = sprintf('%064x', next_directory_owner++);
+		return directory_owners[resolved];
+	};
+	fake.directory_owner = (path) => directory_owners[resolve(path)];
 	fake.set_symlink = (path, target) => {
+		if (object_generations[path] != null)
+			delete generation_paths[sprintf('%d', object_generations[path])];
 		delete files[path];
+		delete directories[path];
+		delete directory_owners[path];
 		symlinks[path] = target;
 		inodes[path] = next_inode++;
+		let generation = next_object_generation++;
+		object_generations[path] = generation;
+		generation_paths[sprintf('%d', generation)] = path;
 		remember_directories(path);
 		return true;
 	};

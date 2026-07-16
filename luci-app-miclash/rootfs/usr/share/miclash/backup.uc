@@ -10,8 +10,11 @@ import * as schema from 'miclash.schema';
  * primitive authenticates the supplied expected identity in the same
  * operation; there is intentionally no runtime.fs pathname fallback.
  *
- *   open(path, { create, mode, uid }) -> directory handle
- *   open_at(dir, name, { create, mode, uid, expected? }) -> directory handle
+ *   open(path, { create, mode, uid }) -> opaque directory handle
+ *   open_at(dir, name, { create, mode, uid, expected? }) -> opaque directory handle
+ *       (handles and identities carry a persistent capability-owned,
+ *        unforgeable 256-bit directory generation; inode metadata is only
+ *        supplemental and never establishes directory ownership)
  *   stat(dir, name) -> identity|null
  *   list(dir) -> [ immediate-name ]
  *   read(dir, name, { maximum, mode, uid, nlink, expected? })
@@ -96,7 +99,8 @@ function same_directory_identity(left, right) {
 	return left?.type == 'directory' && right?.type == 'directory' &&
 		left?.inode == right?.inode &&
 		left?.dev?.major == right?.dev?.major && left?.dev?.minor == right?.dev?.minor &&
-		left?.uid == right?.uid && left?.mode == right?.mode;
+		left?.uid == right?.uid && left?.mode == right?.mode &&
+		left?.generation == right?.generation;
 };
 
 function valid_file_identity(identity, mode, size) {
@@ -110,7 +114,8 @@ function valid_file_identity(identity, mode, size) {
 function valid_directory_identity(identity, mode) {
 	return type(identity) == 'object' && identity.type == 'directory' &&
 		type(identity.inode) == 'int' && type(identity.dev?.major) == 'int' &&
-		type(identity.dev?.minor) == 'int' && identity.uid == 0 && identity.mode == mode;
+		type(identity.dev?.minor) == 'int' && identity.uid == 0 && identity.mode == mode &&
+		type(identity.generation) == 'string' && match(identity.generation, /^[0-9a-f]{64}$/);
 };
 
 function validate_app(app) {
@@ -517,7 +522,7 @@ function remove_tree(env, parent, name, expected, registered, registered_directo
 				expected_directory = {
 					type: value.type, inode: value.inode,
 					dev: { major: value.dev_major, minor: value.dev_minor },
-					uid: value.uid, mode: value.mode
+					uid: value.uid, mode: value.mode, generation: value.generation
 				};
 			}
 			if (expected_directory == null ||
@@ -572,7 +577,7 @@ function directory_identity_record(identity) {
 	return {
 		type: identity.type, inode: identity.inode,
 		dev_major: identity.dev?.major, dev_minor: identity.dev?.minor,
-		uid: identity.uid, mode: identity.mode
+		uid: identity.uid, mode: identity.mode, generation: identity.generation
 	};
 };
 
@@ -590,7 +595,7 @@ function record_directory_identity(record) {
 	return {
 		type: record.type, inode: record.inode,
 		dev: { major: record.dev_major, minor: record.dev_minor },
-		uid: record.uid, mode: record.mode
+		uid: record.uid, mode: record.mode, generation: record.generation
 	};
 };
 
@@ -607,10 +612,11 @@ function valid_file_identity_record(record) {
 function valid_directory_identity_record(record) {
 	return record == null || (exact_fields(record, {
 		type: true, inode: true, dev_major: true, dev_minor: true,
-		uid: true, mode: true
+		uid: true, mode: true, generation: true
 	}) && record.type == 'directory' && type(record.inode) == 'int' &&
 		type(record.dev_major) == 'int' && type(record.dev_minor) == 'int' &&
-		record.uid == 0 && type(record.mode) == 'int');
+		record.uid == 0 && type(record.mode) == 'int' &&
+		type(record.generation) == 'string' && match(record.generation, /^[0-9a-f]{64}$/));
 };
 
 const JOURNAL_FIELDS = {
