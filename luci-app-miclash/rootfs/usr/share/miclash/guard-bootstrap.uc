@@ -1,6 +1,8 @@
 #!/usr/bin/ucode
 
 import * as guard from 'miclash.guard';
+import * as guard_latch from 'miclash.guard-latch';
+import * as boot_policy from 'miclash.guard-boot-policy';
 import * as runtime_module from 'miclash.runtime';
 import * as settings_module from 'miclash.settings';
 import { atomic_write } from 'miclash.storage';
@@ -62,25 +64,6 @@ function write_json(runtime, path, value, mode) {
 	return true;
 };
 
-function persisted(runtime) {
-	let content = runtime.fs.readfile(STATE_PATH);
-	if (content == null)
-		return null;
-	try { return json(content); }
-	catch (error) { return null; }
-};
-
-function observations(runtime, backend) {
-	return {
-		persisted: persisted(runtime),
-		installed: {
-			verified: backend.installed(),
-			enabled: true,
-			occupied: backend.occupied()
-		}
-	};
-};
-
 function production_adapter(runtime, backend) {
 	return {
 		verify: (wanted) => wanted.enabled ? backend.installed() : backend.absent(),
@@ -104,21 +87,12 @@ function main() {
 	let runtime = runtime_module.create();
 	let backend = guard.create_nft_backend(nft_io(runtime));
 	runtime.observers.guard = production_adapter(runtime, backend);
-	let wanted;
-	if (ARGV[0] == 'disable' || ARGV[0] == 'remove')
-		wanted = {
-			enabled: false,
-			source: ARGV[0] == 'disable' ? 'explicit_disable' : 'package_removal',
-			explicit_disable: true
-		};
-	else {
-		let settings = null;
-		try { settings = settings_module.load(runtime); }
-		catch (error) {}
-		wanted = guard.desired(settings, observations(runtime, backend));
-	}
-
-	guard.install_bootstrap(runtime, wanted);
+	let settings = null;
+	try { settings = settings_module.load(runtime); }
+	catch (error) {}
+	// Any latch object, including corrupt files and symlinks, is an ON intent.
+	// Early boot and init remove are never authorized to weaken that barrier.
+	boot_policy.apply(runtime, settings, guard_latch.is_set(runtime), ARGV[0]);
 };
 
 main();

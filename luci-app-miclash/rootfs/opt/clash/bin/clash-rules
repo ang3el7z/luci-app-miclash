@@ -185,7 +185,7 @@ load_all_settings_once() {
     [ -n "$AUTO_DETECT_LAN" ] && settings_part="$settings_part, Auto-detect LAN: $AUTO_DETECT_LAN"
     [ -n "$AUTO_DETECT_WAN" ] && settings_part="$settings_part, Auto-detect WAN: $AUTO_DETECT_WAN"
     [ -n "$BLOCK_QUIC" ] && settings_part="$settings_part, Block QUIC: $BLOCK_QUIC"
-    [ -n "$INTERNET_ONLY_MICLASH" ] && settings_part="$settings_part, Client guard: $INTERNET_ONLY_MICLASH"
+    settings_part="$settings_part, Client guard: ${INTERNET_ONLY_MICLASH:-unknown}"
     [ -n "$TUN_STACK" ] && settings_part="$settings_part, TUN stack: $TUN_STACK"
     [ -n "$DETECTED_LAN" ] && settings_part="$settings_part, Detected LAN: $DETECTED_LAN"
     [ -n "$DETECTED_WAN" ] && settings_part="$settings_part, Detected WAN: $DETECTED_WAN"
@@ -1554,8 +1554,16 @@ guard_safety_latched() {
 	[ -e "$GUARD_SAFETY_LATCH" ] || [ -L "$GUARD_SAFETY_LATCH" ]
 }
 
+guard_canonical_enabled() {
+	[ "$INTERNET_ONLY_MICLASH" = "true" ]
+}
+
+guard_canonical_disabled() {
+	! guard_canonical_enabled
+}
+
 guard_effective_enabled() {
-	[ "$INTERNET_ONLY_MICLASH" = "true" ] || guard_safety_latched
+	guard_canonical_enabled || guard_safety_latched
 }
 
 guard_safety_latch_set() {
@@ -1625,7 +1633,7 @@ verify_guard_absent() {
 
 guard_verify_on() {
 	load_all_settings_once
-	[ "$INTERNET_ONLY_MICLASH" = "true" ] || return 1
+	guard_canonical_enabled || return 1
 	verify_guard_rules || return 1
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc verify-bootstrap-on
 }
@@ -1637,7 +1645,7 @@ guard_verify_protected() {
 
 guard_verify_off() {
 	load_all_settings_once
-	[ "$INTERNET_ONLY_MICLASH" = "false" ] || return 1
+	guard_canonical_disabled || return 1
 	guard_safety_latched && return 1
 	verify_guard_absent || return 1
 	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc verify-bootstrap-off
@@ -1855,7 +1863,7 @@ finalize_guard_rules() {
 	local controlled_off="${1:-false}"
 	load_all_settings_once
 	if guard_effective_enabled &&
-	   { [ "$controlled_off" != "true" ] || [ "$INTERNET_ONLY_MICLASH" = "true" ]; }; then
+	   { [ "$controlled_off" != "true" ] || guard_canonical_enabled; }; then
 		# Enabled finalization refines and verifies the forced Guard without
 		# removing its independent emergency barrier during procd registration.
 		apply_guard_rules && guard_verify_protected || {
@@ -1874,9 +1882,17 @@ finalize_guard_rules() {
 		msg "ERROR: Disabled Guard finalization could not establish bootstrap protection"
 		return 1
 	}
-	if remove_guard_rules_strict && verify_guard_absent && guard_bootstrap_disable; then
-		msg "Client forwarding guard finalization verified disabled state"
-		return 0
+	if remove_guard_rules_strict && verify_guard_absent; then
+		# A controlled OFF retains the durable latch and bootstrap until the
+		# primary runtime owner is absent. Ordinary OFF has no latch to retain.
+		if guard_safety_latched; then
+			msg "Client forwarding guard primary runtime removed; latched bootstrap retained"
+			return 0
+		fi
+		if guard_bootstrap_disable; then
+			msg "Client forwarding guard finalization verified disabled state"
+			return 0
+		fi
 	fi
 
 	if ! guard_emergency_protect; then
@@ -1890,7 +1906,8 @@ finalize_guard_rules() {
 guard_controlled_disable() {
 	# Retain the durable latch through terminal physical removal. If this process
 	# dies, the next boot/finalize sees it and restores fail-closed protection.
-	if finalize_guard_rules true && guard_safety_latch_clear && guard_verify_off; then
+	if finalize_guard_rules true && guard_safety_latch_clear &&
+	   guard_bootstrap_disable && guard_verify_off; then
 		return 0
 	fi
 	guard_safety_latch_set >/dev/null 2>&1 || true
@@ -1969,7 +1986,7 @@ apply_nft_clash_exclusions_mangle() {
 
 # For nftables - exclude proxy server IPs in mangle chain
 apply_nft_server_exclusions_mangle() {
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+    if guard_effective_enabled; then
         msg "Client guard enabled; proxy server IPs are not excluded from client mangle"
         return 0
     fi
@@ -2357,7 +2374,7 @@ apply_iptables_clash_exclusions() {
 # For iptables - exclude proxy server IPs
 apply_iptables_server_exclusions() {
     local server_ips="$1"
-    if [ "$INTERNET_ONLY_MICLASH" = "true" ]; then
+    if guard_effective_enabled; then
         msg "Client guard enabled; proxy server IPs are not excluded from client processing"
         return 0
     fi

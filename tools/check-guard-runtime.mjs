@@ -88,8 +88,18 @@ ordered(finalize, [ 'guard_emergency_protect ||', 'remove_guard_rules_strict',
 	'explicit disable must prove protection and runtime absence before release');
 
 const effective = body(rules, 'guard_effective_enabled');
-check(effective.includes('INTERNET_ONLY_MICLASH') && effective.includes('guard_safety_latched'),
+check(effective.includes('guard_canonical_enabled') && effective.includes('guard_safety_latched'),
 	'effective Guard must be canonical UCI OR the backend-owned safety latch');
+check(body(rules, 'guard_canonical_enabled').includes('INTERNET_ONLY_MICLASH'),
+	'canonical Guard helper must be the sole legacy variable decision boundary');
+for (const name of [ 'apply_nft_server_exclusions_mangle', 'apply_iptables_server_exclusions' ])
+	check(body(rules, name).includes('guard_effective_enabled') &&
+		!body(rules, name).includes('INTERNET_ONLY_MICLASH'),
+		`${name} must honor latched effective Guard exactly like canonical ON`);
+const rawGuardBranches = rules.match(/(?:if|elif)[^\n]*INTERNET_ONLY_MICLASH|\[[^\n]*INTERNET_ONLY_MICLASH[^\n]*\]/g) ?? [];
+check(rawGuardBranches.length === 1 &&
+	body(rules, 'guard_canonical_enabled').includes(rawGuardBranches[0]),
+	'raw INTERNET_ONLY_MICLASH branch decisions are forbidden outside the canonical helper');
 for (const name of [ 'refresh_guard_rules', 'finalize_guard_rules', 'start', 'stop' ])
 	check(body(rules, name).includes('guard_effective_enabled'),
 		`${name} must honor the effective Guard safety latch`);

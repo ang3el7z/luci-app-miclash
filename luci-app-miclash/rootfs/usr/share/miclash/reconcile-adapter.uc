@@ -47,7 +47,35 @@ export function create(app) {
 		try { return app.events?.emit?.(type_name, data) === true; }
 		catch (error) { return false; }
 	};
+	function recover_guard(trigger, stage) {
+		trigger = reason(trigger);
+		if (!app.guard.is_latched()) return app.settings.get();
+		let desired;
+		try {
+			stage?.('guard-protect', 10, 'Maintaining fail-closed Guard protection');
+			if (app.guard.protect() !== true) fail('HEALTH_FAILED');
+			stage?.('guard-settings', 15, 'Repairing canonical Guard setting');
+			desired = app.settings.set({ guard: { enabled: true } });
+			if (desired?.guard?.enabled !== true || app.guard.verify(true) !== true)
+				fail('HEALTH_FAILED');
+			stage?.('guard-latch', 20, 'Releasing repaired Guard safety latch');
+			if (app.guard.latch_clear() !== true || app.guard.is_latched())
+				fail('HEALTH_FAILED');
+			return desired;
+		}
+		catch (error) {
+			// Startup and ordinary reconciliation share this exact fail-closed
+			// transaction. Partial latch release is always durably re-armed.
+			try { app.guard.latch_set(); } catch (latch_error) {}
+			try { app.guard.protect(); } catch (protect_error) {}
+			fail(error?.code ?? error?.message ?? 'HEALTH_FAILED');
+		}
+	};
 	return {
+		recover_guard: (trigger) => {
+			recover_guard(trigger, null);
+			return true;
+		},
 		run: (trigger) => {
 			trigger = reason(trigger);
 			return app.operations.submit('system.reconcile', 'system', { trigger }, (ctx) => {
@@ -55,15 +83,7 @@ export function create(app) {
 				try {
 					if (app.guard.is_latched()) {
 						failure_component = 'guard';
-						ctx.stage('guard-protect', 10, 'Maintaining fail-closed Guard protection');
-						if (app.guard.protect() !== true) fail('HEALTH_FAILED');
-						ctx.stage('guard-settings', 15, 'Repairing canonical Guard setting');
-						desired = app.settings.set({ guard: { enabled: true } });
-						if (desired?.guard?.enabled !== true || app.guard.verify(true) !== true)
-							fail('HEALTH_FAILED');
-						ctx.stage('guard-latch', 20, 'Releasing repaired Guard safety latch');
-						if (app.guard.latch_clear() !== true || app.guard.is_latched())
-							fail('HEALTH_FAILED');
+						desired = recover_guard(trigger, ctx.stage);
 						failure_component = 'mihomo';
 					}
 					ctx.stage('restart', 25, 'Restarting Mihomo after configuration change');

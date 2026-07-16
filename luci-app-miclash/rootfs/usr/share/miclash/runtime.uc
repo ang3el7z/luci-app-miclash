@@ -551,6 +551,7 @@ function guard_control_adapter(runtime) {
 	};
 	return {
 		protect: () => action('guard_start') && action('guard_verify_protected'),
+		verify_protected: () => action('guard_verify_protected'),
 		disable: () => action('guard_disable') && action('guard_verify_off'),
 		verify: (enabled) => runtime.observers.guard(enabled)?.ready === true,
 		latch_set: () => action('guard_latch_set'),

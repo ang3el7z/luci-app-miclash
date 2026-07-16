@@ -4,6 +4,7 @@ import * as real_api from 'miclash.api';
 import * as real_application from 'miclash.application';
 import * as real_reconcile_adapter from 'miclash.reconcile-adapter';
 import * as runtime_module from 'miclash.runtime';
+import * as startup_guard from 'miclash.startup-guard';
 import * as fakes from './fakes.uc';
 
 let order = [];
@@ -410,6 +411,7 @@ let integrated_runtime = {
 			if (guard_failure_mode == 'protect') return false;
 			return true;
 		},
+		verify_protected: () => guard_actual,
 		disable: () => {
 			push(guard_backend_calls, 'disable'); guard_latched = false; guard_actual = false;
 			return guard_failure_mode != 'disable_after_remove';
@@ -576,6 +578,24 @@ let successful_guard_off = integration_methods.guard_transition.call({ args: { e
 assert_equal(operation_records[successful_guard_off.operation_id].state, 'success');
 assert_equal(guard_latched, false, 'explicit successful OFF retained the safety latch');
 assert_equal(guard_actual, false);
+
+// Exercise the actual post-compose startup path with canonical OFF, no
+// physical protection and an armed latch. Guard-only reconciliation repairs
+// both persisted desired state and the live state model without Clash health.
+guard_latched = true; guard_actual = false;
+let integrated_startup = startup_guard.create({
+	clock: integrated_runtime.clock,
+	guard: integrated_runtime.guard_control,
+	reconcile: integrated_runtime.reconcile
+});
+assert_true(integrated_startup.start());
+assert_equal(desired.guard.enabled, true);
+assert_equal(integrated.state.snapshot().desired.guard.enabled, true);
+assert_equal(guard_actual, true);
+assert_equal(guard_latched, false);
+assert_true(integrated_startup.close());
+let reset_after_startup = integration_methods.guard_transition.call({ args: { enabled: false, source: 'luci' } });
+assert_equal(operation_records[reset_after_startup.operation_id].state, 'success');
 let healthy_memory_set_timeout = integrated_clock.set_timeout;
 let timers_before_failed_memory = length(filter(integrated_clock.timers, (timer) => timer.active));
 integrated_clock.set_timeout = () => die('timer failed');

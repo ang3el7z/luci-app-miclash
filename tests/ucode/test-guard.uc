@@ -357,8 +357,9 @@ assert_true(match(clash_rules, /uci[^\n]*miclash\.guard\.enabled/) != null &&
 assert_true(index(makefile, '/etc/init.d/miclash-guard start || exit 1') >= 0,
 	'package installation must fail closed when an enabled bootstrap cannot be installed');
 assert_true(index(bootstrap, "ARGV[0] != 'disable'") >= 0 &&
-	index(bootstrap, "'explicit_disable'") >= 0,
-	'explicit Guard disable must have a distinct, deliberate bootstrap removal command');
+	index(bootstrap, 'guard_latch.is_set(runtime)') >= 0 &&
+	index(bootstrap, 'boot_policy.apply') >= 0,
+	'bootstrap commands must derive effective UCI-or-latch intent at execution time');
 assert_true(index(init, 'guard-bootstrap.uc remove') >= 0,
 	'Guard owner removal must use its distinct bootstrap removal command');
 assert_true(!match(makefile, /INSTALL_BIN[^\n]*rootfs\/etc\/init\.d\/miclashd/),

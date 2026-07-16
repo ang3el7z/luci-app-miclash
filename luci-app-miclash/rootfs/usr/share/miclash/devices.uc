@@ -4,6 +4,7 @@ import * as settings from 'miclash.settings';
 import * as storage from 'miclash.storage';
 import { with_lock } from 'miclash.mutation_lock';
 import * as schedule from 'miclash.schedule';
+import * as guard_latch from 'miclash.guard-latch';
 
 const CONFIG = 'miclash';
 const POLICY_TYPE = 'device_policy';
@@ -586,11 +587,18 @@ function journal_state(app, current, recover) {
 function guard(app) {
 	try {
 		let value = settings.load(app).guard.enabled;
+		if (guard_latch.is_set(app)) return true;
 		return type(value) == 'bool' ? value : null;
 	}
-	catch (error) { return null; }
+	catch (error) {
+		try { if (guard_latch.is_set(app)) return true; }
+		catch (latch_error) {}
+		return null;
+	}
 };
-function guard_cursor(uci) {
+function guard_cursor(app, uci) {
+	try { if (guard_latch.is_set(app)) return true; }
+	catch (error) { return null; }
 	let value = uci.get(CONFIG, 'guard', 'enabled');
 	if (value == null || value == '0' || value == 'false' || value == 'no' || value == 'off') return false;
 	if (value == '1' || value == 'true' || value == 'yes' || value == 'on') return true;
@@ -652,7 +660,7 @@ export function policy_set(app, policy) {
 	return with_lock(app, { barrier: 'normal', wait_ms: 0 }, () => {
 		let uci = cursor(app);
 		for (let name in uci.changes(CONFIG) ?? {}) invalid('BUSY');
-		if (wanted.action == 'direct' && guard_cursor(uci) !== false) invalid('VALIDATION_FAILED');
+		if (wanted.action == 'direct' && guard_cursor(app, uci) !== false) invalid('VALIDATION_FAILED');
 		let before = list_from(uci); journal_state(app, before, true);
 		let existing = null;
 		for (let item in before) if (item.id == wanted.id) existing = item;

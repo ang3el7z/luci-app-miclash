@@ -3,11 +3,30 @@
 import * as uloop from 'uloop';
 import * as runtime from 'miclash.runtime';
 import * as daemon from 'miclash.daemon';
+import * as startup_guard from 'miclash.startup-guard';
 
 if (uloop.init() !== true)
 	die('INTERNAL');
 
-let process = daemon.compose(runtime.create());
+let environment = runtime.create();
+let process = daemon.compose(environment);
+let startup = null;
+try {
+	startup = startup_guard.create({
+		clock: environment.clock,
+		guard: environment.guard_control,
+		reconcile: environment.reconcile
+	});
+	startup.start();
+}
+catch (error) {
+	try { startup?.close?.(); } catch (close_error) {}
+	try { process.close(); } catch (close_error) {}
+	uloop.done();
+	die('INTERNAL');
+}
+
+let shutting_down = false;
 let observation_timer = null;
 observation_timer = uloop.timer(0, () => {
 	try { process.state.observe('config.yaml'); }
@@ -16,18 +35,19 @@ observation_timer = uloop.timer(0, () => {
 		observation_timer.set(10000);
 });
 if (observation_timer == null) {
+	try { startup.close(); } catch (startup_error) {}
 	try { process.close(); } catch (close_error) {}
 	uloop.done();
 	die('INTERNAL');
 }
 
-let shutting_down = false;
 function shutdown() {
 	if (shutting_down)
 		return;
 	shutting_down = true;
 	process.drain();
 	try { observation_timer.cancel(); } catch (timer_error) {}
+	try { startup.close(); } catch (startup_error) {}
 	try { process.close(); } catch (close_error) {}
 	uloop.end();
 };

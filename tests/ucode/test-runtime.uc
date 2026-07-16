@@ -166,6 +166,8 @@ assert_true(type(guard_runtime.guard_control.latch_set) == 'function' &&
 	'production Guard adapter is missing the persistent safety latch');
 assert_equal(guard_runtime.guard_control.protect(), true,
 	'production Guard adapter did not establish exact protection before UCI ON');
+assert_equal(guard_runtime.guard_control.verify_protected(), true,
+	'production Guard adapter did not expose physical-only startup proof');
 guard_canonical = true;
 assert_equal(guard_runtime.guard_control.verify(true), true,
 	'legacy false overrode canonical Guard ON verification');

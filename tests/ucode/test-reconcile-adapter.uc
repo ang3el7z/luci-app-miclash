@@ -98,3 +98,25 @@ assert_equal(guard_enabled, true);
 assert_equal(guard_physical, true);
 assert_equal(guard_latched, false);
 assert_equal(length(records), records_before_latch + 3);
+
+// Startup recovery invokes only the latch-aware Guard transaction. It must
+// repair canonical/state intent and release the latch without waiting for or
+// restarting a disabled/unready Clash service.
+guard_enabled = false; guard_latched = true; guard_physical = false; ready = false; now++;
+let restarts_before_startup = service_restarts;
+assert_equal(reconciler.recover_guard('startup-guard'), true);
+assert_equal(guard_enabled, true);
+assert_equal(guard_physical, true);
+assert_equal(guard_latched, false);
+assert_equal(service_restarts, restarts_before_startup);
+
+guard_enabled = false; guard_latched = true; guard_physical = false;
+guard_persist_fails = true; now++;
+let startup_failed = false;
+try { reconciler.recover_guard('startup-guard'); }
+catch (error) { startup_failed = true; }
+assert_equal(startup_failed, true);
+assert_equal(guard_enabled, false);
+assert_equal(guard_physical, true);
+assert_equal(guard_latched, true);
+assert_equal(service_restarts, restarts_before_startup);

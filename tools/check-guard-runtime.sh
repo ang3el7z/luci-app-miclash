@@ -35,6 +35,26 @@ start() {
 	printf '%s\n' start >> "$MICLASH_GUARD_RESTART_LOG"
 	[ ! -e "$MICLASH_GUARD_RESTART_FAIL-start" ]
 }
+msg() { :; }
+warn() { :; }
+nft() { printf 'nft %s\n' "$*" >> "$MICLASH_GUARD_PROXY_LOG"; }
+iptables() { printf 'iptables %s\n' "$*" >> "$MICLASH_GUARD_PROXY_LOG"; }
+if [ "${1:-}" = guard_test_effective_exclusions ]; then
+	INTERNET_ONLY_MICLASH=false
+	: > "$MICLASH_GUARD_PROXY_LOG"
+	: > "$GUARD_SAFETY_LATCH"
+	apply_nft_server_exclusions_mangle
+	apply_iptables_server_exclusions '198.51.100.7'
+	[ ! -s "$MICLASH_GUARD_PROXY_LOG" ] || exit 1
+	rm -f "$GUARD_SAFETY_LATCH"
+	apply_nft_server_exclusions_mangle
+	apply_iptables_server_exclusions '198.51.100.7'
+	grep -q 'nft add rule inet clash CLASH_MARK ip daddr @proxy_servers return' \
+		"$MICLASH_GUARD_PROXY_LOG" || exit 1
+	grep -q 'iptables -t mangle -A CLASH_PROCESS -d 198.51.100.7/32 -j RETURN' \
+		"$MICLASH_GUARD_PROXY_LOG" || exit 1
+	exit 0
+fi
 EOF
 cat > "$work/ucode-stub" <<'EOF'
 #!/bin/sh
@@ -56,9 +76,11 @@ cat > "$work/mutation-lock-fake" <<'EOF'
 miclash_mutation_lock_enter() { return 0; }
 miclash_mutation_lock_leave() { return 0; }
 EOF
-awk -v helper="$work/mutation-lock-fake" -v ucode="$work/ucode-stub" '
+awk -v helper="$work/mutation-lock-fake" -v ucode="$work/ucode-stub" \
+	-v latch="$work/safety-latch" '
 	FNR == NR { injection = injection $0 ORS; next }
 	/^MUTATION_LOCK_HELPER=/ { print "MUTATION_LOCK_HELPER=\"" helper "\""; next }
+	/^readonly GUARD_SAFETY_LATCH=/ { print "readonly GUARD_SAFETY_LATCH=\"" latch "\""; next }
 	!injected && $0 == "case \"$1\" in" { printf "%s", injection; injected = 1 }
 	{ gsub("/usr/bin/ucode", ucode); print }
 ' "$work/entrypoint-overrides" \
@@ -69,6 +91,8 @@ export MICLASH_GUARD_RESTART_LOG="$work/restart.log"
 export MICLASH_GUARD_RESTART_FAIL="$work/fail"
 export MICLASH_GUARD_EMERGENCY_STATE="$work/emergency.nft"
 export MICLASH_GUARD_CAPTURE_LOG="$work/capture.log"
+export MICLASH_GUARD_PROXY_LOG="$work/proxy.log"
+"$work/clash-rules" guard_test_effective_exclusions
 if "$work/clash-rules" guard_start; then
 	echo 'capture failure unexpectedly reported Guard success' >&2
 	exit 1

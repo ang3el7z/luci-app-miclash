@@ -657,6 +657,27 @@ assert_equal(unknown_decision.action, 'proxy', 'unknown Guard cannot compile dir
 assert_equal(unknown_decision.safety, 'guard_safe_override', 'Guard-safe override provenance explicit');
 assert_throws(() => set_policy(unknown_guard, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
 	action: 'direct', schedule: null }), 'VALIDATION_FAILED');
+// Durable latch is effective Guard ON even while canonical UCI is still OFF.
+// It must close both policy mutation and persisted DIRECT evaluation windows.
+let latched_guard = runtime({ guard: false, core_available: true, uci: { miclash: {
+	guard: { '.type': 'guard', enabled: '0' },
+	'dp_1_0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
+		mac: 'ac:bb:cc:dd:ee:10', action: 'direct', schedule: '' }
+} } });
+latched_guard.fs.writefile('/etc/miclash/guard-safety-latch', 'corrupt');
+let latched_decision = devices.effective(latched_guard, {
+	mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan', timestamp: 1710000000
+});
+assert_equal(latched_decision.action, 'proxy');
+assert_equal(latched_decision.safety, 'guard_safe_override');
+assert_throws(() => set_policy(latched_guard, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
+	action: 'direct', schedule: null }), 'VALIDATION_FAILED');
+let latch_race = runtime({ guard: false });
+latch_race.uci_fake.on_cursor = (calls) => {
+	if (calls == 2) latch_race.fs.writefile('/etc/miclash/guard-safety-latch', 'corrupt');
+};
+assert_throws(() => set_policy(latch_race, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
+	action: 'direct', schedule: null }), 'VALIDATION_FAILED');
 let guard_race = runtime({ guard: false });
 guard_race.uci_fake.on_cursor = (calls) => {
 	if (calls == 2) guard_race.uci_fake.values.miclash.guard.enabled = '1';
