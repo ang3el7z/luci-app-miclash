@@ -70,23 +70,6 @@ function persisted(runtime) {
 	catch (error) { return null; }
 };
 
-function legacy_enabled(runtime) {
-	let content = runtime.fs.readfile('/opt/clash/settings');
-	if (content == null)
-		return null;
-	let found = null;
-	for (let raw in split(content, '\n')) {
-		let line = trim(raw);
-		if (line != 'INTERNET_ONLY_MICLASH=true' && line != 'INTERNET_ONLY_MICLASH=false')
-			continue;
-		let value = line == 'INTERNET_ONLY_MICLASH=true';
-		if (found != null && found != value)
-			return null;
-		found = value;
-	}
-	return found;
-};
-
 function observations(runtime, backend) {
 	return {
 		persisted: persisted(runtime),
@@ -94,8 +77,7 @@ function observations(runtime, backend) {
 			verified: backend.installed(),
 			enabled: true,
 			occupied: backend.occupied()
-		},
-		legacy_enabled: legacy_enabled(runtime)
+		}
 	};
 };
 

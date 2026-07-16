@@ -109,7 +109,10 @@ export function create(runtime) {
 		let result;
 		try { result = observer(); }
 		catch (error) { return component(name, 'failed'); }
-		return component(name, result?.ready === true ? 'ready' : (result?.state ?? 'failed'));
+		let record = component(name, result?.ready === true ? 'ready' : (result?.state ?? 'failed'));
+		for (let field in [ 'observed_at', 'generation', 'enabled' ])
+			if (result?.[field] != null) record[field] = result[field];
+		return record;
 	};
 	function once(value, options) {
 		let records = [];
@@ -134,6 +137,15 @@ export function create(runtime) {
 			push(records, observer_record('tun'));
 		push(records, observer_record('policy'));
 		push(records, observer_record('forward'));
+		if (type(options.guard_enabled) == 'bool') {
+			let observer = runtime.observers?.guard, result;
+			try { result = observer?.(options.guard_enabled); }
+			catch (error) { result = null; }
+			let record = component('guard', result?.ready === true ? 'ready' : 'failed');
+			for (let field in [ 'observed_at', 'generation', 'enabled' ])
+				if (result?.[field] != null) record[field] = result[field];
+			push(records, record);
+		}
 		return records;
 	};
 	function all_ready(records) {

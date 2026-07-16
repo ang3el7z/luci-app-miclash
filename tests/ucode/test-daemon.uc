@@ -219,13 +219,14 @@ let integrated_state = {
 };
 let guard_settings_calls = 0;
 let guard_settings_value = { sample_interval_ms: 60000 };
+let guard_samples = 0;
 let guard = {
 	status: () => ({ phase: 'monitoring', current_rss_kb: 64000 }),
 	settings: (value) => {
 		if (value != null) { guard_settings_calls++; guard_settings_value = { ...value }; }
 		return { ...guard_settings_value };
 	},
-	reset_baseline: () => true, sample: () => true
+	reset_baseline: () => true, sample: () => { guard_samples++; return true; }
 };
 let emitted_notifications = [], notification_channel_unsubscribes = 0;
 let notifier = {
@@ -364,7 +365,9 @@ let integrated_runtime = {
 	ubus: { connect: () => integrated_connection },
 	clock: integrated_clock,
 	paths: { tmp: '/tmp/miclash', etc: '/etc/miclash', run: '/var/run/miclash' },
-	secure_fs: {}, fs: {}, digest: {}, random: {}, uci: {}, process: { run: () => ({ code: 0 }) }
+	secure_fs: {}, fs: {}, digest: {}, random: {}, uci: {}, process: { run: () => ({ code: 0 }) },
+	observers: { guard: (enabled) => ({ ready: true, state: 'ready', enabled,
+		observed_at: integrated_clock.now(), generation: 1 }) }
 };
 let integrated = daemon.compose(integrated_runtime, integrated_factories);
 assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 1,
@@ -405,6 +408,29 @@ assert_equal(integrated.domains.memory.settings().sample_interval_ms, 60000);
 assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)),
 	timers_before_failed_memory, 'invalid memory timer changed the live timer set');
 integrated_clock.set_timeout = healthy_memory_set_timeout;
+// Once enabled, a transient primary timer failure during callback rearm must
+// move to the independent fallback and later return to the primary scheduler.
+integrated.app.settings_set({ memory: { enabled: true, sample_interval_ms: 60000 } }, 'luci');
+let memory_primary = integrated_clock.set_timeout;
+assert_equal(type(integrated_clock.set_fallback_timeout), 'function');
+let memory_rearm_calls = 0;
+integrated_clock.set_timeout = (delay, callback) => {
+	memory_rearm_calls++;
+	if (memory_rearm_calls == 1) die('transient timer failure');
+	return memory_primary(delay, callback);
+};
+integrated_clock.advance(60000);
+assert_equal(guard_samples, 1, 'first Memory Guard timer did not sample');
+assert_equal(memory_rearm_calls, 1, 'Memory Guard did not attempt primary rearm');
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 2,
+	sprintf('timers after memory fallback: %J', map(integrated_clock.timers,
+		(timer) => ({ due: timer.due, active: timer.active }))));
+integrated_clock.advance(60000);
+assert_equal(guard_samples, 2, 'Memory Guard fallback did not recover primary rearming');
+integrated.app.settings_set({ memory: { enabled: false } }, 'luci');
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 1,
+	'disabling Memory Guard retained its recovered timer');
+integrated_clock.set_timeout = memory_primary;
 assert_equal(integration_methods.telegram_test.call({ args: {} }).sent, true);
 assert_equal(telegram_tests, 1);
 assert_true(type(integrated_operation_listener) == 'function');
@@ -467,6 +493,16 @@ assert_equal(auto_backup_options[1].include_secrets, false,
 integrated.app.settings_set({ backup: { enabled: false } }, 'luci');
 integrated_clock.advance(7200000);
 assert_equal(auto_backup_attempts, 2, 'disabled scheduler created another backup');
+let backup_primary = integrated_clock.set_timeout;
+integrated_clock.set_timeout = () => null;
+let maintenance = filter(integrated_clock.timers, (timer) => timer.active)[0];
+integrated_clock.advance(maintenance.due - integrated_clock.now());
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 1,
+	'backup scheduler did not retain exactly one fallback timer after null rearm');
+integrated_clock.set_timeout = backup_primary;
+integrated_clock.advance(900000);
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 1,
+	'backup scheduler did not recover the primary timer after fallback');
 assert_equal(integration_methods.memory_status.call({ args: {} }).phase, 'monitoring');
 assert_equal(length(integration_methods.backup_list.call({ args: {} })), 1);
 assert_equal(integration_methods.devices_timezones.call({ args: {} })[0], 'UTC');
@@ -490,6 +526,7 @@ assert_equal(telegram_stops, 4);
 // real transfer manager. Only host capabilities are substituted here.
 let production_methods = null, production_disconnects = 0;
 let production_running = false;
+let production_http_healthy = true;
 let production_connection = {
 	call: (object, method, args) => {
 		if (object == 'service' && method == 'list')
@@ -575,7 +612,7 @@ let production_runtime = runtime_module.create({
 	}, dhcp: { dnsmasq: { '.type': 'dnsmasq', server: [ '127.0.0.1#7874' ],
 		cachesize: '0', noresolv: '1' } } }),
 	ubus: { connect: () => production_connection },
-	http: { request: () => ({ status: 200, body: '{}' }) }
+	http: { request: () => ({ status: production_http_healthy ? 200 : 503, body: '{}' }) }
 });
 let production_daemon = daemon.compose(production_runtime);
 assert_true(type(production_runtime.rulesets?.validate) == 'function');
@@ -585,24 +622,17 @@ assert_true(type(production_methods?.transfer_begin?.call) == 'function');
 assert_equal(production_methods.memory_status.call({ args: {} }).baseline_rss_kb, 64000);
 assert_equal(production_methods.devices_timezones.call({ args: {} })[0], 'UTC');
 assert_equal(length(production_methods.backup_list.call({ args: {} })), 0);
-let lifecycle_failure = { failure_id: 'failure-1-1700000000000',
-	component: 'guard', reason: 'automatic' };
-production_runtime.events.emit('failure', lifecycle_failure);
-production_runtime.events.emit('failure', lifecycle_failure);
-production_runtime.events.emit('fail_closed', { failure_id: 'failure-1-1700000000000',
-	component: 'mihomo', reason: 'automatic' });
-production_runtime.events.emit('recovery', { failure_id: 'failure-1-1700000000000',
-	component: 'guard', reason: 'scheduled' });
-production_runtime.events.emit('direct_fallback', {
-	failure_id: 'failure-2-1700000000000', component: 'mihomo', reason: 'automatic' });
-production_runtime.events.emit('internet_restored', {
-	failure_id: 'failure-2-1700000000000',
-	recovery_of: 'direct-fallback/failure-2-1700000000000',
-	guard: { state: 'ok', enabled: false, observed_at: 1700000000000, generation: 7 },
-	dns: { state: 'ok', observed_at: 1700000000000 },
-	network: { state: 'ok', observed_at: 1700000000000,
-		path: 'direct', guard_generation: 7 }
-});
+// The production lifecycle itself must create exactly one restoration event:
+// a failed Mihomo/API observation followed by fresh API, DNS, routing and
+// applied Guard verification. No test-only event injection is accepted here.
+production_http_healthy = false;
+let lifecycle_failed = production_runtime.reconcile.run('automatic');
+production_clock.advance(0);
+assert_equal(production_daemon.app.operation_get(lifecycle_failed.id).state, 'failure');
+production_http_healthy = true;
+let lifecycle_recovered = production_runtime.reconcile.run('scheduled');
+production_clock.advance(0);
+assert_equal(production_daemon.app.operation_get(lifecycle_recovered.id).state, 'success');
 let lifecycle_head = production_methods.notifications_list.call({ args: {
 	generation: null, cursor: 0, limit: 20
 } });
@@ -610,11 +640,10 @@ let lifecycle_page = production_methods.notifications_list.call({ args: {
 	generation: lifecycle_head.generation, cursor: 0, limit: 20
 } });
 let lifecycle_types = map(lifecycle_page.events, (item) => item.event.type);
-assert_equal(length(filter(lifecycle_types, (type_name) => type_name == 'guard_outage')), 1,
-	'production lifecycle duplicate bypassed notification dedupe');
-for (let type_name in [ 'fail_closed', 'recovery', 'direct_fallback', 'internet_restored' ])
-	assert_true(index(lifecycle_types, type_name) >= 0,
-		'production lifecycle did not route ' + type_name);
+assert_equal(length(filter(lifecycle_types, (type_name) => type_name == 'internet_restored')), 1,
+	'production failure-to-health lifecycle did not dedupe Internet restoration');
+assert_true(index(lifecycle_types, 'failure') >= 0 || index(lifecycle_types, 'guard_outage') >= 0,
+	'production lifecycle did not record the real failed observation');
 let schedule_settings = production_methods.settings_set.call({ args: { settings: { backup: {
 	enabled: true, retention: 5, include_secrets: false,
 	interval_hours: 1, schedule_time: '03:00'
@@ -650,8 +679,9 @@ assert_equal(restore_record.error?.code, null);
 assert_equal(restore_record.state, 'success');
 production_clock.advance(0);
 let reconciliations = production_daemon.app.operation_list({ kind: 'system.reconcile' });
-assert_equal(length(reconciliations), 1);
-assert_equal(reconciliations[0].state, 'success');
+assert_equal(length(reconciliations), 3);
+assert_equal(length(filter(reconciliations, (record) => record.state == 'success')), 2);
+assert_equal(length(filter(reconciliations, (record) => record.state == 'failure')), 1);
 let upload = production_methods.transfer_begin.call({ args: {
 	direction: 'upload', kind: 'backup', metadata: { purpose: 'inspect' },
 	size: 1, sha256: sprintf('%064d', 0)

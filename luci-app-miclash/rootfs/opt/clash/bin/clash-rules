@@ -144,18 +144,15 @@ warn() {
 # This is called only once to improve performance.
 load_all_settings_once() {
     if [ ! -f "$SETTINGS_FILE" ]; then
-        msg "Settings file not found. Using default values."
-        return
-    fi
-
-    while IFS='=' read -r key value; do
+        msg "Settings file not found. Using canonical/default values."
+    else
+      while IFS='=' read -r key value; do
         case "$key" in
             "INTERFACE_MODE") MODE="$value" ;;
             "PROXY_MODE") PROXY_MODE="$value" ;;
             "AUTO_DETECT_LAN") AUTO_DETECT_LAN="$value" ;;
             "AUTO_DETECT_WAN") AUTO_DETECT_WAN="$value" ;;
             "BLOCK_QUIC") BLOCK_QUIC="$value" ;;
-            "INTERNET_ONLY_MICLASH") INTERNET_ONLY_MICLASH="$value" ;;
             "TUN_STACK") TUN_STACK="$value" ;;
             "DETECTED_LAN") DETECTED_LAN="$value" ;;
             "DETECTED_WAN") DETECTED_WAN="$value" ;;
@@ -163,7 +160,23 @@ load_all_settings_once() {
             "EXCLUDED_INTERFACES") EXCLUDED_INTERFACES="$value" ;;
             "AUTO_FAKEIP_WHITELIST") AUTO_FAKEIP_WHITELIST="$value" ;;
         esac
-    done < "$SETTINGS_FILE"
+      done < "$SETTINGS_FILE"
+    fi
+
+	# UCI is the sole runtime source for Guard. The legacy settings file is
+	# still parsed for unrelated options but may never override this decision.
+	local canonical_guard
+	canonical_guard=$(uci -q get miclash.guard.enabled 2>/dev/null) || {
+		warn "Canonical Guard setting is unavailable; forcing fail-closed mode"
+		INTERNET_ONLY_MICLASH="true"
+		canonical_guard=""
+	}
+	case "$canonical_guard" in
+		1|true) INTERNET_ONLY_MICLASH="true" ;;
+		0|false) INTERNET_ONLY_MICLASH="false" ;;
+		'') ;;
+		*) warn "Invalid canonical Guard setting; forcing fail-closed mode"; INTERNET_ONLY_MICLASH="true" ;;
+	esac
 
     local settings_part=""
     [ -n "$MODE" ] && settings_part="$settings_part, Mode: $MODE"
@@ -1589,6 +1602,20 @@ verify_guard_absent() {
 		printf '%s\n' "$snapshot" | grep -q "$GUARD_FORWARD_CHAIN" && return 1
 	done
 	return 0
+}
+
+guard_verify_on() {
+	load_all_settings_once
+	[ "$INTERNET_ONLY_MICLASH" = "true" ] || return 1
+	verify_guard_rules || return 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc verify-bootstrap-on
+}
+
+guard_verify_off() {
+	load_all_settings_once
+	[ "$INTERNET_ONLY_MICLASH" = "false" ] || return 1
+	verify_guard_absent || return 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/guard-runtime.uc verify-bootstrap-off
 }
 
 remove_guard_rules_strict() {
@@ -3699,7 +3726,7 @@ stop() {
 }
 
 case "$1" in
-	package_guard_start|package_guard_verify|package_cleanup|validate_policy|validate_forward|health) ;;
+	package_guard_start|package_guard_verify|package_cleanup|guard_verify_on|guard_verify_off|validate_policy|validate_forward|health) ;;
 	*) routing_mutation_allowed || exit 1 ;;
 esac
 
@@ -3747,6 +3774,12 @@ case "$1" in
         ;;
 	guard_finalize)
 		finalize_guard_rules
+		;;
+	guard_verify_on)
+		guard_verify_on
+		;;
+	guard_verify_off)
+		guard_verify_off
 		;;
 	package_guard_start)
 		trusted_package_authority && load_all_settings_once &&
@@ -3820,7 +3853,7 @@ case "$1" in
         exit $?
         ;;
     *)
-		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|guard_finalize|package_guard_start|package_guard_verify|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
+		echo "Usage: $0 {start|stop|restart|update|update-ip-whitelist|guard_start|guard_stop|guard_refresh|guard_finalize|guard_verify_on|guard_verify_off|package_guard_start|package_guard_verify|full_cleanup|package_cleanup|tun_route_setup|tun_route_watch|validate_policy|repair_policy|validate_forward|health|repair_forward_rules}"
         exit 1
         ;;
 esac

@@ -325,12 +325,6 @@ function adapter(runtime) {
 
 export function desired(settings, observations) {
 	let setting = settings?.guard?.enabled;
-	let persisted = observations?.persisted;
-	let persisted_valid = type(persisted) == 'object' && persisted.schema_version === 1 &&
-		type(persisted.enabled) == 'bool';
-	let installed_on = observations?.installed?.verified === true &&
-		observations.installed.enabled === true;
-	let occupied = observations?.installed?.occupied === true;
 
 	if (setting === true)
 		return {
@@ -339,30 +333,11 @@ export function desired(settings, observations) {
 			explicit_disable: false
 		};
 
-	if (setting === false) {
-		if (observations?.explicit_disable === true)
-			return { enabled: false, source: 'explicit_disable', explicit_disable: true };
-		if (installed_on || occupied)
-			return { enabled: true, source: installed_on ? 'installed' : 'repair', explicit_disable: false };
-		if (persisted_valid)
-			return { enabled: persisted.enabled, source: 'persisted', explicit_disable: false };
-		if (type(observations?.legacy_enabled) == 'bool')
-			return { enabled: observations.legacy_enabled, source: 'legacy', explicit_disable: false };
+	if (setting === false)
 		return { enabled: false, source: 'settings', explicit_disable: true };
-	}
 
-	if (installed_on || occupied)
-		return { enabled: true, source: installed_on ? 'installed' : 'repair', explicit_disable: false };
-
-	if (persisted_valid)
-		return {
-			enabled: persisted.enabled,
-			source: 'persisted',
-			explicit_disable: false
-		};
-	if (type(observations?.legacy_enabled) == 'bool')
-		return { enabled: observations.legacy_enabled, source: 'legacy', explicit_disable: false };
-
+	// An unreadable canonical source can only fail closed; observed or persisted
+	// runtime state is diagnostic evidence, never a competing desired setting.
 	return { enabled: true, source: 'fail_closed', explicit_disable: false };
 };
 

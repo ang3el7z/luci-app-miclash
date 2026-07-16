@@ -63,24 +63,21 @@ assert_equal(guard.desired({ guard: { enabled: false } }, {}).enabled, false,
 	'valid settings allow explicit disable');
 assert_equal(guard.desired({ guard: { enabled: false } }, {
 	installed: { verified: true, enabled: true }
-}).enabled, true, 'an uncoordinated default false cannot remove a verified installed Guard');
+}).enabled, false, 'canonical OFF removes stale installed Guard state');
 assert_equal(guard.desired({ guard: { enabled: false } }, {
 	installed: { verified: false, enabled: true, occupied: true }
-}).enabled, true, 'an occupied corrupt reserved table must trigger fail-closed repair');
+}).enabled, false, 'canonical OFF removes corrupt stale Guard state');
 assert_equal(guard.desired({ guard: { enabled: false } }, {
 	persisted: { schema_version: 1, enabled: true }
-}).enabled, true, 'an uncoordinated default false cannot override persisted Guard ON');
-assert_equal(guard.desired({ guard: { enabled: false } }, {
-	legacy_enabled: true
-}).enabled, true, 'first package upgrade preserves the legacy Guard setting');
+}).enabled, false, 'canonical OFF overrides historical diagnostic state');
 assert_equal(guard.desired(null, {
 	installed: { verified: true, enabled: true },
 	persisted: { schema_version: 1, enabled: false }
-}).enabled, true, 'verified installed Guard wins when settings are unreadable');
+}).enabled, true, 'unreadable canonical settings fail closed');
 assert_equal(guard.desired(null, {
 	installed: { verified: false },
 	persisted: { schema_version: 1, enabled: true }
-}).enabled, true, 'persisted last desired state survives a missing runtime table');
+}).enabled, true, 'unreadable canonical settings ignore persisted OFF/ON and fail closed');
 assert_equal(guard.desired(null, {
 	installed: { verified: false },
 	persisted: { schema_version: 99, enabled: false }
@@ -350,9 +347,13 @@ assert_true(index(bootstrap, "[ '-f', BATCH_PATH ]") >= 0 &&
 assert_true(index(bootstrap, '-j list tables') >= 0 &&
 	index(guard_source, 'verify_nft_table') >= 0,
 	'bootstrap verification must use structural nft JSON parsing');
-assert_true(index(bootstrap, "'/opt/clash/settings'") >= 0 &&
-	index(bootstrap, 'INTERNET_ONLY_MICLASH') >= 0,
-	'first upgrade must observe the legacy Guard setting before canonical state exists');
+let clash_rules = fs.readfile('luci-app-miclash/rootfs/opt/clash/bin/clash-rules');
+assert_true(index(bootstrap, "'/opt/clash/settings'") < 0 &&
+	index(bootstrap, 'INTERNET_ONLY_MICLASH') < 0,
+	'Guard bootstrap must not retain a second legacy source of truth');
+assert_true(match(clash_rules, /uci[^\n]*miclash\.guard\.enabled/) != null &&
+	index(clash_rules, 'guard_verify_on') >= 0 && index(clash_rules, 'guard_verify_off') >= 0,
+	'real clash-rules must consume canonical UCI and expose applied-state verification');
 assert_true(index(makefile, '/etc/init.d/miclash-guard start || exit 1') >= 0,
 	'package installation must fail closed when an enabled bootstrap cannot be installed');
 assert_true(index(bootstrap, "ARGV[0] != 'disable'") >= 0 &&

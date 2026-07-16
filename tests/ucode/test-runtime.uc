@@ -42,6 +42,7 @@ assert_equal(extended.app_version, '0.9.2');
 
 let production = runtime.create();
 assert_true(type(production.clock.set_timeout) == 'function');
+assert_true(type(production.clock.set_fallback_timeout) == 'function');
 assert_true(type(production.random.hex) == 'function');
 assert_true(type(production.secure_fs?.open) == 'function');
 assert_true(type(production.secure_fs?.open_at) == 'function');
@@ -135,6 +136,28 @@ let fake_result = validation_fake.run({ command: '/bin/true' });
 assert_equal(fake_result.code, 0);
 assert_equal(fake_result.stdout, null);
 assert_equal(fake_result.stderr, null);
+
+// Production Guard verification follows the typed requested state even when
+// the retained legacy settings file says the exact opposite.
+let guard_fs = fakes.fs({ '/opt/clash/settings': 'INTERNET_ONLY_MICLASH=false\n' });
+let guard_process = fakes.process({
+	'/opt/clash/bin/clash-rules:guard_verify_on': { code: 0 },
+	'/opt/clash/bin/clash-rules:guard_verify_off': { code: 0 }
+});
+let guard_clock = fakes.clock(1700000000000);
+let guard_runtime = runtime.create({
+	fs: guard_fs, digest: fakes.digest(guard_fs), random: fakes.entropy(),
+	clock: guard_clock, process: guard_process, uci: fakes.uci({}),
+	ubus: { connect: () => null }, http: { request: () => null }
+});
+assert_equal(guard_runtime.observers.guard(true).ready, true,
+	'legacy false overrode canonical Guard ON verification');
+guard_fs.writefile('/opt/clash/settings', 'INTERNET_ONLY_MICLASH=true\n');
+guard_clock.advance(1);
+assert_equal(guard_runtime.observers.guard(false).ready, true,
+	'legacy true overrode canonical Guard OFF verification');
+assert_equal(guard_process.calls[0].args[0], 'guard_verify_on');
+assert_equal(guard_process.calls[1].args[0], 'guard_verify_off');
 
 let fake_fs = fakes.fs({ '/etc/miclash/config': 'old' });
 assert_equal(fake_fs.readfile('/etc/miclash/config'), 'old');

@@ -269,6 +269,7 @@ export function compose(runtime, overrides) {
 			catch (error) { return false; }
 		});
 		let memory_enabled = false, memory_timer = null, memory_closed = false;
+		let schedule_memory_sample = null;
 		function prepare_memory_settings(next) {
 			if (memory_closed) errors.fail('HEALTH_FAILED');
 			memory_options(next);
@@ -280,28 +281,38 @@ export function compose(runtime, overrides) {
 			if (type(current.cancel) == 'function') current.cancel();
 			return true;
 		};
-		function create_memory_timer(interval) {
+		function create_memory_timer(interval, allow_fallback) {
 			let timer = null, activated = false, fired = false;
+			let callback = () => {
+				if (!activated) { fired = true; return; }
+				if (memory_timer !== timer || !memory_enabled || memory_closed) return;
+				memory_timer = null;
+				try { guard.sample(); } catch (error) {}
+				schedule_memory_sample(true);
+			};
 			try {
-				timer = runtime.clock.set_timeout(interval, () => {
-					if (!activated) { fired = true; return; }
-					if (memory_timer !== timer || !memory_enabled || memory_closed) return;
-					memory_timer = null;
-					try { guard.sample(); } catch (error) {}
-					try { schedule_memory_sample(); } catch (error) {}
-				});
+				timer = runtime.clock.set_timeout(interval, callback);
 			}
-			catch (error) { errors.fail('INTERNAL'); }
+			catch (error) {}
+			if (timer == null && !fired && allow_fallback === true) {
+				try { timer?.cancel?.(); } catch (error) {}
+				fired = false;
+				try {
+					if (type(runtime.clock.set_fallback_timeout) == 'function')
+						timer = runtime.clock.set_fallback_timeout(interval, callback);
+				}
+				catch (error) { timer = null; }
+			}
 			if (timer == null || type(timer.cancel) != 'function' || fired) {
 				try { timer?.cancel?.(); } catch (error) {}
 				errors.fail('INTERNAL');
 			}
 			return { timer, activate: () => { activated = true; return true; } };
 		};
-		function schedule_memory_sample() {
+		schedule_memory_sample = (allow_fallback) => {
 			if (!memory_enabled || memory_closed || type(runtime.clock.set_timeout) != 'function')
 				return cancel_memory_timer();
-			let prepared = create_memory_timer(guard.settings().sample_interval_ms);
+			let prepared = create_memory_timer(guard.settings().sample_interval_ms, allow_fallback);
 			let previous = memory_timer;
 			memory_timer = prepared.timer;
 			prepared.activate();
@@ -322,7 +333,7 @@ export function compose(runtime, overrides) {
 				let prepared = null;
 				if ((options_changed || enabled_changed) && next.enabled) {
 					if (type(runtime.clock.set_timeout) != 'function') errors.fail('INTERNAL');
-					prepared = create_memory_timer(wanted.sample_interval_ms);
+					prepared = create_memory_timer(wanted.sample_interval_ms, false);
 				}
 				try {
 					if (options_changed) guard.settings(wanted);
@@ -400,79 +411,72 @@ export function compose(runtime, overrides) {
 			if (type(current.cancel) == 'function') current.cancel();
 			return true;
 		};
-		function schedule_backup_timer() {
+		function schedule_backup_timer(allow_fallback) {
 			if (backup_closed || type(runtime.clock.set_timeout) != 'function')
 				return cancel_backup_timer();
 			let due = next_cleanup_at;
 			if ((backup_settings.enabled || backup_pending_prune) && next_backup_at != null && next_backup_at < due)
 				due = next_backup_at;
 			let previous = backup_timer, timer = null, activated = false, fired = false;
+			let callback = () => {
+				if (!activated) { fired = true; return; }
+				if (backup_timer !== timer || backup_closed) return;
+				backup_timer = null;
+				let now = runtime.clock.now();
+				if (now >= next_cleanup_at) {
+					try { modules.backup.list(backup_app, {}); } catch (cleanup_error) {}
+					try {
+						if (type(modules.backup.prune) != 'function') errors.fail('INTERNAL');
+						modules.backup.prune(backup_app, { retain: backup_settings.retention });
+						if (backup_pending_prune) {
+							backup_pending_prune = false; backup_failures = 0;
+							next_backup_at = backup_settings.enabled ? scheduled_at(backup_settings, now) : null;
+						}
+					}
+					catch (prune_error) {
+						backup_pending_prune = true; backup_failures = min(backup_failures + 1, 4);
+						let retry = 300000; for (let index = 1; index < backup_failures; index++) retry *= 2;
+						next_backup_at = now + min(retry, 3600000);
+						try { if (type(producer.backup) == 'function') notifier.emit(producer.backup(false)); } catch (notify_error) {}
+					}
+					next_cleanup_at = now + 900000;
+				}
+				if ((backup_settings.enabled || backup_pending_prune) && next_backup_at != null && now >= next_backup_at && !backup_running) {
+					backup_running = true; let success = false;
+					try {
+						if (!backup_pending_prune) {
+							modules.backup.create(backup_app, { include_secrets: backup_settings.include_secrets }, 'auto');
+							backup_pending_prune = true; backup_failures = 0;
+						}
+						if (type(modules.backup.prune) != 'function') errors.fail('INTERNAL');
+						modules.backup.prune(backup_app, { retain: backup_settings.retention });
+						backup_pending_prune = false; success = true;
+					}
+					catch (backup_error) {}
+					backup_running = false;
+					try { if (type(producer.backup) == 'function') notifier.emit(producer.backup(success)); } catch (notify_error) {}
+					if (success) { backup_failures = 0; next_backup_at = scheduled_at(backup_settings, now); }
+					else {
+						backup_failures = min(backup_failures + 1, 4);
+						let retry = 300000; for (let index = 1; index < backup_failures; index++) retry *= 2;
+						next_backup_at = now + min(retry, 3600000);
+					}
+				}
+				try { schedule_backup_timer(true); } catch (schedule_error) {}
+			};
 			try {
-				timer = runtime.clock.set_timeout(max(0, due - runtime.clock.now()), () => {
-					if (!activated) { fired = true; return; }
-					if (backup_timer !== timer || backup_closed) return;
-					backup_timer = null;
-					let now = runtime.clock.now();
-					if (now >= next_cleanup_at) {
-						try { modules.backup.list(backup_app, {}); } catch (cleanup_error) {}
-						try {
-							if (type(modules.backup.prune) != 'function') errors.fail('INTERNAL');
-							modules.backup.prune(backup_app, { retain: backup_settings.retention });
-							if (backup_pending_prune) {
-								backup_pending_prune = false; backup_failures = 0;
-								next_backup_at = backup_settings.enabled ?
-									scheduled_at(backup_settings, now) : null;
-							}
-						}
-						catch (prune_error) {
-							backup_pending_prune = true;
-							backup_failures = min(backup_failures + 1, 4);
-							let retry = 300000;
-							for (let index = 1; index < backup_failures; index++) retry *= 2;
-							next_backup_at = now + min(retry, 3600000);
-							try {
-								if (type(producer.backup) == 'function')
-									notifier.emit(producer.backup(false));
-							} catch (notify_error) {}
-						}
-						next_cleanup_at = now + 900000;
-					}
-					if ((backup_settings.enabled || backup_pending_prune) && next_backup_at != null &&
-					    now >= next_backup_at && !backup_running) {
-						backup_running = true; let success = false;
-						try {
-							if (!backup_pending_prune) {
-								modules.backup.create(backup_app,
-									{ include_secrets: backup_settings.include_secrets }, 'auto');
-								backup_pending_prune = true;
-								backup_failures = 0;
-							}
-							if (type(modules.backup.prune) != 'function') errors.fail('INTERNAL');
-							modules.backup.prune(backup_app, { retain: backup_settings.retention });
-							backup_pending_prune = false;
-							success = true;
-						}
-						catch (backup_error) {}
-						backup_running = false;
-						try {
-							if (type(producer.backup) == 'function')
-								notifier.emit(producer.backup(success));
-						} catch (notify_error) {}
-						if (success) {
-							backup_failures = 0;
-							next_backup_at = scheduled_at(backup_settings, now);
-						}
-						else {
-							backup_failures = min(backup_failures + 1, 4);
-							let retry = 300000;
-							for (let index = 1; index < backup_failures; index++) retry *= 2;
-							next_backup_at = now + min(retry, 3600000);
-						}
-					}
-					try { schedule_backup_timer(); } catch (schedule_error) {}
-				});
+				timer = runtime.clock.set_timeout(max(0, due - runtime.clock.now()), callback);
 			}
-			catch (error) { errors.fail('INTERNAL'); }
+			catch (error) {}
+			if (timer == null && !fired && allow_fallback === true) {
+				try { timer?.cancel?.(); } catch (error) {}
+				fired = false;
+				try {
+					if (type(runtime.clock.set_fallback_timeout) == 'function')
+						timer = runtime.clock.set_fallback_timeout(max(0, due - runtime.clock.now()), callback);
+				}
+				catch (error) { timer = null; }
+			}
 			if (timer == null || type(timer.cancel) != 'function' || fired) {
 				try { timer?.cancel?.(); } catch (error) {}
 				errors.fail('INTERNAL');
@@ -494,7 +498,7 @@ export function compose(runtime, overrides) {
 				backup_failures = 0;
 				if (next.enabled) next_backup_at = scheduled_at(next, runtime.clock.now());
 				else if (!backup_pending_prune) next_backup_at = null;
-				schedule_backup_timer(); return clone(backup_settings);
+				schedule_backup_timer(false); return clone(backup_settings);
 			},
 			close: () => {
 				if (backup_closed) return false;
@@ -541,7 +545,8 @@ export function compose(runtime, overrides) {
 						ctx.stage('reconcile', 60, 'Reconciling protected routing');
 						service_adapter.restart_service('config.yaml');
 						let ready = service_adapter.wait_ready(runtime.clock.now() + 5000,
-							'config.yaml', { tun_required: saved?.core?.proxy_mode == 'tun' });
+							'config.yaml', { tun_required: saved?.core?.proxy_mode == 'tun',
+								guard_enabled: enabled });
 						if (ready?.ok !== true) errors.fail('HEALTH_FAILED');
 						ctx.stage('ready', 100, 'Guard transition complete');
 						return { enabled, guard_preserved: true };

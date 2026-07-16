@@ -100,9 +100,10 @@ function stdin() { return require('fs').readfile('/dev/stdin'); };
 
 function main() {
 	if (length(ARGV) < 1 || length(ARGV) > 2 ||
-	    (ARGV[0] != 'protect' && ARGV[0] != 'release' && ARGV[0] != 'disable' && ARGV[0] != 'verify-nft' &&
+	    (ARGV[0] != 'protect' && ARGV[0] != 'release' && ARGV[0] != 'disable' &&
+	     ARGV[0] != 'verify-bootstrap-on' && ARGV[0] != 'verify-bootstrap-off' && ARGV[0] != 'verify-nft' &&
 	     ARGV[0] != 'verify-iptables4' && ARGV[0] != 'verify-iptables6'))
-		die('usage: guard-runtime.uc {protect|release|disable|verify-nft|verify-iptables4|verify-iptables6} [interfaces]\n');
+		die('usage: guard-runtime.uc {protect|release|disable|verify-bootstrap-on|verify-bootstrap-off|verify-nft|verify-iptables4|verify-iptables6} [interfaces]\n');
 	let runtime = runtime_module.create();
 	runtime.mutation_lock_token = getenv('MICLASH_MUTATION_LOCK_TOKEN');
 	if (runtime.mutation_lock_token == null || !length(runtime.mutation_lock_token)) die('BUSY\n');
@@ -112,14 +113,22 @@ function main() {
 	let ok = false, thrown = null, terminal_success = false;
 	try {
 		assert_held(runtime, lease);
-		if (ARGV[0] == 'protect' || ARGV[0] == 'release' || ARGV[0] == 'disable') {
+		if (ARGV[0] == 'protect' || ARGV[0] == 'release' || ARGV[0] == 'disable' ||
+		    ARGV[0] == 'verify-bootstrap-on' || ARGV[0] == 'verify-bootstrap-off') {
 			let nft = nft_binary(runtime);
 			if (nft == null) fail('INTERNAL');
 			if (ARGV[0] == 'protect') ok = protect(runtime, lease, nft);
 			else if (ARGV[0] == 'release') ok = release_emergency(runtime, lease, nft);
-			else {
+			else if (ARGV[0] == 'disable') {
 				ok = disable_bootstrap(runtime, lease, nft);
 				terminal_success = ok;
+			}
+			else {
+				let present = inventory(nft);
+				if (present != null && ARGV[0] == 'verify-bootstrap-off') ok = !length(present);
+				else if (present != null) {
+					ok = length(present) == 1 && present[0] == PRIMARY && verified(nft, PRIMARY);
+				}
 			}
 		}
 		else {

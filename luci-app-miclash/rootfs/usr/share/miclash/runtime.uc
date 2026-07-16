@@ -102,10 +102,14 @@ function fs_adapter() {
 };
 
 function clock_adapter() {
+	let arm = (milliseconds, callback) => require('uloop').timer(milliseconds, callback);
 	return {
 		now: () => time() * 1000,
 		sleep: (milliseconds) => require('uloop').run(milliseconds),
-		set_timeout: (milliseconds, callback) => require('uloop').timer(milliseconds, callback)
+		set_timeout: arm,
+		// Keep a separately bound production primitive. A wrapped/injected primary
+		// scheduler can fail transiently without orphaning enabled daemon domains.
+		set_fallback_timeout: arm
 	};
 };
 
@@ -489,12 +493,20 @@ function readiness_observers(runtime) {
 		return routing_snapshot;
 	};
 	function safe(observer) {
-		return () => {
-			try { return observer(); }
+		return (argument) => {
+			try { return observer(argument); }
 			catch (error) { return { ready: false, state: 'failed' }; }
 		};
 	};
 	return {
+		guard: safe((enabled) => {
+			if (type(enabled) != 'bool') return { ready: false, state: 'failed' };
+			let result = runtime.process.run({ command: '/opt/clash/bin/clash-rules',
+				args: [ enabled ? 'guard_verify_on' : 'guard_verify_off' ] });
+			let ready = result?.code === 0, observed_at = runtime.clock.now();
+			return { ready, state: ready ? 'ready' : 'failed', enabled,
+				observed_at, generation: observed_at };
+		}),
 		dns: safe(() => {
 			let observed = dns.observe(runtime), current = observed?.current;
 			let blocked = false;

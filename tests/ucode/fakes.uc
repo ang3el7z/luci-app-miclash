@@ -37,12 +37,16 @@ export function clock(start) {
 		return current;
 	};
 	fake.sleep = fake.advance;
-	fake.set_timeout = (milliseconds, callback) => {
+	function arm(milliseconds, callback) {
 		let timer = { due: current + milliseconds, callback, active: true };
 		timer.cancel = () => timer.active = false;
 		push(fake.timers, timer);
 		return timer;
 	};
+	fake.set_timeout = arm;
+	// Production exposes a separately bound uloop timer as a bounded scheduler
+	// fallback. Tests may fault only the primary binding and prove rearming.
+	fake.set_fallback_timeout = arm;
 
 	return fake;
 };
