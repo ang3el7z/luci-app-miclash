@@ -332,6 +332,43 @@ assert_equal(resized_authority_controller.handle_update(update(704, '/reboot')),
 assert_equal(length(resized_authority.submitted), 1);
 assert_equal(json(resized_authority.filesystem.readfile(offset_path)).last_update_id, 704);
 
+// A durable write failure is a batch barrier: later updates wait while N retries.
+let barrier_document = sprintf('%J', {
+	ok: true,
+	result: [ update(800, '/reboot'), update(801, '/status', 43) ]
+});
+let barrier_fs = fakes.fs({ [offset_path]: '{"last_update_id":799}\n' });
+let barrier = environment({
+	filesystem: barrier_fs,
+	poll_replies: [
+		{ status: 200, headers: {}, body: barrier_document },
+		{ status: 200, headers: {}, body: barrier_document }
+	]
+});
+let barrier_controller = telegram.create(barrier.app);
+assert_equal(barrier_controller.start(), true);
+barrier.filesystem.fail_on = 'rename';
+barrier.clock.advance(0);
+assert_equal(barrier_controller.status().last_update_id, 799);
+assert_equal(json(barrier.filesystem.readfile(offset_path)).last_update_id, 799);
+assert_equal(length(barrier.submitted), 0);
+assert_equal(length(barrier.audit), 0, 'later update crossed persistence barrier');
+assert_equal(barrier_controller.status().last_error, 'INTERNAL');
+assert_equal(barrier_controller.status().retry_after_ms, 1000);
+assert_equal(active_timers(barrier.clock), 1);
+assert_match(barrier.requests[0].url, /\/getUpdates\?offset=800&timeout=20/);
+barrier.filesystem.fail_on = null;
+barrier.clock.advance(999);
+assert_equal(length(barrier.requests), 1);
+assert_equal(active_timers(barrier.clock), 1);
+barrier.clock.advance(1);
+assert_match(barrier.requests[1].url, /\/getUpdates\?offset=800&timeout=20/);
+assert_equal(json(barrier.filesystem.readfile(offset_path)).last_update_id, 800);
+assert_equal(barrier_controller.status().last_update_id, 801);
+assert_equal(length(barrier.submitted), 1);
+assert_equal(barrier_controller.status().retry_after_ms, 0);
+assert_equal(active_timers(barrier.clock), 1);
+
 // Telegram 429 honors retry_after; network failures back off exponentially.
 let limited_poll = environment({ poll_replies: [ {
 	status: 429,
@@ -359,6 +396,35 @@ assert_true(length(lifecycle.requests) >= 1);
 assert_equal(lifecycle_controller.stop(), true);
 assert_equal(lifecycle_controller.stop(), false);
 assert_equal(lifecycle_controller.status().running, false);
+
+// Poll dispatch uses its validated settings snapshot; no handler-level reread can fail.
+let snapshot = environment({ poll_replies: [ {
+	status: 200,
+	headers: {},
+	body: sprintf('%J', { ok: true, result: [ update(900, '/reboot') ] })
+} ] });
+let snapshot_reads = 0;
+snapshot.app.settings_get = () => {
+	snapshot_reads++;
+	if (snapshot_reads <= 2)
+		return clone(snapshot.settings);
+	die('INTERNAL');
+};
+let snapshot_controller = telegram.create(snapshot.app);
+assert_equal(snapshot_controller.start(), true);
+snapshot.clock.advance(0);
+assert_equal(snapshot_reads, 2, 'poll handler reread validated settings');
+assert_equal(length(snapshot.submitted), 1);
+assert_equal(active_timers(snapshot.clock), 1);
+let snapshot_requests = length(snapshot.requests);
+snapshot.clock.advance(10);
+assert_equal(snapshot_controller.status().last_error, 'SETTINGS_UNAVAILABLE');
+assert_equal(snapshot_controller.status().retry_after_ms, 1000);
+assert_equal(length(snapshot.requests), snapshot_requests);
+assert_equal(active_timers(snapshot.clock), 1);
+snapshot.clock.advance(999);
+assert_equal(length(snapshot.requests), snapshot_requests);
+assert_equal(active_timers(snapshot.clock), 1);
 
 // A live controller becomes inactive without a tight loop when settings are disabled/incomplete.
 for (let change in [ 'disabled', 'incomplete' ]) {

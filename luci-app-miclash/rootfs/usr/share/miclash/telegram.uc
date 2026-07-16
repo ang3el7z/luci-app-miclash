@@ -263,8 +263,8 @@ export function create(app) {
 		});
 	};
 
-	function send_message(text) {
-		let settings = configuration(app);
+	function send_message(text, settings) {
+		settings = settings ?? configuration(app);
 		if (!settings.available || !settings.enabled || !settings.configured)
 			return false;
 		try {
@@ -364,6 +364,49 @@ export function create(app) {
 		invalid();
 	};
 
+	function handle_update(update, settings) {
+		if (!settings.available || !settings.enabled || !settings.configured ||
+		    type(update) != 'object' ||
+		    type(update.update_id) != 'int' || update.update_id < 0 ||
+		    update.update_id <= state.last_update_id)
+			return { handled: false, retryable: false };
+		let message = update.message;
+		let sender = normalized_id(message?.from?.id);
+		let chat = normalized_id(message?.chat?.id);
+		if (type(message) != 'object' || message.chat?.type != 'private' ||
+		    message.from?.is_bot === true || sender != settings.user_id || chat != settings.user_id) {
+			state.last_update_id = update.update_id;
+			audit('message', 'rejected', update.update_id);
+			return { handled: false, retryable: false };
+		}
+		let command = parse_command(message.text);
+		if (command == null) {
+			state.last_update_id = update.update_id;
+			audit('command', 'rejected', update.update_id);
+			return { handled: false, retryable: false };
+		}
+		try { persist_offset(update.update_id); }
+		catch (error) {
+			log_failure('Telegram offset persistence failed');
+			return { handled: false, retryable: true, error: 'INTERNAL' };
+		}
+		if (!rate_allowed(app.runtime.clock.now())) {
+			audit(command.name, 'rate_limited', update.update_id);
+			send_message('Rate limit exceeded', settings);
+			return { handled: false, retryable: false };
+		}
+		let response;
+		try { response = dispatch(command); }
+		catch (error) {
+			audit(command.name, 'failed', update.update_id);
+			send_message('Command failed', settings);
+			return { handled: false, retryable: false };
+		}
+		audit(command.name, 'accepted', update.update_id);
+		send_message(response, settings);
+		return { handled: true, retryable: false };
+	};
+
 	let controller = {};
 	controller.status = () => {
 		let settings = configuration(app);
@@ -379,49 +422,8 @@ export function create(app) {
 			failures: state.failures
 		};
 	};
-	controller.handle_update = (update) => {
-		let settings = configuration(app);
-		if (!settings.available || !settings.enabled || !settings.configured ||
-		    type(update) != 'object' ||
-		    type(update.update_id) != 'int' || update.update_id < 0 ||
-		    update.update_id <= state.last_update_id)
-			return false;
-		let message = update.message;
-		let sender = normalized_id(message?.from?.id);
-		let chat = normalized_id(message?.chat?.id);
-		if (type(message) != 'object' || message.chat?.type != 'private' ||
-		    message.from?.is_bot === true || sender != settings.user_id || chat != settings.user_id) {
-			state.last_update_id = update.update_id;
-			audit('message', 'rejected', update.update_id);
-			return false;
-		}
-		let command = parse_command(message.text);
-		if (command == null) {
-			state.last_update_id = update.update_id;
-			audit('command', 'rejected', update.update_id);
-			return false;
-		}
-		try { persist_offset(update.update_id); }
-		catch (error) {
-			log_failure('Telegram offset persistence failed');
-			return false;
-		}
-		if (!rate_allowed(app.runtime.clock.now())) {
-			audit(command.name, 'rate_limited', update.update_id);
-			send_message('Rate limit exceeded');
-			return false;
-		}
-		let response;
-		try { response = dispatch(command); }
-		catch (error) {
-			audit(command.name, 'failed', update.update_id);
-			send_message('Command failed');
-			return false;
-		}
-		audit(command.name, 'accepted', update.update_id);
-		send_message(response);
-		return true;
-	};
+	controller.handle_update = (update) =>
+		handle_update(update, configuration(app)).handled;
 	controller.poll_once = () => {
 		let settings = configuration(app);
 		if (!settings.available) {
@@ -459,8 +461,11 @@ export function create(app) {
 			if (reply.status < 200 || reply.status >= 300 || document.ok !== true ||
 			    type(document.result) != 'array' || length(document.result) > 100)
 				errors.fail('INVALID_RESPONSE');
-			for (let update in document.result)
-				controller.handle_update(update);
+			for (let update in document.result) {
+				let outcome = handle_update(update, settings);
+				if (outcome.retryable)
+					errors.fail(outcome.error);
+			}
 			state.last_success_at = app.runtime.clock.now();
 			state.last_error = null;
 			state.retry_after_ms = 0;
