@@ -79,25 +79,32 @@ function validate_options(options, allowed) {
 	return options;
 };
 
-function same_identity(left, right) {
-	return left?.type == right?.type && left?.inode == right?.inode &&
+function same_file_identity(left, right) {
+	return left?.type == 'file' && right?.type == 'file' && left?.inode == right?.inode &&
 		left?.dev?.major == right?.dev?.major && left?.dev?.minor == right?.dev?.minor &&
 		left?.uid == right?.uid && left?.mode == right?.mode &&
-		left?.nlink == right?.nlink;
+		left?.nlink == right?.nlink && left?.size == right?.size;
 };
 
-function same_node(left, right) {
-	return left?.type == right?.type && left?.inode == right?.inode &&
+function same_directory_identity(left, right) {
+	return left?.type == 'directory' && right?.type == 'directory' &&
+		left?.inode == right?.inode &&
 		left?.dev?.major == right?.dev?.major && left?.dev?.minor == right?.dev?.minor &&
-		left?.uid == right?.uid && left?.nlink == right?.nlink;
+		left?.uid == right?.uid && left?.mode == right?.mode;
 };
 
-function valid_identity(identity, kind, mode, size) {
-	return type(identity) == 'object' && identity.type == kind &&
+function valid_file_identity(identity, mode, size) {
+	return type(identity) == 'object' && identity.type == 'file' &&
 		type(identity.inode) == 'int' && type(identity.dev?.major) == 'int' &&
 		type(identity.dev?.minor) == 'int' && identity.uid == 0 &&
 		identity.mode == mode && identity.nlink == 1 &&
 		(size == null || identity.size == size);
+};
+
+function valid_directory_identity(identity, mode) {
+	return type(identity) == 'object' && identity.type == 'directory' &&
+		type(identity.inode) == 'int' && type(identity.dev?.major) == 'int' &&
+		type(identity.dev?.minor) == 'int' && identity.uid == 0 && identity.mode == mode;
 };
 
 function validate_app(app) {
@@ -118,7 +125,7 @@ function validate_app(app) {
 
 function open_dir(secure, path) {
 	let handle = secure.open(path, { create: true, mode: 0o700, uid: 0 });
-	if (type(handle) != 'object' || !valid_identity(handle.identity, 'directory', 0o700))
+	if (type(handle) != 'object' || !valid_directory_identity(handle.identity, 0o700))
 		internal();
 	return handle;
 };
@@ -126,8 +133,8 @@ function open_dir(secure, path) {
 function open_child_dir(secure, parent, name, create, expected) {
 	let handle = secure.open_at(parent, name,
 		{ create: create === true, mode: 0o700, uid: 0, expected });
-	if (type(handle) != 'object' || !valid_identity(handle.identity, 'directory', 0o700) ||
-	    (expected != null && !same_identity(handle.identity, expected))) internal();
+	if (type(handle) != 'object' || !valid_directory_identity(handle.identity, 0o700) ||
+	    (expected != null && !same_directory_identity(handle.identity, expected))) internal();
 	return handle;
 };
 
@@ -135,9 +142,9 @@ function secure_read(env, directory, name, maximum, mode, expected) {
 	let captured = env.secure.read(directory, name,
 		{ maximum, mode, uid: 0, nlink: 1, expected });
 	if (type(captured?.content) != 'string' ||
-	    !valid_identity(captured?.identity, 'file', mode, length(captured.content)) ||
+	    !valid_file_identity(captured?.identity, mode, length(captured.content)) ||
 	    length(captured.content) > maximum ||
-	    (expected != null && !same_identity(captured.identity, expected))) internal();
+	    (expected != null && !same_file_identity(captured.identity, expected))) internal();
 	let digest = env.runtime.digest.sha256(captured.content);
 	if (type(digest) != 'string' || !match(digest, /^[0-9a-f]{64}$/)) internal();
 	return {
@@ -149,7 +156,7 @@ function secure_read(env, directory, name, maximum, mode, expected) {
 function secure_create(env, directory, name, content, mode) {
 	if (type(content) != 'string') internal();
 	let identity = env.secure.create_exclusive(directory, name, content, { mode, uid: 0 });
-	if (!valid_identity(identity, 'file', mode, length(content))) internal();
+	if (!valid_file_identity(identity, mode, length(content))) internal();
 	return secure_read(env, directory, name, length(content), mode, identity);
 };
 
@@ -157,7 +164,7 @@ function secure_replace(env, directory, name, expected, content, mode) {
 	if (type(content) != 'string') internal();
 	let identity = env.secure.replace_atomic(directory, name, expected, content,
 		{ mode, uid: 0, nlink: 1 });
-	if (!valid_identity(identity, 'file', mode, length(content))) internal();
+	if (!valid_file_identity(identity, mode, length(content))) internal();
 	return secure_read(env, directory, name, length(content), mode, identity);
 };
 
@@ -478,8 +485,8 @@ function source_record(app, source_id) {
 	return { env, root, sidecar, sidecar_capture, archive };
 };
 
-function remove_tree(env, parent, name, expected, registered, relative) {
-	if (type(registered) != 'array') internal();
+function remove_tree(env, parent, name, expected, registered, registered_directories, relative) {
+	if (type(registered) != 'array' || type(registered_directories) != 'array') internal();
 	let directory;
 	try { directory = open_child_dir(env.secure, parent, name, false, expected); }
 	catch (error) { return false; }
@@ -491,11 +498,22 @@ function remove_tree(env, parent, name, expected, registered, relative) {
 		let identity = env.secure.stat(directory, child_name);
 		let child_path = length(relative ?? '') ? relative + '/' + child_name : child_name;
 		if (identity?.type == 'directory') {
-			let allowed = false;
-			for (let file in registered)
-				if (substr(file.path, 0, length(child_path) + 1) == child_path + '/') allowed = true;
-			if (!allowed || !remove_tree(env, directory, child_name, identity,
-			    registered, child_path)) failed = true;
+			let registration = null;
+			for (let item in registered_directories)
+				if (item.path == child_path) registration = item;
+			let expected_directory = null;
+			if (registration?.identity != null) {
+				let value = registration.identity;
+				expected_directory = {
+					type: value.type, inode: value.inode,
+					dev: { major: value.dev_major, minor: value.dev_minor },
+					uid: value.uid, mode: value.mode
+				};
+			}
+			if (expected_directory == null ||
+			    !same_directory_identity(expected_directory, identity) ||
+			    !remove_tree(env, directory, child_name, expected_directory,
+				    registered, registered_directories, child_path)) failed = true;
 		}
 		else if (identity?.type == 'file') {
 			let registration = null;
@@ -510,8 +528,8 @@ function remove_tree(env, parent, name, expected, registered, relative) {
 				};
 			}
 			if (registration == null || identity.mode != registration.mode || identity.uid != 0 ||
-			    identity.nlink != 1 || (registered_identity != null &&
-			    !same_node(registered_identity, identity))) {
+			    identity.nlink != 1 || identity.size != registration.size ||
+			    (registered_identity != null && !same_file_identity(registered_identity, identity))) {
 				failed = true; continue;
 			}
 			try {
@@ -526,11 +544,11 @@ function remove_tree(env, parent, name, expected, registered, relative) {
 		else failed = true;
 	}
 	if (failed) return false;
-	try { return env.secure.rmdir(parent, name, directory.identity) === true; }
+	try { return env.secure.rmdir(parent, name, expected) === true; }
 	catch (error) { return false; }
 };
 
-function identity_record(identity) {
+function file_identity_record(identity) {
 	if (identity == null) return null;
 	return {
 		type: identity.type, inode: identity.inode,
@@ -539,7 +557,16 @@ function identity_record(identity) {
 	};
 };
 
-function record_identity(record) {
+function directory_identity_record(identity) {
+	if (identity == null) return null;
+	return {
+		type: identity.type, inode: identity.inode,
+		dev_major: identity.dev?.major, dev_minor: identity.dev?.minor,
+		uid: identity.uid, mode: identity.mode
+	};
+};
+
+function record_file_identity(record) {
 	if (record == null) return null;
 	return {
 		type: record.type, inode: record.inode,
@@ -548,14 +575,32 @@ function record_identity(record) {
 	};
 };
 
-function valid_identity_record(record, kind) {
+function record_directory_identity(record) {
+	if (record == null) return null;
+	return {
+		type: record.type, inode: record.inode,
+		dev: { major: record.dev_major, minor: record.dev_minor },
+		uid: record.uid, mode: record.mode
+	};
+};
+
+function valid_file_identity_record(record) {
 	return record == null || (exact_fields(record, {
 		type: true, inode: true, dev_major: true, dev_minor: true,
 		uid: true, mode: true, nlink: true, size: true
-	}) && record.type == kind && type(record.inode) == 'int' &&
+	}) && record.type == 'file' && type(record.inode) == 'int' &&
 		type(record.dev_major) == 'int' && type(record.dev_minor) == 'int' &&
 		record.uid == 0 && record.nlink == 1 && type(record.mode) == 'int' &&
 		type(record.size) == 'int' && record.size >= 0);
+};
+
+function valid_directory_identity_record(record) {
+	return record == null || (exact_fields(record, {
+		type: true, inode: true, dev_major: true, dev_minor: true,
+		uid: true, mode: true
+	}) && record.type == 'directory' && type(record.inode) == 'int' &&
+		type(record.dev_major) == 'int' && type(record.dev_minor) == 'int' &&
+		record.uid == 0 && type(record.mode) == 'int');
 };
 
 const JOURNAL_FIELDS = {
@@ -563,7 +608,8 @@ const JOURNAL_FIELDS = {
 	backup_id: true, temp_name: true, archive_name: true, sidecar_name: true,
 	archive_size: true, archive_sha256: true, sidecar_size: true, sidecar_sha256: true,
 	temp_identity: true, archive_identity: true, sidecar_identity: true,
-	inspection_id: true, expires_at: true, stage_identity: true, files: true, cursor: true,
+	inspection_id: true, expires_at: true, stage_identity: true, directories: true,
+	files: true, cursor: true,
 	prune_id: true, archive_tomb: true, sidecar_tomb: true
 };
 
@@ -573,7 +619,8 @@ function journal_base(id, kind, created_at) {
 		backup_id: null, temp_name: null, archive_name: null, sidecar_name: null,
 		archive_size: null, archive_sha256: null, sidecar_size: null, sidecar_sha256: null,
 		temp_identity: null, archive_identity: null, sidecar_identity: null,
-		inspection_id: null, expires_at: null, stage_identity: null, files: null, cursor: 0,
+		inspection_id: null, expires_at: null, stage_identity: null, directories: null,
+		files: null, cursor: 0,
 		prune_id: null, archive_tomb: null, sidecar_tomb: null
 	};
 };
@@ -586,7 +633,13 @@ function valid_journal_file(file) {
 		type(file.size) == 'int' && file.size >= 0 && file.size <= maximum &&
 		match(file.sha256, /^[0-9a-f]{64}$/) &&
 		(file.mode == 0o400 || file.mode == 0o600) &&
-		valid_identity_record(file.identity, 'file');
+		valid_file_identity_record(file.identity);
+};
+
+function valid_journal_directory(directory) {
+	return exact_fields(directory, { path: true, identity: true }) &&
+		canonical_member_name(directory.path) && directory.identity != null &&
+		valid_directory_identity_record(directory.identity);
 };
 
 function valid_journal(record, name) {
@@ -596,10 +649,10 @@ function valid_journal(record, name) {
 	    type(record.created_at) != 'int' || record.created_at < 0 ||
 	    type(record.phase) != 'string' || type(record.cursor) != 'int' || record.cursor < 0)
 		return false;
-	if (!valid_identity_record(record.temp_identity, 'file') ||
-	    !valid_identity_record(record.archive_identity, 'file') ||
-	    !valid_identity_record(record.sidecar_identity, 'file') ||
-	    !valid_identity_record(record.stage_identity, 'directory')) return false;
+	if (!valid_file_identity_record(record.temp_identity) ||
+	    !valid_file_identity_record(record.archive_identity) ||
+	    !valid_file_identity_record(record.sidecar_identity) ||
+	    !valid_directory_identity_record(record.stage_identity)) return false;
 	if (record.kind == 'create')
 		return valid_id(record.backup_id, 'b') &&
 			match(record.temp_name, /^\.b-[0-9]{13}-[0-9a-f]{32}\.tar\.tmp$/) &&
@@ -612,12 +665,14 @@ function valid_journal(record, name) {
 			exists({ planned: true, temp: true, side_planned: true, side: true,
 				publish_planned: true, published: true, complete: true }, record.phase) &&
 			record.inspection_id == null && record.expires_at == null &&
-			record.stage_identity == null && record.files == null && record.cursor == 0 &&
+			record.stage_identity == null && record.directories == null &&
+			record.files == null && record.cursor == 0 &&
 			record.prune_id == null && record.archive_tomb == null && record.sidecar_tomb == null;
 	if (record.kind == 'inspect') {
 		if (!valid_id(record.inspection_id, 'x') || type(record.expires_at) != 'int' ||
 		    record.expires_at - record.created_at != INSPECTION_TTL ||
 		    type(record.files) != 'array' || length(record.files) < 2 ||
+		    type(record.directories) != 'array' || length(record.directories) > MAX_FILES ||
 		    length(record.files) > MAX_FILES + 2 || record.backup_id != null ||
 		    record.temp_name != null || record.archive_name != null || record.sidecar_name != null ||
 		    record.archive_size != null || record.archive_sha256 != null ||
@@ -632,6 +687,12 @@ function valid_journal(record, name) {
 			if (!valid_journal_file(file) || seen[file.path]) return false;
 			seen[file.path] = true;
 		}
+		let seen_directories = {};
+		for (let directory in record.directories) {
+			if (!valid_journal_directory(directory) || seen_directories[directory.path])
+				return false;
+			seen_directories[directory.path] = true;
+		}
 		return record.cursor <= length(record.files);
 	}
 	if (record.kind == 'prune')
@@ -644,12 +705,13 @@ function valid_journal(record, name) {
 			type(record.sidecar_size) == 'int' && record.sidecar_size > 0 &&
 			match(record.sidecar_sha256, /^[0-9a-f]{64}$/) &&
 			record.archive_identity != null && record.sidecar_identity != null &&
-			valid_identity_record(record.archive_identity, 'file') &&
-			valid_identity_record(record.sidecar_identity, 'file') &&
+			valid_file_identity_record(record.archive_identity) &&
+			valid_file_identity_record(record.sidecar_identity) &&
 			exists({ planned: true, side_moved: true, archive_moved: true,
 				deleting: true }, record.phase) && record.inspection_id == null &&
 			record.expires_at == null && record.stage_identity == null &&
-			record.files == null && record.cursor == 0 && record.backup_id == null &&
+			record.directories == null && record.files == null && record.cursor == 0 &&
+			record.backup_id == null &&
 			record.temp_name == null && record.temp_identity == null;
 	return false;
 };
@@ -678,7 +740,7 @@ function registered_file(env, directory, name, size, digest, recorded) {
 	if (current == null) return null;
 	if (current.type != 'file' || current.uid != 0 || current.nlink != 1 ||
 	    current.size != size || (recorded != null &&
-	    !same_node(record_identity(recorded), current))) internal();
+	    !same_file_identity(record_file_identity(recorded), current))) internal();
 	let captured = secure_read(env, directory, name, size, current.mode, current);
 	if (captured.size != size || captured.sha256 != digest) internal();
 	return captured;
@@ -712,14 +774,19 @@ function expected_prefix(files, path) {
 	return false;
 };
 
-function authenticate_stage(env, directory, relative, files, seen) {
+function authenticate_stage(env, directory, relative, files, directories, seen, seen_directories) {
 	for (let name in safe_names(env.secure, directory, MAX_FILES + 8)) {
 		let path = length(relative) ? relative + '/' + name : name;
 		let identity = env.secure.stat(directory, name);
 		if (identity?.type == 'directory') {
-			if (!expected_prefix(files, path)) internal();
-			let child = open_child_dir(env.secure, directory, name, false, identity);
-			authenticate_stage(env, child, path, files, seen);
+			let registration = null;
+			for (let item in directories) if (item.path == path) registration = item;
+			if (!expected_prefix(files, path) || registration?.identity == null) internal();
+			let expected = record_directory_identity(registration.identity);
+			if (!same_directory_identity(expected, identity)) internal();
+			let child = open_child_dir(env.secure, directory, name, false, expected);
+			seen_directories[path] = true;
+			authenticate_stage(env, child, path, files, directories, seen, seen_directories);
 		}
 		else if (identity?.type == 'file') {
 			let expected = null;
@@ -738,12 +805,19 @@ function recover_inspect(env, transaction, now) {
 	let record = transaction.record, root = open_dir(env.secure, INSPECT_ROOT);
 	let stat = env.secure.stat(root, record.inspection_id);
 	if (stat == null) { journal_finish(env, transaction); return true; }
-	if (record.stage_identity != null &&
-	    !same_identity(record_identity(record.stage_identity), stat)) internal();
-	let stage = open_child_dir(env.secure, root, record.inspection_id, false, stat), seen = {};
-	authenticate_stage(env, stage, '', record.files, seen);
+	if (record.stage_identity == null) internal();
+	let stage_expected = record_directory_identity(record.stage_identity);
+	if (!same_directory_identity(stage_expected, stat)) internal();
+	let stage = open_child_dir(env.secure, root, record.inspection_id, false, stage_expected);
+	let seen = {}, seen_directories = {};
+	authenticate_stage(env, stage, '', record.files, record.directories, seen, seen_directories);
+	for (let file in record.files)
+		if (file.identity != null && !seen[file.path]) internal();
+	for (let directory in record.directories)
+		if (!seen_directories[directory.path]) internal();
 	if (record.phase == 'preview' && now <= record.expires_at) return true;
-	if (!remove_tree(env, root, record.inspection_id, stage.identity, record.files, '')) internal();
+	if (!remove_tree(env, root, record.inspection_id, stage_expected,
+	    record.files, record.directories, '')) internal();
 	journal_finish(env, transaction);
 	return true;
 };
@@ -915,20 +989,20 @@ function create_impl(app, options, source) {
 		});
 		let temp = secure_create(env, root, temp_name, archive_bytes, 0o600);
 		temp_identity = temp.identity;
-		transaction.record.temp_identity = identity_record(temp.identity);
+		transaction.record.temp_identity = file_identity_record(temp.identity);
 		transaction.record.phase = 'temp'; journal_store(env, transaction);
 		transaction.record.phase = 'side_planned'; journal_store(env, transaction);
 		let side = secure_create(env, root, side_name, sidecar_text, 0o600);
 		side_identity = side.identity;
-		transaction.record.sidecar_identity = identity_record(side.identity);
+		transaction.record.sidecar_identity = file_identity_record(side.identity);
 		transaction.record.phase = 'side'; journal_store(env, transaction);
 		transaction.record.phase = 'publish_planned'; journal_store(env, transaction);
 		archive_identity = env.secure.rename(root, temp_name, id + '.tar', temp_identity,
 			{ mode: 0o600, uid: 0, nlink: 1 });
-		if (!valid_identity(archive_identity, 'file', 0o600, length(archive_bytes))) internal();
+		if (!valid_file_identity(archive_identity, 0o600, length(archive_bytes))) internal();
 		temp_identity = null;
 		transaction.record.temp_identity = null;
-		transaction.record.archive_identity = identity_record(archive_identity);
+		transaction.record.archive_identity = file_identity_record(archive_identity);
 		transaction.record.phase = 'published'; journal_store(env, transaction);
 		let published = secure_read(env, root, id + '.tar', MAX_ARCHIVE, 0o600, archive_identity);
 		let published_side = secure_read(env, root, side_name, MAX_MANIFEST, 0o600, side_identity);
@@ -997,22 +1071,41 @@ function inspect_impl(app, source_id, options) {
 	push(journal_files, { path: 'manifest.json', size: length(manifest_content),
 		sha256: source.env.runtime.digest.sha256(manifest_content), mode: 0o400, identity: null });
 	let transaction = journal_begin(source.env, 'inspect', now, {
-		inspection_id: id, expires_at: now + INSPECTION_TTL, files: journal_files
+		inspection_id: id, expires_at: now + INSPECTION_TTL,
+		directories: [], files: journal_files
 	});
 	let staging = null;
 	try {
 		staging = open_child_dir(source.env.secure, root, id, true);
-		transaction.record.stage_identity = identity_record(staging.identity);
+		transaction.record.stage_identity = directory_identity_record(staging.identity);
 		transaction.record.phase = 'staging'; journal_store(source.env, transaction);
 		let captured = [];
 		for (let index, file in manifest.files) {
 			transaction.record.cursor = index; journal_store(source.env, transaction);
 			let parts = split(file.path, '/'), directory = staging;
 			let leaf = pop(parts);
-			for (let part in parts) directory = open_child_dir(source.env.secure, directory, part, true);
+			let relative = '';
+			for (let part in parts) {
+				relative = length(relative) ? relative + '/' + part : part;
+				let registration = null;
+				for (let item in transaction.record.directories)
+					if (item.path == relative) registration = item;
+				if (registration == null) {
+					if (source.env.secure.stat(directory, part) != null) internal();
+					directory = open_child_dir(source.env.secure, directory, part, true);
+					push(transaction.record.directories, {
+						path: relative, identity: directory_identity_record(directory.identity)
+					});
+					journal_store(source.env, transaction);
+				}
+				else {
+					let expected = record_directory_identity(registration.identity);
+					directory = open_child_dir(source.env.secure, directory, part, false, expected);
+				}
+			}
 			let written = secure_create(source.env, directory, leaf,
 				decoded.parsed.by_name[file.path].content, 0o400);
-			transaction.record.files[index].identity = identity_record(written.identity);
+			transaction.record.files[index].identity = file_identity_record(written.identity);
 			transaction.record.cursor = index + 1; journal_store(source.env, transaction);
 			push(captured, { path: file.path, size: file.size, sha256: file.sha256,
 				secret: file.secret, inode: written.identity.inode,
@@ -1022,7 +1115,7 @@ function inspect_impl(app, source_id, options) {
 		transaction.record.cursor = manifest_index; journal_store(source.env, transaction);
 		let manifest_written = secure_create(source.env, staging, 'manifest.json',
 			manifest_content, 0o400);
-		transaction.record.files[manifest_index].identity = identity_record(manifest_written.identity);
+		transaction.record.files[manifest_index].identity = file_identity_record(manifest_written.identity);
 		transaction.record.cursor = manifest_index + 1; journal_store(source.env, transaction);
 		let report = {
 			schema: 1, id, source_id, inspected_at: now, expires_at: now + INSPECTION_TTL,
@@ -1044,7 +1137,7 @@ function inspect_impl(app, source_id, options) {
 		let report_written = secure_create(source.env, staging, '.inspection.json',
 			report_content, 0o600);
 		transaction.record.files[length(transaction.record.files) - 1].identity =
-			identity_record(report_written.identity);
+			file_identity_record(report_written.identity);
 		transaction.record.cursor = length(transaction.record.files);
 		transaction.record.phase = 'ready'; journal_store(source.env, transaction);
 		transaction.record.phase = 'preview'; journal_store(source.env, transaction);
@@ -1109,7 +1202,8 @@ function inspection_record(app, inspected_id) {
 	if (type(manifest?.files) != 'array') errors.fail('CORRUPT_STATE');
 	let contents = {}, expected_top = { '.inspection.json': true, 'manifest.json': true };
 	let manifest_expected = { type: 'file', inode: report.manifest_inode, uid: 0, mode: 0o400,
-		nlink: 1, dev: { major: report.manifest_dev_major, minor: report.manifest_dev_minor } };
+		nlink: 1, size: length(sprintf('%J\n', report.manifest)),
+		dev: { major: report.manifest_dev_major, minor: report.manifest_dev_minor } };
 	let staged_manifest;
 	try { staged_manifest = secure_read(env, staging, 'manifest.json', MAX_MANIFEST, 0o400,
 		manifest_expected); }
@@ -1133,7 +1227,8 @@ function inspection_record(app, inspected_id) {
 			catch (error) { errors.fail('CORRUPT_STATE'); }
 		}
 		let expected = { type: 'file', inode: captured.inode, uid: 0, mode: 0o400,
-			nlink: 1, dev: { major: captured.dev_major, minor: captured.dev_minor } };
+			nlink: 1, size: captured.size,
+			dev: { major: captured.dev_major, minor: captured.dev_minor } };
 		let current;
 		try { current = secure_read(env, directory, leaf, MAX_MEMBER, 0o400, expected); }
 		catch (error) { errors.fail('CORRUPT_STATE'); }
@@ -1213,7 +1308,7 @@ function prepare_restore_targets(inspected) {
 		}
 		else continue;
 		let expected = env.secure.stat(directory, name);
-		if (expected != null && !valid_identity(expected, 'file', 0o600)) internal();
+		if (expected != null && !valid_file_identity(expected, 0o600)) internal();
 		push(targets, { directory, name, expected,
 			content: inspected.contents[file.path] });
 	}
@@ -1224,7 +1319,7 @@ function revalidate_restore_targets(env, targets) {
 	for (let target in targets) {
 		let current = env.secure.stat(target.directory, target.name);
 		if (target.expected == null ? current != null :
-		    !same_identity(current, target.expected)) internal();
+		    !same_file_identity(current, target.expected)) internal();
 	}
 	return true;
 };
@@ -1279,8 +1374,8 @@ function prune_impl(app, options) {
 			archive_tomb, sidecar_tomb: side_tomb, archive_size: current.archive.size,
 			archive_sha256: current.archive.sha256, sidecar_size: current.sidecar_capture.size,
 			sidecar_sha256: current.sidecar_capture.sha256,
-			archive_identity: identity_record(current.archive.identity),
-			sidecar_identity: identity_record(current.sidecar_capture.identity)
+			archive_identity: file_identity_record(current.archive.identity),
+			sidecar_identity: file_identity_record(current.sidecar_capture.identity)
 		});
 		try {
 			let moved_side = env.secure.rename(root, item.id + '.json', side_tomb,

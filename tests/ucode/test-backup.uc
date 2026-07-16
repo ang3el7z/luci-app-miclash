@@ -15,14 +15,21 @@ function mkdirs(filesystem, paths) {
 		if (filesystem.lstat(path) == null) assert_equal(filesystem.mkdir(path), true);
 		filesystem.chmod(path, 0o700);
 		filesystem.set_uid(path, 0);
-		filesystem.set_nlink(path, 1);
+		filesystem.set_nlink(path, 2);
 	}
 };
 
-function same_identity(left, right) {
+function same_file_identity(left, right) {
 	return left?.type == right?.type && left?.inode == right?.inode &&
 		left?.dev?.major == right?.dev?.major && left?.dev?.minor == right?.dev?.minor &&
 		left?.uid == right?.uid && left?.mode == right?.mode && left?.nlink == right?.nlink;
+};
+
+function same_directory_identity(left, right) {
+	return left?.type == 'directory' && right?.type == 'directory' &&
+		left?.inode == right?.inode && left?.dev?.major == right?.dev?.major &&
+		left?.dev?.minor == right?.dev?.minor && left?.uid == right?.uid &&
+		left?.mode == right?.mode;
 };
 
 function secure_fs(filesystem) {
@@ -36,7 +43,8 @@ function secure_fs(filesystem) {
 	function directory(path, expected) {
 		let current = filesystem.lstat(path);
 		if (current?.type != 'directory' || current.uid != 0 || current.mode != 0o700 ||
-		    current.nlink != 1 || (expected != null && !same_identity(current, expected)))
+		    type(current.nlink) != 'int' || current.nlink < 2 ||
+		    (expected != null && !same_directory_identity(current, expected)))
 			die('INTERNAL');
 		return current;
 	};
@@ -44,7 +52,7 @@ function secure_fs(filesystem) {
 		let current = filesystem.lstat(path);
 		if (current?.type != 'file' || current.uid != (options?.uid ?? 0) ||
 		    current.mode != options?.mode || current.nlink != (options?.nlink ?? 1) ||
-		    (expected != null && !same_identity(current, expected))) die('INTERNAL');
+		    (expected != null && !same_file_identity(current, expected))) die('INTERNAL');
 		return current;
 	};
 	capability.open = (path, options) => {
@@ -52,7 +60,7 @@ function secure_fs(filesystem) {
 		if (filesystem.lstat(path) == null) {
 			if (options?.create !== true || filesystem.mkdir(path) !== true) die('INTERNAL');
 			filesystem.chmod(path, options.mode); filesystem.set_uid(path, options.uid);
-			filesystem.set_nlink(path, 1);
+			filesystem.set_nlink(path, 2);
 		}
 		let identity = directory(path, options?.expected);
 		hook('after', 'open', null, path, options);
@@ -67,7 +75,8 @@ function secure_fs(filesystem) {
 		if (filesystem.lstat(path) == null) {
 			if (options?.create !== true || filesystem.mkdir(path) !== true) die('INTERNAL');
 			filesystem.chmod(path, options.mode); filesystem.set_uid(path, options.uid);
-			filesystem.set_nlink(path, 1);
+			filesystem.set_nlink(path, 2);
+			filesystem.set_nlink(parent.opaque, parent.identity.nlink + 1);
 		}
 		let identity = directory(path, options?.expected);
 		hook('after', 'open_at', parent, name, options);
@@ -119,7 +128,7 @@ function secure_fs(filesystem) {
 		let path = parent.opaque + '/' + name;
 		hook('before', 'replace_atomic', parent, name, { expected, options });
 		let current = filesystem.lstat(path);
-		if (expected == null ? current != null : !same_identity(current, expected)) die('INTERNAL');
+		if (expected == null ? current != null : !same_file_identity(current, expected)) die('INTERNAL');
 		let replacement = {
 			content, inode: 1000000 + capability.replacement_nonce++, mode: options.mode,
 			uid: options.uid, nlink: 1
@@ -127,7 +136,7 @@ function secure_fs(filesystem) {
 		hook('after', 'replace_temp_fsync', parent, name, { expected, options });
 		hook('before', 'replace_rename', parent, name, { expected, options });
 		current = filesystem.lstat(path);
-		if (expected == null ? current != null : !same_identity(current, expected)) die('INTERNAL');
+		if (expected == null ? current != null : !same_file_identity(current, expected)) die('INTERNAL');
 		filesystem.files[path] = replacement.content;
 		filesystem.bump_inode(path);
 		filesystem.set_mode(path, replacement.mode); filesystem.set_uid(path, replacement.uid);
@@ -161,7 +170,7 @@ function secure_fs(filesystem) {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
 		hook('before', 'unlink', parent, name, expected);
-		if (!same_identity(filesystem.lstat(path), expected)) die('INTERNAL');
+		if (!same_file_identity(filesystem.lstat(path), expected)) die('INTERNAL');
 		if (filesystem.unlink(path) !== true) die('INTERNAL');
 		hook('after', 'unlink', parent, name, expected);
 		return true;
@@ -170,7 +179,7 @@ function secure_fs(filesystem) {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
 		hook('before', 'rmdir', parent, name, expected);
-		if (!same_identity(filesystem.lstat(path), expected)) die('INTERNAL');
+		if (!same_directory_identity(filesystem.lstat(path), expected)) die('INTERNAL');
 		if (filesystem.rmdir(path) !== true) die('INTERNAL');
 		hook('after', 'rmdir', parent, name, expected);
 		return true;
@@ -292,6 +301,12 @@ for (let primitive in [ 'create_exclusive', 'replace_atomic', 'with_admission_lo
 	assert_throws(() => backup.list(missing.app), 'INTERNAL');
 }
 
+let hardlinked_file = make_app();
+hardlinked_file.filesystem.set_nlink('/opt/clash/lst/local.txt', 2);
+assert_throws(() => backup.create(hardlinked_file.app), 'INTERNAL');
+assert_equal(length(hardlinked_file.filesystem.lsdir('/tmp/miclash/backup-transactions') ?? []), 0,
+	'hardlinked source file reached transaction admission');
+
 let base = make_app(), created = backup.create(base.app, null, 'luci');
 assert_match(created.id, /^b-[0-9]{13}-[0-9a-f]{32}$/);
 assert_equal(length(backup.list(base.app)), 1);
@@ -328,8 +343,12 @@ publish_swap.filesystem.on_rename = (from, to) => {
 };
 assert_throws(() => backup.create(publish_swap.app,
 	{ include_secrets: true }, 'system'), 'INTERNAL');
-assert_equal(length(publish_swap.filesystem.lsdir('/etc/miclash/backups')), 0,
-	'unsafe publication residue survived cleanup');
+let publish_residue = publish_swap.filesystem.lsdir('/etc/miclash/backups');
+assert_equal(length(publish_residue), 2, 'ambiguous publication residue was mutated');
+let publish_archive = null;
+for (let name in publish_residue) if (match(name, /\.tar$/)) publish_archive = name;
+assert_equal(publish_swap.filesystem.lstat('/etc/miclash/backups/' + publish_archive).mode, 0o644);
+assert_throws(() => backup.list(publish_swap.app), 'INTERNAL');
 
 // Byte-faithful parser and staging.
 let imported_box = make_app();
@@ -801,8 +820,14 @@ let inspect_order_seed = seed_import(inspect_order,
 	'00000000000000000000000000000093', { 'settings/settings.json': '{ }\n' });
 let inspect_marker_seen = false;
 inspect_order.app.secure_fs.before = (operation, directory, name, extra) => {
-	if (operation == 'create_exclusive' && name == 'settings.json')
-		inspect_marker_seen = length(transaction_names(inspect_order)) == 1;
+	if (operation == 'create_exclusive' && name == 'settings.json') {
+		let names = transaction_names(inspect_order);
+		let journal = length(names) == 1 ? json(inspect_order.filesystem.readfile(
+			'/tmp/miclash/backup-transactions/' + names[0])) : null;
+		inspect_marker_seen = type(journal?.directories) == 'array' &&
+			length(journal.directories) == 1 && journal.directories[0].path == 'settings' &&
+			journal.directories[0].identity != null;
+	}
 };
 let inspect_order_preview = backup.inspect(inspect_order.app, inspect_order_seed.id);
 assert_equal(inspect_marker_seen, true, 'inspection wrote member before transaction marker');
@@ -823,6 +848,39 @@ partial_inspect.app.secure_fs.after = null;
 backup.list(partial_inspect.app);
 assert_equal(length(partial_inspect.filesystem.lsdir('/tmp/miclash/backup-inspected')), 0);
 assert_equal(length(transaction_names(partial_inspect)), 0);
+
+let intermediate_swap = make_app();
+let intermediate_seed = seed_import(intermediate_swap,
+	'00000000000000000000000000000106', { 'settings/settings.json': '{ }\n' });
+let intermediate_crashed = false;
+intermediate_swap.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!intermediate_crashed && operation == 'create_exclusive' && name == 'settings.json') {
+		intermediate_crashed = true; die('intermediate-swap-crash');
+	}
+};
+intermediate_swap.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (intermediate_crashed && operation == 'list' &&
+	    directory.opaque == '/tmp/miclash/backup-transactions') die('process-gone');
+};
+assert_throws(() => backup.inspect(intermediate_swap.app, intermediate_seed.id), 'CORRUPT_STATE');
+intermediate_swap.app.secure_fs.after = null; intermediate_swap.app.secure_fs.before = null;
+let intermediate_journal_name = transaction_names(intermediate_swap)[0];
+let intermediate_journal = json(intermediate_swap.filesystem.readfile(
+	'/tmp/miclash/backup-transactions/' + intermediate_journal_name));
+assert_equal(intermediate_journal.directories[0].path, 'settings',
+	'intermediate directory was not registered before child write');
+let intermediate_path = '/tmp/miclash/backup-inspected/' +
+	intermediate_journal.inspection_id + '/settings';
+assert_equal(intermediate_swap.filesystem.unlink(intermediate_path + '/settings.json'), true);
+assert_equal(intermediate_swap.filesystem.rmdir(intermediate_path), true);
+assert_equal(intermediate_swap.filesystem.mkdir(intermediate_path), true);
+intermediate_swap.filesystem.set_mode(intermediate_path, 0o700);
+intermediate_swap.filesystem.set_uid(intermediate_path, 0);
+intermediate_swap.filesystem.set_nlink(intermediate_path, 2);
+let intermediate_foreign = intermediate_swap.filesystem.lstat(intermediate_path);
+assert_throws(() => backup.list(intermediate_swap.app), 'INTERNAL');
+assert_equal(intermediate_swap.filesystem.lstat(intermediate_path).inode,
+	intermediate_foreign.inode, 'foreign intermediate directory was removed');
 
 inspect_order.runtime.clock.advance(900001);
 backup.list(inspect_order.app);
