@@ -15,6 +15,9 @@
 'require view.miclash.api';
 'require view.miclash.diagnostics-panel';
 'require view.miclash.history-panel';
+'require view.miclash.settings-panels';
+'require view.miclash.devices-panel';
+'require view.miclash.backup-panel';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
@@ -53,6 +56,43 @@ const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
 });
+const managementOwner = (() => {
+	let panels = null;
+	function destroy() {
+		if (!panels) return false;
+		const owned = panels; panels = null;
+		for (const panel of owned) panel.destroy();
+		return true;
+	}
+	function replace() {
+		destroy();
+		const factories = [ view_miclash_settings_panels, view_miclash_devices_panel,
+			view_miclash_backup_panel ];
+		const created = [];
+		try {
+			for (const factory of factories) created.push(factory.create({
+				api: view_miclash_api.create(),
+				onError: (error) => { setOperationError(error); notify('error', error?.message || error); },
+				onProgress: (message, operation) => setOperationStatus('running', message, {
+					detail: operation?.stage || '', context: 'management'
+				})
+			}));
+		} catch (error) {
+			for (const panel of created) panel.destroy();
+			throw error;
+		}
+		panels = created;
+		return panels;
+	}
+	function mount(root) {
+		if (!panels || !root) return;
+		const hosts = [ '#sbox-management-settings', '#sbox-management-devices', '#sbox-management-backup' ];
+		for (let i = 0; i < panels.length; i++) {
+			const host = root.querySelector(hosts[i]); if (host) panels[i].mount(host);
+		}
+	}
+	return { replace, mount, destroy };
+})();
 const configDraftLifecycle = view_miclash_editor.createLifecycleOwner();
 const draftLoadCoordinator = view_miclash_editor.createDraftLoadCoordinator(() => ({
 	generation: configRuntimeGeneration, api: configApi, controller: draftController,
@@ -2146,6 +2186,11 @@ function buildSettingsPaneHtml() {
 				'</div>' +
 			'</section>' +
 			'</div>' +
+			'<div id="sbox-management-panels" class="sbox-management-grid">' +
+				'<section id="sbox-management-settings" class="sbox-management-module sbox-management-settings" aria-live="polite"></section>' +
+				'<section id="sbox-management-backup" class="cbi-section sbox-settings-block sbox-management-module" aria-live="polite"></section>' +
+				'<section id="sbox-management-devices" class="cbi-section sbox-settings-block sbox-management-module sbox-management-wide" aria-live="polite"></section>' +
+			'</div>' +
 
 			'<div class="sbox-settings-save-wrap">' +
 				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply sbox-settings-save-btn">' + safeText(_('Save Settings')) + '</button>' +
@@ -2404,6 +2449,7 @@ function renderSettingsPane() {
 	bindSettingsPaneEvents();
 	const diagnosticsHost = pane.querySelector('#sbox-diagnostics-summary');
 	if (diagnosticsHost) diagnosticsOwner.mount(diagnosticsHost);
+	managementOwner.mount(pane);
 }
 
 async function collectSettingsFormState() {
@@ -3115,11 +3161,14 @@ function bindTabEvents() {
 			appState.activeCfgTab = name;
 			if (name === 'settings') {
 				stopLogPolling();
+				managementOwner.replace();
 				renderSettingsPane();
 			} else if (name === 'logs') {
+				managementOwner.destroy();
 				refreshLogs().catch(() => {});
 				startLogPolling();
 			} else {
+				managementOwner.destroy();
 				stopLogPolling();
 				resizeConfigEditor();
 			}
@@ -3146,6 +3195,7 @@ return view.extend({
 	},
 
 	render: async function(data) {
+		managementOwner.destroy();
 		destroyConfigDraftRuntime();
 		await ensureConfigProfilesReady(data[0] || '');
 		appState.configProfiles = CONFIG_PROFILES.slice();
@@ -3230,6 +3280,7 @@ return view.extend({
 		bindConfigEvents();
 		bindTabEvents();
 		diagnosticsOwner.replace();
+		if (appState.activeCfgTab === 'settings') managementOwner.replace();
 		renderSettingsPane();
 		updateHeaderAndControlDom();
 		refreshReleaseMeta({ force: true }).catch(() => {});
@@ -3263,6 +3314,7 @@ return view.extend({
 
 	unload: function() {
 		diagnosticsOwner.destroy();
+		managementOwner.destroy();
 		destroyConfigDraftRuntime();
 	}
 });

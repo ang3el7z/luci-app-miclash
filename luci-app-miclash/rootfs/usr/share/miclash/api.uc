@@ -85,8 +85,6 @@ function telegram_settings_value(app) {
 	if (type(settings) != 'object')
 		settings = {};
 	settings = redact.value('telegram', settings);
-	if (exists(settings, 'user_id'))
-		settings.user_id = redact.MASK;
 	return settings;
 };
 
@@ -95,8 +93,6 @@ function telegram_status_value(app) {
 		let status = redact.value('telegram_status', app.telegram_status());
 		if (type(status) != 'object')
 			errors.fail('INTERNAL');
-		if (exists(status, 'user_id'))
-			status.user_id = redact.MASK;
 		return status;
 	}
 	let settings = app.settings_get()?.telegram;
@@ -813,13 +809,15 @@ export function method_table(app, transfers) {
 			return domain_operation('devices_policy_set', {
 				policy: transfer_metadata(arguments.policy), source: source(arguments) });
 		}),
-		devices_policy_delete: method({ mac: '', source: '' }, (arguments) => {
-			exact(arguments, { mac: { type: 'string', required: true },
-				source: { type: 'string' } });
-			if (!match(arguments.mac, /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/))
+		devices_policy_delete: method({ policy_id: '', expected_revision: 0, source: '' }, (arguments) => {
+			exact(arguments, { policy_id: { type: 'string', required: true },
+				expected_revision: { type: 'int', required: true }, source: { type: 'string' } });
+			if (!match(arguments.policy_id, /^dp_[0-9]+_[0-9a-f]{16}$/) ||
+			    arguments.expected_revision < 1 || arguments.expected_revision > 2147483647)
 				errors.fail('INVALID_ARGUMENT');
 			return domain_operation('devices_policy_delete', {
-				mac: uc(arguments.mac), source: source(arguments) });
+				policy_id: arguments.policy_id, expected_revision: arguments.expected_revision,
+				source: source(arguments) });
 		}),
 		notifications_settings: method(empty, (arguments) => {
 			exact(arguments, {});

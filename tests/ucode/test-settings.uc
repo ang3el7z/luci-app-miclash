@@ -94,11 +94,17 @@ assert_equal(defaults.interfaces.auto_detect_wan, true);
 assert_equal(defaults.guard.enabled, false);
 assert_equal(defaults.guard.auto_fakeip_whitelist, true);
 assert_equal(defaults.memory.enabled, false);
+assert_equal(defaults.memory.sample_interval_ms, 60000);
+assert_equal(defaults.memory.failure_cooldown_ms, 86400000);
 assert_equal(defaults.updates.auto_subscription, true);
 assert_equal(defaults.updates.interval_hours, 4);
 assert_equal(defaults.updates.miclash_release_channel, 'release');
 assert_equal(defaults.updates.mihomo_release_channel, 'release');
 assert_equal(defaults.notifications.auto_hide, true);
+assert_json_equal(defaults.notifications.channels, [ 'syslog', 'luci', 'telegram' ]);
+assert_json_equal(defaults.notifications.events, [ 'guard_outage', 'failure', 'recovery',
+	'fail_closed', 'direct_fallback', 'memory_action', 'memory_outcome',
+	'subscription_outcome', 'update_outcome', 'internet_restored' ]);
 assert_equal(defaults.telegram.enabled, false);
 assert_equal(defaults.backup.enabled, false);
 assert_equal(defaults.backup.retention, 5);
@@ -108,10 +114,16 @@ assert_equal(defaults.meta.schema_version, 1);
 let normalized_env = fake_runtime();
 assert_json_equal(settings.validate_patch({
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
-	updates: { interval_hours: '24' }
+	updates: { interval_hours: '24' },
+	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
+	notifications: { channels: [ 'telegram', 'syslog', 'telegram' ],
+		events: [ 'failure', 'internet_restored' ] }
 }), {
 	interfaces: { included: [ 'br-lan', 'wlan0' ] },
-	updates: { interval_hours: 24 }
+	updates: { interval_hours: 24 },
+	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
+	notifications: { channels: [ 'telegram', 'syslog' ],
+		events: [ 'failure', 'internet_restored' ] }
 });
 let normalized = settings.save(normalized_env.rt, {
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
@@ -128,6 +140,24 @@ assert_throws(() => settings.save(fake_runtime().rt, { unknown: { enabled: true 
 assert_throws(() => settings.save(fake_runtime().rt, { core: { unknown: true } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt, { core: { proxy_mode: 'shell' } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt, { telegram: { token: 'bad\nvalue' } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ memory: { sample_interval_ms: 9999 } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ notifications: { channels: [ 'shell' ] } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ notifications: { events: [ 'unknown_event' ] } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ memory: { reserve_min_kb: 131072, reserve_max_kb: 65536 } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ memory: { success_cooldown_ms: 172800000, failure_cooldown_ms: 86400000 } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ telegram: { enabled: true, token: '', user_id: '' } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ telegram: { enabled: true, token: 'token', user_id: '9007199254740993e0' } }), 'INVALID_ARGUMENT');
+let telegram_partial_env = fake_runtime({ miclash: {
+	telegram: { '.type': 'telegram', enabled: '0', token: 'stored-token', user_id: '9007199254740993123456789' }
+} });
+assert_equal(settings.save(telegram_partial_env.rt, { telegram: { enabled: true } }).telegram.enabled, true);
 let atomic_env = fake_runtime();
 assert_throws(() => settings.save(atomic_env.rt, {
 	core: { proxy_mode: 'tun' },

@@ -579,5 +579,5 @@ assert_equal(length(keys(methods.telegram_settings.args)), 0);
 assert_equal(length(keys(methods.telegram_test.args)), 0);
 let telegram_settings = methods.telegram_settings.call({ args: {} });
 assert_equal(telegram_settings.token, '[REDACTED]');
-assert_equal(telegram_settings.user_id, '[REDACTED]');
+assert_equal(telegram_settings.user_id, api_env.settings.telegram.user_id);
 assert_equal(methods.telegram_test.call({ args: {} }).sent, true);

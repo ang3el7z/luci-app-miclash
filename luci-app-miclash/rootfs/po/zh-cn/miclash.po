@@ -1646,3 +1646,321 @@ msgstr "所选保留版本之间没有差异。"
 
 msgid "This revision is corrupt and cannot be opened or restored."
 msgstr "此版本已损坏，无法打开或恢复。"
+msgid "%s is outside the safe range."
+msgstr "%s 超出安全范围。"
+
+msgid "%s must be an integer."
+msgstr "%s 必须是整数。"
+
+msgid "Actions"
+msgstr "操作"
+
+msgid "Adaptive defaults are recommended. Unsafe values are rejected."
+msgstr "建议使用自适应默认值；不安全的数值会被拒绝。"
+
+msgid "Allowed Telegram user ID"
+msgstr "允许的 Telegram 用户 ID"
+
+msgid "Backup and restore"
+msgstr "备份与恢复"
+
+msgid "Backup archive changed while reading."
+msgstr "读取时备份归档已发生变化。"
+
+msgid "Backup archive size is outside the safe limit."
+msgstr "备份归档大小超出安全限制。"
+
+msgid "Backup completed but returned no safe backup ID."
+msgstr "备份已完成，但未返回安全的备份 ID。"
+
+msgid "Backup inspection"
+msgstr "备份检查"
+
+msgid "Backups are validated and previewed before restore."
+msgstr "恢复前会验证并预览备份。"
+
+msgid "BotFather token"
+msgstr "BotFather 令牌"
+
+msgid "Channels"
+msgstr "通道"
+
+msgid "Choose a backup archive first."
+msgstr "请先选择备份归档。"
+
+msgid "Configured; leave blank to keep"
+msgstr "已配置；留空以保留"
+
+msgid "Contents"
+msgstr "内容"
+
+msgid "Create and download"
+msgstr "创建并下载"
+
+msgid "Creating backup…"
+msgstr "正在创建备份…"
+
+msgid "Current IP"
+msgstr "当前 IP"
+
+msgid "Deleting device policy…"
+msgstr "正在删除设备策略…"
+
+msgid "Device policies"
+msgstr "设备策略"
+
+msgid "Device policy"
+msgstr "设备策略"
+
+msgid "Edit"
+msgstr "编辑"
+
+msgid "Enable Telegram control"
+msgstr "启用 Telegram 控制"
+
+msgid "Enabling Telegram requires a BotFather token and exact user ID."
+msgstr "启用 Telegram 需要 BotFather 令牌和精确的用户 ID。"
+
+msgid "End"
+msgstr "结束"
+
+msgid "Enter a valid MAC address such as AA:BB:CC:DD:EE:FF."
+msgstr "请输入有效的 MAC 地址，例如 AA:BB:CC:DD:EE:FF。"
+
+msgid "Enter an exact numeric Telegram user ID."
+msgstr "请输入精确的数字 Telegram 用户 ID。"
+
+msgid "Enter valid schedule days, times, and IANA timezone."
+msgstr "请输入有效的计划日期、时间和 IANA 时区。"
+
+msgid "Events"
+msgstr "事件"
+
+msgid "Expert settings"
+msgstr "专家设置"
+
+msgid "Guard has highest precedence. A direct policy never disables or bypasses Guard protection."
+msgstr "Guard 具有最高优先级。直连策略绝不会禁用或绕过 Guard 保护。"
+
+msgid "Guard precedence: fail-closed protection is evaluated before device direct/proxy policy."
+msgstr "Guard 优先级：先执行故障关闭保护，再执行设备直连/代理策略。"
+
+msgid "Hostname"
+msgstr "主机名"
+
+msgid "Include secrets"
+msgstr "包含机密"
+
+msgid "Inspect"
+msgstr "检查"
+
+msgid "Inspect import"
+msgstr "检查导入"
+
+msgid "Invalid backup ID."
+msgstr "备份 ID 无效。"
+
+msgid "Invalid backup import response."
+msgstr "备份导入响应无效。"
+
+msgid "Invalid backup inspection response."
+msgstr "备份检查响应无效。"
+
+msgid "Invalid backup payload."
+msgstr "备份数据无效。"
+
+msgid "Invalid backup/import ID."
+msgstr "备份或导入 ID 无效。"
+
+msgid "Invalid device policy."
+msgstr "设备策略无效。"
+
+msgid "Invalid notification channel."
+msgstr "通知通道无效。"
+
+msgid "Invalid operation response."
+msgstr "操作响应无效。"
+
+msgid "Last action"
+msgstr "上次操作"
+
+msgid "Last seen"
+msgstr "最后出现"
+
+msgid "MAC"
+msgstr "MAC"
+
+msgid "Memory expert settings are internally inconsistent."
+msgstr "内存专家设置相互冲突。"
+
+msgid "Memory Guard"
+msgstr "内存守护"
+
+msgid "No backups yet."
+msgstr "暂无备份。"
+
+msgid "No devices discovered."
+msgstr "未发现设备。"
+
+msgid "Notifications"
+msgstr "通知"
+
+msgid "Only this exact user ID is accepted in a private chat."
+msgstr "私聊中仅接受此精确用户 ID。"
+
+msgid "Operation failed."
+msgstr "操作失败。"
+
+msgid "Policy"
+msgstr "策略"
+
+msgid "Poller is running"
+msgstr "轮询器正在运行"
+
+msgid "Poller is stopped"
+msgstr "轮询器已停止"
+
+msgid "Reset baseline"
+msgstr "重置基线"
+
+msgid "Resetting memory baseline…"
+msgstr "正在重置内存基线…"
+
+msgid "Restore inspected backup"
+msgstr "恢复已检查的备份"
+
+msgid "Restore plan"
+msgstr "恢复计划"
+
+msgid "Restoring backup…"
+msgstr "正在恢复备份…"
+
+msgid "Review this exact manifest before restore. Restore uses only the opaque inspection ID."
+msgstr "恢复前请检查此清单。恢复仅使用不透明的检查 ID。"
+
+msgid "Save management settings"
+msgstr "保存管理设置"
+
+msgid "Saving device policy…"
+msgstr "正在保存设备策略…"
+
+msgid "Saving management settings…"
+msgstr "正在保存管理设置…"
+
+msgid "Schedule days"
+msgstr "计划日期"
+
+msgid "secret"
+msgstr "机密"
+
+msgid "Send test"
+msgstr "发送测试"
+
+msgid "Set policy"
+msgstr "设置策略"
+
+msgid "Size"
+msgstr "大小"
+
+msgid "Telegram test message was not sent."
+msgstr "Telegram 测试消息未发送。"
+
+msgid "The masked token cannot be saved as a replacement."
+msgstr "不能将掩码令牌保存为替代令牌。"
+
+msgid "Timezone"
+msgstr "时区"
+
+msgid "Unknown device"
+msgstr "未知设备"
+
+msgid "Use schedule"
+msgstr "使用计划"
+
+msgid "Warning: a backup with secrets contains subscription credentials and private configuration. Store it safely."
+msgstr "警告：包含机密的备份含有订阅凭据和私有配置，请妥善保管。"
+msgid "Enable scheduled backups"
+msgstr "启用计划备份"
+
+msgid "Retention"
+msgstr "保留数量"
+
+msgid "Retention must be between 1 and 100."
+msgstr "保留数量必须在 1 到 100 之间。"
+
+msgid "Save backup settings"
+msgstr "保存备份设置"
+
+msgid "Saving backup settings…"
+msgstr "正在保存备份设置…"
+msgid "Anomaly growth (KiB)"
+msgstr "异常增长量 (KiB)"
+
+msgid "Anomaly threshold (%)"
+msgstr "异常阈值 (%)"
+
+msgid "Baseline samples"
+msgstr "基线样本数"
+
+msgid "Component failure"
+msgstr "组件故障"
+
+msgid "Direct fallback"
+msgstr "直连回退"
+
+msgid "Fail-closed protection"
+msgstr "故障关闭保护"
+
+msgid "Failure cooldown (ms)"
+msgstr "失败冷却时间 (ms)"
+
+msgid "Guard outage"
+msgstr "Guard 故障"
+
+msgid "Internet restored"
+msgstr "互联网已恢复"
+
+msgid "Maximum reserve (KiB)"
+msgstr "最大预留 (KiB)"
+
+msgid "Memory action"
+msgstr "内存操作"
+
+msgid "Memory outcome"
+msgstr "内存恢复结果"
+
+msgid "Memory reserve (%)"
+msgstr "内存预留 (%)"
+
+msgid "Minimum drop (KiB)"
+msgstr "最小下降量 (KiB)"
+
+msgid "Minimum reserve (KiB)"
+msgstr "最小预留 (KiB)"
+
+msgid "Normal rearm delay (ms)"
+msgstr "正常重新启用延迟 (ms)"
+
+msgid "Recovery"
+msgstr "恢复"
+
+msgid "Required drop (%)"
+msgstr "要求下降比例 (%)"
+
+msgid "Sample interval (ms)"
+msgstr "采样间隔 (ms)"
+
+msgid "Subscription result"
+msgstr "订阅结果"
+
+msgid "Success cooldown (ms)"
+msgstr "成功冷却时间 (ms)"
+
+msgid "Sustained samples"
+msgstr "持续样本数"
+
+msgid "Update result"
+msgstr "更新结果"
+
+msgid "Warm-up time (ms)"
+msgstr "预热时间 (ms)"

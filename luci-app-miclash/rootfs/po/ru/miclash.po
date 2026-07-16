@@ -1699,3 +1699,324 @@ msgstr "Между выбранными сохранёнными версиям�
 
 msgid "This revision is corrupt and cannot be opened or restored."
 msgstr "Эта версия повреждена, её нельзя открыть или восстановить."
+msgid "%s is outside the safe range."
+msgstr "%s находится вне безопасного диапазона."
+
+msgid "%s must be an integer."
+msgstr "%s должно быть целым числом."
+
+msgid "Actions"
+msgstr "Действия"
+
+msgid "Adaptive defaults are recommended. Unsafe values are rejected."
+msgstr "Рекомендуются адаптивные значения по умолчанию. Небезопасные значения отклоняются."
+
+msgid "Allowed Telegram user ID"
+msgstr "Разрешённый ID пользователя Telegram"
+
+msgid "Backup and restore"
+msgstr "Резервное копирование и восстановление"
+
+msgid "Backup archive changed while reading."
+msgstr "Архив резервной копии изменился во время чтения."
+
+msgid "Backup archive size is outside the safe limit."
+msgstr "Размер архива резервной копии превышает безопасный предел."
+
+msgid "Backup completed but returned no safe backup ID."
+msgstr "Резервное копирование завершено, но безопасный ID не получен."
+
+msgid "Backup inspection"
+msgstr "Проверка резервной копии"
+
+msgid "Backups are validated and previewed before restore."
+msgstr "Перед восстановлением резервные копии проверяются и показываются для просмотра."
+
+msgid "BotFather token"
+msgstr "Токен BotFather"
+
+msgid "Channels"
+msgstr "Каналы"
+
+msgid "Choose a backup archive first."
+msgstr "Сначала выберите архив резервной копии."
+
+msgid "Configured; leave blank to keep"
+msgstr "Настроено; оставьте пустым, чтобы сохранить"
+
+msgid "Contents"
+msgstr "Содержимое"
+
+msgid "Create and download"
+msgstr "Создать и скачать"
+
+msgid "Creating backup…"
+msgstr "Создание резервной копии…"
+
+msgid "Current IP"
+msgstr "Текущий IP"
+
+msgid "Deleting device policy…"
+msgstr "Удаление политики устройства…"
+
+msgid "Device policies"
+msgstr "Политики устройств"
+
+msgid "Device policy"
+msgstr "Политика устройства"
+
+msgid "Download"
+msgstr "Скачать"
+
+msgid "Edit"
+msgstr "Изменить"
+
+msgid "Enable Telegram control"
+msgstr "Включить управление через Telegram"
+
+msgid "Enabling Telegram requires a BotFather token and exact user ID."
+msgstr "Для включения Telegram нужны токен BotFather и точный ID пользователя."
+
+msgid "End"
+msgstr "Окончание"
+
+msgid "Enter a valid MAC address such as AA:BB:CC:DD:EE:FF."
+msgstr "Введите корректный MAC-адрес, например AA:BB:CC:DD:EE:FF."
+
+msgid "Enter an exact numeric Telegram user ID."
+msgstr "Введите точный числовой ID пользователя Telegram."
+
+msgid "Enter valid schedule days, times, and IANA timezone."
+msgstr "Укажите корректные дни, время и часовой пояс IANA."
+
+msgid "Events"
+msgstr "События"
+
+msgid "Expert settings"
+msgstr "Экспертные настройки"
+
+msgid "Guard has highest precedence. A direct policy never disables or bypasses Guard protection."
+msgstr "Guard имеет высший приоритет. Политика direct никогда не отключает и не обходит защиту Guard."
+
+msgid "Guard precedence: fail-closed protection is evaluated before device direct/proxy policy."
+msgstr "Приоритет Guard: защита fail-closed применяется раньше политики direct/proxy устройства."
+
+msgid "Hostname"
+msgstr "Имя хоста"
+
+msgid "Include secrets"
+msgstr "Включить секреты"
+
+msgid "Inspect"
+msgstr "Проверить"
+
+msgid "Inspect import"
+msgstr "Проверить импорт"
+
+msgid "Invalid backup ID."
+msgstr "Некорректный ID резервной копии."
+
+msgid "Invalid backup import response."
+msgstr "Некорректный ответ импорта резервной копии."
+
+msgid "Invalid backup inspection response."
+msgstr "Некорректный ответ проверки резервной копии."
+
+msgid "Invalid backup payload."
+msgstr "Некорректные данные резервной копии."
+
+msgid "Invalid backup/import ID."
+msgstr "Некорректный ID резервной копии или импорта."
+
+msgid "Invalid device policy."
+msgstr "Некорректная политика устройства."
+
+msgid "Invalid notification channel."
+msgstr "Некорректный канал уведомлений."
+
+msgid "Invalid operation response."
+msgstr "Некорректный ответ операции."
+
+msgid "Last action"
+msgstr "Последнее действие"
+
+msgid "Last seen"
+msgstr "Последняя активность"
+
+msgid "MAC"
+msgstr "MAC"
+
+msgid "Memory expert settings are internally inconsistent."
+msgstr "Экспертные настройки памяти противоречат друг другу."
+
+msgid "Memory Guard"
+msgstr "Защита памяти"
+
+msgid "No backups yet."
+msgstr "Резервных копий пока нет."
+
+msgid "No devices discovered."
+msgstr "Устройства не обнаружены."
+
+msgid "Notifications"
+msgstr "Уведомления"
+
+msgid "Only this exact user ID is accepted in a private chat."
+msgstr "В личном чате принимается только этот точный ID пользователя."
+
+msgid "Operation failed."
+msgstr "Операция завершилась ошибкой."
+
+msgid "Policy"
+msgstr "Политика"
+
+msgid "Poller is running"
+msgstr "Опрос Telegram запущен"
+
+msgid "Poller is stopped"
+msgstr "Опрос Telegram остановлен"
+
+msgid "Reset baseline"
+msgstr "Сбросить базовый уровень"
+
+msgid "Resetting memory baseline…"
+msgstr "Сброс базового уровня памяти…"
+
+msgid "Restore inspected backup"
+msgstr "Восстановить проверенную копию"
+
+msgid "Restore plan"
+msgstr "План восстановления"
+
+msgid "Restoring backup…"
+msgstr "Восстановление резервной копии…"
+
+msgid "Review this exact manifest before restore. Restore uses only the opaque inspection ID."
+msgstr "Проверьте этот манифест перед восстановлением. Используется только непрозрачный ID проверки."
+
+msgid "Save management settings"
+msgstr "Сохранить настройки управления"
+
+msgid "Saving device policy…"
+msgstr "Сохранение политики устройства…"
+
+msgid "Saving management settings…"
+msgstr "Сохранение настроек управления…"
+
+msgid "Schedule days"
+msgstr "Дни расписания"
+
+msgid "secret"
+msgstr "секрет"
+
+msgid "Send test"
+msgstr "Отправить тест"
+
+msgid "Set policy"
+msgstr "Задать политику"
+
+msgid "Size"
+msgstr "Размер"
+
+msgid "Telegram test message was not sent."
+msgstr "Тестовое сообщение Telegram не отправлено."
+
+msgid "The masked token cannot be saved as a replacement."
+msgstr "Маскированный токен нельзя сохранить как замену."
+
+msgid "Timezone"
+msgstr "Часовой пояс"
+
+msgid "Unknown device"
+msgstr "Неизвестное устройство"
+
+msgid "Use schedule"
+msgstr "Использовать расписание"
+
+msgid "Warning: a backup with secrets contains subscription credentials and private configuration. Store it safely."
+msgstr "Предупреждение: копия с секретами содержит данные подписки и приватную конфигурацию. Храните её безопасно."
+msgid "Enable scheduled backups"
+msgstr "Включить резервные копии по расписанию"
+
+msgid "Retention"
+msgstr "Количество хранимых копий"
+
+msgid "Retention must be between 1 and 100."
+msgstr "Количество хранимых копий должно быть от 1 до 100."
+
+msgid "Save backup settings"
+msgstr "Сохранить настройки резервных копий"
+
+msgid "Saving backup settings…"
+msgstr "Сохранение настроек резервных копий…"
+msgid "Anomaly growth (KiB)"
+msgstr "Рост аномалии (КиБ)"
+
+msgid "Anomaly threshold (%)"
+msgstr "Порог аномалии (%)"
+
+msgid "Baseline samples"
+msgstr "Замеры базового уровня"
+
+msgid "Component failure"
+msgstr "Сбой компонента"
+
+msgid "Direct fallback"
+msgstr "Переход на прямое соединение"
+
+msgid "Fail-closed protection"
+msgstr "Защита fail-closed"
+
+msgid "Failure cooldown (ms)"
+msgstr "Пауза после ошибки (мс)"
+
+msgid "Guard outage"
+msgstr "Сбой Guard"
+
+msgid "Internet restored"
+msgstr "Доступ в Интернет восстановлен"
+
+msgid "Maximum reserve (KiB)"
+msgstr "Максимальный резерв (КиБ)"
+
+msgid "Memory action"
+msgstr "Действие с памятью"
+
+msgid "Memory outcome"
+msgstr "Результат восстановления памяти"
+
+msgid "Memory reserve (%)"
+msgstr "Резерв памяти (%)"
+
+msgid "Minimum drop (KiB)"
+msgstr "Минимальное снижение (КиБ)"
+
+msgid "Minimum reserve (KiB)"
+msgstr "Минимальный резерв (КиБ)"
+
+msgid "Normal rearm delay (ms)"
+msgstr "Задержка повторного включения (мс)"
+
+msgid "Recovery"
+msgstr "Восстановление"
+
+msgid "Required drop (%)"
+msgstr "Требуемое снижение (%)"
+
+msgid "Sample interval (ms)"
+msgstr "Интервал замеров (мс)"
+
+msgid "Subscription result"
+msgstr "Результат обновления подписки"
+
+msgid "Success cooldown (ms)"
+msgstr "Пауза после успеха (мс)"
+
+msgid "Sustained samples"
+msgstr "Подтверждающие замеры"
+
+msgid "Update result"
+msgstr "Результат обновления"
+
+msgid "Warm-up time (ms)"
+msgstr "Время прогрева (мс)"

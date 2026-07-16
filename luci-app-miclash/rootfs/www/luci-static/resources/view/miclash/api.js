@@ -48,7 +48,7 @@ const METHOD_SPECS = [
 	{ name: 'devices_list', params: [], operation: false },
 	{ name: 'devices_policy_list', params: [], operation: false },
 	{ name: 'devices_policy_set', params: ['policy', 'source'], operation: true },
-	{ name: 'devices_policy_delete', params: ['mac', 'source'], operation: true },
+	{ name: 'devices_policy_delete', params: ['policy_id', 'expected_revision', 'source'], operation: true },
 	{ name: 'notifications_settings', params: [], operation: false },
 	{ name: 'notifications_test', params: ['channel'], operation: false },
 	{ name: 'transfer_begin', params: ['direction', 'kind', 'object_id', 'size', 'sha256', 'metadata'], operation: false },

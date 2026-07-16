@@ -30,7 +30,23 @@ const FIELDS = {
 		enabled: 'bool',
 		auto_fakeip_whitelist: 'bool'
 	},
-	memory: { enabled: 'bool' },
+	memory: {
+		enabled: 'bool',
+		sample_interval_ms: 'memory_sample_interval_ms',
+		sustained_samples: 'memory_sustained_samples',
+		warmup_ms: 'memory_warmup_ms',
+		baseline_samples: 'memory_baseline_samples',
+		anomaly_percent: 'memory_anomaly_percent',
+		anomaly_growth_kb: 'memory_anomaly_growth_kb',
+		reserve_percent: 'memory_reserve_percent',
+		reserve_min_kb: 'memory_reserve_min_kb',
+		reserve_max_kb: 'memory_reserve_max_kb',
+		drop_percent: 'memory_drop_percent',
+		drop_min_kb: 'memory_drop_min_kb',
+		success_cooldown_ms: 'memory_success_cooldown_ms',
+		failure_cooldown_ms: 'memory_failure_cooldown_ms',
+		normal_rearm_ms: 'memory_normal_rearm_ms'
+	},
 	updates: {
 		auto_subscription: 'bool',
 		interval_hours: 'interval',
@@ -42,7 +58,11 @@ const FIELDS = {
 		token: 'secret_string',
 		user_id: 'string'
 	},
-	notifications: { auto_hide: 'bool' },
+	notifications: {
+		auto_hide: 'bool',
+		channels: 'notification_channels',
+		events: 'notification_events'
+	},
 	backup: {
 		enabled: 'bool',
 		retention: 'retention',
@@ -76,7 +96,14 @@ function defaults() {
 			excluded: []
 		},
 		guard: { enabled: false, auto_fakeip_whitelist: true },
-		memory: { enabled: false },
+		memory: {
+			enabled: false, sample_interval_ms: 60000, sustained_samples: 5,
+			warmup_ms: 900000, baseline_samples: 6, anomaly_percent: 150,
+			anomaly_growth_kb: 16384, reserve_percent: 10, reserve_min_kb: 16384,
+			reserve_max_kb: 65536, drop_percent: 10, drop_min_kb: 8192,
+			success_cooldown_ms: 21600000, failure_cooldown_ms: 86400000,
+			normal_rearm_ms: 1800000
+		},
 		updates: {
 			auto_subscription: true,
 			interval_hours: 4,
@@ -84,7 +111,13 @@ function defaults() {
 			mihomo_release_channel: 'release'
 		},
 		telegram: { enabled: false, token: '', user_id: '' },
-		notifications: { auto_hide: true },
+		notifications: {
+			auto_hide: true,
+			channels: [ 'syslog', 'luci', 'telegram' ],
+			events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
+				'direct_fallback', 'memory_action', 'memory_outcome',
+				'subscription_outcome', 'update_outcome', 'internet_restored' ]
+		},
 		backup: { enabled: false, retention: 5, include_secrets: false },
 		meta: { schema_version: 1 }
 	};
@@ -155,6 +188,28 @@ function positive_integer(value, fallback, maximum) {
 	return fallback;
 };
 
+function bounded_integer(value, minimum, maximum) {
+	let normalized = positive_integer(value, null, maximum);
+	if (normalized == null || normalized < minimum)
+		invalid();
+	return normalized;
+};
+
+function unique_enum_list(value, allowed, strict) {
+	if (!strict && type(value) == 'string')
+		value = length(value) ? split(value, ',') : [];
+	if (type(value) != 'array' || length(value) > length(allowed))
+		invalid();
+	let result = [];
+	for (let item in value) {
+		item = enum_value(item, allowed);
+		let duplicate = false;
+		for (let existing in result) if (existing == item) duplicate = true;
+		if (!duplicate) push(result, item);
+	}
+	return result;
+};
+
 function normalize(kind, value, fallback, strict) {
 	if (kind == 'bool') {
 		if (type(value) == 'bool')
@@ -193,6 +248,30 @@ function normalize(kind, value, fallback, strict) {
 			invalid();
 		return normalized;
 	}
+	let memory_bounds = {
+		memory_sample_interval_ms: [ 10000, 3600000 ],
+		memory_sustained_samples: [ 2, 60 ],
+		memory_warmup_ms: [ 60000, 86400000 ],
+		memory_baseline_samples: [ 3, 60 ],
+		memory_anomaly_percent: [ 110, 500 ],
+		memory_anomaly_growth_kb: [ 4096, 262144 ],
+		memory_reserve_percent: [ 5, 50 ],
+		memory_reserve_min_kb: [ 4096, 262144 ],
+		memory_reserve_max_kb: [ 8192, 1048576 ],
+		memory_drop_percent: [ 5, 90 ],
+		memory_drop_min_kb: [ 1024, 262144 ],
+		memory_success_cooldown_ms: [ 60000, 604800000 ],
+		memory_failure_cooldown_ms: [ 60000, 604800000 ],
+		memory_normal_rearm_ms: [ 60000, 86400000 ]
+	};
+	if (exists(memory_bounds, kind))
+		return bounded_integer(value, memory_bounds[kind][0], memory_bounds[kind][1]);
+	if (kind == 'notification_channels')
+		return unique_enum_list(value, [ 'syslog', 'luci', 'telegram' ], strict);
+	if (kind == 'notification_events')
+		return unique_enum_list(value, [ 'guard_outage', 'failure', 'recovery',
+			'fail_closed', 'direct_fallback', 'memory_action', 'memory_outcome',
+			'subscription_outcome', 'update_outcome', 'internet_restored' ], strict);
 	if (kind == 'schema_version') {
 		let normalized = positive_integer(value, null, 1);
 		if (normalized != 1)
@@ -212,6 +291,10 @@ function encoded(kind, value) {
 		return value ? '1' : '0';
 	if (kind == 'interval' || kind == 'retention' || kind == 'schema_version')
 		return sprintf('%d', value);
+	if (substr(kind, 0, 7) == 'memory_')
+		return sprintf('%d', value);
+	if (kind == 'notification_channels' || kind == 'notification_events')
+		return join(',', value);
 	return value;
 };
 
@@ -258,10 +341,29 @@ export function validate_patch(patch) {
 	return normalized_patch;
 };
 
+function validate_effective(current, patch) {
+	let effective = current;
+	for (let section, values in patch)
+		for (let option, value in values)
+			effective[section][option] = value;
+	let memory = effective.memory;
+	if (memory.reserve_min_kb > memory.reserve_max_kb ||
+	    memory.failure_cooldown_ms < memory.success_cooldown_ms ||
+	    memory.warmup_ms < memory.sample_interval_ms)
+		invalid();
+	let telegram = effective.telegram;
+	if (length(telegram.user_id) && !match(telegram.user_id, /^[1-9][0-9]{0,31}$/))
+		invalid();
+	if (telegram.enabled && (!length(telegram.token) || !length(telegram.user_id)))
+		invalid();
+	return effective;
+};
+
 export function save(runtime, patch) {
 	let normalized_patch = validate_patch(patch);
 	let persist = () => {
 		let uci = cursor(runtime);
+		validate_effective(load_cursor(uci), normalized_patch);
 		for (let section, values in normalized_patch)
 			for (let option, value in values) {
 				let kind = FIELDS[section][option];

@@ -257,7 +257,7 @@ let unwired_methods = api.method_table(unwired_app);
 assert_equal(unwired_methods.telegram_status.call({ args: {} }).running, false);
 assert_equal(unwired_methods.telegram_status.call({ args: {} }).configured, true);
 assert_equal(unwired_methods.telegram_settings.call({ args: {} }).token, '[REDACTED]');
-assert_equal(unwired_methods.telegram_settings.call({ args: {} }).user_id, '[REDACTED]');
+assert_equal(unwired_methods.telegram_settings.call({ args: {} }).user_id, '42');
 json_equal(unwired_methods.telegram_test.call({ args: {} }), { sent: false });
 
 function invoke(name, args) {
@@ -299,7 +299,7 @@ for (let secret in [ 'telegram-secret', 'controller-secret', 'config-secret' ])
 settings_reply.core.proxy_mode = 'tampered';
 assert_equal(invoke('settings_get').core.proxy_mode, 'tproxy');
 assert_equal(index(sprintf('%J', invoke('telegram_status')), 'telegram-secret'), -1);
-assert_equal(invoke('telegram_status').user_id, '[REDACTED]');
+assert_equal(invoke('telegram_status').user_id, '42');
 assert_equal(invoke('telegram_settings').token, '[REDACTED]');
 json_equal(invoke('telegram_test'), { sent: true });
 
@@ -399,7 +399,8 @@ function valid_contract_arguments(entry) {
 		backup_id: 'b-0000000005000-' + sprintf('%032x', 4),
 		inspection_id: 'x-0000000005000-' + sprintf('%032x', 5),
 		policy: { mac: 'AA:BB:CC:DD:EE:FF', mode: 'proxy' },
-		mac: 'aa:bb:cc:dd:ee:ff', direction: 'upload', object_id: '', size: 1,
+		policy_id: 'dp_1_0000000000000001', expected_revision: 1,
+		direction: 'upload', object_id: '', size: 1,
 		sha256: sprintf('%064x', 7), metadata: {}, transfer_id: sprintf('%064x', 8),
 		seq: 0, data: b64enc('x')
 	};
@@ -419,8 +420,6 @@ function expected_delegate_arguments(name, arguments) {
 	if (name == 'config_save_draft' || name == 'config_validate' || name == 'config_apply')
 		return [ arguments.profile, arguments.content, arguments.source ];
 	if (name == 'settings_set') return [ arguments.settings, arguments.source ];
-	if (name == 'devices_policy_delete')
-		return [ { mac: uc(arguments.mac), source: arguments.source } ];
 	return [ arguments ];
 };
 let delegation = [], contract_sequence = 100;
@@ -490,7 +489,7 @@ assert_equal(contract_methods.subscription_probe.call({ args: {
 	profile: 'config.yaml', url: 'https://user@example.test/path'
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(contract_methods.devices_policy_delete.call({ args: {
-	mac: 'not-a-mac', source: 'luci'
+	policy_id: 'not-an-id', expected_revision: 1, source: 'luci'
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(contract_methods.history_list.call({ args: {
 	profile: 'config.yaml', limit: 101

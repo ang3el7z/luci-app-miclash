@@ -614,6 +614,111 @@
 	font-size: 12px;
 	line-height: 1.5;
 }
+
+.sbox-management-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1rem;
+	margin-top: 1rem;
+}
+
+.sbox-management-module,
+.sbox-management-card {
+	min-width: 0;
+}
+
+.sbox-management-settings {
+	display: contents;
+}
+
+.sbox-management-wide,
+.sbox-management-save-row {
+	grid-column: 1 / -1;
+}
+
+.sbox-management-facts {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: .45rem .8rem;
+	margin: .75rem 0;
+}
+
+.sbox-management-expert {
+	margin-top: .75rem;
+	border-top: 1px solid var(--border-color-medium, #d8d8d8);
+	padding-top: .65rem;
+}
+
+.sbox-management-expert summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.sbox-management-form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: .65rem;
+}
+
+.sbox-management-field,
+.sbox-management-form-grid label {
+	display: flex;
+	flex-direction: column;
+	gap: .25rem;
+}
+
+.sbox-management-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: .5rem;
+	margin-top: .75rem;
+}
+
+.sbox-management-switches,
+.sbox-device-days {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+	gap: .25rem .65rem;
+}
+
+.sbox-management-table-wrap {
+	overflow-x: auto;
+	max-width: 100%;
+}
+
+.sbox-management-warning {
+	border-left: .25rem solid #d97706;
+	padding: .55rem .75rem;
+	background: rgba(217, 119, 6, .08);
+}
+
+.sbox-backup-manifest {
+	max-height: 45vh;
+	overflow: auto;
+	word-break: break-word;
+}
+
+.sbox-management-grid button:focus-visible,
+.sbox-management-grid input:focus-visible,
+.sbox-management-grid select:focus-visible,
+.sbox-management-expert summary:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+	.sbox-management-grid,
+	.sbox-management-facts,
+	.sbox-management-form-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.sbox-management-wide,
+	.sbox-management-save-row {
+		grid-column: auto;
+	}
+}
 .sbox-settings-summary-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
