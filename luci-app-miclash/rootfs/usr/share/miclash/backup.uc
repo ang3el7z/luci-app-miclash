@@ -45,10 +45,13 @@ const IMPORT_ROOT = '/tmp/miclash/imports';
 const INSPECT_ROOT = '/tmp/miclash/backup-inspected';
 const TRANSACTION_ROOT = '/tmp/miclash/backup-transactions';
 const INSPECTION_TTL = 900000;
+const IMPORT_TTL = 900000;
+const MAX_IMPORTS = 4;
 const MAX_TRANSACTIONS = 64;
 const MAX_ARCHIVE = 16777216;
 const MAX_MEMBER = 4194304;
 const MAX_MANIFEST = 65536;
+const MAX_IMPORT_BYTES = MAX_ARCHIVE + MAX_MANIFEST;
 const MAX_REPORT = 262144;
 const MAX_FILES = 1024;
 
@@ -715,7 +718,8 @@ function valid_journal(record, name) {
 		return record.cursor <= length(record.files);
 	}
 	if (record.kind == 'prune')
-		return valid_id(record.prune_id, 'b') && record.archive_name == record.prune_id + '.tar' &&
+		return (valid_id(record.prune_id, 'b') || valid_id(record.prune_id, 'i')) &&
+			record.archive_name == record.prune_id + '.tar' &&
 			record.sidecar_name == record.prune_id + '.json' &&
 			record.archive_tomb == '.prune-' + record.prune_id + '.tar' &&
 			record.sidecar_tomb == '.prune-' + record.prune_id + '.json' &&
@@ -853,7 +857,8 @@ function prune_candidate(env, root, original, tomb, size, digest, recorded) {
 };
 
 function recover_prune(env, transaction) {
-	let record = transaction.record, root = open_dir(env, BACKUP_ROOT);
+	let record = transaction.record, root = open_dir(env,
+		valid_id(record.prune_id, 'i') ? IMPORT_ROOT : BACKUP_ROOT);
 	let archive = prune_candidate(env, root, record.archive_name, record.archive_tomb,
 		record.archive_size, record.archive_sha256, record.archive_identity);
 	let sidecar = prune_candidate(env, root, record.sidecar_name, record.sidecar_tomb,
@@ -899,12 +904,117 @@ function with_transaction_lease(env, worker) {
 	});
 };
 
+function source_timestamp(source_id) {
+	if (!valid_id(source_id, 'b') && !valid_id(source_id, 'i')) invalid();
+	let value = int(substr(source_id, 2, 13));
+	if (type(value) != 'int' || value < 0) internal();
+	return value;
+};
+
+function begin_cleanup_journal(env, kind, created_at, initial) {
+	if (type(env?.lease) != 'object') internal();
+	recover_transactions_locked(env);
+	let root = open_dir(env, TRANSACTION_ROOT);
+	if (length(safe_names(env, root, MAX_TRANSACTIONS)) >= MAX_TRANSACTIONS)
+		errors.fail('BUSY');
+	let nonce = env.runtime.random.hex(16);
+	if (!match(nonce, /^[0-9a-f]{32}$/)) internal();
+	let id = sprintf('t-%013d-%s', created_at, nonce);
+	let record = journal_base(id, kind, created_at);
+	for (let name, value in initial ?? {}) {
+		if (!exists(JOURNAL_FIELDS, name)) internal();
+		record[name] = value;
+	}
+	let written = secure_create(env, root, id + '.json', journal_text(record), 0o600);
+	return { root, name: id + '.json', record, identity: written.identity };
+};
+
+function remove_source_locked(env, source_id) {
+	if (type(env?.lease) != 'object') internal();
+	let current = source_record(null, source_id, env), root = current.root;
+	let side_tomb = '.prune-' + source_id + '.json';
+	let archive_tomb = '.prune-' + source_id + '.tar';
+	if (env.secure.stat(root, side_tomb, env.lease) != null ||
+	    env.secure.stat(root, archive_tomb, env.lease) != null) internal();
+	let transaction = begin_cleanup_journal(env, 'prune', env.runtime.clock.now(), {
+		prune_id: source_id, archive_name: source_id + '.tar',
+		sidecar_name: source_id + '.json', archive_tomb, sidecar_tomb: side_tomb,
+		archive_size: current.archive.size, archive_sha256: current.archive.sha256,
+		sidecar_size: current.sidecar_capture.size,
+		sidecar_sha256: current.sidecar_capture.sha256,
+		archive_identity: file_identity_record(current.archive.identity),
+		sidecar_identity: file_identity_record(current.sidecar_capture.identity)
+	});
+	try {
+		let moved_side = env.secure.rename_noreplace(root, source_id + '.json', side_tomb,
+			current.sidecar_capture.identity, { mode: 0o600, uid: 0, nlink: 1 }, env.lease);
+		transaction.record.phase = 'side_moved'; journal_store(env, transaction);
+		let moved_archive = env.secure.rename_noreplace(root, source_id + '.tar', archive_tomb,
+			current.archive.identity, { mode: 0o600, uid: 0, nlink: 1 }, env.lease);
+		transaction.record.phase = 'archive_moved'; journal_store(env, transaction);
+		transaction.record.phase = 'deleting'; journal_store(env, transaction);
+		if (env.secure.unlink_durable(root, archive_tomb, moved_archive, env.lease) !== true ||
+		    env.secure.unlink_durable(root, side_tomb, moved_side, env.lease) !== true) internal();
+		journal_finish(env, transaction);
+		return true;
+	}
+	catch (error) {
+		try { recover_transactions_locked(env); } catch (ignore) {}
+		errors.fail(errors.normalize(error).code);
+	}
+};
+
+function cleanup_imports_locked(env) {
+	if (type(env?.lease) != 'object') internal();
+	let root = open_dir(env, IMPORT_ROOT), pairs = {};
+	for (let name in safe_names(env, root, MAX_FILES * 2 + 16)) {
+		let found = match(name, /^(i-[0-9]{13}-[0-9a-f]{32})\.(tar|json)$/);
+		if (found == null) internal();
+		pairs[found[1]] ??= {};
+		if (pairs[found[1]][found[2]]) internal();
+		pairs[found[1]][found[2]] = true;
+	}
+	let now = env.runtime.clock.now(), active = [], total = 0;
+	if (type(now) != 'int' || now < 0) internal();
+	for (let source_id in sorted(keys(pairs))) {
+		if (!pairs[source_id].tar || !pairs[source_id].json) internal();
+		let source = source_record(null, source_id, env);
+		if (now > source_timestamp(source_id) + IMPORT_TTL) {
+			remove_source_locked(env, source_id);
+			continue;
+		}
+		let retained_size = source.archive.size + source.sidecar_capture.size;
+		push(active, { id: source_id, size: retained_size }); total += retained_size;
+	}
+	while (length(active) > MAX_IMPORTS || total > MAX_IMPORT_BYTES) {
+		let oldest = shift(active);
+		remove_source_locked(env, oldest.id); total -= oldest.size;
+	}
+	return { records: active, bytes: total };
+};
+
+function prepare_locked(env) {
+	recover_transactions_locked(env);
+	return cleanup_imports_locked(env);
+};
+
+function reserve_import_locked(env, size) {
+	let active = prepare_locked(env);
+	let reserved = size + MAX_MANIFEST;
+	if (reserved > MAX_IMPORT_BYTES) errors.fail('RESOURCE_EXHAUSTED');
+	while (length(active.records) >= MAX_IMPORTS || active.bytes + reserved > MAX_IMPORT_BYTES) {
+		let oldest = shift(active.records);
+		remove_source_locked(env, oldest.id); active.bytes -= oldest.size;
+	}
+	return active;
+};
+
 export function transfer_download(app, backup_id) {
 	if (!valid_id(backup_id, 'b')) invalid();
 	try {
 		let env = validate_app(app);
 		return with_transaction_lease(env, (leased) => {
-			recover_transactions_locked(leased);
+			prepare_locked(leased);
 			let source = source_record(app, backup_id, leased), content = source.archive.content;
 			let expected_size = source.archive.size, expected_sha256 = source.archive.sha256;
 			let closed = false;
@@ -973,7 +1083,7 @@ export function list(app, options) {
 	try {
 		let env = validate_app(app);
 		return with_transaction_lease(env, (leased) => {
-			recover_transactions_locked(leased);
+			prepare_locked(leased);
 			return list_records(app, leased);
 		});
 	}
@@ -1087,7 +1197,7 @@ export function create(app, options, source) {
 	try {
 		let env = validate_app(app);
 		return with_transaction_lease(env, (leased) => {
-			recover_transactions_locked(leased);
+			prepare_locked(leased);
 			return create_impl(app, options, source, leased);
 		});
 	}
@@ -1117,6 +1227,7 @@ export function transfer_import(app, staged) {
 	    type(staged.read) != 'function') invalid();
 	try {
 		let env = validate_app(app), content = '';
+		with_transaction_lease(env, (leased) => reserve_import_locked(leased, staged.size));
 		while (length(content) < staged.size) {
 			let chunk = staged.read(min(49152, staged.size - length(content)));
 			if (type(chunk) != 'string' || !length(chunk) ||
@@ -1126,7 +1237,7 @@ export function transfer_import(app, staged) {
 		if (length(content) != staged.size || env.runtime.digest.sha256(content) != staged.sha256)
 			errors.fail('VALIDATION_FAILED');
 		return with_transaction_lease(env, (leased) => {
-			recover_transactions_locked(leased);
+			reserve_import_locked(leased, staged.size);
 			let decoded;
 			try { decoded = manifest_from_archive(leased, { content }); }
 			catch (error) { errors.fail('VALIDATION_FAILED'); }
@@ -1291,7 +1402,7 @@ export function inspect(app, source_id, options) {
 	try {
 		let env = validate_app(app);
 		return with_transaction_lease(env, (leased) => {
-			recover_transactions_locked(leased);
+			prepare_locked(leased);
 			return inspect_impl(app, source_id, options, leased);
 		});
 	}
@@ -1472,7 +1583,7 @@ export function restore(app, inspected_id, options, source) {
 		let env = validate_app(app);
 		return app.operations.submit('backup.restore', source, { inspection_id: inspected_id },
 			(ctx) => with_transaction_lease(env, (leased) => {
-				recover_transactions_locked(leased);
+				prepare_locked(leased);
 				return app.lock.with_lock(app.runtime, { barrier: 'normal', wait_ms: 0 }, () => {
 					ctx.stage('validating', 10, 'Validating backup');
 					let inspected = inspection_record(app, inspected_id, leased);
@@ -1488,6 +1599,9 @@ export function restore(app, inspected_id, options, source) {
 					app.settings.save(app.runtime, settings_patch);
 					ctx.stage('reconcile', 90, 'Scheduling reconciliation');
 					let reconciliation = app.reconcile.run('backup_restore');
+					if (valid_id(inspected.report.source_id, 'i'))
+						try { remove_source_locked(leased, inspected.report.source_id); }
+						catch (cleanup_error) {}
 					ctx.stage('complete', 100, 'Restore committed');
 					return { snapshot_id: snapshot.id, reconciliation };
 				});
@@ -1547,7 +1661,7 @@ export function prune(app, options) {
 	try {
 		let env = validate_app(app);
 		return with_transaction_lease(env, (leased) => {
-			recover_transactions_locked(leased);
+			prepare_locked(leased);
 			return prune_impl(app, options, leased);
 		});
 	}

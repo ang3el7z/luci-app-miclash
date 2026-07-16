@@ -384,6 +384,8 @@ export function create_transfers(dependencies) {
 			(arguments.kind == 'backup' &&
 			 !match(arguments.object_id, /^b-[0-9]{13}-[0-9a-f]{32}$/)))
 			errors.fail('INVALID_ARGUMENT');
+		for (let active in values(records))
+			if (active.direction == 'download') errors.fail('BUSY');
 		let source = dependencies.downloads[arguments.kind](arguments.object_id, metadata);
 		let maximum = arguments.kind == 'report' ? REPORT_MAX : TRANSFER_MAX;
 		if (type(source?.read) != 'function' || type(source?.finish) != 'function' ||

@@ -615,6 +615,9 @@ assert_equal(download_verified, true, 'download source did not verify finalized 
 let backup_download = transfer.begin({ direction: 'download', kind: 'backup',
 	object_id: transfer_fixture.backup_id, size: 0, sha256: '', metadata: {} });
 assert_match(backup_download.transfer_id, /^[0-9a-f]{64}$/);
+assert_equal(transfer.begin({ direction: 'download', kind: 'report', object_id: report_id,
+	size: 0, sha256: '', metadata: {} }).error.code, 'BUSY',
+	'accepted a second aggregate download source');
 assert_equal(transfer.abort({ transfer_id: backup_download.transfer_id }).aborted, true);
 for (let invalid_id in transfer_fixture.invalid_backup_ids)
 	assert_equal(transfer.begin({ direction: 'download', kind: 'backup',
@@ -677,12 +680,13 @@ let collision_values = [ token_a, token_a, token_b ], collision_calls = 0;
 let collision_runtime = { fs: collision_fs, clock: collision_clock,
 	random: { hex: (bytes) => { collision_calls++; return shift(collision_values); } },
 	digest: fakes.digest(collision_fs), paths: { tmp: '/tmp/miclash' } };
-let collision_transfer = api.create_transfers({ runtime: collision_runtime, uploads: {},
+let collision_transfer = api.create_transfers({ runtime: collision_runtime,
+	uploads: { backup: () => ({ import_id: 'i-0000000000000-' + sprintf('%032x', 23) }) },
 	downloads: { report: (id) => empty_download(collision_runtime) } });
 let collision_first = collision_transfer.begin({ direction: 'download', kind: 'report',
 	object_id: 'rpt_' + sprintf('%032x', 21), size: 0, sha256: '', metadata: {} });
-let collision_second = collision_transfer.begin({ direction: 'download', kind: 'report',
-	object_id: 'rpt_' + sprintf('%032x', 22), size: 0, sha256: '', metadata: {} });
+let collision_second = collision_transfer.begin({ direction: 'upload', kind: 'backup',
+	object_id: '', size: 1, sha256: collision_runtime.digest.sha256('x'), metadata: {} });
 assert_equal(collision_first.transfer_id, token_a);
 assert_equal(collision_second.transfer_id, token_b);
 assert_equal(collision_calls, 3);
@@ -743,12 +747,13 @@ replacement_clock.set_timeout = (milliseconds, callback) => reject_replacement ?
 	replacement_set_timeout(milliseconds, callback);
 let replacement_runtime = { fs: replacement_fs, clock: replacement_clock,
 	random: fakes.entropy(), digest: fakes.digest(replacement_fs), paths: { tmp: '/tmp/miclash' } };
-let replacement = api.create_transfers({ runtime: replacement_runtime, uploads: {},
+let replacement = api.create_transfers({ runtime: replacement_runtime,
+	uploads: { backup: () => ({ import_id: 'i-0000000000000-' + sprintf('%032x', 32) }) },
 	downloads: { report: (id) => ({ size: 1, sha256: replacement_runtime.digest.sha256('z'),
 		read: () => 'z', finish: () => ({ size: 1,
 			sha256: replacement_runtime.digest.sha256('z') }), close: () => true }) } });
-let replacement_first = replacement.begin({ direction: 'download', kind: 'report',
-	object_id: 'rpt_' + sprintf('%032x', 32), size: 0, sha256: '', metadata: {} });
+let replacement_first = replacement.begin({ direction: 'upload', kind: 'backup',
+	object_id: '', size: 1, sha256: replacement_runtime.digest.sha256('u'), metadata: {} });
 replacement_clock.advance(1);
 let replacement_second = replacement.begin({ direction: 'download', kind: 'report',
 	object_id: 'rpt_' + sprintf('%032x', 33), size: 0, sha256: '', metadata: {} });
@@ -774,13 +779,14 @@ cancel_replace_clock.set_timeout = (milliseconds, callback) => {
 let cancel_replace_runtime = { fs: cancel_replace_fs, clock: cancel_replace_clock,
 	random: fakes.entropy(), digest: fakes.digest(cancel_replace_fs),
 	paths: { tmp: '/tmp/miclash' } };
-let cancel_replace = api.create_transfers({ runtime: cancel_replace_runtime, uploads: {},
+let cancel_replace = api.create_transfers({ runtime: cancel_replace_runtime,
+	uploads: { backup: () => ({ import_id: 'i-0000000000000-' + sprintf('%032x', 35) }) },
 	downloads: { report: (id) => ({ size: 1,
 		sha256: cancel_replace_runtime.digest.sha256('k'), read: () => 'k',
 		finish: () => ({ size: 1, sha256: cancel_replace_runtime.digest.sha256('k') }),
 		close: () => cancel_replace_closes++ }) } });
-let cancel_replace_first = cancel_replace.begin({ direction: 'download', kind: 'report',
-	object_id: 'rpt_' + sprintf('%032x', 35), size: 0, sha256: '', metadata: {} });
+let cancel_replace_first = cancel_replace.begin({ direction: 'upload', kind: 'backup',
+	object_id: '', size: 1, sha256: cancel_replace_runtime.digest.sha256('u'), metadata: {} });
 cancel_replace_clock.advance(1);
 let cancel_replace_second = cancel_replace.begin({ direction: 'download', kind: 'report',
 	object_id: 'rpt_' + sprintf('%032x', 36), size: 0, sha256: '', metadata: {} });
@@ -790,7 +796,7 @@ assert_true(length(filter(cancel_replace_clock.timers, (timer) => timer.active))
 assert_equal(b64dec(cancel_replace.read({ transfer_id: cancel_replace_second.transfer_id,
 	seq: 0 }).data), 'k');
 assert_equal(cancel_replace.close(), true);
-assert_equal(cancel_replace_closes, 2);
+assert_equal(cancel_replace_closes, 1);
 
 // If callback rearming fails after the earliest deadline, expiry fails closed:
 // the expired source is pruned and every later source/staging leaf is disposed
@@ -815,8 +821,6 @@ for (let rearm_mode in [ 'throw', 'null', 'invalid' ]) {
 	let rearm_first = rearm.begin({ direction: 'download', kind: 'report',
 		object_id: 'rpt_' + sprintf('%032x', 41), size: 0, sha256: '', metadata: {} });
 	rearm_clock.advance(1);
-	let rearm_second = rearm.begin({ direction: 'download', kind: 'report',
-		object_id: 'rpt_' + sprintf('%032x', 42), size: 0, sha256: '', metadata: {} });
 	let rearm_upload = rearm.begin({ direction: 'upload', kind: 'backup', object_id: '',
 		size: 1, sha256: rearm_runtime.digest.sha256('u'), metadata: {} });
 	let rearm_path = rearm_fs.calls.open[length(rearm_fs.calls.open) - 1].path;
@@ -824,11 +828,9 @@ for (let rearm_mode in [ 'throw', 'null', 'invalid' ]) {
 	let callback_failure = null;
 	try { rearm_clock.advance(299999); } catch (error) { callback_failure = error; }
 	assert_equal(callback_failure, null, rearm_mode + ' rearm exception escaped timer callback');
-	assert_equal(rearm_closes, 2, rearm_mode + ' rearm did not close both download sources');
+	assert_equal(rearm_closes, 1, rearm_mode + ' rearm did not close the download source');
 	assert_true(rearm_fs.lstat(rearm_path) == null,
 		rearm_mode + ' rearm leaked the later upload staging leaf');
-	assert_equal(rearm.read({ transfer_id: rearm_second.transfer_id, seq: 0 }).error.code,
-		'NOT_FOUND', rearm_mode + ' rearm left an inaccessible download record');
 	assert_equal(rearm.write({ transfer_id: rearm_upload.transfer_id, seq: 0,
 		data: b64enc('u') }).error.code, 'NOT_FOUND',
 		rearm_mode + ' rearm left an inaccessible upload record');

@@ -648,6 +648,38 @@ assert_throws(() => backup.transfer_import(base.app, {
 	sha256: base.runtime.digest.sha256('x'), read: () => 'x'
 }), 'INVALID_ARGUMENT');
 
+// Completed imports are authenticated, bounded, and reclaimed without waiting
+// for another upload. Admission is rejected before reading an unreservable body.
+let expired_import = make_app(), expired_seed = seed_import(expired_import,
+	'00000000000000000000000000000011', { 'settings/settings.json': '{ }\n' });
+expired_import.runtime.clock.advance(900001);
+backup.list(expired_import.app);
+assert_equal(expired_import.filesystem.lstat('/tmp/miclash/imports/' + expired_seed.id + '.tar'), null);
+assert_equal(expired_import.filesystem.lstat('/tmp/miclash/imports/' + expired_seed.id + '.json'), null);
+
+let import_capacity = make_app(), capacity_imports = [];
+for (let i = 1; i <= 5; i++) push(capacity_imports,
+	seed_import(import_capacity, sprintf('%032x', 32 + i),
+		{ 'settings/settings.json': '{ }\n' }));
+backup.list(import_capacity.app);
+assert_equal(import_capacity.filesystem.lstat('/tmp/miclash/imports/' +
+	capacity_imports[0].id + '.tar'), null, 'oldest fifth import was not pruned');
+assert_equal(length(import_capacity.filesystem.lsdir('/tmp/miclash/imports')), 8,
+	'import count was not reduced to four authenticated pairs');
+
+let byte_capacity = make_app();
+let large_bytes = 'x'; while (length(large_bytes) < 16777216) large_bytes += large_bytes;
+let excess_bytes = 'y'; while (length(excess_bytes) < 131072) excess_bytes += excess_bytes;
+let large_import = seed_import(byte_capacity, sprintf('%032x', 48),
+	{ 'settings/settings.json': '{ }\n' }, { bytes: large_bytes });
+let retained_import = seed_import(byte_capacity, sprintf('%032x', 49),
+	{ 'settings/settings.json': '{ }\n' }, { bytes: excess_bytes });
+backup.list(byte_capacity.app);
+assert_equal(byte_capacity.filesystem.lstat('/tmp/miclash/imports/' + large_import.id + '.tar'), null,
+	'aggregate byte cleanup did not prune the oldest import');
+assert_true(byte_capacity.filesystem.lstat('/tmp/miclash/imports/' + retained_import.id + '.tar') != null,
+	'aggregate byte cleanup pruned the newest fitting import');
+
 let ruleset_90 = '', ruleset_91 = '';
 for (let i = 0; i < 86; i++) ruleset_90 += 'a';
 for (let i = 0; i < 87; i++) ruleset_91 += 'a';
@@ -852,6 +884,10 @@ assert_equal(restore_box.filesystem.readfile('/opt/clash/config.yaml'), 'port: 1
 assert_equal(restore_box.runtime.uci.commit_calls, 1);
 assert_equal(length(restore_box.app.reconcile.calls), 1);
 assert_equal(length(backup.list(restore_box.app)), 1, 'recovery snapshot must remain');
+assert_equal(restore_box.filesystem.lstat('/tmp/miclash/imports/' + restore_seed.id + '.tar'), null,
+	'successful restore retained its import archive');
+assert_equal(restore_box.filesystem.lstat('/tmp/miclash/imports/' + restore_seed.id + '.json'), null,
+	'successful restore retained its import metadata');
 
 // The real operation manager runs mutation workers from a later zero-delay
 // timer. Enqueue must return before the restore lease is acquired; the worker
