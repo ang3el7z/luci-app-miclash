@@ -35,7 +35,6 @@ const IMPORT_ROOT = '/tmp/miclash/imports';
 const INSPECT_ROOT = '/tmp/miclash/backup-inspected';
 const TRANSACTION_ROOT = '/tmp/miclash/backup-transactions';
 const INSPECTION_TTL = 900000;
-const MAX_TRANSACTION_AGE = 86400000;
 const MAX_TRANSACTIONS = 64;
 const MAX_ARCHIVE = 16777216;
 const MAX_MEMBER = 4194304;
@@ -590,12 +589,11 @@ function valid_journal_file(file) {
 		valid_identity_record(file.identity, 'file');
 };
 
-function valid_journal(record, name, now) {
+function valid_journal(record, name) {
 	if (!exact_fields(record, JOURNAL_FIELDS) || record.schema != 1 ||
 	    name != record.id + '.json' ||
 	    !match(record.id, /^t-[0-9]{13}-[0-9a-f]{32}$/) ||
 	    type(record.created_at) != 'int' || record.created_at < 0 ||
-	    now < record.created_at || now - record.created_at > MAX_TRANSACTION_AGE ||
 	    type(record.phase) != 'string' || type(record.cursor) != 'int' || record.cursor < 0)
 		return false;
 	if (!valid_identity_record(record.temp_identity, 'file') ||
@@ -782,7 +780,7 @@ function recover_transactions_locked(env) {
 		let captured = secure_read(env, root, name, MAX_REPORT, 0o600), record;
 		try { record = json(captured.content); }
 		catch (error) { internal(); }
-		if (captured.content != sprintf('%J\n', record) || !valid_journal(record, name, now))
+		if (captured.content != sprintf('%J\n', record) || !valid_journal(record, name))
 			internal();
 		push(transactions, { root, name, record, identity: captured.identity });
 	}

@@ -888,18 +888,66 @@ prune_crash('rename', (name) => match(name, /\.prune-.*\.json$/), 'side-rename')
 prune_crash('rename', (name) => match(name, /\.prune-.*\.tar$/), 'archive-rename');
 prune_crash('unlink', (name) => match(name, /\.prune-.*\.tar$/), 'archive-unlink');
 
-let stale = make_app(), stale_seed = seed_import(stale,
+// Authentic journals remain recoverable after arbitrary downtime. Age controls
+// only preview expiry; it is not part of journal authenticity.
+let old_preview = make_app(), old_preview_seed = seed_import(old_preview,
 	'00000000000000000000000000000096', { 'settings/settings.json': '{ }\n' });
-let stale_preview = backup.inspect(stale.app, stale_seed.id);
-let stale_name = transaction_names(stale)[0];
-let stale_path = '/tmp/miclash/backup-transactions/' + stale_name;
-let stale_record = json(stale.filesystem.readfile(stale_path));
-stale_record.created_at = 0; stale_record.expires_at = 900000;
-stale.filesystem.files[stale_path] = sprintf('%J\n', stale_record);
-stale.filesystem.bump_inode(stale_path); stale.filesystem.set_mode(stale_path, 0o600);
-assert_throws(() => backup.list(stale.app), 'INTERNAL');
-assert_true(stale.filesystem.lstat('/tmp/miclash/backup-inspected/' + stale_preview.id) != null,
-	'stale ambiguous journal mutated its registered stage');
+let old_preview_value = backup.inspect(old_preview.app, old_preview_seed.id);
+old_preview.runtime.clock.advance(86400001);
+backup.list(old_preview.app);
+assert_equal(old_preview.filesystem.lstat('/tmp/miclash/backup-inspected/' +
+	old_preview_value.id), null, 'old authentic preview did not expire through recovery');
+assert_equal(length(transaction_names(old_preview)), 0);
+
+let old_create = make_app(), old_create_crashed = false;
+old_create.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!old_create_crashed && operation == 'create_exclusive' && match(name, /\.tar\.tmp$/)) {
+		old_create_crashed = true; die('old-create-crash');
+	}
+};
+old_create.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (old_create_crashed && operation == 'list' &&
+	    directory.opaque == '/tmp/miclash/backup-transactions') die('process-gone');
+};
+assert_throws(() => backup.create(old_create.app), 'INTERNAL');
+old_create.app.secure_fs.after = null; old_create.app.secure_fs.before = null;
+old_create.runtime.clock.advance(86400001);
+backup.list(old_create.app);
+assert_equal(length(transaction_names(old_create)), 0, 'old create journal did not converge');
+assert_equal(length(old_create.filesystem.lsdir('/etc/miclash/backups')), 0);
+
+let old_prune = make_app();
+backup.create(old_prune.app); old_prune.runtime.clock.advance(1); backup.create(old_prune.app);
+let old_prune_crashed = false;
+old_prune.app.secure_fs.after = (operation, directory, name, extra) => {
+	if (!old_prune_crashed && operation == 'rename' && match(name, /\.prune-.*\.json$/)) {
+		old_prune_crashed = true; die('old-prune-crash');
+	}
+};
+old_prune.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (old_prune_crashed && operation == 'list' &&
+	    directory.opaque == '/tmp/miclash/backup-transactions') die('process-gone');
+};
+assert_throws(() => backup.prune(old_prune.app, { retain: 1 }), 'INTERNAL');
+old_prune.app.secure_fs.after = null; old_prune.app.secure_fs.before = null;
+old_prune.runtime.clock.advance(86400001);
+assert_equal(length(backup.list(old_prune.app)), 1, 'old prune journal did not converge');
+assert_equal(length(transaction_names(old_prune)), 0);
+
+let old_malformed = make_app(), old_malformed_seed = seed_import(old_malformed,
+	'00000000000000000000000000000105', { 'settings/settings.json': '{ }\n' });
+let old_malformed_preview = backup.inspect(old_malformed.app, old_malformed_seed.id);
+let old_malformed_name = transaction_names(old_malformed)[0];
+let old_malformed_path = '/tmp/miclash/backup-transactions/' + old_malformed_name;
+let old_malformed_record = json(old_malformed.filesystem.readfile(old_malformed_path));
+old_malformed_record.created_at = 0; old_malformed_record.expires_at = 900000;
+old_malformed_record.unknown = true;
+old_malformed.filesystem.files[old_malformed_path] = sprintf('%J\n', old_malformed_record);
+old_malformed.filesystem.bump_inode(old_malformed_path);
+old_malformed.filesystem.set_mode(old_malformed_path, 0o600);
+assert_throws(() => backup.list(old_malformed.app), 'INTERNAL');
+assert_true(old_malformed.filesystem.lstat('/tmp/miclash/backup-inspected/' +
+	old_malformed_preview.id) != null, 'old malformed journal mutated its stage');
 
 let too_many = make_app();
 mkdirs(too_many.filesystem, [ '/tmp/miclash/backup-transactions' ]);
