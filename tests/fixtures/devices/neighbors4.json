@@ -1,0 +1,4 @@
+{
+  "observed_at": 1710000000,
+  "data": "[{\"dst\":\"192.168.1.10\",\"dev\":\"br-lan\",\"lladdr\":\"ac:bb:cc:dd:ee:10\",\"state\":[\"REACHABLE\"]},{\"dst\":\"192.168.1.99\",\"dev\":\"br-lan\",\"state\":[\"STALE\"]}]"
+}
