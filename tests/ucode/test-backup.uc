@@ -35,7 +35,7 @@ function same_directory_identity(left, right) {
 
 function secure_fs(filesystem) {
 	let capability = { before: null, after: null, calls: [], replacement_nonce: 0,
-		admission_held: false };
+		lease_held: false, lease_nonce: 0 };
 	function hook(which, operation, directory, name, extra) {
 		push(capability.calls, { which, operation, name });
 		let callback = capability[which];
@@ -150,13 +150,14 @@ function secure_fs(filesystem) {
 		hook('after', 'replace_atomic', parent, name, { expected, options, identity });
 		return clone(file(path, identity, { ...options, nlink: 1 }));
 	};
-	capability.with_admission_lock = (worker) => {
-		if (capability.admission_held) die('BUSY');
-		capability.admission_held = true;
+	capability.with_transaction_lease = (worker) => {
+		if (capability.lease_held) die('BUSY');
+		capability.lease_held = true;
+		let lease = { id: ++capability.lease_nonce };
 		let result;
-		try { result = worker(); }
-		catch (error) { capability.admission_held = false; die(error); }
-		capability.admission_held = false;
+		try { result = worker(lease); }
+		catch (error) { capability.lease_held = false; die(error); }
+		capability.lease_held = false;
 		return result;
 	};
 	capability.rename = (parent, from, to, expected, options) => {
@@ -299,7 +300,7 @@ function seed_import(box, suffix, contents, options) {
 assert_throws(() => backup.create({}, null, 'luci'), 'INVALID_ARGUMENT');
 let unsupported = make_app(); delete unsupported.app.secure_fs;
 assert_throws(() => backup.list(unsupported.app), 'INTERNAL');
-for (let primitive in [ 'create_exclusive', 'replace_atomic', 'with_admission_lock' ]) {
+for (let primitive in [ 'create_exclusive', 'replace_atomic', 'with_transaction_lease' ]) {
 	let missing = make_app(); delete missing.app.secure_fs[primitive];
 	assert_throws(() => backup.list(missing.app), 'INTERNAL');
 }
@@ -794,6 +795,84 @@ backup.inspect(admission_race.app, admission_seed.id);
 assert_equal(admission_probe, true, 'admission race did not reach journal reservation');
 assert_equal(length(transaction_names(admission_race)), 1,
 	'reentrant admission created a second transaction');
+
+// The same crash-released lease spans each complete public lifecycle, not only
+// journal reservation. Every risky create/inspect/prune phase rejects a
+// competing recovery entry while the owner continues without reacquiring.
+function lifecycle_probe(box, predicate) {
+	let probing = false, seen = {};
+	let probe = (operation, directory, name, extra) => {
+		let label = predicate(operation, directory, name, extra);
+		if (label == null || probing || seen[label]) return;
+		probing = true;
+		assert_throws(() => backup.list(box.app), 'BUSY');
+		probing = false; seen[label] = true;
+	};
+	box.app.secure_fs.before = probe;
+	box.app.secure_fs.after = probe;
+	return seen;
+};
+
+let create_lease = make_app();
+let create_lease_seen = lifecycle_probe(create_lease, (operation, directory, name, extra) => {
+	if (operation == 'create_exclusive' && match(name, /\.tar\.tmp$/)) return 'temp';
+	if (operation == 'create_exclusive' && match(name, /^b-.*\.json$/)) return 'sidecar';
+	if (operation == 'rename' && match(name, /\.tar$/)) return 'publish';
+	if (operation == 'replace_atomic' && match(name, /^t-.*\.json$/)) return 'journal';
+	return null;
+});
+backup.create(create_lease.app);
+for (let phase in [ 'journal', 'temp', 'sidecar', 'publish' ])
+	assert_equal(create_lease_seen[phase], true, 'create lease omitted ' + phase);
+
+let inspect_lease = make_app();
+let inspect_lease_seed = seed_import(inspect_lease,
+	'00000000000000000000000000000107', { 'settings/settings.json': '{ }\n' });
+let inspect_lease_seen = lifecycle_probe(inspect_lease,
+	(operation, directory, name, extra) => {
+		if (operation == 'open_at' && match(name, /^x-/)) return 'stage';
+		if (operation == 'create_exclusive' && name == 'settings.json') return 'member';
+		if (operation == 'create_exclusive' && name == '.inspection.json') return 'report';
+		return null;
+	});
+backup.inspect(inspect_lease.app, inspect_lease_seed.id);
+for (let phase in [ 'stage', 'member', 'report' ])
+	assert_equal(inspect_lease_seen[phase], true, 'inspect lease omitted ' + phase);
+
+let prune_lease = make_app();
+backup.create(prune_lease.app); prune_lease.runtime.clock.advance(1);
+backup.create(prune_lease.app);
+let prune_lease_seen = lifecycle_probe(prune_lease, (operation, directory, name, extra) => {
+	if (operation == 'rename' && match(name, /^\.prune-.*\.json$/)) return 'side-move';
+	if (operation == 'rename' && match(name, /^\.prune-.*\.tar$/)) return 'archive-move';
+	if (operation == 'unlink' && match(name, /^\.prune-/)) return 'delete';
+	return null;
+});
+backup.prune(prune_lease.app, { retain: 1 });
+for (let phase in [ 'side-move', 'archive-move', 'delete' ])
+	assert_equal(prune_lease_seen[phase], true, 'prune lease omitted ' + phase);
+
+// Expiry may pass during restore, but recovery cannot reclaim the preview until
+// its lease is released after live commit and reconciliation.
+let expiry_lease = make_app(), expiry_seed = seed_import(expiry_lease,
+	'00000000000000000000000000000108', {
+		'configs/config.yaml': 'port: 8123\n', 'settings/settings.json': '{ }\n'
+	}, { secrets: { 'configs/config.yaml': true } });
+let expiry_preview = backup.inspect(expiry_lease.app, expiry_seed.id), expiry_probe = false;
+expiry_lease.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (!expiry_probe && operation == 'replace_atomic' && name == 'config.yaml') {
+		expiry_probe = true; expiry_lease.runtime.clock.advance(900001);
+		assert_throws(() => backup.list(expiry_lease.app), 'BUSY');
+		assert_equal(expiry_lease.filesystem.lstat('/tmp/miclash/backup-inspected/' +
+			expiry_preview.id) != null, true, 'in-use expired preview was reclaimed');
+	}
+};
+backup.restore(expiry_lease.app, expiry_preview.id);
+assert_equal(expiry_probe, true, 'restore expiry lease probe did not fire');
+expiry_lease.app.secure_fs.before = null;
+backup.list(expiry_lease.app);
+assert_equal(expiry_lease.filesystem.lstat('/tmp/miclash/backup-inspected/' +
+	expiry_preview.id), null, 'expired preview survived the next lease owner');
 
 let capacity = make_app();
 let capacity_seed = seed_import(capacity,

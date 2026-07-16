@@ -21,7 +21,7 @@ import * as schema from 'miclash.schema';
  *   replace_atomic(dir, name, expected|null, bytes, { mode, uid, nlink }) -> identity
  *       (CAS current identity/must-not-exist, distinct nofollow temp, temp
  *        fsync, atomic replace, parent fsync)
- *   with_admission_lock(callback) -> callback result
+ *   with_transaction_lease(callback) -> callback(opaque_lease) result
  *   rename(dir, from, to, expected, { mode, uid, nlink }) -> identity
  *   unlink(dir, name, expected) -> true
  *   rmdir(dir, name, expected) -> true
@@ -117,7 +117,7 @@ function validate_app(app) {
 	    !valid_version(app?.app_version)) invalid();
 	if (type(secure) != 'object') internal();
 	for (let method in [ 'open', 'open_at', 'stat', 'list', 'read',
-		'create_exclusive', 'replace_atomic', 'with_admission_lock',
+		'create_exclusive', 'replace_atomic', 'with_transaction_lease',
 		'rename', 'unlink', 'rmdir' ])
 		if (type(secure[method]) != 'function') internal();
 	return { runtime, secure };
@@ -467,8 +467,9 @@ function sidecar_valid(value, id) {
 	return sprintf('%J', value.includes) == sprintf('%J', sorted(value.includes));
 };
 
-function source_record(app, source_id) {
-	let env = validate_app(app), path;
+function source_record(app, source_id, env) {
+	if (type(env?.lease) != 'object') internal();
+	let path;
 	if (valid_id(source_id, 'b')) path = BACKUP_ROOT;
 	else if (valid_id(source_id, 'i')) path = IMPORT_ROOT;
 	else invalid();
@@ -846,6 +847,7 @@ function recover_prune(env, transaction) {
 };
 
 function recover_transactions_locked(env) {
+	if (type(env?.lease) != 'object') internal();
 	let root = open_dir(env.secure, TRANSACTION_ROOT);
 	let names = sorted(safe_names(env.secure, root, MAX_TRANSACTIONS + 1));
 	if (length(names) > MAX_TRANSACTIONS) internal();
@@ -870,37 +872,40 @@ function recover_transactions_locked(env) {
 	return true;
 };
 
-function recover_transactions(env) {
-	return env.secure.with_admission_lock(() => recover_transactions_locked(env));
-};
-
-function journal_begin(env, kind, created_at, initial) {
-	return env.secure.with_admission_lock(() => {
-		recover_transactions_locked(env);
-		let root = open_dir(env.secure, TRANSACTION_ROOT);
-		if (length(safe_names(env.secure, root, MAX_TRANSACTIONS)) >= MAX_TRANSACTIONS)
-			errors.fail('BUSY');
-		let nonce = env.runtime.random.hex(16);
-		if (!match(nonce, /^[0-9a-f]{32}$/)) internal();
-		let id = sprintf('t-%013d-%s', created_at, nonce);
-		let record = journal_base(id, kind, created_at);
-		for (let name, value in initial ?? {}) {
-			if (!exists(JOURNAL_FIELDS, name)) internal();
-			record[name] = value;
-		}
-		let written = secure_create(env, root, id + '.json', journal_text(record), 0o600);
-		return { root, name: id + '.json', record, identity: written.identity };
+function with_transaction_lease(env, worker) {
+	return env.secure.with_transaction_lease((lease) => {
+		if (type(lease) != 'object') internal();
+		return worker({ runtime: env.runtime, secure: env.secure, lease });
 	});
 };
 
-function list_records(app) {
-	let env = validate_app(app), root = open_dir(env.secure, BACKUP_ROOT);
+function journal_begin(env, kind, created_at, initial) {
+	if (type(env?.lease) != 'object') internal();
+	recover_transactions_locked(env);
+	let root = open_dir(env.secure, TRANSACTION_ROOT);
+	if (length(safe_names(env.secure, root, MAX_TRANSACTIONS)) >= MAX_TRANSACTIONS)
+		errors.fail('BUSY');
+	let nonce = env.runtime.random.hex(16);
+	if (!match(nonce, /^[0-9a-f]{32}$/)) internal();
+	let id = sprintf('t-%013d-%s', created_at, nonce);
+	let record = journal_base(id, kind, created_at);
+	for (let name, value in initial ?? {}) {
+		if (!exists(JOURNAL_FIELDS, name)) internal();
+		record[name] = value;
+	}
+	let written = secure_create(env, root, id + '.json', journal_text(record), 0o600);
+	return { root, name: id + '.json', record, identity: written.identity };
+};
+
+function list_records(app, env) {
+	if (type(env?.lease) != 'object') internal();
+	let root = open_dir(env.secure, BACKUP_ROOT);
 	let names = safe_names(env.secure, root, MAX_FILES * 4 + 64), output = [];
 	for (let name in names) {
 		let found = match(name, /^(b-[0-9]{13}-[0-9a-f]{32})\.json$/);
 		if (found == null) continue;
 		try {
-			let record = source_record(app, found[1]);
+			let record = source_record(app, found[1], env);
 			push(output, clone(record.sidecar));
 		}
 		catch (error) {
@@ -915,18 +920,21 @@ function list_records(app) {
 export function list(app, options) {
 	validate_options(options, {});
 	try {
-		let env = validate_app(app); recover_transactions(env);
-		return list_records(app);
+		let env = validate_app(app);
+		return with_transaction_lease(env, (leased) => {
+			recover_transactions_locked(leased);
+			return list_records(app, leased);
+		});
 	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
-function create_impl(app, options, source) {
+function create_impl(app, options, source, env) {
 	options = validate_options(options, { include_secrets: true });
 	if (options.include_secrets != null && type(options.include_secrets) != 'bool') invalid();
 	if (source != null && !exists({ luci: true, telegram: true, auto: true, system: true }, source))
 		invalid();
-	let env = validate_app(app);
+	if (type(env?.lease) != 'object') internal();
 	if (type(app.settings?.load) != 'function' ||
 	    type(app.settings?.validate_patch) != 'function') invalid();
 	let root = open_dir(env.secure, BACKUP_ROOT), include_secrets = options.include_secrets === true;
@@ -1017,7 +1025,7 @@ function create_impl(app, options, source) {
 	}
 	catch (error) {
 		if (transaction != null)
-			try { recover_transactions(env); } catch (ignore) {}
+			try { recover_transactions_locked(env); } catch (ignore) {}
 		let code = errors.normalize(error).code;
 		errors.fail(code == 'RESPONSE_TOO_LARGE' || code == 'INVALID_ARGUMENT' || code == 'BUSY' ?
 			code : 'INTERNAL');
@@ -1026,8 +1034,11 @@ function create_impl(app, options, source) {
 
 export function create(app, options, source) {
 	try {
-		let env = validate_app(app); recover_transactions(env);
-		return create_impl(app, options, source);
+		let env = validate_app(app);
+		return with_transaction_lease(env, (leased) => {
+			recover_transactions_locked(leased);
+			return create_impl(app, options, source, leased);
+		});
 	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
@@ -1047,9 +1058,10 @@ function manifest_from_archive(env, archive) {
 	return { manifest, parsed };
 };
 
-function inspect_impl(app, source_id, options) {
+function inspect_impl(app, source_id, options, env) {
 	validate_options(options, {});
-	let source = source_record(app, source_id), decoded;
+	if (type(env?.lease) != 'object') internal();
+	let source = source_record(app, source_id, env), decoded;
 	try { decoded = manifest_from_archive(source.env, source.archive); }
 	catch (error) {
 		let code = errors.normalize(error).code;
@@ -1149,7 +1161,7 @@ function inspect_impl(app, source_id, options) {
 			includes: clone(manifest.includes), files: clone(manifest.files) };
 	}
 	catch (error) {
-		try { recover_transactions(source.env); } catch (ignore) {}
+		try { recover_transactions_locked(source.env); } catch (ignore) {}
 		let code = errors.normalize(error).code;
 		errors.fail(code == 'RESPONSE_TOO_LARGE' || code == 'VALIDATION_FAILED' || code == 'BUSY' ?
 			code : 'CORRUPT_STATE');
@@ -1158,14 +1170,17 @@ function inspect_impl(app, source_id, options) {
 
 export function inspect(app, source_id, options) {
 	try {
-		let env = validate_app(app); recover_transactions(env);
-		return inspect_impl(app, source_id, options);
+		let env = validate_app(app);
+		return with_transaction_lease(env, (leased) => {
+			recover_transactions_locked(leased);
+			return inspect_impl(app, source_id, options, leased);
+		});
 	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
-function inspection_record(app, inspected_id) {
-	let env = validate_app(app);
+function inspection_record(app, inspected_id, env) {
+	if (type(env?.lease) != 'object') internal();
 	if (!valid_id(inspected_id, 'x')) invalid();
 	let root = open_dir(env.secure, INSPECT_ROOT), stat = env.secure.stat(root, inspected_id);
 	if (stat == null) errors.fail('NOT_FOUND');
@@ -1334,15 +1349,17 @@ export function restore(app, inspected_id, options, source) {
 	if (!exists({ luci: true, telegram: true, auto: true, system: true }, source)) invalid();
 	validate_restore_app(app);
 	try {
-		recover_transactions(validate_app(app));
-		return app.operations.submit('backup.restore', source, { inspection_id: inspected_id },
+		let env = validate_app(app);
+		return with_transaction_lease(env, (leased) => {
+			recover_transactions_locked(leased);
+			return app.operations.submit('backup.restore', source, { inspection_id: inspected_id },
 			(ctx) => app.lock.with_lock(app.runtime, { barrier: 'normal', wait_ms: 0 }, () => {
 				ctx.stage('validating', 10, 'Validating backup');
-				let inspected = inspection_record(app, inspected_id);
+				let inspected = inspection_record(app, inspected_id, leased);
 				let settings_patch = validate_restore_contents(app, ctx, inspected);
 				let targets = prepare_restore_targets(inspected);
 				ctx.stage('snapshot', 30, 'Creating recovery snapshot');
-				let snapshot = create_impl(app, { include_secrets: true }, 'system');
+				let snapshot = create_impl(app, { include_secrets: true }, 'system', leased);
 				ctx.stage('committing', 60, 'Committing configuration');
 				revalidate_restore_targets(inspected.env, targets);
 				for (let target in targets)
@@ -1354,21 +1371,23 @@ export function restore(app, inspected_id, options, source) {
 				ctx.stage('complete', 100, 'Restore committed');
 				return { snapshot_id: snapshot.id, reconciliation };
 			}));
+		});
 	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
 
-function prune_impl(app, options) {
+function prune_impl(app, options, env) {
 	options = validate_options(options, { retain: true });
-	let env = validate_app(app), retain = options.retain;
+	if (type(env?.lease) != 'object') internal();
+	let retain = options.retain;
 	if (retain == null) {
 		if (type(app.settings?.load) != 'function') invalid();
 		retain = app.settings.load(env.runtime)?.backup?.retention;
 	}
 	if (type(retain) != 'int' || retain < 1 || retain > 100) invalid();
-	let records = list_records(app), root = open_dir(env.secure, BACKUP_ROOT), removed = [];
+	let records = list_records(app, env), root = open_dir(env.secure, BACKUP_ROOT), removed = [];
 	while (length(records) > retain) {
-		let item = shift(records), current = source_record(app, item.id);
+		let item = shift(records), current = source_record(app, item.id, env);
 		let side_tomb = '.prune-' + item.id + '.json', archive_tomb = '.prune-' + item.id + '.tar';
 		if (env.secure.stat(root, side_tomb) != null || env.secure.stat(root, archive_tomb) != null)
 			internal();
@@ -1393,7 +1412,7 @@ function prune_impl(app, options) {
 			journal_finish(env, transaction);
 		}
 		catch (error) {
-			try { recover_transactions(env); } catch (ignore) {}
+			try { recover_transactions_locked(env); } catch (ignore) {}
 			errors.fail(errors.normalize(error).code);
 		}
 		push(removed, item.id);
@@ -1405,8 +1424,11 @@ function prune_impl(app, options) {
 
 export function prune(app, options) {
 	try {
-		let env = validate_app(app); recover_transactions(env);
-		return prune_impl(app, options);
+		let env = validate_app(app);
+		return with_transaction_lease(env, (leased) => {
+			recover_transactions_locked(leased);
+			return prune_impl(app, options, leased);
+		});
 	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
