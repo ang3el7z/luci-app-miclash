@@ -1564,3 +1564,90 @@ msgstr "Некорректное устройство или имя интерф
 
 msgid "Enabled"
 msgstr "Включено"
+
+msgid "Draft"
+msgstr "Черновик"
+
+msgid "Validate"
+msgstr "Проверить"
+
+msgid "Apply"
+msgstr "Применить"
+
+msgid "History"
+msgstr "История"
+
+msgid "Configuration history"
+msgstr "История конфигурации"
+
+msgid "Configuration revisions"
+msgstr "Версии конфигурации"
+
+msgid "Open in editor"
+msgstr "Открыть в редакторе"
+
+msgid "Restore"
+msgstr "Восстановить"
+
+msgid "Manual"
+msgstr "Вручную"
+
+msgid "Subscription"
+msgstr "Подписка"
+
+msgid "Before restore"
+msgstr "До восстановления"
+
+msgid "External change"
+msgstr "Внешнее изменение"
+
+msgid "Revision"
+msgstr "Версия"
+
+msgid "Source"
+msgstr "Источник"
+
+msgid "Created"
+msgstr "Создано"
+
+msgid "Validation"
+msgstr "Проверка"
+
+msgid "Activation"
+msgstr "Активация"
+
+msgid "Loading diff…"
+msgstr "Загрузка различий…"
+
+msgid "No differences from the newest revision."
+msgstr "Отличий от новейшей версии нет."
+
+msgid "Loading history…"
+msgstr "Загрузка истории…"
+
+msgid "No configuration revisions yet."
+msgstr "Версий конфигурации пока нет."
+
+msgid "Unsaved local Draft found"
+msgstr "Найден несохранённый локальный черновик"
+
+msgid "A browser crash copy differs from the router Draft. Choose which content to open; neither copy will be deleted."
+msgstr "Аварийная копия браузера отличается от черновика на роутере. Выберите, какой вариант открыть; ни одна копия не будет удалена."
+
+msgid "Open local copy"
+msgstr "Открыть локальную копию"
+
+msgid "Keep router Draft"
+msgstr "Оставить черновик роутера"
+
+msgid "Applying configuration..."
+msgstr "Применение конфигурации..."
+
+msgid "Configuration applied."
+msgstr "Конфигурация применена."
+
+msgid "Failed to open history: %s"
+msgstr "Не удалось открыть историю: %s"
+
+msgid "An operation is already running."
+msgstr "Операция уже выполняется."

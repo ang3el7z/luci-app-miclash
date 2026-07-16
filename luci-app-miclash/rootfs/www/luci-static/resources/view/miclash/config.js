@@ -14,6 +14,7 @@
 'require view.miclash.editor';
 'require view.miclash.api';
 'require view.miclash.diagnostics-panel';
+'require view.miclash.history-panel';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
@@ -39,6 +40,12 @@ let operationAutoClearTimer = null;
 let controlPollBusy = false;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
+let configApi = null;
+let draftController = null;
+let draftActions = null;
+let historyPanel = null;
+let editorChangeCleanup = null;
+let pageHideHandler = null;
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
@@ -1481,6 +1488,71 @@ async function initializeConfigEditor(content) {
 	resizeConfigEditor();
 }
 
+function setDraftEditorContent(content) {
+	const value = String(content || '');
+	if (!editor) return;
+	editor.setValue(value, -1);
+	editor.clearSelection();
+	if (draftController) draftController.setContent(value);
+}
+
+function bindDraftEditorChanges() {
+	if (!editor || !draftController) return;
+	const changed = () => draftController.setContent(editor.getValue());
+	if (editor.session && typeof editor.session.on === 'function') {
+		editor.session.on('change', changed);
+		editorChangeCleanup = () => {
+			if (typeof editor?.session?.off === 'function') editor.session.off('change', changed);
+		};
+		return;
+	}
+	const textarea = editor.container?.querySelector?.('textarea');
+	if (textarea) {
+		textarea.addEventListener('input', changed);
+		editorChangeCleanup = () => textarea.removeEventListener('input', changed);
+	}
+}
+
+async function loadDraftProfile(profile) {
+	const selected = normalizeConfigProfileName(profile);
+	const [active, draft] = await Promise.all([
+		configApi.config_read(selected),
+		configApi.configReadDraft(selected)
+	]);
+	const loaded = await draftController.load(selected, active, draft);
+	appState.selectedConfigName = selected;
+	appState.configContent = loaded.active;
+	setDraftEditorContent(loaded.draft);
+	if (loaded.conflict) {
+		showModal({
+			title: _('Unsaved local Draft found'),
+			body: _('A browser crash copy differs from the router Draft. Choose which content to open; neither copy will be deleted.'),
+			buttons: [
+				{ label: _('Open local copy'), className: 'cbi-button cbi-button-apply',
+					onClick: async function(ctx) {
+						setDraftEditorContent(draftController.useCrashCopy(loaded.crash));
+						ctx.closeModal();
+					} },
+				{ label: _('Keep router Draft'), className: 'cbi-button cbi-button-neutral' }
+			]
+		});
+	}
+	return loaded;
+}
+
+async function saveRouterDraft() {
+	if (!editor || !draftActions) return { changed: false };
+	return draftActions.save(editor.getValue());
+}
+
+async function validateDraft() {
+	return draftActions.validate();
+}
+
+async function applyDraft() {
+	return draftActions.apply();
+}
+
 function resizeConfigEditor() {
 	if (!editor || typeof editor.resize !== 'function') return;
 	const resize = function() {
@@ -2117,8 +2189,10 @@ function buildPageHtml() {
 					'</div>' +
 					'<div id="miclash-editor" class="sbox-editor"></div>' +
 					'<div class="sbox-actions">' +
-						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Check')) + '</button>' +
-						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
+						'<span class="sbox-draft-label">' + safeText(_('Draft')) + '</span>' +
+						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Validate')) + '</button>' +
+						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Apply')) + '</button>' +
+						'<button id="sbox-history" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('History')) + '</button>' +
 						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear editor content')) + '</button>' +
 						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
 						'<span class="sbox-actions-spacer" aria-hidden="true"></span>' +
@@ -2673,17 +2747,23 @@ function bindControlAndHeaderEvents() {
 }
 
 async function switchConfigProfile(profileName) {
+	if (draftActions?.isBusy()) throw new Error(_('An operation is already running.'));
 	const selected = normalizeConfigProfileName(profileName);
-	const [content, url] = await Promise.all([
-		readConfigFileByName(selected),
-		readSubscriptionUrl(selected)
-	]);
+	if (draftController && selected !== appState.selectedConfigName) await saveRouterDraft();
+	const url = await readSubscriptionUrl(selected);
+	let content = '';
+	if (configApi && draftController) {
+		const loaded = await loadDraftProfile(selected);
+		content = loaded.draft;
+	} else {
+		content = await readConfigFileByName(selected);
+	}
 
 	appState.selectedConfigName = selected;
 	appState.configContent = String(content || '');
 	appState.subscriptionUrl = String(url || '');
 
-	if (editor) {
+	if (editor && !(configApi && draftController)) {
 		editor.setValue(appState.configContent, -1);
 		editor.clearSelection();
 	}
@@ -2888,16 +2968,7 @@ function bindConfigEvents() {
 		validateBtn.addEventListener('click', () => withButtons(validateBtn, async () => {
 			if (!editor) return;
 			setOperationStatus('running', _('Validating YAML...'));
-			const tested = await testConfigContent(
-				editor.getValue(),
-				false,
-				getConfigPathByName(appState.selectedConfigName)
-			);
-			if (!tested.ok) {
-				setOperationError(new Error(tested.message || _('YAML validation failed.')));
-				notifyDetailedError(_('YAML validation failed.'), tested.message);
-				return;
-			}
+			await validateDraft();
 			setOperationSuccess(_('YAML validation passed.'));
 			notify('info', _('YAML validation passed.'));
 		}).catch((e) => {
@@ -2910,41 +2981,27 @@ function bindConfigEvents() {
 	if (saveBtn) {
 		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
 			if (!editor) return;
-			setOperationStatus('running', _('Saving configuration...'));
+			setOperationStatus('running', _('Applying configuration...'));
 			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
-			const selectedPath = getConfigPathByName(selectedConfig);
-			const tested = await testConfigContent(editor.getValue(), true, selectedPath);
-			if (!tested.ok) {
-				setOperationError(new Error(tested.message || _('Configuration test failed - service not reloaded. Please fix the errors below:')));
-				notifyDetailedError(
-					_('Configuration test failed - service not reloaded. Please fix the errors below:'),
-					tested.message
-				);
-				return;
-			}
-			appState.configContent = editor.getValue();
-
-			if (selectedConfig === MAIN_CONFIG_NAME) {
-				const wasRunning = await getServiceStatus();
-				if (wasRunning) {
-					setOperationStatus('running', _('Reloading Mihomo configuration...'));
-					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
-				}
-				appState.serviceRunning = await getServiceStatus();
-				updateHeaderAndControlDom();
-				await logUiAction('info', wasRunning ? 'Configuration applied and Mihomo reloaded' : getConfigLabel(selectedConfig) + ' saved');
-				setOperationSuccess(wasRunning ? _('Configuration applied and Mihomo reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
-				notify('info', wasRunning ? _('Configuration applied and Mihomo reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
-			} else {
-				await logUiAction('info', getConfigLabel(selectedConfig) + ' saved');
-				setOperationSuccess(_('%s saved.').format(_(getConfigLabel(selectedConfig))));
-				notify('info', _('%s saved.').format(_(getConfigLabel(selectedConfig))));
-			}
+			await applyDraft();
+			appState.serviceRunning = await getServiceStatus();
+			updateHeaderAndControlDom();
+			await logUiAction('info', 'Configuration applied: ' + selectedConfig);
+			setOperationSuccess(_('Configuration applied.'));
+			notify('info', _('Configuration applied.'));
 		}).catch((e) => {
 			setOperationError(e);
 			logUiAction('err', 'Failed to apply configuration: ' + e.message);
 			notify('error', _('Failed to apply configuration: %s').format(e.message));
 		}));
+	}
+
+	const historyBtn = pageRoot.querySelector('#sbox-history');
+	if (historyBtn) {
+		historyBtn.addEventListener('click', () => withButtons(historyBtn, async () => {
+			await saveRouterDraft();
+			await historyPanel.open(appState.selectedConfigName);
+		}).catch((error) => notify('error', _('Failed to open history: %s').format(error.message))));
 	}
 
 	const clearBtn = pageRoot.querySelector('#sbox-clear-editor');
@@ -3006,6 +3063,7 @@ function bindTabEvents() {
 			logs: '#sbox-pane-logs'
 		},
 		onChange: (name) => {
+			if (name !== 'config') saveRouterDraft().catch(() => {});
 			appState.activeCfgTab = name;
 			if (name === 'settings') {
 				stopLogPolling();
@@ -3066,9 +3124,34 @@ return view.extend({
 		]);
 
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
+		if (historyPanel) historyPanel.destroy();
+		if (draftController) draftController.destroy();
+		if (configApi) configApi.destroy();
+		configApi = view_miclash_api.create();
+		draftController = view_miclash_editor.createDraftController({
+			profile: appState.selectedConfigName,
+			content: appState.configContent
+		});
+		draftActions = view_miclash_editor.createDraftActions({
+			api: configApi,
+			controller: draftController,
+			getProfile: () => appState.selectedConfigName,
+			getContent: () => editor ? editor.getValue() : draftController.getContent(),
+			onApplied: async (active) => {
+				appState.configContent = String(active?.content || '');
+			}
+		});
+		historyPanel = view_miclash_history_panel.create({
+			api: configApi,
+			profile: appState.selectedConfigName,
+			onDraft: async (content) => setDraftEditorContent(content),
+			onRestored: async () => loadDraftProfile(appState.selectedConfigName)
+		});
 
 		try {
 			await initializeConfigEditor(appState.configContent);
+			bindDraftEditorChanges();
+			await loadDraftProfile(appState.selectedConfigName);
 		} catch (e) {
 			notify('error', _('Failed to initialize editor: %s').format(e.message));
 		}
@@ -3085,6 +3168,12 @@ return view.extend({
 		startUpdatePolling();
 		resumeMiClashServiceJobStatus().catch(() => {});
 		resumeMiClashUpdateJobStatus().catch(() => {});
+		pageHideHandler = () => {
+			if (draftController && editor) draftController.setContent(editor.getValue());
+			if (draftController) draftController.flushLocal();
+			saveRouterDraft().catch(() => {});
+		};
+		window.addEventListener('pagehide', pageHideHandler);
 
 		document.addEventListener('visibilitychange', () => {
 			if (document.hidden) {
@@ -3103,5 +3192,16 @@ return view.extend({
 
 	unload: function() {
 		diagnosticsOwner.destroy();
+		if (pageHideHandler) window.removeEventListener('pagehide', pageHideHandler);
+		pageHideHandler = null;
+		if (editorChangeCleanup) editorChangeCleanup();
+		editorChangeCleanup = null;
+		if (draftController) draftController.destroy();
+		draftController = null;
+		draftActions = null;
+		if (historyPanel) historyPanel.destroy();
+		historyPanel = null;
+		if (configApi) configApi.destroy();
+		configApi = null;
 	}
 });

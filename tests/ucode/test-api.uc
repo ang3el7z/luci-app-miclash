@@ -92,6 +92,11 @@ let config = {
 	read_active: (profile) =>
 		'external-controller: 127.0.0.1:9090\nsecret: controller-secret\n' +
 		'proxy-provider: https://user:pass@example.test/sub?token=config-secret\n',
+	read_draft: (profile) => 'draft: true\n',
+	save_draft: (profile, content, source) => {
+		push(config_calls, { method: 'save_draft', profile, content, source });
+		return operations.submit('config.save_draft', source, { profile }, () => null);
+	},
 	validate: (profile, content, source) => {
 		push(config_calls, { method: 'validate', profile, content, source });
 		return operations.submit('config.validate', source, { profile }, () => null);
@@ -193,6 +198,10 @@ let app = {
 	service_restart: (profile, source) => application_service('restart', profile, source),
 	config_list: () => config.list_profiles(),
 	config_read: (profile) => config.read_active(profile),
+	config_read_draft: (profile) => config.read_draft(profile),
+	config_save_draft: (profile, content, source) => {
+		application_writable(); return config.save_draft(profile, content, source);
+	},
 	config_validate: (profile, content, source) => {
 		application_writable(); return config.validate(profile, content, source);
 	},
@@ -220,7 +229,8 @@ let names = sort(keys(methods));
 json_equal(names, sort([
 	'status', 'health', 'operation_get', 'operation_list', 'operation_start',
 	'service_start', 'service_stop', 'service_reload', 'service_restart',
-	'config_list', 'config_read', 'config_validate', 'config_apply',
+	'config_list', 'config_read', 'config_read_draft', 'config_save_draft',
+	'config_validate', 'config_apply',
 	'config_external_adopt', 'settings_get', 'settings_set',
 	'history_list', 'history_diff', 'history_open_draft', 'history_restore',
 	'subscription_get', 'subscription_set', 'subscription_update', 'subscription_probe',
@@ -259,6 +269,9 @@ json_equal(methods.status.args, {});
 json_equal(methods.operation_get.args, { operation_id: '' });
 json_equal(methods.service_start.args, { profile: '', source: '' });
 json_equal(methods.config_validate.args, { profile: '', content: '', source: '' });
+json_equal(methods.config_read_draft.args, { profile: '' });
+json_equal(methods.config_save_draft.args, { profile: '', content: '', source: '' });
+json_equal(methods.history_open_draft.args, { profile: '', revision: '', source: '' });
 json_equal(methods.settings_set.args, { settings: {}, source: '' });
 json_equal(methods.telegram_status.args, {});
 json_equal(methods.telegram_settings.args, {});
@@ -302,6 +315,12 @@ json_equal(keys(validate_reply), [ 'operation_id' ]);
 let apply_reply = invoke('config_apply', { profile: 'config.yaml', content: 'mode: direct\n' });
 json_equal(keys(apply_reply), [ 'operation_id' ]);
 assert_equal(config_calls[length(config_calls) - 1].source, 'luci');
+assert_equal(invoke('config_read_draft', { profile: 'config.yaml' }).content, 'draft: true\n');
+let save_draft_reply = invoke('config_save_draft', {
+	profile: 'config.yaml', content: 'draft: changed\n', source: 'luci'
+});
+json_equal(keys(save_draft_reply), [ 'operation_id' ]);
+assert_equal(config_calls[length(config_calls) - 1].method, 'save_draft');
 
 // Service/settings mutations are wrapped exactly once in the same FIFO.
 for (let name in [ 'service_start', 'service_stop', 'service_reload', 'service_restart' ]) {
@@ -347,7 +366,7 @@ assert_invalid('settings_set', { settings: { core: { proxy_mode: 'bad' } } });
 // Draining rejects every new mutation with BUSY while reads remain available.
 api.set_draining(app, true);
 for (let name in [ 'service_start', 'service_stop', 'service_reload', 'service_restart',
-	'config_validate', 'config_apply', 'settings_set' ]) {
+	'config_save_draft', 'config_validate', 'config_apply', 'settings_set' ]) {
 	let args = name == 'settings_set' ? { settings: {} } :
 		(index(name, 'config_') == 0 ? { profile: 'config.yaml', content: 'mode: rule\n' } : {});
 	assert_equal(invoke(name, args).error.code, 'BUSY', name);
@@ -396,8 +415,8 @@ function expected_delegate_arguments(name, arguments) {
 	if (name == 'operation_get') return [ arguments.operation_id ];
 	if (name == 'operation_list') return [ arguments ];
 	if (index(name, 'service_') == 0) return [ arguments.profile, arguments.source ];
-	if (name == 'config_read') return [ arguments.profile ];
-	if (name == 'config_validate' || name == 'config_apply')
+	if (name == 'config_read' || name == 'config_read_draft') return [ arguments.profile ];
+	if (name == 'config_save_draft' || name == 'config_validate' || name == 'config_apply')
 		return [ arguments.profile, arguments.content, arguments.source ];
 	if (name == 'settings_set') return [ arguments.settings, arguments.source ];
 	if (name == 'devices_policy_delete')
@@ -413,7 +432,7 @@ function contract_delegate(name, operation) {
 		if (operation)
 			return { id: sprintf('0000000005000-%08d-0123456789abcdef', ++contract_sequence) };
 		if (name == 'config_list') return [ { marker: 'read:' + name } ];
-		if (name == 'config_read') return 'read:' + name;
+		if (name == 'config_read' || name == 'config_read_draft') return 'read:' + name;
 		if (name == 'operation_list') return [ { marker: 'read:' + name } ];
 		return { marker: 'read:' + name };
 	};
@@ -437,7 +456,7 @@ function expected_read_reply(entry, arguments) {
 	if (entry.name == 'operation_get') return { operation: marker };
 	if (entry.name == 'operation_list') return { operations: [ marker ] };
 	if (entry.name == 'config_list') return { profiles: [ marker ] };
-	if (entry.name == 'config_read')
+	if (entry.name == 'config_read' || entry.name == 'config_read_draft')
 		return { profile: arguments.profile, content: 'read:' + entry.name };
 	if (entry.name == 'telegram_test') return { sent: true };
 	return marker;

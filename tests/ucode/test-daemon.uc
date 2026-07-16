@@ -31,6 +31,7 @@ let application = {
 	service_start: () => ({ id: 'id' }), service_stop: () => ({ id: 'id' }),
 	service_reload: () => ({ id: 'id' }), service_restart: () => ({ id: 'id' }),
 	config_list: () => [], config_read: () => '',
+	config_read_draft: () => '', config_save_draft: () => ({ id: 'id' }),
 	config_validate: () => ({ id: 'id' }), config_apply: () => ({ id: 'id' }),
 	settings_get: () => ({}), settings_set: () => ({ id: 'id' }),
 	set_draining: (value) => { if (value) drained++; return value; }

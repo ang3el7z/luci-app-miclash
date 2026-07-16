@@ -169,8 +169,13 @@ await eventClient.service_start('config.yaml', 'luci');
 assert.deepEqual(producedEvents.map((event) => event.detail), [ {
 	object: 'miclash', method: 'service_start', operation_id: 'event_op_1', state: 'accepted'
 } ], 'successful mutation must emit one safe typed change event');
+replies.set('history_open_draft', { operation_id: 'event_history_1' });
+await eventClient.historyOpenDraft('config.yaml', 'revision-1', 'luci');
+assert.deepEqual(producedEvents.at(-1).detail, {
+	object: 'miclash', method: 'history_open_draft', operation_id: 'event_history_1', state: 'accepted'
+}, 'opening a history revision as Draft must emit an operation event');
 await eventClient.status();
-assert.equal(producedEvents.length, 1, 'read-only status must not emit a change event');
+assert.equal(producedEvents.length, 2, 'read-only status must not emit a change event');
 replies.set('operation_get', { operation: { id: 'event_op_1', state: 'success' } });
 const cancelTerminal = eventClient.watchOperation('event_op_1', () => {});
 await new Promise((resolve) => setImmediate(resolve));

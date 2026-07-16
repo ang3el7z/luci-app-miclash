@@ -89,7 +89,7 @@ check(!config.includes('showOperationErrorDetails') &&
 	"Switching proxy mode...",
 	"Saving subscription URL...",
 	"Validating YAML...",
-	"Saving configuration...",
+	"Applying configuration...",
 	"Setting selected config as Main...",
 	"Saving ruleset...",
 	"Saving IP-CIDR list...",
@@ -104,7 +104,7 @@ check(bindConfigEventsBlock.includes("setOperationStatus('running', _('Saving su
 	'Subscription update must show operation status before saving/downloading.');
 check(bindConfigEventsBlock.includes("setOperationStatus('running', _('Validating YAML...'))"),
 	'YAML validation must show operation status.');
-check(bindConfigEventsBlock.includes("setOperationStatus('running', _('Saving configuration...'))"),
+check(bindConfigEventsBlock.includes("setOperationStatus('running', _('Applying configuration...'))"),
 	'Config save/apply must show operation status.');
 check(config.includes("setOperationStatus('running', _('Setting selected config as Main...'))"),
 	'Set as Main must show operation status.');

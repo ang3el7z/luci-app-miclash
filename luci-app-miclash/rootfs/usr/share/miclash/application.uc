@@ -14,6 +14,12 @@ export function create(dependencies) {
 	    type(dependencies?.settings?.set) != 'function' ||
 	    type(dependencies?.config?.validate) != 'function' ||
 	    type(dependencies?.config?.apply) != 'function' ||
+	    type(dependencies?.config?.read_draft) != 'function' ||
+	    type(dependencies?.config?.save_draft) != 'function' ||
+	    type(dependencies?.history?.list) != 'function' ||
+	    type(dependencies?.history?.diff) != 'function' ||
+	    type(dependencies?.history?.open_draft) != 'function' ||
+	    type(dependencies?.history?.restore) != 'function' ||
 	    type(dependencies?.state?.snapshot) != 'function' ||
 	    type(dependencies?.state?.health) != 'function' ||
 	    type(dependencies?.state?.set_desired) != 'function' ||
@@ -62,6 +68,11 @@ export function create(dependencies) {
 		service_restart: (profile, source) => service_action('restart', profile, source),
 		config_list: () => dependencies.config.list_profiles(),
 		config_read: (profile) => dependencies.config.read_active(profile),
+		config_read_draft: (profile) => dependencies.config.read_draft(profile),
+		config_save_draft: (profile, content, source) => {
+			writable();
+			return dependencies.config.save_draft(profile, content, source);
+		},
 		config_validate: (profile, content, source) => {
 			writable();
 			return dependencies.config.validate(profile, content, source);
@@ -69,6 +80,19 @@ export function create(dependencies) {
 		config_apply: (profile, content, source) => {
 			writable();
 			return dependencies.config.apply(profile, content, source);
+		},
+		history_list: (arguments) => dependencies.history.list(arguments.profile, arguments.limit),
+		history_diff: (arguments) => dependencies.history.diff(arguments.profile,
+			arguments.from_revision, arguments.to_revision),
+		history_open_draft: (arguments) => {
+			writable();
+			return dependencies.history.open_draft(arguments.profile, arguments.revision,
+				arguments.source);
+		},
+		history_restore: (arguments) => {
+			writable();
+			return dependencies.history.restore(arguments.profile, arguments.revision,
+				arguments.source);
 		},
 		settings_get: () => dependencies.settings.get(),
 		settings_set: (patch, source) => {

@@ -3,6 +3,7 @@ import * as operations from 'miclash.operations';
 import * as settings from 'miclash.settings';
 import * as storage from 'miclash.storage';
 import * as history from 'miclash.history';
+import * as diff from 'miclash.diff';
 import * as service from 'miclash.service';
 import * as config from 'miclash.config';
 import * as state from 'miclash.state';
@@ -15,7 +16,7 @@ export function compose(runtime, overrides) {
 		errors.fail('INVALID_ARGUMENT');
 
 	let modules = {
-		operations, settings, storage, history, service, config, state, application,
+		operations, settings, storage, history, diff, service, config, state, application,
 		...(overrides ?? {})
 	};
 	let operation_manager = modules.operations.create(runtime);
@@ -45,7 +46,7 @@ export function compose(runtime, overrides) {
 		runtime.ubus = { connect: () => connection };
 		let service_adapter = modules.service.create(runtime);
 		runtime.service = service_adapter;
-		let history_store = modules.history.create(runtime);
+		let history_store = modules.history.create(runtime, { diff: modules.diff });
 		let configuration = modules.config.create(runtime, operation_manager, history_store);
 		let settings_domain = {
 			get: () => modules.settings.load(runtime),
@@ -67,6 +68,7 @@ export function compose(runtime, overrides) {
 			settings: settings_domain,
 			service: service_adapter,
 			config: configuration,
+			history: history_store,
 			state: state_model,
 			clock: runtime.clock
 		});

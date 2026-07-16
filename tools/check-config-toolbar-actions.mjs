@@ -88,8 +88,8 @@ check(clearUrlHandler.includes("setOperationStatus('running', _('Clearing subscr
 check(clearUrlHandler.includes("await saveSubscriptionUrl('', selectedConfig);"),
 	'Clear URL handler must persist an empty subscription URL.');
 
-check(config.includes("_('Check')") && !config.includes("_('Validate YAML')"),
-	'Validate YAML button must be renamed to Check.');
+check(config.includes("_('Validate')") && !config.includes("_('Validate YAML')"),
+	'Draft action must use the approved concise Validate label.');
 check(config.includes("_('Clear editor content')") && !config.includes("_('Clear Editor')"),
 	'Clear Editor button must use the MiClash-specific clear action label.');
 check(config.includes('Client devices only through MiClash (Protection)') &&

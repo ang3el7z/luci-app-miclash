@@ -1511,3 +1511,90 @@ msgstr "设备或接口无效"
 
 msgid "Enabled"
 msgstr "已启用"
+
+msgid "Draft"
+msgstr "草稿"
+
+msgid "Validate"
+msgstr "验证"
+
+msgid "Apply"
+msgstr "应用"
+
+msgid "History"
+msgstr "历史"
+
+msgid "Configuration history"
+msgstr "配置历史"
+
+msgid "Configuration revisions"
+msgstr "配置版本"
+
+msgid "Open in editor"
+msgstr "在编辑器中打开"
+
+msgid "Restore"
+msgstr "恢复"
+
+msgid "Manual"
+msgstr "手动"
+
+msgid "Subscription"
+msgstr "订阅"
+
+msgid "Before restore"
+msgstr "恢复前"
+
+msgid "External change"
+msgstr "外部更改"
+
+msgid "Revision"
+msgstr "版本"
+
+msgid "Source"
+msgstr "来源"
+
+msgid "Created"
+msgstr "创建时间"
+
+msgid "Validation"
+msgstr "验证"
+
+msgid "Activation"
+msgstr "激活"
+
+msgid "Loading diff…"
+msgstr "正在加载差异…"
+
+msgid "No differences from the newest revision."
+msgstr "与最新版本没有差异。"
+
+msgid "Loading history…"
+msgstr "正在加载历史…"
+
+msgid "No configuration revisions yet."
+msgstr "尚无配置版本。"
+
+msgid "Unsaved local Draft found"
+msgstr "发现未保存的本地草稿"
+
+msgid "A browser crash copy differs from the router Draft. Choose which content to open; neither copy will be deleted."
+msgstr "浏览器崩溃副本与路由器草稿不同。请选择要打开的内容；两个副本都不会被删除。"
+
+msgid "Open local copy"
+msgstr "打开本地副本"
+
+msgid "Keep router Draft"
+msgstr "保留路由器草稿"
+
+msgid "Applying configuration..."
+msgstr "正在应用配置..."
+
+msgid "Configuration applied."
+msgstr "配置已应用。"
+
+msgid "Failed to open history: %s"
+msgstr "无法打开历史：%s"
+
+msgid "An operation is already running."
+msgstr "已有操作正在运行。"

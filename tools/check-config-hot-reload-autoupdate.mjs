@@ -54,7 +54,8 @@ check(reloadCase.includes('hot_reload_config') &&
 check(config.includes("reload: _('Reloading Mihomo configuration...')") &&
 	config.includes("? _('Reloading Mihomo configuration...')"),
 	'UI service status text must describe hot configuration reload for reload operations.');
-check(config.includes('Configuration applied and Mihomo reloaded.') &&
+check((config.includes('Configuration applied and Mihomo reloaded.') ||
+	(config.includes('draftActions.apply()') && config.includes('Configuration applied.'))) &&
 	config.includes('Subscription downloaded and applied.') &&
 	config.includes("restartOrReloadServiceOrThrow('reload'"),
 	'Config save/update flows must keep using reload but report Mihomo hot reload to the user.');

@@ -529,7 +529,8 @@ export function method_table(app, transfers) {
 	for (let name in [
 		'status', 'health', 'operation_get', 'operation_list',
 		'service_start', 'service_stop', 'service_reload', 'service_restart',
-		'config_list', 'config_read', 'config_validate', 'config_apply',
+		'config_list', 'config_read', 'config_read_draft', 'config_save_draft',
+		'config_validate', 'config_apply',
 		'settings_get', 'settings_set', 'set_draining'
 	]) if (type(app?.[name]) != 'function')
 		errors.fail('INVALID_ARGUMENT');
@@ -617,6 +618,20 @@ export function method_table(app, transfers) {
 				content: app.config_read(selected_profile)
 			};
 		}),
+		config_read_draft: method({ profile: '' }, (arguments) => {
+			exact(arguments, { profile: { type: 'string' } });
+			let selected_profile = profile(arguments);
+			return { profile: selected_profile,
+				content: app.config_read_draft(selected_profile) };
+		}),
+		config_save_draft: method(config_policy, (arguments) => {
+			exact(arguments, {
+				profile: { type: 'string' }, content: { type: 'string', required: true },
+				source: { type: 'string' }
+			});
+			return operation_reply(app.config_save_draft(profile(arguments),
+				content(arguments), source(arguments)));
+		}),
 		config_validate: method(config_policy, (arguments) => {
 			exact(arguments, {
 				profile: { type: 'string' }, content: { type: 'string', required: true },
@@ -662,11 +677,11 @@ export function method_table(app, transfers) {
 				from_revision: safe_id(arguments.from_revision),
 				to_revision: safe_id(arguments.to_revision) });
 		}),
-		history_open_draft: method({ profile: '', revision: '' }, (arguments) => {
+		history_open_draft: method({ profile: '', revision: '', source: '' }, (arguments) => {
 			exact(arguments, { profile: { type: 'string' },
-				revision: { type: 'string', required: true } });
-			return domain_read('history_open_draft', { profile: profile(arguments),
-				revision: safe_id(arguments.revision) });
+				revision: { type: 'string', required: true }, source: { type: 'string' } });
+			return domain_operation('history_open_draft', { profile: profile(arguments),
+				revision: safe_id(arguments.revision), source: source(arguments) });
 		}),
 		history_restore: method({ profile: '', revision: '', source: '' }, (arguments) => {
 			exact(arguments, { profile: { type: 'string' },
