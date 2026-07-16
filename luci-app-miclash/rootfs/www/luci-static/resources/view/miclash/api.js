@@ -133,7 +133,19 @@ function createClient(options) {
 	const timerSet = options.setTimeout || window.setTimeout.bind(window);
 	const timerClear = options.clearTimeout || window.clearTimeout.bind(window);
 	const cryptoProvider = options.crypto || window.crypto;
+	const eventTarget = options.eventTarget || window;
+	const EventConstructor = options.CustomEvent || window.CustomEvent;
 	let destroyed = false;
+	function emitChange(method, operationId, state) {
+		if (destroyed || !eventTarget || typeof eventTarget.dispatchEvent !== 'function') return;
+		const detail = { object: 'miclash', method, operation_id: operationId, state };
+		try {
+			const event = typeof EventConstructor === 'function'
+				? new EventConstructor('miclash:ubus-event', { detail })
+				: { type: 'miclash:ubus-event', detail };
+			eventTarget.dispatchEvent(event);
+		} catch (error) {}
+	}
 
 	for (const spec of METHOD_SPECS) {
 		const declared = rpc.declare({ object: 'miclash', method: spec.name,
@@ -142,7 +154,11 @@ function createClient(options) {
 		calls[spec.name] = (...args) => {
 			if (destroyed) return Promise.reject(apiError('CANCELLED', 'View destroyed'));
 			return Promise.resolve(declared(...args))
-				.then((reply) => normalizeReply(reply, spec.operation))
+				.then((reply) => {
+					const normalized = normalizeReply(reply, spec.operation);
+					if (spec.operation) emitChange(spec.name, normalized.operation_id, 'accepted');
+					return normalized;
+				})
 				.catch((error) => { throw normalizeFailure(error); });
 		};
 	}
@@ -177,7 +193,10 @@ function createClient(options) {
 					const reply = await client.operation_get(operationId);
 					if (cancelled || destroyed) return;
 					callback(reply.operation);
-					if (TERMINAL.has(reply.operation && reply.operation.state)) return;
+					if (TERMINAL.has(reply.operation && reply.operation.state)) {
+						emitChange('operation_get', operationId, reply.operation.state);
+						return;
+					}
 				} catch (error) {
 					if (!cancelled && !destroyed) callback(null, error);
 				}

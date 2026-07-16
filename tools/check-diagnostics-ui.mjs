@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
 
 const panelPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/diagnostics-panel.js';
 const configPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js';
@@ -8,6 +9,7 @@ const cssPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/
 assert.ok(existsSync(panelPath), `missing diagnostics panel: ${panelPath}`);
 
 const panelSource = readFileSync(panelPath, 'utf8');
+const apiSource = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/api.js', 'utf8');
 const configSource = readFileSync(configPath, 'utf8');
 const css = readFileSync(cssPath, 'utf8');
 assert.match(configSource, /Mode: Explicit \(proxy only selected interfaces\)/);
@@ -17,6 +19,8 @@ assert.match(configSource, /Tun stack: %s/);
 assert.match(configSource, /view\.miclash\.api/);
 assert.match(configSource, /view\.miclash\.diagnostics-panel/);
 assert.match(configSource, /sbox-diagnostics-summary/);
+assert.match(configSource, /diagnosticsOwner\s*=\s*view_miclash_diagnostics_panel\.createOwner/,
+	'config.js must consume the executable diagnostics ownership helper');
 assert.doesNotMatch(panelSource, /(?:innerHTML|outerHTML|insertAdjacentHTML|document\.write)/,
 	'diagnostics data must be rendered through DOM text nodes');
 assert.doesNotMatch(panelSource, /(?:fs\.|exec\s*\(|\/bin\/sh|\/usr\/bin\/|\/sbin\/)/,
@@ -140,6 +144,7 @@ let timerSequence = 1;
 const timers = new Map();
 const revoked = [], createdUrls = [], clickedDownloads = [];
 const windowMock = Object.assign(windowEvents, {
+	crypto: webcrypto,
 	setTimeout(callback, delay) { const id = timerSequence++; timers.set(id, { callback, delay }); return id; },
 	clearTimeout(id) { timers.delete(id); },
 	URL: {
@@ -148,6 +153,7 @@ const windowMock = Object.assign(windowEvents, {
 	},
 	document: documentMock
 });
+windowMock.dispatchEvent = (event) => { windowEvents.emit(event.type, event.detail); return true; };
 documentMock.createElement = (tag) => {
 	const node = new MiniNode(tag);
 	if (String(tag).toLowerCase() === 'a') node.click = () => clickedDownloads.push({ href: node.href, download: node.download });
@@ -170,17 +176,18 @@ let destroyedApi = 0;
 const malicious = '<img src=x onerror=alert(1)>';
 const replies = {
 	status: { desired: { guard: { enabled: true } }, observed: { service: { running: true } } },
-	health: {
-		mihomo: { state: 'ok', code: 'READY', message: malicious, details: { pid: 7 } },
-		dns: { state: 'ok', code: 'READY', message: 'DNS ready', details: {} },
-		firewall: { state: 'degraded', code: 'DRIFT', message: 'Firewall drift', details: { table: 'miclash' } },
-		routing: { state: 'ok', code: 'READY', message: 'Routes ready', details: {} },
-		guard: { state: 'ok', code: 'ENABLED', message: 'Fail closed', details: {} }
-	},
+	health: { observed: { service: { running: true }, readiness: { components: [] } }, observed_at: 1710000000000 },
 	summary: {
-		memory: { rss_bytes: 104857600, baseline_bytes: 83886080, pressure: 'normal', cooldown_until: 0 },
+		health: {
+			mihomo: { state: 'ok', code: 'READY', message: malicious, details: { pid: 7 } },
+			dns: { state: 'ok', code: 'READY', message: 'DNS ready', details: { listener: '127.0.0.1' } },
+			firewall: { state: 'degraded', code: 'DRIFT', message: 'Firewall drift', details: { table: 'miclash' } },
+			routing: { state: 'ok', code: 'READY', message: 'Routes ready', details: { mark: '0x162' } },
+			guard: { state: 'ok', code: 'ENABLED', message: 'Fail closed', details: { enabled: true } }
+		},
+		memory: { current_rss_kb: 102400, baseline_rss_kb: 81920, phase: 'monitoring', cooldown_until: 1710000200000 },
 		last_repair: { component: 'firewall', action: 'reconcile', result: 'success', at: 1710000000 },
-		updates: { subscription: { state: 'success', activated_at: 1710000100 } },
+		updates: { running: true, enabled: true, last_activation: 1710000100000 },
 		subscription: { configured: true, transport: 'https', insecure: false },
 		telegram: { enabled: true, configured: true }
 	}
@@ -223,13 +230,23 @@ for (const node of host.querySelectorAll('[role="status"]'))
 assert.equal(host.querySelector('a[data-action="download-report"]')?.textContent,
 	'Download diagnostic report', 'report action must be hyperlink-styled semantic link');
 assert.match(summaryText, /Guard●Enabled/, 'Guard must show desired enabled/disabled state, not only health');
+assert.match(summaryText, /RSS100\.0 MiB/);
+assert.match(summaryText, /Baseline80\.0 MiB/);
+assert.match(summaryText, new RegExp(new Date(1710000200000).toLocaleString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+	'real memory cooldown_until was not rendered');
+assert.match(summaryText, new RegExp(new Date(1710000100000).toLocaleString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+	'real scheduler last_activation was not rendered');
 assert.equal(host.querySelector('img'), null, 'summary created an unexpected element');
 const statusFallback = panel.renderSummary({
 	status: { desired: { guard: { enabled: false } }, observed: { service: { running: true } } },
-	health: {}, summary: replies.summary
+	health: {}, summary: { ...replies.summary, health: {} }
 }).textContent;
 assert.match(statusFallback, /Mihomo●Ready/, 'Mihomo status must fall back to typed status state');
 assert.match(statusFallback, /Guard●Disabled/, 'Guard status must fall back to typed desired state');
+const arrayHealth = panel.renderSummary({ status: replies.status, health: {}, summary: {
+	...replies.summary, health: { components: [ { component: 'mihomo', state: 'degraded' } ] }
+} }).textContent;
+assert.match(arrayHealth, /Mihomo●Degraded/, 'component arrays must normalize safely');
 
 assert.equal(timers.size, 1, 'visible page must schedule one bounded poll');
 hidden = true;
@@ -255,6 +272,8 @@ assert.equal(modal.title, 'MiClash diagnostics');
 assert.match(modal.body.textContent, /Component evidence/);
 assert.match(modal.body.textContent, /Last self-heal/);
 assert.match(modal.body.textContent, /Firewall drift/);
+assert.match(modal.body.textContent, /"table":"miclash"/);
+assert.match(modal.body.textContent, /Last self-healfirewall · reconcile · success/);
 assert.match(modal.body.textContent, /<img src=x onerror=alert\(1\)>/,
 	'backend evidence must remain literal text, proving no HTML interpretation');
 assert.equal(modal.body.querySelector('img'), null, 'malicious evidence created an element');
@@ -320,5 +339,83 @@ assert.equal(timers.size, 0, 'destroy must cancel every panel timer');
 assert.equal(documentEvents.count('visibilitychange'), 0, 'destroy leaked visibility listener');
 assert.equal(windowEvents.count('miclash:ubus-event'), 0, 'destroy leaked ubus event listener');
 assert.equal(destroyedApi, 1, 'destroy must cancel typed client transfer work');
+
+assert.equal(typeof moduleApi.createOwner, 'function', 'missing executable config diagnostics owner');
+let clientsCreated = 0, panelsCreated = 0;
+const ownedPanels = [], ownedClients = [];
+const owner = moduleApi.createOwner({
+	createClient() {
+		clientsCreated++;
+		const client = { id: clientsCreated, destroys: 0, destroy() { this.destroys++; } };
+		ownedClients.push(client);
+		return client;
+	},
+	createPanel(options) {
+		panelsCreated++;
+		const owned = { api: options.api, mounts: [], destroys: 0,
+			mount(node) { this.mounts.push(node); },
+			destroy() { this.destroys++; this.api.destroy(); } };
+		ownedPanels.push(owned);
+		return owned;
+	}
+});
+owner.replace();
+owner.mount('first-host');
+owner.mount('rerendered-settings-host');
+assert.equal(clientsCreated, 1, 'settings rerender created a duplicate typed client');
+assert.equal(panelsCreated, 1, 'settings rerender created a duplicate panel');
+assert.deepEqual(ownedPanels[0].mounts, ['first-host', 'rerendered-settings-host']);
+owner.replace();
+assert.equal(ownedPanels[0].destroys, 1, 'view rerender did not destroy prior panel exactly once');
+assert.equal(ownedClients[0].destroys, 1, 'view rerender did not destroy prior typed client exactly once');
+owner.destroy(); owner.destroy();
+assert.equal(ownedPanels[1].destroys, 1, 'unload must destroy current panel exactly once');
+assert.equal(ownedClients[1].destroys, 1, 'unload must destroy current typed client exactly once');
+
+// The genuine typed API producer and reader share one event target. A mutating
+// operation refreshes a visible panel sooner; read-only refresh calls never emit.
+const rpcReplies = new Map();
+const rpcCalls = [];
+const rpcMock = { declare(spec) { return async (...args) => {
+	rpcCalls.push({ method: spec.method, args });
+	const reply = rpcReplies.get(spec.method);
+	return typeof reply === 'function' ? reply(...args) : (reply || {});
+}; } };
+const typedApi = new Function('rpc', 'window', 'TextEncoder', 'Uint8Array', 'ArrayBuffer',
+	'btoa', 'atob', apiSource)(rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
+	(value) => Buffer.from(value, 'binary').toString('base64'),
+	(value) => Buffer.from(value, 'base64').toString('binary'));
+rpcReplies.set('status', replies.status);
+rpcReplies.set('health', { observed: { service: { running: true }, readiness: { components: [] } }, observed_at: 1710000000000 });
+rpcReplies.set('diagnostics_summary', replies.summary);
+rpcReplies.set('service_restart', { operation_id: 'op_event_1' });
+const typedReader = typedApi.create({ eventTarget: windowMock });
+const typedProducer = typedApi.create({ eventTarget: windowMock });
+const eventPanel = moduleApi.create({ api: typedReader, document: documentMock, window: windowMock, pollInterval: 30000 });
+const eventHost = new MiniNode('div');
+eventPanel.mount(eventHost);
+await new Promise((resolve) => setImmediate(resolve));
+const readsBeforeMutation = rpcCalls.filter((call) => ['status', 'health', 'diagnostics_summary'].includes(call.method)).length;
+await typedProducer.service_restart('config.yaml', 'luci');
+assert.equal([...timers.values()].some((timer) => timer.delay < 1000), true,
+	'typed mutation did not produce an early panel refresh event');
+for (const [id, timer] of [...timers]) if (timer.delay < 1000) { timers.delete(id); await timer.callback(); }
+await new Promise((resolve) => setImmediate(resolve));
+assert.ok(rpcCalls.filter((call) => ['status', 'health', 'diagnostics_summary'].includes(call.method)).length > readsBeforeMutation,
+	'visible panel did not consume genuine typed operation event');
+const shortTimersBeforeRead = [...timers.values()].filter((timer) => timer.delay < 1000).length;
+await typedProducer.status();
+assert.equal([...timers.values()].filter((timer) => timer.delay < 1000).length, shortTimersBeforeRead,
+	'read-only status produced a refresh loop event');
+hidden = true; documentEvents.emit('visibilitychange');
+await typedProducer.service_restart('config.yaml', 'luci');
+assert.equal([...timers.values()].filter((timer) => timer.delay < 1000).length, 0,
+	'hidden panel reacted to a genuine typed operation event');
+hidden = false; documentEvents.emit('visibilitychange');
+await new Promise((resolve) => setImmediate(resolve));
+eventPanel.destroy();
+await typedProducer.service_restart('config.yaml', 'luci');
+assert.equal(timers.size, 0, 'destroyed panel reacted to a genuine typed operation event');
+typedProducer.destroy();
 
 console.log('integrated diagnostics UI contract passed');

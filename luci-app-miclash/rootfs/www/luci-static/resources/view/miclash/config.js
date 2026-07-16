@@ -39,7 +39,10 @@ let operationAutoClearTimer = null;
 let controlPollBusy = false;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
-let diagnosticsPanel = null;
+const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
+	createClient: () => view_miclash_api.create(),
+	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
+});
 
 view_miclash_utils.bumpRpcTimeout();
 
@@ -2281,7 +2284,7 @@ function renderSettingsPane() {
 	pane.innerHTML = buildSettingsPaneHtml();
 	bindSettingsPaneEvents();
 	const diagnosticsHost = pane.querySelector('#sbox-diagnostics-summary');
-	if (diagnosticsHost && diagnosticsPanel) diagnosticsPanel.mount(diagnosticsHost);
+	if (diagnosticsHost) diagnosticsOwner.mount(diagnosticsHost);
 }
 
 async function collectSettingsFormState() {
@@ -3037,8 +3040,6 @@ return view.extend({
 	},
 
 	render: async function(data) {
-		if (diagnosticsPanel) diagnosticsPanel.destroy();
-		diagnosticsPanel = null;
 		await ensureConfigProfilesReady(data[0] || '');
 		appState.configProfiles = CONFIG_PROFILES.slice();
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
@@ -3075,9 +3076,7 @@ return view.extend({
 		bindControlAndHeaderEvents();
 		bindConfigEvents();
 		bindTabEvents();
-		diagnosticsPanel = view_miclash_diagnostics_panel.create({
-			api: view_miclash_api.create()
-		});
+		diagnosticsOwner.replace();
 		renderSettingsPane();
 		updateHeaderAndControlDom();
 		refreshReleaseMeta({ force: true }).catch(() => {});
@@ -3103,9 +3102,6 @@ return view.extend({
 	},
 
 	unload: function() {
-		if (diagnosticsPanel) {
-			diagnosticsPanel.destroy();
-			diagnosticsPanel = null;
-		}
+		diagnosticsOwner.destroy();
 	}
 });

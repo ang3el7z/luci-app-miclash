@@ -160,6 +160,26 @@ replies.set('health', async () => { throw { code: 'PERMISSION_DENIED', message: 
 await assert.rejects(errorClient.health(),
 	(error) => error instanceof Error && error.code === 'PERMISSION_DENIED' && error.message === 'Denied');
 
+const producedEvents = [];
+const eventTarget = { dispatchEvent(event) { producedEvents.push(event); return true; } };
+replies.set('service_start', { operation_id: 'event_op_1' });
+replies.set('status', { desired: {}, observed: {} });
+const eventClient = moduleApi.create({ eventTarget });
+await eventClient.service_start('config.yaml', 'luci');
+assert.deepEqual(producedEvents.map((event) => event.detail), [ {
+	object: 'miclash', method: 'service_start', operation_id: 'event_op_1', state: 'accepted'
+} ], 'successful mutation must emit one safe typed change event');
+await eventClient.status();
+assert.equal(producedEvents.length, 1, 'read-only status must not emit a change event');
+replies.set('operation_get', { operation: { id: 'event_op_1', state: 'success' } });
+const cancelTerminal = eventClient.watchOperation('event_op_1', () => {});
+await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(producedEvents.at(-1).detail, {
+	object: 'miclash', method: 'operation_get', operation_id: 'event_op_1', state: 'success'
+}, 'terminal watcher state must emit one safe typed change event');
+cancelTerminal();
+eventClient.destroy();
+
 replies.set('operation_get', { operation: { id: 'op_1', state: 'running' } });
 let watched = 0;
 const cancelClient = moduleApi.create();

@@ -96,6 +96,34 @@ function memoryBytes(memory, bytesName, kbName) {
 	return '-';
 }
 
+function normalizedGraph(value) {
+	const graph = {};
+	if (Array.isArray(value)) {
+		for (const item of value.slice(0, 32)) {
+			if (!item || typeof item !== 'object') continue;
+			const name = String(item.name || item.component || '').toLowerCase();
+			if (COMPONENTS.some(([ component ]) => component === name)) graph[name] = item;
+		}
+		return graph;
+	}
+	if (!value || typeof value !== 'object') return graph;
+	if (value.components != null) {
+		const nested = normalizedGraph(value.components);
+		if (Object.keys(nested).length) return nested;
+	}
+	for (const [ name ] of COMPONENTS)
+		if (value[name] && typeof value[name] === 'object') graph[name] = value[name];
+	return graph;
+}
+
+function componentGraph(state) {
+	const summary = normalizedGraph(state?.summary?.health);
+	if (Object.keys(summary).length) return summary;
+	const direct = normalizedGraph(state?.health);
+	if (Object.keys(direct).length) return direct;
+	return normalizedGraph(state?.health?.observed?.readiness?.components);
+}
+
 function dateValue(value) {
 	const amount = Number(value);
 	if (!Number.isFinite(amount) || amount <= 0) return '-';
@@ -117,6 +145,8 @@ function subscriptionValue(summary) {
 		const at = dateValue(update.activated_at || update.finished_at || update.at);
 		return at === '-' ? text(state) : text(state) + ' · ' + at;
 	}
+	if (summary?.updates?.last_activation != null)
+		return dateValue(summary.updates.last_activation);
 	if (summary?.subscription?.configured === true) return _('Configured');
 	return _('Not configured');
 }
@@ -186,9 +216,7 @@ function create(options) {
 	function renderSummary(state) {
 		state = state || current;
 		const summary = state.summary || {};
-		const summaryHealth = summary.health || {};
-		const apiHealth = state.health?.components || state.health || {};
-		const health = COMPONENTS.some(([ name ]) => summaryHealth[name]) ? summaryHealth : apiHealth;
+		const health = componentGraph(state);
 		const memory = summary.memory || {};
 		const status = state.status || {};
 		const serviceRunning = status.observed?.service?.running ?? status.state?.observed?.service?.running ?? status.running;
@@ -207,7 +235,8 @@ function create(options) {
 		return E('div', { 'class': 'sbox-diagnostics-content' }, [
 			E('div', { 'class': 'sbox-diagnostics-components', 'aria-label': _('Component status') }, componentRows),
 			E('div', { 'class': 'sbox-diagnostics-facts' }, [
-				valueRow(_('RSS'), memoryBytes(memory, 'rss_bytes', 'rss_kb')),
+				valueRow(_('RSS'), memoryBytes(memory, 'rss_bytes', 'current_rss_kb') !== '-'
+					? memoryBytes(memory, 'rss_bytes', 'current_rss_kb') : memoryBytes(memory, 'rss_bytes', 'rss_kb')),
 				valueRow(_('Baseline'), memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb')),
 				valueRow(_('Pressure'), memory.pressure || memory.phase || '-'),
 				valueRow(_('Cooldown'), cooldown),
@@ -271,7 +300,8 @@ function create(options) {
 	}
 
 	function openDetails() {
-		const records = COMPONENTS.map(([ name, label ]) => ({ label: label(), value: current.health?.[name] || {} }));
+		const health = componentGraph(current);
+		const records = COMPONENTS.map(([ name, label ]) => ({ label: label(), value: health[name] || {} }));
 		const body = E('div', { 'class': 'sbox-diagnostics-modal' }, [
 			E('h4', {}, _('Component evidence')),
 			E('ul', { 'class': 'sbox-diagnostics-evidence' }, records.map(detailsEvidence)),
@@ -422,4 +452,34 @@ function create(options) {
 	return { renderSummary, openDetails, downloadReport, openRouteTest, mount, refresh, destroy };
 }
 
-return { create };
+function createOwner(options) {
+	if (!options || typeof options.createClient !== 'function' || typeof options.createPanel !== 'function')
+		throw new Error('Diagnostics owner factories are required');
+	let panel = null;
+	return {
+		replace() {
+			if (panel) panel.destroy();
+			panel = null;
+			const client = options.createClient();
+			try { panel = options.createPanel({ api: client }); }
+			catch (error) {
+				if (client && typeof client.destroy === 'function') client.destroy();
+				throw error;
+			}
+			return panel;
+		},
+		mount(node) {
+			if (panel && node) panel.mount(node);
+			return panel;
+		},
+		destroy() {
+			if (!panel) return false;
+			const owned = panel;
+			panel = null;
+			owned.destroy();
+			return true;
+		}
+	};
+}
+
+return { create, createOwner };
