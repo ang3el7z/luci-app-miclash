@@ -25,9 +25,12 @@ import * as schema from 'miclash.schema';
  *        fsync, atomic replace, parent fsync; on every failure the destination
  *        is the complete old or complete new file and no hidden temp remains)
  *   with_transaction_lease(callback) -> callback(opaque_lease) result
- *   rename(dir, from, to, expected, { mode, uid, nlink }) -> identity
- *   unlink(dir, name, expected) -> true
- *   rmdir(dir, name, expected) -> true
+ *   rename_noreplace(dir, from, to, expected, { mode, uid, nlink }) -> identity
+ *       (identity-bound source, absent destination, atomic rename, parent fsync)
+ *   unlink_durable(dir, name, expected) -> true
+ *       (identity-bound unlink and parent fsync)
+ *   rmdir_durable(dir, name, expected) -> true
+ *       (identity-bound empty-directory removal and parent fsync)
  *
  * The module writes and parses strict USTAR itself.  No normalized archive
  * listing or extraction adapter is authoritative.
@@ -121,7 +124,7 @@ function validate_app(app) {
 	if (type(secure) != 'object') internal();
 	for (let method in [ 'open', 'open_at', 'stat', 'list', 'read',
 		'create_exclusive', 'replace_atomic', 'with_transaction_lease',
-		'rename', 'unlink', 'rmdir' ])
+		'rename_noreplace', 'unlink_durable', 'rmdir_durable' ])
 		if (type(secure[method]) != 'function') internal();
 	return { runtime, secure };
 };
@@ -543,7 +546,7 @@ function remove_tree(env, parent, name, expected, registered, registered_directo
 				let captured = secure_read(env, directory, child_name, registration.size,
 					registration.mode, identity);
 				if (captured.size != registration.size || captured.sha256 != registration.sha256 ||
-				    env.secure.unlink(directory, child_name, captured.identity) !== true)
+			    env.secure.unlink_durable(directory, child_name, captured.identity) !== true)
 					failed = true;
 			}
 			catch (error) { failed = true; }
@@ -551,7 +554,7 @@ function remove_tree(env, parent, name, expected, registered, registered_directo
 		else failed = true;
 	}
 	if (failed) return false;
-	try { return env.secure.rmdir(parent, name, expected) === true; }
+	try { return env.secure.rmdir_durable(parent, name, expected) === true; }
 	catch (error) { return false; }
 };
 
@@ -737,7 +740,7 @@ function journal_store(env, transaction) {
 };
 
 function journal_finish(env, transaction) {
-	if (env.secure.unlink(transaction.root, transaction.name, transaction.identity) !== true)
+	if (env.secure.unlink_durable(transaction.root, transaction.name, transaction.identity) !== true)
 		internal();
 	return true;
 };
@@ -769,7 +772,7 @@ function recover_create(env, transaction) {
 	}
 	for (let item in [ [ record.temp_name, temp ], [ record.archive_name, archive ],
 		[ record.sidecar_name, sidecar ] ])
-		if (item[1] != null) env.secure.unlink(root, item[0], item[1].identity);
+		if (item[1] != null) env.secure.unlink_durable(root, item[0], item[1].identity);
 	journal_finish(env, transaction);
 	return true;
 };
@@ -843,8 +846,8 @@ function recover_prune(env, transaction) {
 		record.archive_size, record.archive_sha256, record.archive_identity);
 	let sidecar = prune_candidate(env, root, record.sidecar_name, record.sidecar_tomb,
 		record.sidecar_size, record.sidecar_sha256, record.sidecar_identity);
-	if (archive != null) env.secure.unlink(root, archive.name, archive.capture.identity);
-	if (sidecar != null) env.secure.unlink(root, sidecar.name, sidecar.capture.identity);
+	if (archive != null) env.secure.unlink_durable(root, archive.name, archive.capture.identity);
+	if (sidecar != null) env.secure.unlink_durable(root, sidecar.name, sidecar.capture.identity);
 	journal_finish(env, transaction);
 	return true;
 };
@@ -1011,7 +1014,7 @@ function create_impl(app, options, source, env) {
 		transaction.record.sidecar_identity = file_identity_record(side.identity);
 		transaction.record.phase = 'side'; journal_store(env, transaction);
 		transaction.record.phase = 'publish_planned'; journal_store(env, transaction);
-		archive_identity = env.secure.rename(root, temp_name, id + '.tar', temp_identity,
+		archive_identity = env.secure.rename_noreplace(root, temp_name, id + '.tar', temp_identity,
 			{ mode: 0o600, uid: 0, nlink: 1 });
 		if (!valid_file_identity(archive_identity, 0o600, length(archive_bytes))) internal();
 		temp_identity = null;
@@ -1403,15 +1406,15 @@ function prune_impl(app, options, env) {
 			sidecar_identity: file_identity_record(current.sidecar_capture.identity)
 		});
 		try {
-			let moved_side = env.secure.rename(root, item.id + '.json', side_tomb,
+			let moved_side = env.secure.rename_noreplace(root, item.id + '.json', side_tomb,
 				current.sidecar_capture.identity, { mode: 0o600, uid: 0, nlink: 1 });
 			transaction.record.phase = 'side_moved'; journal_store(env, transaction);
-			let moved_archive = env.secure.rename(root, item.id + '.tar', archive_tomb,
+			let moved_archive = env.secure.rename_noreplace(root, item.id + '.tar', archive_tomb,
 				current.archive.identity, { mode: 0o600, uid: 0, nlink: 1 });
 			transaction.record.phase = 'archive_moved'; journal_store(env, transaction);
 			transaction.record.phase = 'deleting'; journal_store(env, transaction);
-			if (env.secure.unlink(root, archive_tomb, moved_archive) !== true ||
-			    env.secure.unlink(root, side_tomb, moved_side) !== true) internal();
+			if (env.secure.unlink_durable(root, archive_tomb, moved_archive) !== true ||
+			    env.secure.unlink_durable(root, side_tomb, moved_side) !== true) internal();
 			journal_finish(env, transaction);
 		}
 		catch (error) {

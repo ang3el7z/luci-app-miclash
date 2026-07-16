@@ -197,32 +197,36 @@ function secure_fs(filesystem) {
 		capability.lease_held = false;
 		return result;
 	};
-	capability.rename = (parent, from, to, expected, options) => {
+	capability.rename_noreplace = (parent, from, to, expected, options) => {
 		directory(parent.opaque, parent.identity);
 		let from_path = parent.opaque + '/' + from, to_path = parent.opaque + '/' + to;
-		hook('before', 'rename', parent, from, { to, expected, options });
+		hook('before', 'rename_noreplace', parent, from, { to, expected, options });
 		file(from_path, expected, options);
 		if (filesystem.lstat(to_path) != null || filesystem.rename(from_path, to_path) !== true)
 			die('INTERNAL');
-		hook('after', 'rename', parent, to, { from, expected, options });
-		return clone(file(to_path, expected, options));
+		let identity = clone(file(to_path, expected, options));
+		hook('after', 'rename_noreplace', parent, to, { from, expected, options, identity });
+		hook('after', 'rename_parent_fsync', parent, to, { from, expected, options, identity });
+		return clone(file(to_path, identity, options));
 	};
-	capability.unlink = (parent, name, expected) => {
+	capability.unlink_durable = (parent, name, expected) => {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
-		hook('before', 'unlink', parent, name, expected);
+		hook('before', 'unlink_durable', parent, name, expected);
 		if (!same_file_identity(filesystem.lstat(path), expected)) die('INTERNAL');
 		if (filesystem.unlink(path) !== true) die('INTERNAL');
-		hook('after', 'unlink', parent, name, expected);
+		hook('after', 'unlink_durable', parent, name, expected);
+		hook('after', 'unlink_parent_fsync', parent, name, expected);
 		return true;
 	};
-	capability.rmdir = (parent, name, expected) => {
+	capability.rmdir_durable = (parent, name, expected) => {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
-		hook('before', 'rmdir', parent, name, expected);
+		hook('before', 'rmdir_durable', parent, name, expected);
 		if (!same_directory_identity(filesystem.lstat(path), expected)) die('INTERNAL');
 		if (filesystem.rmdir(path) !== true) die('INTERNAL');
-		hook('after', 'rmdir', parent, name, expected);
+		hook('after', 'rmdir_durable', parent, name, expected);
+		hook('after', 'rmdir_parent_fsync', parent, name, expected);
 		return true;
 	};
 	return capability;
@@ -337,7 +341,8 @@ function seed_import(box, suffix, contents, options) {
 assert_throws(() => backup.create({}, null, 'luci'), 'INVALID_ARGUMENT');
 let unsupported = make_app(); delete unsupported.app.secure_fs;
 assert_throws(() => backup.list(unsupported.app), 'INTERNAL');
-for (let primitive in [ 'create_exclusive', 'replace_atomic', 'with_transaction_lease' ]) {
+for (let primitive in [ 'create_exclusive', 'replace_atomic', 'with_transaction_lease',
+	'rename_noreplace', 'unlink_durable', 'rmdir_durable' ]) {
 	let missing = make_app(); delete missing.app.secure_fs[primitive];
 	assert_throws(() => backup.list(missing.app), 'INTERNAL');
 }
@@ -392,6 +397,64 @@ for (let stage in [ 'replace_temp_create', 'replace_temp_write', 'replace_temp_f
 	assert_equal(current.uid, 0); assert_equal(current.nlink, 1);
 	assert_no_secure_temp(box, '/tmp/miclash/atomic-replace');
 }
+
+for (let fault in [ [ 'before', 'rename_noreplace' ],
+	[ 'after', 'rename_noreplace' ], [ 'after', 'rename_parent_fsync' ] ]) {
+	let box = make_app(), root = box.app.secure_fs.open('/tmp/miclash/durable-rename',
+		{ create: true, mode: 0o700, uid: 0 });
+	let source = '/tmp/miclash/durable-rename/source';
+	box.filesystem.files[source] = 'complete'; box.filesystem.bump_inode(source);
+	box.filesystem.set_mode(source, 0o600); box.filesystem.set_uid(source, 0);
+	box.filesystem.set_nlink(source, 1);
+	let expected = box.app.secure_fs.stat(root, 'source');
+	box.app.secure_fs[fault[0]] = (operation, directory, name, extra) => {
+		if (operation == fault[1]) die('durable-rename-fault');
+	};
+	assert_throws(() => box.app.secure_fs.rename_noreplace(root, 'source', 'target',
+		expected, { mode: 0o600, uid: 0, nlink: 1 }), 'durable-rename-fault');
+	let left = box.filesystem.lstat(source);
+	let right = box.filesystem.lstat('/tmp/miclash/durable-rename/target');
+	assert_equal((left != null) != (right != null), true,
+		'durable rename exposed both or neither namespace entry');
+	assert_equal(box.filesystem.readfile(left != null ? source :
+		'/tmp/miclash/durable-rename/target'), 'complete');
+}
+
+let noreplace = make_app(), noreplace_root = noreplace.app.secure_fs.open(
+	'/tmp/miclash/no-replace', { create: true, mode: 0o700, uid: 0 });
+for (let item in [ [ 'source', 'source-complete' ], [ 'target', 'foreign-complete' ] ]) {
+	let path = '/tmp/miclash/no-replace/' + item[0];
+	noreplace.filesystem.files[path] = item[1]; noreplace.filesystem.bump_inode(path);
+	noreplace.filesystem.set_mode(path, 0o600); noreplace.filesystem.set_uid(path, 0);
+	noreplace.filesystem.set_nlink(path, 1);
+}
+let noreplace_expected = noreplace.app.secure_fs.stat(noreplace_root, 'source');
+assert_throws(() => noreplace.app.secure_fs.rename_noreplace(noreplace_root,
+	'source', 'target', noreplace_expected, { mode: 0o600, uid: 0, nlink: 1 }), 'INTERNAL');
+assert_equal(noreplace.filesystem.readfile('/tmp/miclash/no-replace/source'), 'source-complete');
+assert_equal(noreplace.filesystem.readfile('/tmp/miclash/no-replace/target'), 'foreign-complete');
+
+for (let primitive in [ 'unlink', 'rmdir' ])
+	for (let fault in [ [ 'before', primitive + '_durable' ],
+		[ 'after', primitive + '_durable' ], [ 'after', primitive + '_parent_fsync' ] ]) {
+		let box = make_app(), root = box.app.secure_fs.open('/tmp/miclash/durable-remove',
+			{ create: true, mode: 0o700, uid: 0 }), name = primitive == 'unlink' ? 'file' : 'dir';
+		let path = '/tmp/miclash/durable-remove/' + name;
+		if (primitive == 'unlink') box.filesystem.files[path] = 'complete';
+		else assert_equal(box.filesystem.mkdir(path), true);
+		box.filesystem.bump_inode(path); box.filesystem.set_mode(path,
+			primitive == 'unlink' ? 0o600 : 0o700);
+		box.filesystem.set_uid(path, 0); box.filesystem.set_nlink(path,
+			primitive == 'unlink' ? 1 : 2);
+		let expected = box.app.secure_fs.stat(root, name);
+		box.app.secure_fs[fault[0]] = (operation, directory, seen_name, extra) => {
+			if (operation == fault[1]) die('durable-remove-fault');
+		};
+		assert_throws(() => box.app.secure_fs[primitive + '_durable'](root, name, expected),
+			'durable-remove-fault');
+		assert_equal(box.filesystem.lstat(path) != null, fault[0] == 'before',
+			'durable removal persisted a partial namespace state');
+	}
 
 let hardlinked_file = make_app();
 hardlinked_file.filesystem.set_nlink('/opt/clash/lst/local.txt', 2);
@@ -639,7 +702,7 @@ raced.filesystem.files['/opt/clash/foreign'] = 'foreign';
 raced.filesystem.set_mode('/opt/clash/foreign', 0o600); raced.filesystem.set_uid('/opt/clash/foreign', 0);
 let swapped = false;
 raced.app.secure_fs.before = (operation, directory, name, extra) => {
-	if (!swapped && operation == 'rename' && match(name, /\.json$/)) {
+	if (!swapped && operation == 'rename_noreplace' && match(name, /\.json$/)) {
 		swapped = true;
 		raced.filesystem.set_symlink(directory.opaque + '/' + name, '/opt/clash/foreign');
 	}
@@ -905,7 +968,7 @@ let create_lease = make_app();
 let create_lease_seen = lifecycle_probe(create_lease, (operation, directory, name, extra) => {
 	if (operation == 'create_exclusive' && match(name, /\.tar\.tmp$/)) return 'temp';
 	if (operation == 'create_exclusive' && match(name, /^b-.*\.json$/)) return 'sidecar';
-	if (operation == 'rename' && match(name, /\.tar$/)) return 'publish';
+	if (operation == 'rename_noreplace' && match(name, /\.tar$/)) return 'publish';
 	if (operation == 'replace_atomic' && match(name, /^t-.*\.json$/)) return 'journal';
 	return null;
 });
@@ -931,9 +994,9 @@ let prune_lease = make_app();
 backup.create(prune_lease.app); prune_lease.runtime.clock.advance(1);
 backup.create(prune_lease.app);
 let prune_lease_seen = lifecycle_probe(prune_lease, (operation, directory, name, extra) => {
-	if (operation == 'rename' && match(name, /^\.prune-.*\.json$/)) return 'side-move';
-	if (operation == 'rename' && match(name, /^\.prune-.*\.tar$/)) return 'archive-move';
-	if (operation == 'unlink' && match(name, /^\.prune-/)) return 'delete';
+	if (operation == 'rename_noreplace' && match(name, /^\.prune-.*\.json$/)) return 'side-move';
+	if (operation == 'rename_noreplace' && match(name, /^\.prune-.*\.tar$/)) return 'archive-move';
+	if (operation == 'unlink_durable' && match(name, /^\.prune-/)) return 'delete';
 	return null;
 });
 backup.prune(prune_lease.app, { retain: 1 });
@@ -994,7 +1057,7 @@ create_crash('create_file_fsync', (name) => match(name, /\.tar\.tmp$/), 'temp-wr
 create_crash('create_parent_fsync', (name) => match(name, /\.tar\.tmp$/), 'temp-parent-fsync');
 create_crash('create_file_fsync', (name) => match(name, /^b-[0-9]{13}-[0-9a-f]{32}\.json$/),
 	'sidecar-write');
-create_crash('rename', (name) => match(name, /\.tar$/), 'archive-publish');
+create_crash('rename_noreplace', (name) => match(name, /\.tar$/), 'archive-publish');
 
 for (let stage in [ 'replace_temp_fsync', 'replace_rename', 'replace_parent_fsync' ]) {
 	let box = make_app(), fired = false;
@@ -1093,7 +1156,7 @@ backup.create(prune_marker.app); prune_marker.runtime.clock.advance(1);
 backup.create(prune_marker.app);
 let prune_marker_seen = false;
 prune_marker.app.secure_fs.before = (operation, directory, name, extra) => {
-	if (operation == 'rename' && match(name, /\.json$/))
+	if (operation == 'rename_noreplace' && match(name, /\.json$/))
 		prune_marker_seen = length(transaction_names(prune_marker)) == 1;
 };
 backup.prune(prune_marker.app, { retain: 1 });
@@ -1141,9 +1204,9 @@ function prune_crash(operation, predicate, label) {
 	assert_equal(length(visible), 1, 'prune did not converge after ' + label);
 	assert_equal(length(transaction_names(box)), 0, 'prune journal survived ' + label);
 };
-prune_crash('rename', (name) => match(name, /\.prune-.*\.json$/), 'side-rename');
-prune_crash('rename', (name) => match(name, /\.prune-.*\.tar$/), 'archive-rename');
-prune_crash('unlink', (name) => match(name, /\.prune-.*\.tar$/), 'archive-unlink');
+prune_crash('rename_noreplace', (name) => match(name, /\.prune-.*\.json$/), 'side-rename');
+prune_crash('rename_noreplace', (name) => match(name, /\.prune-.*\.tar$/), 'archive-rename');
+prune_crash('unlink_durable', (name) => match(name, /\.prune-.*\.tar$/), 'archive-unlink');
 
 // Authentic journals remain recoverable after arbitrary downtime. Age controls
 // only preview expiry; it is not part of journal authenticity.
@@ -1177,7 +1240,7 @@ let old_prune = make_app();
 backup.create(old_prune.app); old_prune.runtime.clock.advance(1); backup.create(old_prune.app);
 let old_prune_crashed = false;
 old_prune.app.secure_fs.after = (operation, directory, name, extra) => {
-	if (!old_prune_crashed && operation == 'rename' && match(name, /\.prune-.*\.json$/)) {
+	if (!old_prune_crashed && operation == 'rename_noreplace' && match(name, /\.prune-.*\.json$/)) {
 		old_prune_crashed = true; die('old-prune-crash');
 	}
 };
@@ -1231,7 +1294,7 @@ cleanup_race.app.secure_fs.after = (operation, directory, name, extra) => {
 	}
 };
 cleanup_race.app.secure_fs.before = (operation, directory, name, extra) => {
-	if (!cleanup_swapped && operation == 'rmdir' && match(name, /^x-/)) {
+	if (!cleanup_swapped && operation == 'rmdir_durable' && match(name, /^x-/)) {
 		cleanup_swapped = true;
 		cleanup_race.filesystem.set_symlink(directory.opaque + '/' + name,
 			'/opt/clash/cleanup-foreign');
@@ -1280,7 +1343,7 @@ late_foreign.app.secure_fs.after = (operation, directory, name, extra) => {
 	}
 };
 late_foreign.app.secure_fs.before = (operation, directory, name, extra) => {
-	if (!late_inserted && operation == 'unlink' && name == 'settings.json') {
+	if (!late_inserted && operation == 'unlink_durable' && name == 'settings.json') {
 		late_inserted = true;
 		let parts = split(directory.opaque, '/'); pop(parts);
 		late_path = join('/', parts) + '/unregistered';
