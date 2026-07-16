@@ -20,9 +20,15 @@ const HELP = '/status /health /memory /diagnostics /logs /help /start /stop ' +
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
 function corrupt() { errors.fail('CORRUPT_STATE'); };
 
-function same_node(left, right) {
-	return left?.type != null && left.type == right?.type &&
-		left.inode == right?.inode && left.dev?.major == right.dev?.major &&
+function same_directory(left, right) {
+	return left?.type == 'directory' && right?.type == 'directory' &&
+		left.inode == right.inode && left.dev?.major == right.dev?.major &&
+		left.dev?.minor == right.dev?.minor;
+};
+
+function same_file(left, right) {
+	return left?.type == 'file' && right?.type == 'file' &&
+		left.inode == right.inode && left.dev?.major == right.dev?.major &&
 		left.dev?.minor == right.dev?.minor && left.nlink == right.nlink &&
 		left.size == right.size && left.mode == right.mode && left.uid == right.uid;
 };
@@ -60,9 +66,9 @@ function read_offset(runtime) {
 	let source = runtime.fs.readfile(offset_path(runtime));
 	let after = offset_identity(runtime, authority);
 	let current_authority = persistent_authority(runtime);
-	if (!same_node(authority, current_authority) ||
+	if (!same_directory(authority, current_authority) ||
 	    (before == null ? source != null || after != null :
-		(type(source) != 'string' || !same_node(before, after))))
+		(type(source) != 'string' || !same_file(before, after))))
 		corrupt();
 	if (source == null)
 		return -1;
@@ -233,7 +239,7 @@ export function create(app) {
 		catch (error) { errors.fail('INTERNAL'); }
 		let verified = offset_identity(app.runtime, authority);
 		let current_authority = persistent_authority(app.runtime);
-		if (!same_node(authority, current_authority) || !same_node(identity, verified) ||
+		if (!same_directory(authority, current_authority) || !same_file(identity, verified) ||
 		    type(persisted) != 'object' ||
 		    length(keys(persisted)) != 1 || persisted.last_update_id != update_id)
 			errors.fail('INTERNAL');
@@ -380,22 +386,24 @@ export function create(app) {
 		    type(update.update_id) != 'int' || update.update_id < 0 ||
 		    update.update_id <= state.last_update_id)
 			return false;
-		try { persist_offset(update.update_id); }
-		catch (error) {
-			log_failure('Telegram offset persistence failed');
-			return false;
-		}
 		let message = update.message;
 		let sender = normalized_id(message?.from?.id);
 		let chat = normalized_id(message?.chat?.id);
 		if (type(message) != 'object' || message.chat?.type != 'private' ||
 		    message.from?.is_bot === true || sender != settings.user_id || chat != settings.user_id) {
+			state.last_update_id = update.update_id;
 			audit('message', 'rejected', update.update_id);
 			return false;
 		}
 		let command = parse_command(message.text);
 		if (command == null) {
+			state.last_update_id = update.update_id;
 			audit('command', 'rejected', update.update_id);
+			return false;
+		}
+		try { persist_offset(update.update_id); }
+		catch (error) {
+			log_failure('Telegram offset persistence failed');
 			return false;
 		}
 		if (!rate_allowed(app.runtime.clock.now())) {

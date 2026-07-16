@@ -140,6 +140,8 @@ function environment(changes) {
 
 assert_equal(type(telegram.create), 'function');
 
+let offset_path = '/etc/miclash/telegram-offset.json';
+
 // The command test double must preserve caller arguments instead of manufacturing telegram.
 let source_probe = environment();
 source_probe.app.service_start('config2.yaml', 'luci');
@@ -169,11 +171,21 @@ let authorized_controller = telegram.create(authorized.app);
 assert_equal(authorized_controller.handle_update(
 	fixture_json('private-authorized-status-string-id.json')), true);
 assert_equal(length(authorized.requests), 1);
+let authorized_writes = length(authorized.filesystem.calls.open);
+assert_equal(json(authorized.filesystem.readfile(offset_path)).last_update_id, 102);
 assert_equal(authorized_controller.handle_update(fixture_json('group-authorized.json')), false);
 assert_equal(authorized_controller.handle_update(fixture_json('private-wrong-sender.json')), false);
 for (let unsupported in fixture_json('unsupported-updates.json'))
 	assert_equal(authorized_controller.handle_update(unsupported), false);
+assert_equal(authorized_controller.handle_update(update(108, '/unknown')), false);
 assert_equal(length(authorized.submitted), 0);
+assert_equal(length(authorized.filesystem.calls.open), authorized_writes,
+	'rejected updates wrote durable state');
+assert_equal(json(authorized.filesystem.readfile(offset_path)).last_update_id, 102);
+assert_equal(authorized_controller.status().last_update_id, 108);
+assert_equal(authorized_controller.poll_once(), true);
+assert_match(authorized.requests[length(authorized.requests) - 1].url,
+	/\/getUpdates\?offset=109&timeout=20/);
 
 // A handled update is consumed once, including rejected/unsupported updates.
 let duplicate = fixture_json('private-authorized-reboot.json');
@@ -181,11 +193,19 @@ assert_equal(authorized_controller.handle_update(duplicate), false,
 	'older update IDs are duplicates after a newer update');
 let duplicate_env = environment();
 let duplicate_controller = telegram.create(duplicate_env.app);
+let original_submit = duplicate_env.app.operations.submit;
+let durable_at_submit = null;
+duplicate_env.app.operations.submit = (kind, source, context, worker) => {
+	durable_at_submit = json(duplicate_env.filesystem.readfile(offset_path));
+	return original_submit(kind, source, context, worker);
+};
 assert_equal(duplicate_controller.handle_update(duplicate), true);
 assert_equal(duplicate_controller.handle_update(duplicate), false);
 assert_equal(length(duplicate_env.submitted), 1);
 assert_equal(duplicate_env.submitted[0].kind, 'system.reboot');
 assert_equal(duplicate_env.submitted[0].source, 'telegram');
+assert_equal(durable_at_submit.last_update_id, duplicate.update_id,
+	'authorized command dispatched before durable offset persistence');
 duplicate_env.submitted[0].worker({ stage: () => null });
 assert_equal(duplicate_env.domain_calls[0].method, 'reboot');
 
@@ -230,7 +250,6 @@ assert_equal(poll_controller.poll_once(), true);
 assert_match(poll_env.requests[0].url, /\/getUpdates\?offset=0&timeout=20/);
 assert_equal(poll_env.requests[0].timeout_ms, 30000);
 assert_equal(poll_controller.status().last_update_id, 702);
-let offset_path = '/etc/miclash/telegram-offset.json';
 let persisted_bytes = poll_env.filesystem.readfile(offset_path);
 assert_true(type(persisted_bytes) == 'string', 'durable Telegram offset was not persisted');
 let persisted = json(persisted_bytes);
@@ -295,6 +314,23 @@ write_authority_swap.filesystem.on_lstat = (path, count) => {
 };
 assert_equal(write_authority_swap_controller.handle_update(update(703, '/reboot')), false);
 assert_equal(length(write_authority_swap.submitted), 0);
+
+// Directory size is mutable metadata and must not invalidate a stable authority identity.
+let resized_authority = environment();
+let resized_authority_controller = telegram.create(resized_authority.app);
+let authority_lstat = resized_authority.filesystem.lstat;
+let authority_reads = 0;
+resized_authority.filesystem.lstat = (path) => {
+	let identity = authority_lstat(path);
+	if (path == '/etc/miclash' && identity != null) {
+		authority_reads++;
+		identity = { ...identity, size: authority_reads == 1 ? 0 : 4096 };
+	}
+	return identity;
+};
+assert_equal(resized_authority_controller.handle_update(update(704, '/reboot')), true);
+assert_equal(length(resized_authority.submitted), 1);
+assert_equal(json(resized_authority.filesystem.readfile(offset_path)).last_update_id, 704);
 
 // Telegram 429 honors retry_after; network failures back off exponentially.
 let limited_poll = environment({ poll_replies: [ {
