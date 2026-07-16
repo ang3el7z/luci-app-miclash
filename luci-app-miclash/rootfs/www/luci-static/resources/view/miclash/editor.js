@@ -239,6 +239,14 @@ function createDraftController(options) {
 		}
 		return false;
 	}
+	function adoptRouterDraft(name, nextContent, nextRevision) {
+		if (destroyed || pendingConflict || String(name || '') !== profile) return false;
+		content = String(nextContent || '');
+		routerContent = content;
+		routerDraftExists = true;
+		if (nextRevision != null) revision = String(nextRevision);
+		return true;
+	}
 	function useCrashCopy(record) {
 		if (!pendingConflict || record !== pendingConflict.record || record.profile !== profile ||
 			record.hash !== contentHash(record.content))
@@ -263,6 +271,7 @@ function createDraftController(options) {
 		destroyed = true;
 	}
 	return { hash: contentHash, setContent, flushLocal, load, saveRouter, confirmRouterSaved,
+		adoptRouterDraft,
 		useCrashCopy, keepRouterCopy, hasPendingConflict: () => pendingConflict != null,
 		getContent: () => content, getProfile: () => profile,
 		routerDraftExists: () => routerDraftExists, destroy };

@@ -31,6 +31,8 @@ assert.match(config, /historyPanel !== owner \|\| !owner\.owns\(token\)/,
 	'history callbacks lack exact panel identity and modal generation ownership');
 assert.match(config, /historyPanel === owner && owner\.owns\(token\)/,
 	'late Restore refresh lacks post-RPC history ownership check');
+assert.match(config, /adoptRouterDraft\(token\.profile, content, record\?\.revision\)/,
+	'Open revision does not adopt the confirmed Router Draft baseline');
 assert.match(config, /Active configuration changed; Draft preserved\./);
 const subscriptionBlock = config.slice(config.indexOf("const updateUrlBtn ="), config.indexOf("const clearUrlBtn ="));
 assert.doesNotMatch(subscriptionBlock, /freshConfig[\s\S]{0,300}editor\.setValue/,
@@ -239,11 +241,39 @@ assert.equal((await draft.saveRouter(draftApi, 'changed\n')).changed, true,
 assert.equal(saves, 2);
 assert.equal(draft.confirmRouterSaved(acceptedDraft), true);
 assert.equal((await draft.saveRouter(draftApi, 'changed\n')).changed, false);
+let adoptedTimers = 0, adoptedSaves = 0, adoptedValidations = 0;
+const adoptedController = editorModule.createDraftController({ storage, profile: 'adopt.yaml',
+	content: 'old Router Draft\n', routerContent: 'old Router Draft\n',
+	setTimeout() { adoptedTimers++; return adoptedTimers; }, clearTimeout() {} });
+assert.equal(adoptedController.adoptRouterDraft('wrong.yaml', 'must not adopt\n', 'wrong-revision'), false,
+	'profile mismatch adopted another profile Router Draft');
+assert.equal(adoptedController.getContent(), 'old Router Draft\n');
+assert.equal(adoptedController.adoptRouterDraft('adopt.yaml', 'opened exact bytes\n', 'opened-revision'), true);
+assert.equal(adoptedTimers, 0, 'adopting a confirmed Router Draft scheduled an extra local/flash write');
+const adoptedApi = {
+	async configSaveDraft() { adoptedSaves++; return { operation_id: 'redundant-save' }; },
+	async config_validate(profile, content) {
+		adoptedValidations++; assert.equal(content, 'opened exact bytes\n');
+		return { operation_id: 'adopt-validate' };
+	},
+	watchOperation(id, callback) { callback({ id, state: 'success', percent: 100 }); return () => {}; }
+};
+assert.equal((await adoptedController.saveRouter(adoptedApi, 'opened exact bytes\n')).changed, false,
+	'unchanged navigation after Open revision caused an additional Router Draft save');
+const adoptedActions = editorModule.createDraftActions({ api: adoptedApi, controller: adoptedController,
+	getProfile: () => 'adopt.yaml', getContent: () => 'opened exact bytes\n' });
+await adoptedActions.validate();
+assert.equal(adoptedValidations, 1);
+assert.equal(adoptedSaves, 0, 'Validate preliminary save rewrote the just-opened Router Draft');
 const originalCrashBytes = storage.getItem('miclash-draft-v1:config.yaml');
 const routerDraft = editorModule.createDraftController({ storage, profile: 'config.yaml', content: 'router\n' });
 const loaded = await routerDraft.load('config.yaml', { content: 'active\n', revision: 'active-1' },
 	{ content: 'router newer\n', revision: 'draft-2' });
 assert.equal(loaded.conflict, true, 'different crash copy was silently overwritten');
+assert.equal(routerDraft.adoptRouterDraft('config.yaml', 'opened during conflict\n', 'conflict-revision'), false,
+	'unresolved crash-copy conflict adopted a new Router Draft baseline');
+assert.equal(storage.getItem('miclash-draft-v1:config.yaml'), originalCrashBytes,
+	'failed conflict adoption deleted or replaced the original crash copy');
 assert.equal(loaded.content, 'router newer\n', 'router Draft must remain selected until explicit user choice');
 routerDraft.setContent('router newer\n');
 await new Promise((resolve) => setTimeout(resolve, 300));
@@ -367,7 +397,7 @@ const applyActions = editorModule.createDraftActions({ controller: applyControll
 await applyActions.apply();
 assert.equal(applyValidateCalls, 0, 'Apply redundantly called config_validate before backend config_apply');
 assert.equal(successfulApplyCalls, 1);
-applyController.destroy();
+applyController.destroy(); adoptedController.destroy();
 failedController.destroy(); collisionController.destroy(); keepController.destroy(); isolated.destroy(); routerDraft.destroy(); draft.destroy(); history.destroy();
 
 console.log('Draft and configuration history UI contract passed');

@@ -3193,14 +3193,17 @@ return view.extend({
 				appState.configContent = String(active?.content || '');
 			}
 		});
+		const panelDraftController = draftController;
 		const createdHistoryPanel = view_miclash_history_panel.create({
 			api: configApi,
 			profile: appState.selectedConfigName,
 			onDraft: async (content, record, token) => {
 				const owner = createdHistoryPanel;
 				if (historyPanel !== owner || !owner.owns(token) ||
+					panelDraftController !== draftController ||
 					token.profile !== appState.selectedConfigName ||
-					token.profile !== draftController?.getProfile()) return;
+					token.profile !== panelDraftController.getProfile()) return;
+				if (!panelDraftController.adoptRouterDraft(token.profile, content, record?.revision)) return;
 				setDraftEditorContent(content);
 			},
 			onRestored: async (record, token) => {
