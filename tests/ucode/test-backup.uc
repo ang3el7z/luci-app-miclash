@@ -26,7 +26,8 @@ function same_identity(left, right) {
 };
 
 function secure_fs(filesystem) {
-	let capability = { before: null, after: null, calls: [] };
+	let capability = { before: null, after: null, calls: [], replacement_nonce: 0,
+		admission_held: false };
 	function hook(which, operation, directory, name, extra) {
 		push(capability.calls, { which, operation, name });
 		let callback = capability[which];
@@ -75,7 +76,10 @@ function secure_fs(filesystem) {
 	};
 	capability.stat = (parent, name) => {
 		directory(parent.opaque, parent.identity);
-		return clone(filesystem.lstat(parent.opaque + '/' + name));
+		hook('before', 'stat', parent, name, null);
+		let identity = clone(filesystem.lstat(parent.opaque + '/' + name));
+		hook('after', 'stat', parent, name, identity);
+		return identity;
 	};
 	capability.list = (parent) => {
 		directory(parent.opaque, parent.identity);
@@ -97,16 +101,51 @@ function secure_fs(filesystem) {
 		if (type(content) != 'string' || length(content) != after.size) die('INTERNAL');
 		return { content, identity: clone(after) };
 	};
-	capability.write = (parent, name, content, options) => {
+	capability.create_exclusive = (parent, name, content, options) => {
 		directory(parent.opaque, parent.identity);
 		let path = parent.opaque + '/' + name;
-		hook('before', 'write', parent, name, options);
-		if (options.exclusive && filesystem.lstat(path) != null) die('INTERNAL');
+		hook('before', 'create_exclusive', parent, name, options);
+		if (filesystem.lstat(path) != null) die('INTERNAL');
 		filesystem.files[path] = content; filesystem.bump_inode(path);
 		filesystem.set_mode(path, options.mode); filesystem.set_uid(path, options.uid);
 		filesystem.set_nlink(path, 1);
-		hook('after', 'write', parent, name, options);
+		hook('after', 'create_file_fsync', parent, name, options);
+		hook('after', 'create_parent_fsync', parent, name, options);
+		hook('after', 'create_exclusive', parent, name, options);
 		return clone(file(path, null, { ...options, nlink: 1 }));
+	};
+	capability.replace_atomic = (parent, name, expected, content, options) => {
+		directory(parent.opaque, parent.identity);
+		let path = parent.opaque + '/' + name;
+		hook('before', 'replace_atomic', parent, name, { expected, options });
+		let current = filesystem.lstat(path);
+		if (expected == null ? current != null : !same_identity(current, expected)) die('INTERNAL');
+		let replacement = {
+			content, inode: 1000000 + capability.replacement_nonce++, mode: options.mode,
+			uid: options.uid, nlink: 1
+		};
+		hook('after', 'replace_temp_fsync', parent, name, { expected, options });
+		hook('before', 'replace_rename', parent, name, { expected, options });
+		current = filesystem.lstat(path);
+		if (expected == null ? current != null : !same_identity(current, expected)) die('INTERNAL');
+		filesystem.files[path] = replacement.content;
+		filesystem.bump_inode(path);
+		filesystem.set_mode(path, replacement.mode); filesystem.set_uid(path, replacement.uid);
+		filesystem.set_nlink(path, replacement.nlink);
+		let identity = clone(file(path, null, { ...options, nlink: 1 }));
+		hook('after', 'replace_rename', parent, name, { expected, options, identity });
+		hook('after', 'replace_parent_fsync', parent, name, { expected, options, identity });
+		hook('after', 'replace_atomic', parent, name, { expected, options, identity });
+		return identity;
+	};
+	capability.with_admission_lock = (worker) => {
+		if (capability.admission_held) die('BUSY');
+		capability.admission_held = true;
+		let result;
+		try { result = worker(); }
+		catch (error) { capability.admission_held = false; die(error); }
+		capability.admission_held = false;
+		return result;
 	};
 	capability.rename = (parent, from, to, expected, options) => {
 		directory(parent.opaque, parent.identity);
@@ -248,6 +287,10 @@ function seed_import(box, suffix, contents, options) {
 assert_throws(() => backup.create({}, null, 'luci'), 'INVALID_ARGUMENT');
 let unsupported = make_app(); delete unsupported.app.secure_fs;
 assert_throws(() => backup.list(unsupported.app), 'INTERNAL');
+for (let primitive in [ 'create_exclusive', 'replace_atomic', 'with_admission_lock' ]) {
+	let missing = make_app(); delete missing.app.secure_fs[primitive];
+	assert_throws(() => backup.list(missing.app), 'INTERNAL');
+}
 
 let base = make_app(), created = backup.create(base.app, null, 'luci');
 assert_match(created.id, /^b-[0-9]{13}-[0-9a-f]{32}$/);
@@ -601,6 +644,57 @@ assert_equal(preserved.core.subscription_url, 'https://new-current.example/sub')
 assert_equal(preserve.runtime.uci.commit_calls, commits_before + 1);
 assert_equal(invalid_box.runtime.uci.commit_calls, 0, 'failed restore committed UCI');
 
+// Live restore commits are CAS-bound to the identities revalidated immediately
+// before the first mutation. A foreign swap is never overwritten.
+let live_swap = make_app();
+let live_swap_seed = seed_import(live_swap,
+	'00000000000000000000000000000101', {
+		'configs/config.yaml': 'port: 7999\n',
+		'settings/settings.json': '{ }\n'
+	}, { secrets: { 'configs/config.yaml': true } });
+let live_swap_preview = backup.inspect(live_swap.app, live_swap_seed.id);
+let live_swap_fired = false;
+live_swap.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (!live_swap_fired && operation == 'replace_atomic' && name == 'config.yaml') {
+		live_swap_fired = true;
+		let path = directory.opaque + '/' + name;
+		live_swap.filesystem.files[path] = 'foreign-live';
+		live_swap.filesystem.bump_inode(path);
+		live_swap.filesystem.set_mode(path, 0o600);
+		live_swap.filesystem.set_uid(path, 0);
+		live_swap.filesystem.set_nlink(path, 1);
+	}
+};
+assert_throws(() => backup.restore(live_swap.app, live_swap_preview.id), 'INTERNAL');
+assert_equal(live_swap_fired, true, 'restore did not reach live CAS boundary');
+assert_equal(live_swap.filesystem.readfile('/opt/clash/config.yaml'), 'foreign-live');
+
+let preflight_swap = make_app();
+let preflight_seed = seed_import(preflight_swap,
+	'00000000000000000000000000000102', {
+		'configs/config.yaml': 'port: 7998\n',
+		'configs/config2.yaml': 'port: 7997\n',
+		'settings/settings.json': '{ }\n'
+	}, { secrets: { 'configs/config.yaml': true, 'configs/config2.yaml': true } });
+let preflight_preview = backup.inspect(preflight_swap.app, preflight_seed.id);
+let preflight_original = preflight_swap.filesystem.readfile('/opt/clash/config.yaml');
+let config2_stats = 0;
+preflight_swap.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (operation == 'stat' && directory.opaque == '/opt/clash' && name == 'config2.yaml' &&
+	    ++config2_stats == 2) {
+		let path = '/opt/clash/config2.yaml';
+		preflight_swap.filesystem.files[path] = 'foreign-preflight';
+		preflight_swap.filesystem.bump_inode(path);
+		preflight_swap.filesystem.set_mode(path, 0o600);
+		preflight_swap.filesystem.set_uid(path, 0);
+		preflight_swap.filesystem.set_nlink(path, 1);
+	}
+};
+assert_throws(() => backup.restore(preflight_swap.app, preflight_preview.id), 'INTERNAL');
+assert_equal(preflight_swap.filesystem.readfile('/opt/clash/config.yaml'),
+	preflight_original, 'first live target mutated before full preflight revalidation');
+assert_equal(preflight_swap.filesystem.readfile('/opt/clash/config2.yaml'), 'foreign-preflight');
+
 function transaction_names(box) {
 	return box.filesystem.lsdir('/tmp/miclash/backup-transactions') ?? [];
 };
@@ -608,7 +702,7 @@ function transaction_names(box) {
 // Journal registration is durable before every risky create phase.
 let marker_order = make_app(), marker_seen = false;
 marker_order.app.secure_fs.before = (operation, directory, name, extra) => {
-	if (operation == 'write' && match(name, /\.tar\.tmp$/)) {
+	if (operation == 'create_exclusive' && match(name, /\.tar\.tmp$/)) {
 		let names = transaction_names(marker_order);
 		marker_seen = length(names) == 1 &&
 			marker_order.filesystem.lstat('/tmp/miclash/backup-transactions/' + names[0]).mode == 0o600;
@@ -617,6 +711,21 @@ marker_order.app.secure_fs.before = (operation, directory, name, extra) => {
 backup.create(marker_order.app);
 assert_equal(marker_seen, true, 'archive temp was exposed before durable transaction marker');
 assert_equal(length(transaction_names(marker_order)), 0, 'completed create retained journal');
+
+let journal_swap = make_app(), journal_swap_fired = false, journal_foreign = null;
+journal_swap.app.secure_fs.before = (operation, directory, name, extra) => {
+	if (!journal_swap_fired && operation == 'replace_atomic' && match(name, /^t-.*\.json$/)) {
+		journal_swap_fired = true; journal_foreign = directory.opaque + '/' + name;
+		journal_swap.filesystem.files[journal_foreign] = 'foreign-journal';
+		journal_swap.filesystem.bump_inode(journal_foreign);
+		journal_swap.filesystem.set_mode(journal_foreign, 0o600);
+		journal_swap.filesystem.set_uid(journal_foreign, 0);
+		journal_swap.filesystem.set_nlink(journal_foreign, 1);
+	}
+};
+assert_throws(() => backup.create(journal_swap.app), 'INTERNAL');
+assert_equal(journal_swap_fired, true, 'journal did not reach CAS replacement boundary');
+assert_equal(journal_swap.filesystem.readfile(journal_foreign), 'foreign-journal');
 
 function create_crash(operation, predicate, suffix) {
 	let box = make_app(), fired = false;
@@ -632,10 +741,27 @@ function create_crash(operation, predicate, suffix) {
 		'create crash residue survived ' + suffix);
 	assert_equal(length(transaction_names(box)), 0, 'journal survived recovery ' + suffix);
 };
-create_crash('write', (name) => match(name, /\.tar\.tmp$/), 'temp-write');
-create_crash('write', (name) => match(name, /^b-[0-9]{13}-[0-9a-f]{32}\.json$/),
+create_crash('create_file_fsync', (name) => match(name, /\.tar\.tmp$/), 'temp-write');
+create_crash('create_parent_fsync', (name) => match(name, /\.tar\.tmp$/), 'temp-parent-fsync');
+create_crash('create_file_fsync', (name) => match(name, /^b-[0-9]{13}-[0-9a-f]{32}\.json$/),
 	'sidecar-write');
 create_crash('rename', (name) => match(name, /\.tar$/), 'archive-publish');
+
+for (let stage in [ 'replace_temp_fsync', 'replace_rename', 'replace_parent_fsync' ]) {
+	let box = make_app(), fired = false;
+	box.app.secure_fs.after = (operation, directory, name, extra) => {
+		if (!fired && operation == stage && match(name, /^t-.*\.json$/)) {
+			fired = true; die('journal-transition-' + stage);
+		}
+	};
+	assert_throws(() => backup.create(box.app), 'INTERNAL');
+	assert_equal(fired, true, stage + ' fault did not fire');
+	box.app.secure_fs.after = null;
+	backup.list(box.app);
+	assert_equal(length(transaction_names(box)), 0, stage + ' journal survived recovery');
+	assert_equal(length(box.filesystem.lsdir('/etc/miclash/backups')), 0,
+		stage + ' artifact survived recovery');
+}
 
 // Inspection marker precedes staging writes; partial and never-ready previews
 // are recovered on a later public entry, while active previews survive.
@@ -644,7 +770,7 @@ let inspect_order_seed = seed_import(inspect_order,
 	'00000000000000000000000000000093', { 'settings/settings.json': '{ }\n' });
 let inspect_marker_seen = false;
 inspect_order.app.secure_fs.before = (operation, directory, name, extra) => {
-	if (operation == 'write' && name == 'settings.json')
+	if (operation == 'create_exclusive' && name == 'settings.json')
 		inspect_marker_seen = length(transaction_names(inspect_order)) == 1;
 };
 let inspect_order_preview = backup.inspect(inspect_order.app, inspect_order_seed.id);
@@ -657,7 +783,7 @@ let partial_seed = seed_import(partial_inspect,
 	'00000000000000000000000000000094', { 'settings/settings.json': '{ }\n' });
 let partial_fired = false;
 partial_inspect.app.secure_fs.after = (operation, directory, name, extra) => {
-	if (!partial_fired && operation == 'write' && name == 'settings.json') {
+	if (!partial_fired && operation == 'create_exclusive' && name == 'settings.json') {
 		partial_fired = true; die('simulated-inspect-crash');
 	}
 };
@@ -702,7 +828,7 @@ let report_crash_seed = seed_import(report_crash,
 	'00000000000000000000000000000095', { 'settings/settings.json': '{ }\n' });
 let report_fired = false;
 report_crash.app.secure_fs.after = (operation, directory, name, extra) => {
-	if (!report_fired && operation == 'write' && name == '.inspection.json') {
+	if (!report_fired && operation == 'create_exclusive' && name == '.inspection.json') {
 		report_fired = true; die('simulated-report-crash');
 	}
 };
@@ -764,7 +890,7 @@ cleanup_race.filesystem.set_mode('/opt/clash/cleanup-foreign', 0o600);
 cleanup_race.filesystem.set_uid('/opt/clash/cleanup-foreign', 0);
 let cleanup_failed = false, cleanup_swapped = false;
 cleanup_race.app.secure_fs.after = (operation, directory, name, extra) => {
-	if (!cleanup_failed && operation == 'write' && name == 'settings.json') {
+	if (!cleanup_failed && operation == 'create_exclusive' && name == 'settings.json') {
 		cleanup_failed = true; die('force-cleanup');
 	}
 };
@@ -780,7 +906,7 @@ assert_equal(cleanup_race.filesystem.readfile('/opt/clash/cleanup-foreign'), 'fo
 
 let unsafe_temp = make_app(), unsafe_temp_fired = false;
 unsafe_temp.app.secure_fs.after = (operation, directory, name, extra) => {
-	if (!unsafe_temp_fired && operation == 'write' && match(name, /\.tar\.tmp$/)) {
+	if (!unsafe_temp_fired && operation == 'create_exclusive' && match(name, /\.tar\.tmp$/)) {
 		unsafe_temp_fired = true;
 		unsafe_temp.filesystem.set_mode(directory.opaque + '/' + name, 0o644);
 	}
@@ -798,7 +924,7 @@ let never_seed = seed_import(never_returned,
 	'00000000000000000000000000000098', { 'settings/settings.json': '{ }\n' });
 let ready_fired = false;
 never_returned.app.secure_fs.after = (operation, directory, name, extra) => {
-	if (!ready_fired && operation == 'write' && match(name, /^t-.*\.json$/)) {
+	if (!ready_fired && operation == 'replace_atomic' && match(name, /^t-.*\.json$/)) {
 		let record = json(never_returned.filesystem.readfile(directory.opaque + '/' + name));
 		if (record.phase == 'ready') { ready_fired = true; die('never-returned-preview'); }
 	}
@@ -813,7 +939,7 @@ let late_foreign = make_app(), late_seed = seed_import(late_foreign,
 	'00000000000000000000000000000099', { 'settings/settings.json': '{ }\n' });
 let late_failed = false, late_inserted = false, late_path = null;
 late_foreign.app.secure_fs.after = (operation, directory, name, extra) => {
-	if (!late_failed && operation == 'write' && name == 'settings.json') {
+	if (!late_failed && operation == 'create_exclusive' && name == 'settings.json') {
 		late_failed = true; die('force-late-cleanup');
 	}
 };

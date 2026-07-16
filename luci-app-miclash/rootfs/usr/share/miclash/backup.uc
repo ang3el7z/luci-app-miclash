@@ -16,7 +16,12 @@ import * as schema from 'miclash.schema';
  *   list(dir) -> [ immediate-name ]
  *   read(dir, name, { maximum, mode, uid, nlink, expected? })
  *       -> { content, identity }
- *   write(dir, name, content, { mode, uid, exclusive }) -> identity
+ *   create_exclusive(dir, name, bytes, { mode, uid }) -> identity
+ *       (nofollow create, file fsync, parent fsync)
+ *   replace_atomic(dir, name, expected|null, bytes, { mode, uid, nlink }) -> identity
+ *       (CAS current identity/must-not-exist, distinct nofollow temp, temp
+ *        fsync, atomic replace, parent fsync)
+ *   with_admission_lock(callback) -> callback result
  *   rename(dir, from, to, expected, { mode, uid, nlink }) -> identity
  *   unlink(dir, name, expected) -> true
  *   rmdir(dir, name, expected) -> true
@@ -105,7 +110,8 @@ function validate_app(app) {
 	    runtime.paths?.etc != '/etc/miclash' || runtime.paths?.tmp != '/tmp/miclash' ||
 	    !valid_version(app?.app_version)) invalid();
 	if (type(secure) != 'object') internal();
-	for (let method in [ 'open', 'open_at', 'stat', 'list', 'read', 'write',
+	for (let method in [ 'open', 'open_at', 'stat', 'list', 'read',
+		'create_exclusive', 'replace_atomic', 'with_admission_lock',
 		'rename', 'unlink', 'rmdir' ])
 		if (type(secure[method]) != 'function') internal();
 	return { runtime, secure };
@@ -141,10 +147,17 @@ function secure_read(env, directory, name, maximum, mode, expected) {
 	};
 };
 
-function secure_write(env, directory, name, content, mode, exclusive) {
+function secure_create(env, directory, name, content, mode) {
 	if (type(content) != 'string') internal();
-	let identity = env.secure.write(directory, name, content,
-		{ mode, uid: 0, exclusive: exclusive === true });
+	let identity = env.secure.create_exclusive(directory, name, content, { mode, uid: 0 });
+	if (!valid_identity(identity, 'file', mode, length(content))) internal();
+	return secure_read(env, directory, name, length(content), mode, identity);
+};
+
+function secure_replace(env, directory, name, expected, content, mode) {
+	if (type(content) != 'string') internal();
+	let identity = env.secure.replace_atomic(directory, name, expected, content,
+		{ mode, uid: 0, nlink: 1 });
 	if (!valid_identity(identity, 'file', mode, length(content))) internal();
 	return secure_read(env, directory, name, length(content), mode, identity);
 };
@@ -657,13 +670,13 @@ function journal_begin(env, kind, created_at, initial) {
 		if (!exists(JOURNAL_FIELDS, name)) internal();
 		record[name] = value;
 	}
-	let written = secure_write(env, root, id + '.json', journal_text(record), 0o600, true);
+	let written = secure_create(env, root, id + '.json', journal_text(record), 0o600);
 	return { root, name: id + '.json', record, identity: written.identity };
 };
 
 function journal_store(env, transaction) {
-	let written = secure_write(env, transaction.root, transaction.name,
-		journal_text(transaction.record), 0o600, false);
+	let written = secure_replace(env, transaction.root, transaction.name, transaction.identity,
+		journal_text(transaction.record), 0o600);
 	transaction.identity = written.identity;
 	return true;
 };
@@ -891,12 +904,12 @@ function create_impl(app, options, source) {
 			archive_size: length(archive_bytes), archive_sha256: archive_digest,
 			sidecar_size: length(sidecar_text), sidecar_sha256: env.runtime.digest.sha256(sidecar_text)
 		});
-		let temp = secure_write(env, root, temp_name, archive_bytes, 0o600, true);
+		let temp = secure_create(env, root, temp_name, archive_bytes, 0o600);
 		temp_identity = temp.identity;
 		transaction.record.temp_identity = identity_record(temp.identity);
 		transaction.record.phase = 'temp'; journal_store(env, transaction);
 		transaction.record.phase = 'side_planned'; journal_store(env, transaction);
-		let side = secure_write(env, root, side_name, sidecar_text, 0o600, true);
+		let side = secure_create(env, root, side_name, sidecar_text, 0o600);
 		side_identity = side.identity;
 		transaction.record.sidecar_identity = identity_record(side.identity);
 		transaction.record.phase = 'side'; journal_store(env, transaction);
@@ -987,8 +1000,8 @@ function inspect_impl(app, source_id, options) {
 			let parts = split(file.path, '/'), directory = staging;
 			let leaf = pop(parts);
 			for (let part in parts) directory = open_child_dir(source.env.secure, directory, part, true);
-			let written = secure_write(source.env, directory, leaf,
-				decoded.parsed.by_name[file.path].content, 0o400, true);
+			let written = secure_create(source.env, directory, leaf,
+				decoded.parsed.by_name[file.path].content, 0o400);
 			transaction.record.files[index].identity = identity_record(written.identity);
 			transaction.record.cursor = index + 1; journal_store(source.env, transaction);
 			push(captured, { path: file.path, size: file.size, sha256: file.sha256,
@@ -997,8 +1010,8 @@ function inspect_impl(app, source_id, options) {
 		}
 		let manifest_index = length(manifest.files);
 		transaction.record.cursor = manifest_index; journal_store(source.env, transaction);
-		let manifest_written = secure_write(source.env, staging, 'manifest.json',
-			manifest_content, 0o400, true);
+		let manifest_written = secure_create(source.env, staging, 'manifest.json',
+			manifest_content, 0o400);
 		transaction.record.files[manifest_index].identity = identity_record(manifest_written.identity);
 		transaction.record.cursor = manifest_index + 1; journal_store(source.env, transaction);
 		let report = {
@@ -1018,8 +1031,8 @@ function inspect_impl(app, source_id, options) {
 		transaction.record.phase = 'report_planned';
 		transaction.record.cursor = length(transaction.record.files) - 1;
 		journal_store(source.env, transaction);
-		let report_written = secure_write(source.env, staging, '.inspection.json',
-			report_content, 0o600, true);
+		let report_written = secure_create(source.env, staging, '.inspection.json',
+			report_content, 0o600);
 		transaction.record.files[length(transaction.record.files) - 1].identity =
 			identity_record(report_written.identity);
 		transaction.record.cursor = length(transaction.record.files);
@@ -1171,6 +1184,40 @@ function validate_restore_contents(app, ctx, inspected) {
 	return settings_patch;
 };
 
+function prepare_restore_targets(inspected) {
+	let env = inspected.env, clash = open_dir(env.secure, '/opt/clash');
+	let rules = null, targets = [];
+	for (let file in inspected.manifest.files) {
+		let directory, name;
+		if (substr(file.path, 0, 8) == 'configs/') {
+			directory = clash; name = substr(file.path, 8);
+		}
+		else if (substr(file.path, 0, 9) == 'rulesets/') {
+			if (rules == null) {
+				let identity = env.secure.stat(clash, 'lst');
+				if (identity == null) internal();
+				rules = open_child_dir(env.secure, clash, 'lst', false, identity);
+			}
+			directory = rules; name = substr(file.path, 9);
+		}
+		else continue;
+		let expected = env.secure.stat(directory, name);
+		if (expected != null && !valid_identity(expected, 'file', 0o600)) internal();
+		push(targets, { directory, name, expected,
+			content: inspected.contents[file.path] });
+	}
+	return targets;
+};
+
+function revalidate_restore_targets(env, targets) {
+	for (let target in targets) {
+		let current = env.secure.stat(target.directory, target.name);
+		if (target.expected == null ? current != null :
+		    !same_identity(current, target.expected)) internal();
+	}
+	return true;
+};
+
 export function restore(app, inspected_id, options, source) {
 	validate_options(options, {});
 	if (!valid_id(inspected_id, 'x')) invalid();
@@ -1184,19 +1231,14 @@ export function restore(app, inspected_id, options, source) {
 				ctx.stage('validating', 10, 'Validating backup');
 				let inspected = inspection_record(app, inspected_id);
 				let settings_patch = validate_restore_contents(app, ctx, inspected);
+				let targets = prepare_restore_targets(inspected);
 				ctx.stage('snapshot', 30, 'Creating recovery snapshot');
 				let snapshot = create_impl(app, { include_secrets: true }, 'system');
 				ctx.stage('committing', 60, 'Committing configuration');
-				let clash = open_dir(inspected.env.secure, '/opt/clash');
-				let rules = open_child_dir(inspected.env.secure, clash, 'lst', true);
-				for (let file in inspected.manifest.files) {
-					if (substr(file.path, 0, 8) == 'configs/')
-						secure_write(inspected.env, clash, substr(file.path, 8),
-							inspected.contents[file.path], 0o600, false);
-					else if (substr(file.path, 0, 9) == 'rulesets/')
-						secure_write(inspected.env, rules, substr(file.path, 9),
-							inspected.contents[file.path], 0o600, false);
-				}
+				revalidate_restore_targets(inspected.env, targets);
+				for (let target in targets)
+					secure_replace(inspected.env, target.directory, target.name,
+						target.expected, target.content, 0o600);
 				app.settings.save(app.runtime, settings_patch);
 				ctx.stage('reconcile', 90, 'Scheduling reconciliation');
 				let reconciliation = app.reconcile.run('backup_restore');
