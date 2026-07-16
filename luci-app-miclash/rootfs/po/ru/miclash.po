@@ -2041,3 +2041,21 @@ msgstr "открытый"
 
 msgid "Source ID"
 msgstr "ID источника"
+
+msgid "Backup interval (hours)"
+msgstr "Интервал резервного копирования (часы)"
+
+msgid "Backup interval must be between 1 and 168 hours."
+msgstr "Интервал резервного копирования должен быть от 1 до 168 часов."
+
+msgid "Backup manifest"
+msgstr "Состав резервной копии"
+
+msgid "Backup result"
+msgstr "Результат резервного копирования"
+
+msgid "Choose a valid UTC schedule time."
+msgstr "Укажите корректное время расписания UTC."
+
+msgid "Schedule anchor (UTC)"
+msgstr "Опорное время расписания (UTC)"

@@ -52,6 +52,7 @@ export function create(dependencies) {
 	    type(dependencies?.backup?.create) != 'function' ||
 	    type(dependencies?.backup?.inspect) != 'function' ||
 	    type(dependencies?.backup?.restore) != 'function' ||
+	    type(dependencies?.backup?.configure) != 'function' ||
 	    type(dependencies?.devices?.list) != 'function' ||
 	    type(dependencies?.devices?.policy_list) != 'function' ||
 	    type(dependencies?.devices?.policy_set) != 'function' ||
@@ -161,22 +162,27 @@ export function create(dependencies) {
 				let memory_changed = !same(before.memory, wanted.memory);
 				let notifications_changed = !same(before.notifications, wanted.notifications);
 				let telegram_changed = !same(before.telegram, wanted.telegram);
+				let backup_changed = !same(before.backup, wanted.backup);
 				let prepare_memory = type(dependencies.memory.prepare) == 'function'
 					? dependencies.memory.prepare : clone;
 				let prepare_notifications = type(dependencies.notifications.prepare) == 'function'
 					? dependencies.notifications.prepare : clone;
 				let prepare_telegram = type(dependencies.telegram.prepare) == 'function'
 					? dependencies.telegram.prepare : clone;
+				let prepare_backup = type(dependencies.backup.prepare) == 'function'
+					? dependencies.backup.prepare : clone;
 				let next_memory = memory_changed ? prepare_memory(wanted.memory) : null;
 				let next_notifications = notifications_changed
 					? prepare_notifications(wanted.notifications) : null;
 				let next_telegram = telegram_changed ? prepare_telegram(wanted.telegram) : null;
+				let next_backup = backup_changed ? prepare_backup(wanted.backup) : null;
 				let prior_notifications = notifications_changed
 					? prepare_notifications(before.notifications) : null;
 				let prior_telegram = telegram_changed ? prepare_telegram(before.telegram) : null;
+				let prior_backup = backup_changed ? prepare_backup(before.backup) : null;
 				ctx.stage('settings', 20, '');
 				let persisted = false, notifications_attempted = false,
-					telegram_attempted = false, failure = null;
+					telegram_attempted = false, backup_attempted = false, failure = null;
 				try {
 					let saved = dependencies.settings.set(patch);
 					persisted = true;
@@ -189,6 +195,10 @@ export function create(dependencies) {
 					if (notifications_changed) {
 						notifications_attempted = true;
 						dependencies.notifications.configure(next_notifications);
+					}
+					if (backup_changed) {
+						backup_attempted = true;
+						dependencies.backup.configure(next_backup);
 					}
 					// This is deliberately the last fallible commit. The Guard validates
 					// and persists transactionally, so a failure preserves its baseline.
@@ -205,6 +215,9 @@ export function create(dependencies) {
 						catch (error) { rollback_failed = true; }
 					if (notifications_attempted)
 						try { dependencies.notifications.configure(prior_notifications); }
+						catch (error) { rollback_failed = true; }
+					if (backup_attempted)
+						try { dependencies.backup.configure(prior_backup); }
 						catch (error) { rollback_failed = true; }
 					if (persisted)
 						try { dependencies.state.set_desired(before); }

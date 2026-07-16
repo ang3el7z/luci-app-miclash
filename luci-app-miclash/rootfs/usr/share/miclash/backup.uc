@@ -3,7 +3,7 @@ import * as redact from 'miclash.redact';
 import * as schema from 'miclash.schema';
 
 /*
- * Deliberately unwired Task 7 domain.
+ * Production backup and restore domain.
  *
  * app.secure_fs is the sole filesystem authority.  It must implement
  * dirfd-relative, no-follow, handle/inode-bound operations.  Each mutating

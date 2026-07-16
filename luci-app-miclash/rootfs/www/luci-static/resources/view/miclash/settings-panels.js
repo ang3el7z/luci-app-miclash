@@ -8,7 +8,7 @@ const MAX_POLL_MS = 300000;
 const KNOWN_CHANNELS = [ 'syslog', 'luci', 'telegram' ];
 const KNOWN_EVENTS = [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 	'direct_fallback', 'memory_action', 'memory_outcome', 'subscription_outcome',
-	'update_outcome', 'internet_restored' ];
+	'update_outcome', 'backup_outcome', 'internet_restored' ];
 const MEMORY_FIELDS = {
 	sample_interval_ms: [ 10000, 3600000, 60000 ], sustained_samples: [ 2, 60, 5 ],
 	warmup_ms: [ 60000, 86400000, 900000 ], baseline_samples: [ 3, 60, 6 ],
@@ -32,6 +32,7 @@ const EVENT_LABELS = {
 	fail_closed: () => _('Fail-closed protection'), direct_fallback: () => _('Direct fallback'),
 	memory_action: () => _('Memory action'), memory_outcome: () => _('Memory outcome'),
 	subscription_outcome: () => _('Subscription result'), update_outcome: () => _('Update result'),
+	backup_outcome: () => _('Backup result'),
 	internet_restored: () => _('Internet restored')
 };
 

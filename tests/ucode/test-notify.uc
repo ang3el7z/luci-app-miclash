@@ -798,6 +798,12 @@ assert_throws(() => producer_center.emit({ type: 'failure', data: {
 	failure_id: 'failure-21-30000', component: 'guard', reason: 'automatic'
 } }), 'INVALID_ARGUMENT');
 let producer_adapter = notify.producer(producer_env.runtime);
+let backup_success_event = producer_adapter.backup(true);
+assert_exact_event(backup_success_event);
+assert_equal(backup_success_event.type, 'backup_outcome');
+assert_equal(backup_success_event.severity, 'notice');
+let backup_failure_event = producer_adapter.backup(false);
+assert_equal(backup_failure_event.severity, 'error');
 let guard_failure_event = producer_adapter.reconcile('failure', {
 	failure_id: 'failure-21-30000', component: 'guard', reason: 'automatic'
 });

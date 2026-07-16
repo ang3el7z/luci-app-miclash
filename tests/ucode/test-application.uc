@@ -24,7 +24,9 @@ let settings_value = {
 	core: { proxy_mode: 'tproxy' },
 	memory: { enabled: false, sample_interval_ms: 60000 },
 	notifications: { channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: true },
-	telegram: { enabled: false, token: '', user_id: '' }
+	telegram: { enabled: false, token: '', user_id: '' },
+	backup: { enabled: false, retention: 5, include_secrets: false,
+		interval_hours: 24, schedule_time: '03:00' }
 };
 let validated = 0, saved = 0, fail_save = false;
 let desired = json(sprintf('%J', settings_value));
@@ -82,7 +84,9 @@ let backup = {
 	create: (options, source) => push(management_calls, [ 'backup.create', options, source ]),
 	inspect: (id, options) => ({ id: 'x-0000000000001-00000000000000000000000000000002',
 		source_id: id, options }),
-	restore: (id, source) => ({ id: 'backup-restore', inspection_id: id, source })
+	restore: (id, source) => ({ id: 'backup-restore', inspection_id: id, source }),
+	prepare: (value) => json(sprintf('%J', value)),
+	configure: (value) => push(management_calls, [ 'backup.configure', value ])
 };
 let devices = {
 	list: () => [ { mac: 'aa:bb:cc:dd:ee:ff' } ],

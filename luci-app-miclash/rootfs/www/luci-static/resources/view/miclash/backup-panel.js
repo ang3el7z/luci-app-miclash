@@ -37,7 +37,8 @@ function create(options) {
 		typeof api.settings_get !== 'function' || typeof api.settings_set !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed backup API is required');
 	let host = null, destroyed = false, generation = 0, modalGeneration = 0, busy = false;
-	let backups = [], backupSettings = { enabled: false, retention: 5, include_secrets: false };
+	let backups = [], backupSettings = { enabled: false, retention: 5, include_secrets: false,
+		interval_hours: 24, schedule_time: '03:00' };
 	const cancels = new Set(), objectUrls = new Set();
 
 	function report(error) {
@@ -90,11 +91,17 @@ function create(options) {
 			'checked': backupSettings.include_secrets === true ? 'checked' : null });
 		const retention = E('input', { 'id': 'sbox-backup-retention', 'type': 'number', 'min': '1', 'max': '100',
 			'step': '1', 'value': backupSettings.retention || 5, 'class': 'cbi-input-text' });
+		const interval = E('input', { 'id': 'sbox-backup-interval', 'type': 'number', 'min': '1', 'max': '168',
+			'step': '1', 'value': backupSettings.interval_hours || 24, 'class': 'cbi-input-text' });
+		const scheduleTime = E('input', { 'id': 'sbox-backup-time', 'type': 'time',
+			'value': backupSettings.schedule_time || '03:00', 'class': 'cbi-input-text' });
 		const file = E('input', { 'id': 'sbox-backup-import', 'type': 'file', 'accept': '.tar,application/x-tar,application/octet-stream' });
 		host.replaceChildren(
 			E('h4', {}, _('Backup and restore')),
 			E('p', { 'class': 'sbox-muted' }, _('Backups are validated and previewed before restore.')),
 			E('label', { 'class': 'sbox-checkbox-row', 'for': 'sbox-backup-enabled' }, [ enabled, _('Enable scheduled backups') ]),
+			E('label', { 'for': 'sbox-backup-interval' }, [ _('Backup interval (hours)'), ' ', interval ]),
+			E('label', { 'for': 'sbox-backup-time' }, [ _('Schedule anchor (UTC)'), ' ', scheduleTime ]),
 			E('label', { 'for': 'sbox-backup-retention' }, [ _('Retention'), ' ', retention ]),
 			E('label', { 'class': 'sbox-checkbox-row', 'for': 'sbox-backup-include-secrets' }, [ include, _('Include secrets') ]),
 			E('p', { 'class': 'sbox-management-warning', 'role': 'alert' },
@@ -109,18 +116,26 @@ function create(options) {
 		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () => mutate(async () => {
 			const name = button.getAttribute('data-action'), id = button.getAttribute('data-backup-id');
 			if (name === 'create') await createAndDownload(!!include.checked);
-			else if (name === 'save-settings') await saveSettings(enabled, retention, include);
+			else if (name === 'save-settings') await saveSettings(enabled, retention, include, interval, scheduleTime);
 			else if (name === 'download') await download(id);
 			else if (name === 'inspect') await inspect(id);
 			else if (name === 'import') await importArchive(file.files?.[0]);
 		}));
 	}
-	async function saveSettings(enabled, retention, include) {
+	async function saveSettings(enabled, retention, include, interval, scheduleTime) {
 		const raw = String(retention.value || '').trim(), amount = /^[0-9]+$/.test(raw) ? Number(raw) : 0;
 		if (!Number.isInteger(amount) || amount < 1 || amount > 100)
 			throw new Error(_('Retention must be between 1 and 100.'));
+		const intervalRaw = String(interval.value || '').trim();
+		const intervalHours = /^[0-9]+$/.test(intervalRaw) ? Number(intervalRaw) : 0;
+		if (!Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168)
+			throw new Error(_('Backup interval must be between 1 and 168 hours.'));
+		const time = String(scheduleTime.value || '').trim();
+		if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time))
+			throw new Error(_('Choose a valid UTC schedule time.'));
 		const patch = { backup: { enabled: !!enabled.checked, retention: amount,
-			include_secrets: !!include.checked } };
+			include_secrets: !!include.checked, interval_hours: intervalHours,
+			schedule_time: time } };
 		await wait(await api.settings_set(patch, SOURCE), _('Saving backup settings…'));
 		await refresh();
 	}

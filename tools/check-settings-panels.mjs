@@ -292,7 +292,8 @@ const fullManifest = Array.from({ length: 1024 }, (_, index) => ({
 	content: 'DO_NOT_RENDER'
 }));
 const backupApi = {
-	async backupList() { return []; }, async settings_get() { return { backup: { enabled: true, retention: 7, include_secrets: false } }; },
+	async backupList() { return []; }, async settings_get() { return { backup: { enabled: true,
+		retention: 7, include_secrets: false, interval_hours: 24, schedule_time: '03:00' } }; },
 	async settings_set(patch, source) { backupCalls.push([ 'settings', patch, source ]); return { operation_id: 'backup-settings' }; },
 	async backupCreate() { return { operation_id: 'backup-create' }; },
 	async backupInspect(id) { backupCalls.push([ 'inspect', id ]); return { id: 'x-0000000000001-00000000000000000000000000000003',
@@ -308,11 +309,14 @@ const backupApi = {
 const backupPanel = dynamicLoad(backup).create({ api: backupApi, document: documentMock, window: windowMock });
 const backupHost = new MiniNode('div'); backupPanel.mount(backupHost); await tick();
 assert.equal(backupHost.querySelector('#sbox-backup-retention').value, '7');
+assert.equal(backupHost.querySelector('#sbox-backup-interval').value, '24');
+assert.equal(backupHost.querySelector('#sbox-backup-time').value, '03:00');
 assert.equal(backupHost.querySelector('[role="alert"]')?.textContent.includes('Warning'), true,
 	'secret-backup warning does not use the standard alert role');
 backupHost.querySelector('[data-action="save-settings"]').click(); await tick(); await tick();
 assert.deepEqual(backupCalls.find((call) => call[0] === 'settings'), [ 'settings', {
-	backup: { enabled: true, retention: 7, include_secrets: false }
+	backup: { enabled: true, retention: 7, include_secrets: false,
+		interval_hours: 24, schedule_time: '03:00' }
 }, 'luci' ]);
 backupCalls.length = 0;
 const archive = { size: 1, async arrayBuffer() { return new Uint8Array([7]).buffer; } };

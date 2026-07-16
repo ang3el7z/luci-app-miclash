@@ -205,10 +205,11 @@ let integrated_operations = {
 	}
 };
 let desired = {
-	memory: { enabled: true, sample_interval_ms: 60000 },
+	memory: { enabled: false, sample_interval_ms: 60000 },
 	notifications: { auto_hide: true, channels: [ 'syslog', 'luci', 'telegram' ],
 		events: [ 'failure', 'subscription_outcome' ] },
-	backup: { enabled: false, retention: 5, include_secrets: false },
+	backup: { enabled: false, retention: 5, include_secrets: false,
+		interval_hours: 24, schedule_time: '03:00' },
 	telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42' }
 };
 let integrated_state = {
@@ -241,6 +242,9 @@ let notifier = {
 let telegram_starts = 0, telegram_stops = 0, telegram_tests = 0, telegram_running = false;
 let telegram_facade = null;
 let imported_staged = null, backup_app_seen = null, devices_app_seen = null;
+let auto_backup_attempts = 0, auto_backup_prunes = 0, auto_backup_options = [];
+let fail_next_auto_backup = true;
+let failed_auto_prune = false, backup_list_calls = 0;
 let fake_transfers = null;
 let integrated_factories = {
 	operations: { create: () => integrated_operations },
@@ -269,6 +273,7 @@ let integrated_factories = {
 	notify: {
 		producer: () => ({
 			memory: (event) => event,
+			backup: (success) => ({ notification: 'backup', success }),
 			operation: (record) => ({ notification: 'operation', id: record.id,
 				kind: record.kind, state: record.state })
 		}),
@@ -289,8 +294,21 @@ let integrated_factories = {
 		};
 	} },
 	backup: {
-		list: (app) => { backup_app_seen = app; return [ { id: 'b-1700000000000-00000000000000000000000000000000' } ]; },
-		create: () => ({ id: 'b-1700000000000-00000000000000000000000000000000' }),
+		list: (app) => { backup_list_calls++; backup_app_seen = app; return [ { id: 'b-1700000000000-00000000000000000000000000000000' } ]; },
+		create: (app, options, source) => {
+			if (source == 'auto') {
+				auto_backup_attempts++; push(auto_backup_options, options);
+				if (fail_next_auto_backup) { fail_next_auto_backup = false; die('HEALTH_FAILED'); }
+			}
+			return { id: 'b-1700000000000-00000000000000000000000000000000' };
+		},
+		prune: () => {
+			auto_backup_prunes++;
+			if (auto_backup_attempts == 2 && !failed_auto_prune) {
+				failed_auto_prune = true; die('INTERNAL');
+			}
+			return { removed: [], retained: [] };
+		},
 		inspect: (app, id) => ({ id: 'x-1700000000000-00000000000000000000000000000000', source_id: id }),
 		restore: () => ({ id: 'operation-backup-restore' }),
 		transfer_download: () => ({ size: 1, sha256: sprintf('%064d', 0), read: () => 'x', finish: () => ({}), close: () => true }),
@@ -319,13 +337,16 @@ let integrated_factories = {
 		register: real_api.register
 	}
 };
+let integrated_clock = fakes.clock(1700000000000);
 let integrated_runtime = {
 	ubus: { connect: () => integrated_connection },
-	clock: { now: () => 1700000000000, set_timeout: () => ({ cancel: () => true }) },
+	clock: integrated_clock,
 	paths: { tmp: '/tmp/miclash', etc: '/etc/miclash', run: '/var/run/miclash' },
 	secure_fs: {}, fs: {}, digest: {}, random: {}, uci: {}, process: { run: () => ({ code: 0 }) }
 };
 let integrated = daemon.compose(integrated_runtime, integrated_factories);
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 1,
+	'backup cleanup owns more than one lifecycle timer');
 assert_equal(guard_settings_calls, 0);
 assert_true(telegram_facade != null);
 assert_equal(telegram_starts, 1);
@@ -352,6 +373,32 @@ assert_equal(telegram_starts, 2);
 assert_equal(telegram_running, true);
 integrated.app.settings_set({ core: { proxy_mode: 'tun' } }, 'luci');
 assert_equal(guard_settings_calls, 0);
+integrated.app.settings_set({ backup: { enabled: true, retention: 3,
+	include_secrets: false, interval_hours: 1, schedule_time: '03:00' } }, 'luci');
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 1,
+	'backup settings update left duplicate timers');
+let schedule_anchor = 3 * 3600000, schedule_interval = 3600000;
+let schedule_now = integrated_clock.now();
+let schedule_due = schedule_anchor +
+	(int((schedule_now - schedule_anchor) / schedule_interval) + 1) * schedule_interval;
+integrated_clock.advance(schedule_due - schedule_now - 1);
+assert_equal(auto_backup_attempts, 0, 'scheduled backup ignored its UTC anchor');
+assert_true(backup_list_calls >= 1, 'proactive import cleanup did not run before the backup interval');
+assert_equal(auto_backup_prunes, 1, 'startup maintenance did not enforce persisted retention');
+integrated_clock.advance(1);
+assert_equal(auto_backup_attempts, 1, 'scheduled backup did not run at its anchored interval');
+assert_equal(auto_backup_prunes, 1, 'failed scheduled create unexpectedly changed retention state');
+integrated_clock.advance(300000);
+assert_equal(auto_backup_attempts, 2, 'failed scheduled backup did not retry with backoff');
+assert_equal(auto_backup_prunes, 2, 'successful create did not attempt retention pruning');
+integrated_clock.advance(300000);
+assert_equal(auto_backup_attempts, 2, 'retention retry created a duplicate backup');
+assert_equal(auto_backup_prunes, 3, 'failed retention pruning was not retried');
+assert_equal(auto_backup_options[1].include_secrets, false,
+	'automatic backup included secrets without the explicit setting');
+integrated.app.settings_set({ backup: { enabled: false } }, 'luci');
+integrated_clock.advance(7200000);
+assert_equal(auto_backup_attempts, 2, 'disabled scheduler created another backup');
 assert_equal(integration_methods.memory_status.call({ args: {} }).phase, 'monitoring');
 assert_equal(length(integration_methods.backup_list.call({ args: {} })), 1);
 assert_equal(integration_methods.devices_timezones.call({ args: {} })[0], 'UTC');
@@ -363,6 +410,8 @@ assert_true(imported_staged != null);
 assert_true(backup_app_seen.runtime === integrated_runtime);
 assert_true(devices_app_seen.timezones.list()[0] == 'UTC');
 assert_equal(integrated.close(), true);
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 0,
+	'daemon close retained the backup lifecycle timer');
 assert_equal(integrated_disconnects, 1);
 assert_true(index(integrated_closes, 'transfers') >= 0);
 assert_equal(integrated_operation_unsubscribes, 1);
@@ -452,6 +501,20 @@ assert_true(type(production_methods?.transfer_begin?.call) == 'function');
 assert_equal(production_methods.memory_status.call({ args: {} }).baseline_rss_kb, 64000);
 assert_equal(production_methods.devices_timezones.call({ args: {} })[0], 'UTC');
 assert_equal(length(production_methods.backup_list.call({ args: {} })), 0);
+let schedule_settings = production_methods.settings_set.call({ args: { settings: { backup: {
+	enabled: true, retention: 5, include_secrets: false,
+	interval_hours: 1, schedule_time: '03:00'
+} }, source: 'luci' } });
+production_clock.advance(0);
+assert_equal(production_daemon.app.operation_get(schedule_settings.operation_id).state, 'success');
+let production_schedule_now = production_clock.now();
+let production_schedule_due = schedule_anchor +
+	(int((production_schedule_now - schedule_anchor) / schedule_interval) + 1) * schedule_interval;
+production_clock.advance(production_schedule_due - production_schedule_now);
+assert_equal(length(production_methods.backup_list.call({ args: {} })), 1,
+	'real scheduled backup path did not publish an archive');
+production_methods.settings_set.call({ args: { settings: { backup: { enabled: false } }, source: 'luci' } });
+production_clock.advance(0);
 let create_record = production_methods.backup_create.call({ args: {
 	options: { include_secrets: true }, source: 'luci'
 } });
@@ -459,7 +522,7 @@ production_clock.advance(0);
 create_record = production_daemon.app.operation_get(create_record.operation_id);
 assert_equal(create_record.state, 'success');
 let created_backups = production_methods.backup_list.call({ args: {} });
-assert_equal(length(created_backups), 1);
+assert_equal(length(created_backups), 2);
 let inspection = production_methods.backup_inspect.call({ args: {
 	backup_id: created_backups[0].id, options: {}
 } });
