@@ -94,7 +94,7 @@ export function compose(runtime, overrides) {
 		return true;
 	};
 
-	let transfers = null, close_domains = [];
+	let transfers = null, state_model = null, close_domains = [];
 	try {
 		if (type(connection.publish) != 'function' ||
 		    type(connection.disconnect) != 'function' ||
@@ -299,7 +299,7 @@ export function compose(runtime, overrides) {
 			close: () => { if (backup_closed) return false; backup_closed = true; return true; }
 		};
 		push(close_domains, backup_domain);
-		let state_model = modules.state.create({
+		state_model = modules.state.create({
 			settings: settings_domain,
 			service: service_adapter,
 			operations: operation_manager,
@@ -409,6 +409,10 @@ export function compose(runtime, overrides) {
 		if (transfers != null) try { transfers.close(); } catch (close_error) {}
 		for (let index = length(close_domains) - 1; index >= 0; index--)
 			try { close_domains[index].close(); } catch (close_error) {}
+		if (state_model != null) {
+			try { state_model.close(); } catch (close_error) {}
+			try { state_model.flush(); } catch (close_error) {}
+		}
 		try { disconnect(); } catch (disconnect_error) {}
 		errors.fail(code);
 	}

@@ -60,8 +60,10 @@ let factories = {
 	storage: { write_json: () => true },
 	memory: { create: () => ({ status: () => ({}), settings: (value) => value ?? {
 		sample_interval_ms: 60000 }, reset_baseline: () => true, sample: () => true }) },
-	notify: { producer: () => ({ memory: (event) => event }), create: () => ({
-		emit: () => true, test: () => true }) },
+	notify: {
+		producer: () => { push(failed_trace, 'producer'); return { memory: (event) => event }; },
+		create: () => { push(failed_trace, 'notify'); return { emit: () => true, test: () => true }; }
+	},
 	backup: {
 		list: () => [], create: () => ({}), inspect: () => ({}), restore: () => ({}),
 		transfer_download: () => ({}), transfer_import: () => ({})
@@ -104,6 +106,74 @@ function malformed_connection(candidate) {
 assert_equal(malformed_connection({ call: () => null, disconnect: () => true }), 1);
 assert_equal(malformed_connection({ publish: () => ({}), disconnect: () => true }), 1);
 assert_equal(malformed_connection({ call: () => null, publish: () => ({}) }), 0);
+
+// Construction failures after state ownership begins must release and flush the
+// state model without replacing the earliest construction error.
+let failed_state_lifecycle = [];
+let failed_state = {
+	snapshot: () => ({}), health: () => ({}), set_desired: () => null,
+	observe: () => null,
+	close: () => { push(failed_state_lifecycle, 'close'); return true; },
+	flush: () => { push(failed_state_lifecycle, 'flush'); return true; }
+};
+let failed_disconnects = 0;
+let failed_transfer_attempts = 0;
+let failed_connection = {
+	call: () => null, publish: () => ({}),
+	disconnect: () => { failed_disconnects++; return true; }
+};
+let failed_runtime = {
+	ubus: { connect: () => failed_connection }, clock: { now: () => 0 },
+	paths: { tmp: '/tmp/miclash-construction-failure' },
+	reconcile: { run: () => ({}) }
+};
+let failed_operations = {
+	recover_interrupted: () => true, submit: () => ({}), get: () => null,
+	list: () => [], subscribe: () => () => true
+};
+let failed_application = {
+	status: failed_state.snapshot, health: failed_state.health,
+	operation_get: () => null, operation_list: () => [],
+	service_start: () => ({}), service_stop: () => ({}), service_reload: () => ({}),
+	service_restart: () => ({}), config_list: () => [], config_read: () => '',
+	config_read_draft: () => '', config_save_draft: () => ({}),
+	config_validate: () => ({}), config_apply: () => ({}), settings_get: () => ({}),
+	settings_set: () => ({}), set_draining: () => true
+};
+let failed_desired = {
+	memory: { enabled: false, sample_interval_ms: 60000 },
+	notifications: { auto_hide: true, channels: [ 'syslog' ], events: [ 'failure' ] }
+};
+let failed_factories = {
+	operations: { create: () => failed_operations }, service: { create: () => ({}) },
+	history: { create: () => ({}) }, config: { create: () => ({}) },
+	state: { create: () => failed_state }, application: { create: () => failed_application },
+	settings: { load: () => failed_desired,
+		validate_patch: (patch) => patch, save: () => ({}) },
+	storage: { write_json: () => true },
+	memory: { create: () => ({
+		status: () => ({}), settings: (value) => value ?? { sample_interval_ms: 60000 },
+		reset_baseline: () => true, sample: () => true
+	}) },
+	notify: { producer: () => ({ memory: (event) => event }), create: () => ({
+		emit: () => true, test: () => true }) },
+	backup: { list: () => [], create: () => ({}), inspect: () => ({}),
+		restore: () => ({}), transfer_download: () => ({}), transfer_import: () => ({}) },
+	devices: { discover: () => [], timezones: () => [ 'UTC' ], policy_list: () => [],
+		policy_set: () => ({}), policy_delete: () => true },
+	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
+	api: { create_transfers: () => { failed_transfer_attempts++; die('HEALTH_FAILED'); },
+		register: real_api.register }
+};
+let failed_error = null;
+try { daemon.compose(failed_runtime, failed_factories); }
+catch (error) { failed_error = error; }
+assert_equal(failed_error?.code ?? failed_error?.message, 'HEALTH_FAILED');
+assert_equal(length(failed_state_lifecycle), 2);
+assert_equal(failed_state_lifecycle[0], 'close');
+assert_equal(failed_state_lifecycle[1], 'flush');
+assert_equal(failed_disconnects, 1);
+assert_equal(failed_transfer_attempts, 1);
 
 // The management cutover uses the real application facade and real API
 // registration. Domain implementations remain injected so this test observes

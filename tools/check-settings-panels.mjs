@@ -285,6 +285,12 @@ await tick(); await tick();
 assert.equal(lateHost.textContent, beforeLate, 'late device reply mutated a destroyed/replaced panel');
 
 const backupCalls = [];
+const fullManifest = Array.from({ length: 1024 }, (_, index) => ({
+	path: index === 0 ? '<img src=x onerror=alert(1)>' : `config/file-${index + 1}.yaml`,
+	size: index + 1,
+	sha256: 'a'.repeat(64), secret: index === 0,
+	content: 'DO_NOT_RENDER'
+}));
 const backupApi = {
 	async backupList() { return []; }, async settings_get() { return { backup: { enabled: true, retention: 7, include_secrets: false } }; },
 	async settings_set(patch, source) { backupCalls.push([ 'settings', patch, source ]); return { operation_id: 'backup-settings' }; },
@@ -292,9 +298,7 @@ const backupApi = {
 	async backupInspect(id) { backupCalls.push([ 'inspect', id ]); return { id: 'x-0000000000001-00000000000000000000000000000003',
 		source_id: id, created_at: 1710000000000, inspected_at: 1710000001000, expires_at: 1710000900000,
 		includes: [ 'settings', '<b>rulesets</b>' ],
-		files: [ { path: '<img src=x onerror=alert(1)>', size: 1,
-			sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', secret: true,
-			content: 'DO_NOT_RENDER' } ], app_version: '1' }; },
+		files: fullManifest, app_version: '1' }; },
 	async backupRestore(id, source) { backupCalls.push([ 'restore', id, source ]); return { operation_id: 'restore-one' }; },
 	async downloadChunks() { return new Uint8Array([1]); },
 	async uploadChunks(kind, metadata, payload) { backupCalls.push([ 'upload', kind, metadata, payload.byteLength ]);
@@ -304,6 +308,8 @@ const backupApi = {
 const backupPanel = dynamicLoad(backup).create({ api: backupApi, document: documentMock, window: windowMock });
 const backupHost = new MiniNode('div'); backupPanel.mount(backupHost); await tick();
 assert.equal(backupHost.querySelector('#sbox-backup-retention').value, '7');
+assert.equal(backupHost.querySelector('[role="alert"]')?.textContent.includes('Warning'), true,
+	'secret-backup warning does not use the standard alert role');
 backupHost.querySelector('[data-action="save-settings"]').click(); await tick(); await tick();
 assert.deepEqual(backupCalls.find((call) => call[0] === 'settings'), [ 'settings', {
 	backup: { enabled: true, retention: 7, include_secrets: false }
@@ -319,6 +325,10 @@ for (const expected of [ 'x-0000000000001-00000000000000000000000000000003',
 	'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'secret' ])
 	assert.ok(planBody.textContent.includes(expected), `manifest preview omitted ${expected}`);
 assert.doesNotMatch(planBody.textContent, /DO_NOT_RENDER/, 'manifest preview rendered an unapproved secret field');
+assert.ok(planBody.textContent.includes('config/file-1024.yaml'),
+	'manifest preview omitted the backend-supported 1024th file');
+assert.equal(planBody.querySelectorAll('.sbox-backup-manifest')[0]?.getAttribute('aria-label'), 'Backup manifest',
+	'backup manifest has no accessible name');
 planBody.querySelector('[data-action="restore"]').click(); await tick(); await tick();
 assert.equal(backupCalls.at(-1)[0], 'restore');
 assert.match(backupCalls.at(-1)[1], /^x-/, 'restore did not use the opaque inspection ID');

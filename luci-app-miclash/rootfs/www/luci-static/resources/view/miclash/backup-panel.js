@@ -97,7 +97,7 @@ function create(options) {
 			E('label', { 'class': 'sbox-checkbox-row', 'for': 'sbox-backup-enabled' }, [ enabled, _('Enable scheduled backups') ]),
 			E('label', { 'for': 'sbox-backup-retention' }, [ _('Retention'), ' ', retention ]),
 			E('label', { 'class': 'sbox-checkbox-row', 'for': 'sbox-backup-include-secrets' }, [ include, _('Include secrets') ]),
-			E('p', { 'class': 'sbox-management-warning', 'role': 'warning' },
+			E('p', { 'class': 'sbox-management-warning', 'role': 'alert' },
 				_('Warning: a backup with secrets contains subscription credentials and private configuration. Store it safely.')),
 			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Save backup settings'), 'save-settings'),
 				action(_('Create and download'), 'create', true), file, action(_('Inspect import'), 'import') ]),
@@ -178,9 +178,9 @@ function create(options) {
 	}
 	function showPlan(plan, token) {
 		const inspection_id = plan.id;
-		const files = Array.isArray(plan.files) ? plan.files.slice(0, 512) : [];
+		const files = Array.isArray(plan.files) ? plan.files.slice(0, 1024) : [];
 		const groups = Array.isArray(plan.includes) ? plan.includes.slice(0, 32) : [];
-		const manifest = E('ul', { 'class': 'sbox-backup-manifest' }, files.map((file) => E('li', {}, [
+		const manifest = E('ul', { 'class': 'sbox-backup-manifest', 'aria-label': _('Backup manifest') }, files.map((file) => E('li', {}, [
 			boundedText(file.path, 512), ' · ', bytes(file.size), ' · ',
 			/^[0-9a-f]{64}$/.test(file.sha256 || '') ? file.sha256 : '-', ' · ',
 			file.secret === true ? _('secret') : _('public')
