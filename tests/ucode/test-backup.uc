@@ -511,6 +511,11 @@ assert_equal(opaque_handle.identity.inode, replacement_handle.identity.inode,
 assert_equal(opaque_handle.identity.generation == replacement_handle.identity.generation,
 	false, 'replacement reused the capability-owned generation');
 assert_throws(() => opaque_box.app.secure_fs.list(clone(opaque_handle)), 'INTERNAL');
+let restarted_capability = secure_fs(opaque_box.filesystem);
+let restarted_handle = restarted_capability.open(opaque_path + '-moved',
+	{ create: false, mode: 0o700, uid: 0 });
+assert_equal(restarted_handle.identity.generation, opaque_handle.identity.generation,
+	'directory owner generation was not persistent across capability restart');
 
 // Deletion invalidates the object-bound handle even if a new directory reuses
 // every forgeable stat field at the same pathname.

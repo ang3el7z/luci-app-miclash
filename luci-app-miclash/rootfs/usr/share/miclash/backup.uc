@@ -14,7 +14,8 @@ import * as schema from 'miclash.schema';
  *   open_at(dir, name, { create, mode, uid, expected? }) -> opaque directory handle
  *       (handles and identities carry a persistent capability-owned,
  *        unforgeable 256-bit directory generation; inode metadata is only
- *        supplemental and never establishes directory ownership)
+ *        supplemental and never establishes directory ownership; creation
+ *        persists the generation and directory namespace before returning)
  *   stat(dir, name) -> identity|null
  *   list(dir) -> [ immediate-name ]
  *   read(dir, name, { maximum, mode, uid, nlink, expected? })
