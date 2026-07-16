@@ -10,7 +10,8 @@ const POLICY_TYPE = 'device_policy';
 const JOURNAL = '/etc/miclash/device-policies.json';
 const MAX_TIMESTAMP = 4102444799;
 const MAX_OBSERVATION = 262144;
-const MAX_LINES = 512;
+const MAX_PROVENANCE = 512;
+const MAX_LINES = MAX_PROVENANCE;
 const MAX_LINE = 512;
 const MAX_DEVICES = 256;
 const MAX_ADDRESSES = 32;
@@ -211,7 +212,7 @@ function validate_address_record(value, timestamp) {
 	let last_seen = integer(value.last_seen, 0, timestamp);
 	strict_sorted_strings(value.interfaces, MAX_INTERFACES, interface_name);
 	bounded_counter(value.interfaces, value.interface_total, value.interfaces_truncated,
-		MAX_INTERFACES, MAX_LINES);
+		MAX_INTERFACES, MAX_PROVENANCE);
 	if (value.source == 'dhcp' && (length(value.interfaces) || value.interface_total ||
 	    value.interfaces_truncated)) invalid();
 	if (value.source == 'neighbor' && !length(value.interfaces)) invalid();
@@ -370,6 +371,17 @@ function conflict_pass(devices) {
 };
 
 let compile_device;
+function validate_device_map(value, now) {
+	let devices = {};
+	for (let key, item in value) {
+		let normalized = compile_device(item, now);
+		let expected = normalized.identity.kind == 'mac' ?
+			'mac:' + normalized.mac : normalized.identity.value;
+		if (key != expected) invalid();
+		devices[key] = normalized;
+	}
+	return devices;
+};
 function validate_cache_state(value, now) {
 	if (type(value) != 'object' || type(value) == 'array') invalid('CORRUPT_STATE');
 	let names = keys(value);
@@ -382,16 +394,9 @@ function validate_cache_state(value, now) {
 	    value.ephemeral_sequence > MAX_DEVICES || type(value.devices) != 'object' ||
 	    type(value.devices) == 'array' || length(keys(value.devices)) > MAX_DEVICES)
 		invalid('CORRUPT_STATE');
-	let devices = {};
-	for (let key, item in value.devices) {
-		let normalized;
-		try { normalized = compile_device(item, now); }
-		catch (error) { invalid('CORRUPT_STATE'); }
-		let expected = normalized.identity.kind == 'mac' ?
-			'mac:' + normalized.mac : normalized.identity.value;
-		if (key != expected) invalid('CORRUPT_STATE');
-		devices[key] = normalized;
-	}
+	let devices;
+	try { devices = validate_device_map(value.devices, now); }
+	catch (error) { invalid('CORRUPT_STATE'); }
 	return { last_now: value.last_now, ephemeral_sequence: value.ephemeral_sequence, devices };
 };
 
@@ -421,6 +426,7 @@ export function discover(app) {
 		if (!length(retained) || now - item.last_seen > HISTORY_SECONDS) delete cache.devices[key];
 	}
 	conflict_pass(cache.devices);
+	cache.devices = validate_device_map(cache.devices, now);
 	let output = []; for (let key, item in cache.devices) push(output, clone(item));
 	app.device_cache = cache;
 	return output;
@@ -679,7 +685,7 @@ function subject(value) {
 	let interface_total = value.interface_total ?? length(normalized_interfaces);
 	let interfaces_truncated = value.interfaces_truncated ?? false;
 	bounded_counter(normalized_interfaces, interface_total, interfaces_truncated,
-		MAX_INTERFACES, MAX_LINES);
+		MAX_INTERFACES, MAX_PROVENANCE);
 	return { mac: value.mac == null ? null : mac(value.mac), interfaces: normalized_interfaces,
 		interface_total, interfaces_truncated,
 		timestamp: integer(value.timestamp, 0, MAX_TIMESTAMP) };
@@ -798,7 +804,7 @@ compile_device = function(value, timestamp) {
 	});
 	strict_sorted_strings(value.interfaces, MAX_INTERFACES, interface_name);
 	bounded_counter(value.interfaces, value.interface_total, value.interfaces_truncated,
-		MAX_INTERFACES, MAX_LINES);
+		MAX_INTERFACES, MAX_PROVENANCE);
 	if (has(value.sources, 'neighbor') != (length(value.interfaces) > 0)) invalid();
 	let sources = [], interfaces = [];
 	for (let source in value.sources) push(sources, source);
@@ -832,7 +838,7 @@ compile_device = function(value, timestamp) {
 			if (type(evidence) != 'string' || !length(evidence) || length(evidence) > 128) invalid();
 		});
 		bounded_counter(raw_conflict.evidence, raw_conflict.total, raw_conflict.truncated,
-			MAX_EVIDENCE, MAX_LINES);
+			MAX_EVIDENCE, MAX_PROVENANCE);
 		if (raw_conflict.total < 2) invalid();
 		if (raw_conflict.reason == 'hostname_changed') {
 			if (raw_conflict.subject != identity_subject || normalized_hostname == null ||

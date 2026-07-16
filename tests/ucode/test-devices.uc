@@ -864,6 +864,88 @@ let split_max_devices = devices.discover(split_max_app);
 assert_equal(split_max_devices[0].interface_total, 32,
 	'max-bound round trip retains the exact device interface total');
 devices.compile_sets(split_max_app, { timestamp: 1710000000, devices: split_max_devices });
+
+function aggregate_hostname_lines(count, reverse, duplicate) {
+	let lines = [];
+	for (let at = 1; at <= count; at++) push(lines,
+		'1710003600 ac:bb:cc:dd:ee:74 192.168.5.2 name' +
+		sprintf('%03d', duplicate ? 1 : at) + ' *');
+	if (reverse) lines = sort(lines, (a, b) => a < b ? 1 : -1);
+	return join('\n', lines) + (length(lines) ? '\n' : '');
+};
+function aggregate_hostname_runtime(count, reverse, duplicate) {
+	let app = runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000,
+			data: '1710003600 ac:bb:cc:dd:ee:74 192.168.5.2 name000 *\n' }),
+		neighbors: () => ({ observed_at: 1710000000, data: '[]' })
+	} });
+	devices.discover(app);
+	app.observers.dhcp_leases = () => ({ observed_at: 1710000000,
+		data: aggregate_hostname_lines(count, reverse, duplicate) });
+	return app;
+};
+let hostname_over_app = aggregate_hostname_runtime(512, false, false);
+let hostname_over_cache = enc(hostname_over_app.device_cache);
+assert_throws(() => devices.discover(hostname_over_app), 'INVALID_ARGUMENT');
+assert_equal(enc(hostname_over_app.device_cache), hostname_over_cache,
+	'retained and new hostname provenance overflow cannot mutate cache');
+let hostname_max_app = aggregate_hostname_runtime(511, false, false);
+let hostname_max_devices = devices.discover(hostname_max_app);
+let hostname_max_conflict = filter(hostname_max_devices[0].conflicts,
+	(item) => item.reason == 'hostname_changed')[0];
+assert_equal(hostname_max_conflict.total, 512,
+	'exact retained and new hostname provenance maximum is accepted');
+devices.compile_sets(hostname_max_app, { timestamp: 1710000000, devices: hostname_max_devices });
+let hostname_max_reload = devices.discover(hostname_max_app);
+devices.compile_sets(hostname_max_app, { timestamp: 1710000000, devices: hostname_max_reload });
+let hostname_reverse_app = aggregate_hostname_runtime(511, true, false);
+assert_equal(enc(hostname_max_devices), enc(devices.discover(hostname_reverse_app)),
+	'hostname provenance is observer-order independent');
+let hostname_duplicate_app = aggregate_hostname_runtime(512, true, true);
+let hostname_duplicate_devices = devices.discover(hostname_duplicate_app);
+let hostname_duplicate_conflict = filter(hostname_duplicate_devices[0].conflicts,
+	(item) => item.reason == 'hostname_changed')[0];
+assert_equal(hostname_duplicate_conflict.total, 2,
+	'repeated identical hostname evidence does not inflate totals');
+
+function aggregate_neighbor_entries(family, count, reverse, duplicate) {
+	let entries = [];
+	for (let at = 0; at < count; at++) push(entries, {
+		dst: family == 'ipv4' ? '192.168.5.1' : 'fd00::5',
+		dev: (family == 'ipv4' ? 'v4' : 'v6') + sprintf('%03d', duplicate ? 0 : at),
+		lladdr: 'ac:bb:cc:dd:ee:73', state: [ 'REACHABLE' ]
+	});
+	if (reverse) entries = sort(entries, (a, b) => a.dev < b.dev ? 1 : -1);
+	return entries;
+};
+function aggregate_neighbor_runtime(v4_count, v6_count, reverse, duplicate) {
+	let v4 = aggregate_neighbor_entries('ipv4', v4_count, reverse, duplicate);
+	let v6 = aggregate_neighbor_entries('ipv6', v6_count, reverse, duplicate);
+	return runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: (family) => ({ observed_at: 1710000000,
+			data: enc(family == 'ipv4' ? v4 : v6) })
+	} });
+};
+let aggregate_over_app = aggregate_neighbor_runtime(512, 512, false, false);
+let aggregate_over_cache = enc(aggregate_over_app.device_cache);
+assert_throws(() => devices.discover(aggregate_over_app), 'INVALID_ARGUMENT');
+assert_equal(enc(aggregate_over_app.device_cache), aggregate_over_cache,
+	'combined neighbor provenance overflow cannot mutate cache');
+let aggregate_max_app = aggregate_neighbor_runtime(256, 256, false, false);
+let aggregate_max_devices = devices.discover(aggregate_max_app);
+assert_equal(aggregate_max_devices[0].interface_total, 512,
+	'exact combined neighbor provenance maximum is accepted');
+devices.compile_sets(aggregate_max_app, { timestamp: 1710000000, devices: aggregate_max_devices });
+let aggregate_max_reload = devices.discover(aggregate_max_app);
+devices.compile_sets(aggregate_max_app, { timestamp: 1710000000, devices: aggregate_max_reload });
+let aggregate_reverse_app = aggregate_neighbor_runtime(256, 256, true, false);
+assert_equal(enc(aggregate_max_devices), enc(devices.discover(aggregate_reverse_app)),
+	'combined neighbor provenance is observer-order independent');
+let aggregate_duplicate_app = aggregate_neighbor_runtime(512, 512, true, true);
+let aggregate_duplicate_devices = devices.discover(aggregate_duplicate_app);
+assert_equal(aggregate_duplicate_devices[0].interface_total, 2,
+	'repeated identical neighbor interface evidence does not inflate totals');
 for (let discovered in [ hostname_history([ 'gamma', 'alpha', 'beta' ]),
 	evidence_devices[0], multi_interface[0], interface_over.devices[0], unrelated[0] ])
 	devices.compile_sets(runtime({ guard: false }), { timestamp: 1710000000, devices: [ discovered ] });
