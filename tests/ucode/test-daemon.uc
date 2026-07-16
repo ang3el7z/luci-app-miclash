@@ -218,11 +218,12 @@ let integrated_state = {
 	close: () => { push(integrated_closes, 'state'); return true; }, flush: () => true
 };
 let guard_settings_calls = 0;
+let guard_settings_value = { sample_interval_ms: 60000 };
 let guard = {
 	status: () => ({ phase: 'monitoring', current_rss_kb: 64000 }),
 	settings: (value) => {
-		if (value != null) guard_settings_calls++;
-		return value ?? { sample_interval_ms: 60000 };
+		if (value != null) { guard_settings_calls++; guard_settings_value = { ...value }; }
+		return { ...guard_settings_value };
 	},
 	reset_baseline: () => true, sample: () => true
 };
@@ -240,8 +241,10 @@ let notifier = {
 	}
 };
 let telegram_starts = 0, telegram_stops = 0, telegram_tests = 0, telegram_running = false;
+let telegram_start_failure = null;
 let telegram_facade = null;
 let imported_staged = null, backup_app_seen = null, devices_app_seen = null;
+let telegram_backend_calls = [];
 let auto_backup_attempts = 0, auto_backup_prunes = 0, auto_backup_options = [];
 let fail_next_auto_backup = true;
 let failed_auto_prune = false, backup_list_calls = 0;
@@ -286,13 +289,32 @@ let integrated_factories = {
 	telegram: { create: (facade) => {
 		telegram_facade = facade;
 		return {
-			start: () => { telegram_starts++; telegram_running = true; return true; },
+			start: () => {
+				telegram_starts++;
+				if (telegram_start_failure == 'throw') die('INTERNAL');
+				if (telegram_start_failure == 'false') return false;
+				telegram_running = true; return true;
+			},
 			stop: () => { telegram_stops++; telegram_running = false; return true; },
 			status: () => ({ running: telegram_running, configured: true }),
 			test: () => { telegram_tests++; return true; },
 			send_event: () => true
 		};
 	} },
+	subscription: { create: () => ({ update: (options, source) => {
+		push(telegram_backend_calls, { method: 'subscription', options, source });
+		return { id: 'subscription-operation', kind: 'subscription.update' };
+	} }) },
+	updates: { create: () => ({
+		update_miclash: (options, source) => {
+			push(telegram_backend_calls, { method: 'miclash', options, source });
+			return { id: 'miclash-operation', kind: 'updates.miclash' };
+		},
+		update_mihomo: (options, source) => {
+			push(telegram_backend_calls, { method: 'mihomo', options, source });
+			return { id: 'mihomo-operation', kind: 'updates.mihomo' };
+		}
+	}) },
 	backup: {
 		list: (app) => { backup_list_calls++; backup_app_seen = app; return [ { id: 'b-1700000000000-00000000000000000000000000000000' } ]; },
 		create: (app, options, source) => {
@@ -350,6 +372,39 @@ assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)), 1
 assert_equal(guard_settings_calls, 0);
 assert_true(telegram_facade != null);
 assert_equal(telegram_starts, 1);
+assert_equal(telegram_facade.subscription_update('https://example.test/sub', 'telegram').id,
+	'subscription-operation');
+assert_equal(telegram_facade.update_miclash('telegram').id, 'miclash-operation');
+assert_equal(telegram_facade.update_mihomo('telegram').id, 'mihomo-operation');
+assert_equal(length(telegram_backend_calls), 3);
+assert_true(type(telegram_facade.logs_read()) == 'string');
+let telegram_guard_record = telegram_facade.guard_transition(true, 'telegram');
+assert_equal(operation_records[telegram_guard_record.id].kind, 'guard.transition');
+assert_equal(operation_records[telegram_guard_record.id].state, 'success');
+assert_equal(desired.guard.enabled, true);
+let healthy_memory_set_timeout = integrated_clock.set_timeout;
+let timers_before_failed_memory = length(filter(integrated_clock.timers, (timer) => timer.active));
+integrated_clock.set_timeout = () => die('timer failed');
+assert_throws(() => integrated.app.settings_set({ memory: {
+	enabled: true, sample_interval_ms: 120000
+} }, 'luci'), 'INTERNAL');
+assert_equal(desired.memory.enabled, false);
+assert_equal(desired.memory.sample_interval_ms, 60000);
+assert_equal(integrated.domains.memory.settings().enabled, false);
+assert_equal(integrated.domains.memory.settings().sample_interval_ms, 60000);
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)),
+	timers_before_failed_memory, 'throwing memory timer changed the live timer set');
+integrated_clock.set_timeout = () => null;
+assert_throws(() => integrated.app.settings_set({ memory: {
+	enabled: true, sample_interval_ms: 180000
+} }, 'luci'), 'INTERNAL');
+assert_equal(desired.memory.enabled, false);
+assert_equal(desired.memory.sample_interval_ms, 60000);
+assert_equal(integrated.domains.memory.settings().enabled, false);
+assert_equal(integrated.domains.memory.settings().sample_interval_ms, 60000);
+assert_equal(length(filter(integrated_clock.timers, (timer) => timer.active)),
+	timers_before_failed_memory, 'invalid memory timer changed the live timer set');
+integrated_clock.set_timeout = healthy_memory_set_timeout;
 assert_equal(integration_methods.telegram_test.call({ args: {} }).sent, true);
 assert_equal(telegram_tests, 1);
 assert_true(type(integrated_operation_listener) == 'function');
@@ -368,8 +423,21 @@ assert_equal(length(emitted_notifications), emitted_before_running);
 integrated.app.settings_set({ telegram: { enabled: false } }, 'luci');
 assert_equal(telegram_stops, 1);
 assert_equal(telegram_running, false);
+telegram_start_failure = 'false';
+assert_throws(() => integrated.app.settings_set({ telegram: { enabled: true } }, 'luci'),
+	'HEALTH_FAILED');
+assert_equal(desired.telegram.enabled, false);
+assert_equal(integrated.app.telegram_settings().enabled, false);
+assert_equal(telegram_running, false);
+telegram_start_failure = 'throw';
+assert_throws(() => integrated.app.settings_set({ telegram: { enabled: true } }, 'luci'),
+	'INTERNAL');
+assert_equal(desired.telegram.enabled, false);
+assert_equal(integrated.app.telegram_settings().enabled, false);
+assert_equal(telegram_running, false);
+telegram_start_failure = null;
 integrated.app.settings_set({ telegram: { enabled: true } }, 'luci');
-assert_equal(telegram_starts, 2);
+assert_equal(telegram_starts, 4);
 assert_equal(telegram_running, true);
 integrated.app.settings_set({ core: { proxy_mode: 'tun' } }, 'luci');
 assert_equal(guard_settings_calls, 0);
@@ -416,7 +484,7 @@ assert_equal(integrated_disconnects, 1);
 assert_true(index(integrated_closes, 'transfers') >= 0);
 assert_equal(integrated_operation_unsubscribes, 1);
 assert_equal(notification_channel_unsubscribes, 1);
-assert_equal(telegram_stops, 2);
+assert_equal(telegram_stops, 4);
 
 // The production composition must construct every management domain and the
 // real transfer manager. Only host capabilities are substituted here.
@@ -462,6 +530,15 @@ let production_fs = fakes.fs({
 	'/proc/self/stat': '123 (ucode) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 200 21 22\n',
 	'/proc/123/stat': '123 (ucode) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 200 21 22\n',
 	'/var/run/miclash/memory.json': persisted_memory,
+	'/var/run/miclash/routing-ownership.json': sprintf('%J\n', {
+		version: 2, owner: 'miclash', protocol: 242,
+		committed: {
+			routes: [ { family: 'ipv4', table: 100, kind: 'local',
+				destination: 'default', device: 'lo' } ],
+			rules: [ { family: 'ipv4', priority: 1000, mark: '0x1',
+				mask: '0xffffffff', table: 100 } ]
+		}, transition: null
+	}),
 	'/var/run/miclash/.keep': '', '/tmp/miclash/.keep': '',
 	'/etc/miclash/.keep': '', '/opt/clash/.keep': '',
 	'/opt/clash/config.yaml': 'external-controller: 127.0.0.1:9090\n',
@@ -471,6 +548,18 @@ let production_fs = fakes.fs({
 production_fs.set_mode('/opt/clash', 0o700);
 production_fs.set_mode('/opt/clash/config.yaml', 0o600);
 production_fs.set_mode('/opt/clash/bin/clash', 0o755);
+production_fs.popen = (command, mode) => {
+	let output = '[]\n';
+	if (index(command, 'ip -j -4 rule show') >= 0)
+		output = '[{"priority":1000,"src":"all","fwmark":"0x1","fwmask":"0xffffffff","table":100,"protocol":242}]\n';
+	else if (index(command, 'ip -j -4 route show table 100') >= 0)
+		output = '[{"type":"local","dst":"default","dev":"lo","table":100,"protocol":242,"scope":"host"}]\n';
+	else if (index(command, 'nft -j list table inet miclash') >= 0)
+		output = '{"nftables":[{"chain":{"family":"inet","table":"miclash","name":"prerouting","type":"filter","hook":"prerouting","prio":-150,"policy":"accept"}},{"rule":{"family":"inet","table":"miclash","chain":"prerouting","expr":[{"jump":{"target":"prerouting_g_aaaaaaaaaaaa"}}]}}]}';
+	let offset = 0;
+	return { read: (amount) => { let chunk = substr(output, offset, amount);
+		offset += length(chunk); return chunk; }, close: () => 0 };
+};
 let production_runtime = runtime_module.create({
 	fs: production_fs,
 	digest: fakes.digest(production_fs),
@@ -483,15 +572,10 @@ let production_runtime = runtime_module.create({
 		updates: { '.type': 'updates' }, telegram: { '.type': 'telegram' },
 		notifications: { '.type': 'notifications' }, backup: { '.type': 'backup' },
 		meta: { '.type': 'meta' }
-	} }),
+	}, dhcp: { dnsmasq: { '.type': 'dnsmasq', server: [ '127.0.0.1#7874' ],
+		cachesize: '0', noresolv: '1' } } }),
 	ubus: { connect: () => production_connection },
-	http: { request: () => ({ status: 200, body: '{}' }) },
-	observers: {
-		dhcp_leases: () => ({ observed_at: 1700000000, data: '' }),
-		neighbors: () => ({ observed_at: 1700000000, data: '[]' }),
-		dns: () => ({ ready: true }), tun: () => ({ ready: true }),
-		policy: () => ({ ready: true }), forward: () => ({ ready: true })
-	}
+	http: { request: () => ({ status: 200, body: '{}' }) }
 });
 let production_daemon = daemon.compose(production_runtime);
 assert_true(type(production_runtime.rulesets?.validate) == 'function');
@@ -501,6 +585,36 @@ assert_true(type(production_methods?.transfer_begin?.call) == 'function');
 assert_equal(production_methods.memory_status.call({ args: {} }).baseline_rss_kb, 64000);
 assert_equal(production_methods.devices_timezones.call({ args: {} })[0], 'UTC');
 assert_equal(length(production_methods.backup_list.call({ args: {} })), 0);
+let lifecycle_failure = { failure_id: 'failure-1-1700000000000',
+	component: 'guard', reason: 'automatic' };
+production_runtime.events.emit('failure', lifecycle_failure);
+production_runtime.events.emit('failure', lifecycle_failure);
+production_runtime.events.emit('fail_closed', { failure_id: 'failure-1-1700000000000',
+	component: 'mihomo', reason: 'automatic' });
+production_runtime.events.emit('recovery', { failure_id: 'failure-1-1700000000000',
+	component: 'guard', reason: 'scheduled' });
+production_runtime.events.emit('direct_fallback', {
+	failure_id: 'failure-2-1700000000000', component: 'mihomo', reason: 'automatic' });
+production_runtime.events.emit('internet_restored', {
+	failure_id: 'failure-2-1700000000000',
+	recovery_of: 'direct-fallback/failure-2-1700000000000',
+	guard: { state: 'ok', enabled: false, observed_at: 1700000000000, generation: 7 },
+	dns: { state: 'ok', observed_at: 1700000000000 },
+	network: { state: 'ok', observed_at: 1700000000000,
+		path: 'direct', guard_generation: 7 }
+});
+let lifecycle_head = production_methods.notifications_list.call({ args: {
+	generation: null, cursor: 0, limit: 20
+} });
+let lifecycle_page = production_methods.notifications_list.call({ args: {
+	generation: lifecycle_head.generation, cursor: 0, limit: 20
+} });
+let lifecycle_types = map(lifecycle_page.events, (item) => item.event.type);
+assert_equal(length(filter(lifecycle_types, (type_name) => type_name == 'guard_outage')), 1,
+	'production lifecycle duplicate bypassed notification dedupe');
+for (let type_name in [ 'fail_closed', 'recovery', 'direct_fallback', 'internet_restored' ])
+	assert_true(index(lifecycle_types, type_name) >= 0,
+		'production lifecycle did not route ' + type_name);
 let schedule_settings = production_methods.settings_set.call({ args: { settings: { backup: {
 	enabled: true, retention: 5, include_secrets: false,
 	interval_hours: 1, schedule_time: '03:00'

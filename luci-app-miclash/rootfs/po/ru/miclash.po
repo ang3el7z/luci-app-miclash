@@ -1786,6 +1786,9 @@ msgstr "Введите корректный MAC-адрес, например AA:
 msgid "Enter an exact numeric Telegram user ID."
 msgstr "Введите точный числовой ID пользователя Telegram."
 
+msgid "Enter a valid BotFather token."
+msgstr "Введите корректный токен BotFather."
+
 msgid "Enter valid schedule days, times, and IANA timezone."
 msgstr "Укажите корректные дни, время и часовой пояс IANA."
 

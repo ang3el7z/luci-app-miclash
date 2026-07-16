@@ -125,6 +125,8 @@ function environment(changes) {
 			[ source ], source),
 		settings_set: (patch, source) => operation('settings_set', 'settings.set',
 			[ patch, source ], source, { patch }),
+		guard_transition: (enabled, source) => operation('guard_transition',
+			'guard.transition', [ enabled, source ], source, { enabled }),
 		backup_create: (source) => operation('backup_create', 'backup.create',
 			[ source ], source),
 		audit: (event) => push(audit, clone(event)),
@@ -163,6 +165,16 @@ for (let settings in [
 	let encoded = sprintf('%J', controller.status());
 	assert_equal(index(encoded, 'disabled-secret'), -1);
 	assert_equal(index(encoded, 'missing-user-secret'), -1);
+}
+
+// Startup is atomic: a rejected/throwing scheduler cannot leave a running poller.
+for (let timer_failure in [ 'throw', 'null' ]) {
+	let failed_start = environment();
+	failed_start.clock.set_timeout = () => timer_failure == 'throw' ? die('timer failed') : null;
+	let failed_controller = telegram.create(failed_start.app);
+	assert_throws(() => failed_controller.start(), 'INTERNAL');
+	assert_equal(failed_controller.status().running, false, timer_failure);
+	assert_equal(active_timers(failed_start.clock), 0, timer_failure);
 }
 
 // Authorization accepts one normalized ID and private messages only.
@@ -567,6 +579,7 @@ let minimal_app = {
 	config_save_draft: () => ({ id: 'op-1' }), config_validate: () => ({ id: 'op-1' }),
 	config_apply: () => ({ id: 'op-1' }), settings_get: () => ({}),
 	settings_set: () => ({ id: 'op-1' }), set_draining: () => null,
+	guard_transition: () => ({ id: 'op-1' }),
 	telegram_status: () => controller.status(),
 	telegram_settings: () => api_env.settings.telegram,
 	telegram_test: () => controller.test()

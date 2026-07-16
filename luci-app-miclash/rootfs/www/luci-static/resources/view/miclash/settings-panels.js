@@ -38,6 +38,7 @@ const EVENT_LABELS = {
 
 function value(value, fallback) { return value == null || value === '' ? (fallback || '-') : String(value); }
 function exactTelegramId(value) { return /^(?:[1-9][0-9]{0,31})$/.test(String(value || '').trim()); }
+function exactTelegramToken(value) { return /^(?:[1-9][0-9]{0,19}:[A-Za-z0-9_-]{8,128})$/.test(String(value || '').trim()); }
 function integer(value, bounds, name) {
 	const text = String(value == null ? '' : value).trim();
 	if (!/^[0-9]+$/.test(text)) throw new Error(_('%s must be an integer.').format(name));
@@ -246,6 +247,7 @@ function create(options) {
 		const token = String(host.querySelector('#sbox-telegram-token')?.value || '').trim();
 		const userId = String(host.querySelector('#sbox-telegram-user-id')?.value || '').trim();
 		if (token === MASK) throw new Error(_('The masked token cannot be saved as a replacement.'));
+		if (token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
 		if (userId && !exactTelegramId(userId)) throw new Error(_('Enter an exact numeric Telegram user ID.'));
 		const configured = state.telegram?.configured === true;
 		if (enabled && !(token && exactTelegramId(userId)) && !configured)
@@ -327,7 +329,7 @@ function create(options) {
 		if (typeof api.destroy === 'function') api.destroy(); host = null;
 	}
 	doc.addEventListener('visibilitychange', visibilitychange);
-	return { mount, refresh, destroy, formPatch, exactTelegramId };
+	return { mount, refresh, destroy, formPatch, exactTelegramId, exactTelegramToken };
 }
 
-return { create, exactTelegramId, KNOWN_EVENTS, KNOWN_CHANNELS, MEMORY_FIELDS, MEMORY_LABELS, EVENT_LABELS };
+return { create, exactTelegramId, exactTelegramToken, KNOWN_EVENTS, KNOWN_CHANNELS, MEMORY_FIELDS, MEMORY_LABELS, EVENT_LABELS };

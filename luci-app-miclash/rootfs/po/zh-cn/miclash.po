@@ -1730,6 +1730,9 @@ msgstr "请输入有效的 MAC 地址，例如 AA:BB:CC:DD:EE:FF。"
 msgid "Enter an exact numeric Telegram user ID."
 msgstr "请输入精确的数字 Telegram 用户 ID。"
 
+msgid "Enter a valid BotFather token."
+msgstr "请输入有效的 BotFather 令牌。"
+
 msgid "Enter valid schedule days, times, and IANA timezone."
 msgstr "请输入有效的计划日期、时间和 IANA 时区。"
 

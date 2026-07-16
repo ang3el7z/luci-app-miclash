@@ -2,6 +2,10 @@ import { fail } from 'miclash.errors';
 import { sha256 as digest_sha256, sha256_file as digest_sha256_file } from 'digest';
 import * as secure_fs from 'miclash.secure-fs';
 import * as rulesets from 'miclash.rulesets';
+import * as dns from 'miclash.dns';
+import * as routing from 'miclash.routing';
+import * as nft from 'miclash.firewall.nft';
+import * as iptables from 'miclash.firewall.iptables';
 
 const PROCESS_FIELDS = {
 	command: true,
@@ -351,6 +355,16 @@ function ubus_adapter() {
 	return { connect: () => require('ubus').connect() };
 };
 
+function reboot_adapter(runtime) {
+	return () => {
+		let connection = runtime.ubus.connect();
+		if (connection == null || type(connection.call) != 'function') fail('INTERNAL');
+		try { connection.call('system', 'reboot', {}); }
+		catch (error) { fail('HEALTH_FAILED'); }
+		return true;
+	};
+};
+
 function uci_adapter() {
 	return { cursor: () => require('uci').cursor() };
 };
@@ -361,6 +375,33 @@ function logger_adapter() {
 		info: (message) => warn(message + '\n'),
 		warn: (message) => warn(message + '\n'),
 		error: (message) => warn(message + '\n')
+	};
+};
+
+function event_adapter() {
+	let listeners = [], sequence = 0;
+	return {
+		emit: (type_name, data) => {
+			if (type(type_name) != 'string' || !match(type_name, /^[a-z][a-z0-9_]{0,63}$/) ||
+			    type(data) != 'object')
+				fail('INVALID_ARGUMENT');
+			for (let listener in [ ...listeners ])
+				try { listener.callback(type_name, data); } catch (error) {}
+			return true;
+		},
+		subscribe: (callback) => {
+			if (type(callback) != 'function') fail('INVALID_ARGUMENT');
+			let id = ++sequence, active = true;
+			push(listeners, { id, callback });
+			return () => {
+				if (!active) return false;
+				active = false;
+				let retained = [];
+				for (let listener in listeners) if (listener.id != id) push(retained, listener);
+				listeners = retained;
+				return true;
+			};
+		}
 	};
 };
 
@@ -437,6 +478,59 @@ function device_observers(filesystem, clock) {
 	};
 };
 
+function readiness_observers(runtime) {
+	let routing_snapshot = null, routing_observed_at = null;
+	function routing_observation() {
+		let now = runtime.clock.now();
+		if (routing_snapshot == null || routing_observed_at != now) {
+			routing_snapshot = routing.observe(runtime);
+			routing_observed_at = now;
+		}
+		return routing_snapshot;
+	};
+	function safe(observer) {
+		return () => {
+			try { return observer(); }
+			catch (error) { return { ready: false, state: 'failed' }; }
+		};
+	};
+	return {
+		dns: safe(() => {
+			let observed = dns.observe(runtime), current = observed?.current;
+			let blocked = false;
+			for (let conflict in observed?.conflicts ?? [])
+				if (conflict != 'AMBIGUOUS_ACTIVE') blocked = true;
+			let target = false;
+			for (let server in current?.server?.value ?? [])
+				if (server == '127.0.0.1#7874') target = true;
+			let ready = !blocked && target &&
+				current?.cachesize?.present === true && current.cachesize.value == '0' &&
+				current?.noresolv?.present === true && current.noresolv.value == '1';
+			return { ready, state: ready ? 'ready' : 'failed' };
+		}),
+		tun: safe(() => {
+			let ready = routing_observation()?.interfaces?.['clash-tun'] === true;
+			return { ready, state: ready ? 'ready' : 'failed' };
+		}),
+		policy: safe(() => {
+			let observed = routing_observation(), ready = observed?.ownership?.trusted === true &&
+				observed.ownership.transition == null && length(observed.routes ?? []) > 0 &&
+				length(observed.rules ?? []) > 0;
+			for (let item in [ ...(observed?.routes ?? []), ...(observed?.rules ?? []) ])
+				if (item?.ambiguous === true || item?.owned !== true) ready = false;
+			return { ready, state: ready ? 'ready' : 'failed' };
+		}),
+		forward: safe(() => {
+			let nft_state = nft.observe(runtime);
+			if (nft_state?.installed === true)
+				return { ready: true, state: 'ready' };
+			let legacy = iptables.observe(runtime);
+			let ready = legacy?.valid === true && legacy.installed === true;
+			return { ready, state: ready ? 'ready' : 'failed' };
+		})
+	};
+};
+
 function mutation_identity(filesystem) {
 	let boot = trim(filesystem.readfile('/proc/sys/kernel/random/boot_id') ?? '');
 	let stat = filesystem.readfile('/proc/self/stat') ?? '';
@@ -491,11 +585,13 @@ export function create(overrides) {
 		secure_fs: null,
 		timezones: null,
 		reconcile: null,
+		reboot: null,
 		rulesets: null,
 		mutation_lock_self: null,
 		core_available: false,
 		app_version: '0.9.2',
 		logger: logger_adapter(),
+		events: null,
 		paths
 	};
 
@@ -508,6 +604,10 @@ export function create(overrides) {
 		runtime.process = process_adapter();
 	if (runtime.http == null)
 		runtime.http = create_http_adapter(runtime.clock, require('socket'));
+	if (runtime.events == null)
+		runtime.events = event_adapter();
+	if (runtime.reboot == null)
+		runtime.reboot = reboot_adapter(runtime);
 	private_runtime_directories(runtime.fs);
 	if (runtime.secure_fs == null)
 		runtime.secure_fs = secure_fs.create(runtime);
@@ -515,8 +615,11 @@ export function create(overrides) {
 		runtime.rulesets = rulesets.create(runtime);
 	if (runtime.timezones == null)
 		runtime.timezones = installed_timezones(runtime.fs);
-	if (!length(keys(runtime.observers ?? {})))
-		runtime.observers = device_observers(runtime.fs, runtime.clock);
+	runtime.observers = {
+		...device_observers(runtime.fs, runtime.clock),
+		...readiness_observers(runtime),
+		...(runtime.observers ?? {})
+	};
 	if (runtime.mutation_lock_self == null)
 		runtime.mutation_lock_self = mutation_identity(runtime.fs);
 	if (overrides?.core_available == null)

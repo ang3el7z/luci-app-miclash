@@ -65,6 +65,13 @@ if (length(installed_timezones) > 1)
 assert_equal(production.timezones.resolve('../etc/passwd', 1700000000), null);
 assert_true(type(production.observers?.dhcp_leases) == 'function');
 assert_true(type(production.observers?.neighbors) == 'function');
+assert_true(type(production.observers?.dns) == 'function');
+assert_true(type(production.observers?.tun) == 'function');
+assert_true(type(production.observers?.policy) == 'function');
+assert_true(type(production.observers?.forward) == 'function');
+assert_true(type(production.events?.emit) == 'function');
+assert_true(type(production.events?.subscribe) == 'function');
+assert_true(type(production.reboot) == 'function');
 assert_true(type(production.mutation_lock_self?.boot) == 'string');
 assert_true(type(production.mutation_lock_self?.pid) == 'int');
 assert_true(type(production.mutation_lock_self?.start) == 'int');

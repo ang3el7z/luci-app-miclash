@@ -14,7 +14,7 @@
   { "text": "/update_subscription", "kind": "subscription.update", "call": { "method": "subscription_update", "args": [null, "telegram"] } },
   { "text": "/update_miclash", "kind": "updates.miclash", "call": { "method": "update_miclash", "args": ["telegram"] } },
   { "text": "/update_mihomo", "kind": "updates.mihomo", "call": { "method": "update_mihomo", "args": ["telegram"] } },
-  { "text": "/guard_on", "kind": "settings.set", "call": { "method": "settings_set", "args": [{ "guard": { "enabled": true } }, "telegram"] } },
-  { "text": "/guard_off", "kind": "settings.set", "call": { "method": "settings_set", "args": [{ "guard": { "enabled": false } }, "telegram"] } },
+  { "text": "/guard_on", "kind": "guard.transition", "call": { "method": "guard_transition", "args": [true, "telegram"] } },
+  { "text": "/guard_off", "kind": "guard.transition", "call": { "method": "guard_transition", "args": [false, "telegram"] } },
   { "text": "/backup", "kind": "backup.create", "call": { "method": "backup_create", "args": ["telegram"] } }
 ]

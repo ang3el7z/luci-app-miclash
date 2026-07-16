@@ -85,6 +85,9 @@ assert.equal(settingsModule.exactTelegramId('9007199254740993123456789'), true,
 	'Telegram ID beyond JS safe integer lost exact string semantics');
 assert.equal(settingsModule.exactTelegramId('9e18'), false);
 assert.equal(settingsModule.exactTelegramId('-42'), false);
+assert.equal(settingsModule.exactTelegramToken('123456:telegram-secret'), true);
+assert.equal(settingsModule.exactTelegramToken('not-a-token'), false);
+assert.equal(settingsModule.exactTelegramToken('0:abcdefgh'), false);
 assert.equal(Object.keys(settingsModule.MEMORY_FIELDS).length, 14);
 const devicesModule = load(devices);
 assert.equal(devicesModule.normalizedMac('aa:bb:cc:dd:ee:ff'), 'AA:BB:CC:DD:EE:FF');

@@ -16,6 +16,9 @@ import * as notify from 'miclash.notify';
 import * as telegram from 'miclash.telegram';
 import * as mutation_lock from 'miclash.mutation_lock';
 import * as reconcile_adapter from 'miclash.reconcile-adapter';
+import * as subscription from 'miclash.subscription';
+import * as updates from 'miclash.updates';
+import * as http from 'miclash.http';
 
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
@@ -65,6 +68,24 @@ function memory_options(settings) {
 	return result;
 };
 
+function bounded_logs(runtime) {
+	let popen = runtime.fs?.popen ?? require('fs').popen;
+	if (type(popen) != 'function') return '';
+	let pipe = null, output = '';
+	try {
+		pipe = popen('/sbin/logread -e miclash 2>/dev/null', 'r');
+		if (pipe == null) return '';
+		while (length(output) < 32768) {
+			let chunk = pipe.read(min(4096, 32768 - length(output)));
+			if (type(chunk) != 'string' || !length(chunk)) break;
+			output += chunk;
+		}
+	}
+	catch (error) { output = ''; }
+	if (pipe != null) try { pipe.close(); } catch (error) { output = ''; }
+	return output;
+};
+
 export function compose(runtime, overrides) {
 	if (type(runtime?.ubus?.connect) != 'function' ||
 	    type(runtime?.clock?.now) != 'function' || runtime?.paths?.tmp == null)
@@ -73,7 +94,7 @@ export function compose(runtime, overrides) {
 	let modules = {
 		operations, settings, storage, history, diff, service, config, state, application,
 		api, memory, backup, devices, notify, telegram, mutation_lock,
-		reconcile_adapter,
+		reconcile_adapter, subscription, updates, http,
 		...(overrides ?? {})
 	};
 	let operation_manager = modules.operations.create(runtime);
@@ -115,12 +136,23 @@ export function compose(runtime, overrides) {
 		if (runtime.reconcile == null)
 			runtime.reconcile = modules.reconcile_adapter.create({
 				operations: operation_manager, service: service_adapter,
-				settings: settings_domain, clock: runtime.clock
+				settings: settings_domain, clock: runtime.clock, events: runtime.events
 			});
 		let notification_settings = clone(desired.notifications);
 		let notifier = modules.notify.create(runtime, notification_config(notification_settings));
 		let producer = modules.notify.producer(runtime);
 		let telegram_controller = null, telegram_channel_unsubscribe = null;
+		let lifecycle_unsubscribe = null;
+		if (type(runtime.events?.subscribe) == 'function')
+			lifecycle_unsubscribe = runtime.events.subscribe((type_name, data) => {
+				try {
+					let event = type_name == 'internet_restored'
+						? producer.internet(data)
+						: producer.reconcile(type_name, data);
+					notifier.emit(event);
+				}
+				catch (error) {}
+			});
 		let operation_unsubscribe = operation_manager.subscribe((record) => {
 			if (record?.state != 'success' && record?.state != 'failure' &&
 			    record?.state != 'interrupted') return;
@@ -179,6 +211,9 @@ export function compose(runtime, overrides) {
 				if (operation_unsubscribe != null) {
 					operation_unsubscribe(); operation_unsubscribe = null;
 				}
+				if (lifecycle_unsubscribe != null) {
+					lifecycle_unsubscribe(); lifecycle_unsubscribe = null;
+				}
 				if (telegram_channel_unsubscribe != null) {
 					telegram_channel_unsubscribe(); telegram_channel_unsubscribe = null;
 				}
@@ -203,11 +238,27 @@ export function compose(runtime, overrides) {
 			prepare: prepare_telegram_settings,
 			configure: (next) => {
 				next = prepare_telegram_settings(next);
-				telegram_settings = clone(next);
-				if (telegram_controller == null) return clone(telegram_settings);
+				if (telegram_controller == null) {
+					telegram_settings = clone(next);
+					return clone(telegram_settings);
+				}
 				let running = telegram_controller.status().running === true;
-				if (next.enabled && !running) telegram_controller.start();
-				if (!next.enabled && running) telegram_controller.stop();
+				if (next.enabled && !running) {
+					let started = false, failure = null;
+					try { started = telegram_controller.start() === true; }
+					catch (error) { failure = errors.normalize(error).code; }
+					if (!started) {
+						try { telegram_controller.stop(); } catch (cleanup_error) {}
+						errors.fail(failure ?? 'HEALTH_FAILED');
+					}
+				}
+				if (!next.enabled && running) {
+					let stopped = false, failure = null;
+					try { stopped = telegram_controller.stop() === true; }
+					catch (error) { failure = errors.normalize(error).code; }
+					if (!stopped) errors.fail(failure ?? 'HEALTH_FAILED');
+				}
+				telegram_settings = clone(next);
 				return clone(telegram_settings);
 			}
 		};
@@ -229,18 +280,32 @@ export function compose(runtime, overrides) {
 			if (type(current.cancel) == 'function') current.cancel();
 			return true;
 		};
+		function create_memory_timer(interval) {
+			let timer = null, activated = false, fired = false;
+			try {
+				timer = runtime.clock.set_timeout(interval, () => {
+					if (!activated) { fired = true; return; }
+					if (memory_timer !== timer || !memory_enabled || memory_closed) return;
+					memory_timer = null;
+					try { guard.sample(); } catch (error) {}
+					try { schedule_memory_sample(); } catch (error) {}
+				});
+			}
+			catch (error) { errors.fail('INTERNAL'); }
+			if (timer == null || type(timer.cancel) != 'function' || fired) {
+				try { timer?.cancel?.(); } catch (error) {}
+				errors.fail('INTERNAL');
+			}
+			return { timer, activate: () => { activated = true; return true; } };
+		};
 		function schedule_memory_sample() {
-			cancel_memory_timer();
 			if (!memory_enabled || memory_closed || type(runtime.clock.set_timeout) != 'function')
-				return false;
-			let interval = guard.settings().sample_interval_ms;
-			memory_timer = runtime.clock.set_timeout(interval, () => {
-				memory_timer = null;
-				if (!memory_enabled || memory_closed) return;
-				try { guard.sample(); } catch (error) {}
-				schedule_memory_sample();
-			});
-			if (memory_timer == null) errors.fail('INTERNAL');
+				return cancel_memory_timer();
+			let prepared = create_memory_timer(guard.settings().sample_interval_ms);
+			let previous = memory_timer;
+			memory_timer = prepared.timer;
+			prepared.activate();
+			if (previous != null) try { previous.cancel(); } catch (error) {}
 			return true;
 		};
 		let memory_domain = {
@@ -254,9 +319,28 @@ export function compose(runtime, overrides) {
 				let wanted = memory_options(next), current = guard.settings();
 				let options_changed = !same(current, wanted);
 				let enabled_changed = memory_enabled != next.enabled;
-				if (options_changed) guard.settings(wanted);
+				let prepared = null;
+				if ((options_changed || enabled_changed) && next.enabled) {
+					if (type(runtime.clock.set_timeout) != 'function') errors.fail('INTERNAL');
+					prepared = create_memory_timer(wanted.sample_interval_ms);
+				}
+				try {
+					if (options_changed) guard.settings(wanted);
+				}
+				catch (error) {
+					try { prepared?.timer?.cancel?.(); } catch (cancel_error) {}
+					errors.fail(errors.normalize(error).code);
+				}
+				let previous = memory_timer;
 				memory_enabled = next.enabled;
-				if (options_changed || enabled_changed) schedule_memory_sample();
+				if (prepared != null) {
+					memory_timer = prepared.timer;
+					prepared.activate();
+				}
+				else if (options_changed || enabled_changed)
+					memory_timer = null;
+				if (previous != null && previous !== memory_timer)
+					try { previous.cancel(); } catch (error) {}
 				return { enabled: memory_enabled, ...guard.settings() };
 			},
 			close: () => {
@@ -445,25 +529,70 @@ export function compose(runtime, overrides) {
 		});
 		if (type(desired.telegram) == 'object') {
 			let unavailable = () => errors.fail('HEALTH_FAILED');
+			function guard_transition(enabled, source) {
+				if (type(enabled) != 'bool') errors.fail('INVALID_ARGUMENT');
+				return operation_manager.submit('guard.transition', source, { enabled }, (ctx) => {
+					let before = settings_domain.get(), persisted = false;
+					try {
+						ctx.stage('settings', 20, 'Applying Guard setting');
+						let saved = settings_domain.set({ guard: { enabled } });
+						persisted = true;
+						state_model.set_desired(saved);
+						ctx.stage('reconcile', 60, 'Reconciling protected routing');
+						service_adapter.restart_service('config.yaml');
+						let ready = service_adapter.wait_ready(runtime.clock.now() + 5000,
+							'config.yaml', { tun_required: saved?.core?.proxy_mode == 'tun' });
+						if (ready?.ok !== true) errors.fail('HEALTH_FAILED');
+						ctx.stage('ready', 100, 'Guard transition complete');
+						return { enabled, guard_preserved: true };
+					}
+					catch (error) {
+						let failure = errors.normalize(error).code;
+						// Enabling Guard fails closed: keep the desired protection enabled so
+						// autonomous repair cannot reopen direct traffic. Disabling rolls back.
+						if (persisted && !enabled) {
+							try {
+								let restored = settings_domain.set(before);
+								state_model.set_desired(restored);
+								service_adapter.restart_service('config.yaml');
+							}
+							catch (rollback_error) { failure = 'INTERNAL'; }
+						}
+						errors.fail(failure);
+					}
+				});
+			};
+			let subscription_domain = modules.subscription.create({
+				runtime, http: modules.http, operations: operation_manager,
+				config: configuration, settings: settings_domain
+			});
+			let updates_domain = modules.updates.create({
+				runtime, operations: operation_manager, service: service_adapter,
+				settings: settings_domain
+			});
 			let telegram_app = {
-				runtime, http: runtime.http, operations: operation_manager,
+				runtime, http: modules.http, operations: operation_manager,
 				logger: runtime.logger, audit: runtime.audit,
 				settings_get: app.settings_get,
 				status: app.status, health: app.health,
 				memory_status: app.memory_status,
 				diagnostics_summary: () => ({ status: app.status(), health: app.health(),
 					memory: app.memory_status() }),
-				logs_read: () => [],
+				logs_read: () => bounded_logs(runtime),
 				service_start: app.service_start, service_stop: app.service_stop,
 				service_restart: app.service_restart, service_reload: app.service_reload,
 				reboot: type(runtime.reboot) == 'function' ? runtime.reboot : unavailable,
-				subscription_update: type(app.subscription_update) == 'function'
-					? app.subscription_update : unavailable,
-				update_miclash: type(app.update_miclash) == 'function'
-					? app.update_miclash : unavailable,
-				update_mihomo: type(app.update_mihomo) == 'function'
-					? app.update_mihomo : unavailable,
+				subscription_update: (url, source) => subscription_domain.update({
+					profile: 'config.yaml', url
+				}, source),
+				update_miclash: (source) => updates_domain.update_miclash({
+					version: null, channel: null
+				}, source),
+				update_mihomo: (source) => updates_domain.update_mihomo({
+					version: null, channel: null
+				}, source),
 				settings_set: app.settings_set,
+				guard_transition,
 				backup_create: (source) => app.backup_create({
 					options: { include_secrets: false }, source
 				})

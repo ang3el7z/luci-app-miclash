@@ -133,7 +133,7 @@ assert_json_equal(settings.validate_patch({
 let normalized = settings.save(normalized_env.rt, {
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
 	updates: { interval_hours: '24' },
-	telegram: { enabled: true, token: 'secret-token', user_id: '12345' }
+	telegram: { enabled: true, token: '123456:secret-token', user_id: '12345' }
 });
 assert_json_equal(normalized.interfaces.included, [ 'br-lan', 'wlan0' ]);
 assert_equal(normalized.updates.interval_hours, 24);
@@ -145,6 +145,10 @@ assert_throws(() => settings.save(fake_runtime().rt, { unknown: { enabled: true 
 assert_throws(() => settings.save(fake_runtime().rt, { core: { unknown: true } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt, { core: { proxy_mode: 'shell' } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt, { telegram: { token: 'bad\nvalue' } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ telegram: { token: 'not-a-botfather-token' } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ telegram: { token: '0:abcdefgh' } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ backup: { schedule_time: '25:00' } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
@@ -164,7 +168,7 @@ assert_throws(() => settings.save(fake_runtime().rt,
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ telegram: { enabled: true, token: 'token', user_id: '9007199254740993e0' } }), 'INVALID_ARGUMENT');
 let telegram_partial_env = fake_runtime({ miclash: {
-	telegram: { '.type': 'telegram', enabled: '0', token: 'stored-token', user_id: '9007199254740993123456789' }
+	telegram: { '.type': 'telegram', enabled: '0', token: '123456:stored-token', user_id: '9007199254740993123456789' }
 } });
 assert_equal(settings.save(telegram_partial_env.rt, { telegram: { enabled: true } }).telegram.enabled, true);
 let atomic_env = fake_runtime();

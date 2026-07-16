@@ -316,7 +316,7 @@ function make_app() {
 			guard: { '.type': 'guard', enabled: '1' },
 			memory: { '.type': 'memory' },
 			updates: { '.type': 'updates' },
-			telegram: { '.type': 'telegram', enabled: '1', token: 'telegram-secret', user_id: '42' },
+			telegram: { '.type': 'telegram', enabled: '1', token: '123456:telegram-secret', user_id: '42' },
 			notifications: { '.type': 'notifications' },
 			backup: { '.type': 'backup' },
 			meta: { '.type': 'meta', schema_version: '1' }
@@ -1151,14 +1151,14 @@ assert_equal(revalidate.runtime.uci.commit_calls, 0);
 let preserve = make_app(), preserve_created = backup.create(preserve.app);
 let preserve_preview = backup.inspect(preserve.app, preserve_created.id);
 let preserve_cursor = preserve.runtime.uci.cursor();
-assert_equal(preserve_cursor.set('miclash', 'telegram', 'token', 'new-current-token'), true);
+assert_equal(preserve_cursor.set('miclash', 'telegram', 'token', '123456:new-current-token'), true);
 assert_equal(preserve_cursor.set('miclash', 'core', 'subscription_url',
 	'https://new-current.example/sub'), true);
 assert_equal(preserve_cursor.commit('miclash'), true);
 let commits_before = preserve.runtime.uci.commit_calls;
 backup.restore(preserve.app, preserve_preview.id);
 let preserved = settings.load(preserve.runtime);
-assert_equal(preserved.telegram.token, 'new-current-token');
+assert_equal(preserved.telegram.token, '123456:new-current-token');
 assert_equal(preserved.core.subscription_url, 'https://new-current.example/sub');
 assert_equal(preserve.runtime.uci.commit_calls, commits_before + 1);
 assert_equal(invalid_box.runtime.uci.commit_calls, 0, 'failed restore committed UCI');

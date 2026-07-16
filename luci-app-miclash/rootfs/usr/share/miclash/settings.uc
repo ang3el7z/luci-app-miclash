@@ -364,6 +364,9 @@ function validate_effective(current, patch) {
 	let telegram = effective.telegram;
 	if (length(telegram.user_id) && !match(telegram.user_id, /^[1-9][0-9]{0,31}$/))
 		invalid();
+	if (length(telegram.token) &&
+	    !match(telegram.token, /^[1-9][0-9]{0,19}:[A-Za-z0-9_-]{8,128}$/))
+		invalid();
 	if (telegram.enabled && (!length(telegram.token) || !length(telegram.user_id)))
 		invalid();
 	return effective;

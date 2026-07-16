@@ -108,7 +108,7 @@ function configuration(app) {
 	let value = all?.telegram;
 	let enabled = type(value?.enabled) == 'bool' && value.enabled;
 	let token = type(value?.token) == 'string' &&
-		match(value.token, /^[0-9]{1,20}:[A-Za-z0-9_-]{8,128}$/) ? value.token : null;
+		match(value.token, /^[1-9][0-9]{0,19}:[A-Za-z0-9_-]{8,128}$/) ? value.token : null;
 	let user_id = normalized_id(value?.user_id);
 	return {
 		available: true, enabled, configured: token != null && user_id != null,
@@ -194,7 +194,7 @@ export function create(app) {
 	for (let method in [ 'status', 'health', 'memory_status', 'diagnostics_summary',
 		'logs_read', 'service_start', 'service_stop', 'service_restart', 'service_reload',
 		'reboot', 'subscription_update', 'update_miclash', 'update_mihomo',
-		'settings_set', 'backup_create' ])
+		'settings_set', 'guard_transition', 'backup_create' ])
 		if (type(app[method]) != 'function')
 			invalid();
 
@@ -356,9 +356,9 @@ export function create(app) {
 		if (command.name == 'update_mihomo')
 			return operation_message(app.update_mihomo('telegram'));
 		if (command.name == 'guard_on')
-			return operation_message(app.settings_set({ guard: { enabled: true } }, 'telegram'));
+			return operation_message(app.guard_transition(true, 'telegram'));
 		if (command.name == 'guard_off')
-			return operation_message(app.settings_set({ guard: { enabled: false } }, 'telegram'));
+			return operation_message(app.guard_transition(false, 'telegram'));
 		if (command.name == 'backup')
 			return operation_message(app.backup_create('telegram'));
 		invalid();
@@ -482,22 +482,41 @@ export function create(app) {
 		}
 	};
 	function schedule(delay) {
-		timer = app.runtime.clock.set_timeout(delay, () => {
+		let candidate = null;
+		try { candidate = app.runtime.clock.set_timeout(delay, () => {
 			timer = null;
 			if (!state.running)
 				return;
 			controller.poll_once();
 			if (!state.running)
 				return;
-			schedule(state.retry_after_ms > 0 ? state.retry_after_ms : SUCCESS_DELAY_MS);
-		});
+			try { schedule(state.retry_after_ms > 0 ? state.retry_after_ms : SUCCESS_DELAY_MS); }
+			catch (error) {
+				state.running = false;
+				state.last_error = 'INTERNAL';
+				state.retry_after_ms = 0;
+			}
+		}); }
+		catch (error) { errors.fail('INTERNAL'); }
+		if (candidate == null || type(candidate.cancel) != 'function') {
+			try { candidate?.cancel?.(); } catch (error) {}
+			errors.fail('INTERNAL');
+		}
+		timer = candidate;
+		return true;
 	};
 	controller.start = () => {
 		let settings = configuration(app);
 		if (state.running || !settings.available || !settings.enabled || !settings.configured)
 			return false;
 		state.running = true;
-		schedule(0);
+		try { schedule(0); }
+		catch (error) {
+			state.running = false;
+			if (timer?.cancel != null) try { timer.cancel(); } catch (cancel_error) {}
+			timer = null;
+			errors.fail('INTERNAL');
+		}
 		return true;
 	};
 	controller.stop = () => {

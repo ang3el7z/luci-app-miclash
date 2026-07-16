@@ -322,8 +322,8 @@ assert_equal(join(',', map(no_tun.components, (item) => item.component)),
 	'process,api,dns,policy,forward');
 
 let missing_observer = env({ running: true, observers: {
-		dns: () => ({ ready: true }), tun: () => ({ ready: true }),
-		policy: () => ({ ready: true })
+	dns: () => ({ ready: true }), tun: () => ({ ready: true }),
+	policy: () => ({ ready: true }), forward: null
 } });
 let unknown = service.create(missing_observer.rt).wait_ready(1020, 'config.yaml');
 assert_equal(unknown.ok, false);
