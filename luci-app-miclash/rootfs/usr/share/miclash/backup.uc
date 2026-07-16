@@ -10,30 +10,30 @@ import * as schema from 'miclash.schema';
  * primitive authenticates the supplied expected identity in the same
  * operation; there is intentionally no runtime.fs pathname fallback.
  *
- *   open(path, { create, mode, uid }) -> opaque directory handle
- *   open_at(dir, name, { create, mode, uid, expected? }) -> opaque directory handle
+ *   open(path, { create, mode, uid }, lease) -> opaque directory handle
+ *   open_at(dir, name, { create, mode, uid, expected? }, lease) -> opaque directory handle
  *       (handles and identities carry a persistent capability-owned,
  *        unforgeable 256-bit directory generation; inode metadata is only
  *        supplemental and never establishes directory ownership; creation
  *        persists the generation and directory namespace before returning)
- *   stat(dir, name) -> identity|null
- *   list(dir) -> [ immediate-name ]
- *   read(dir, name, { maximum, mode, uid, nlink, expected? })
+ *   stat(dir, name, lease) -> identity|null
+ *   list(dir, lease) -> [ immediate-name ]
+ *   read(dir, name, { maximum, mode, uid, nlink, expected? }, lease)
  *       -> { content, identity }
- *   create_exclusive(dir, name, bytes, { mode, uid }) -> identity
+ *   create_exclusive(dir, name, bytes, { mode, uid }, lease) -> identity
  *       (nofollow hidden temp, complete write, file fsync, atomic no-replace
  *        publication, parent fsync; on every failure the destination is
  *        absent or complete and no hidden temp remains)
- *   replace_atomic(dir, name, expected|null, bytes, { mode, uid, nlink }) -> identity
+ *   replace_atomic(dir, name, expected|null, bytes, { mode, uid, nlink }, lease) -> identity
  *       (CAS current identity/must-not-exist, distinct nofollow temp, temp
  *        fsync, atomic replace, parent fsync; on every failure the destination
  *        is the complete old or complete new file and no hidden temp remains)
  *   with_transaction_lease(callback) -> callback(opaque_lease) result
- *   rename_noreplace(dir, from, to, expected, { mode, uid, nlink }) -> identity
+ *   rename_noreplace(dir, from, to, expected, { mode, uid, nlink }, lease) -> identity
  *       (identity-bound source, absent destination, atomic rename, parent fsync)
- *   unlink_durable(dir, name, expected) -> true
+ *   unlink_durable(dir, name, expected, lease) -> true
  *       (identity-bound unlink and parent fsync)
- *   rmdir_durable(dir, name, expected) -> true
+ *   rmdir_durable(dir, name, expected, lease) -> true
  *       (identity-bound empty-directory removal and parent fsync)
  *
  * The module writes and parses strict USTAR itself.  No normalized archive
@@ -135,16 +135,16 @@ function validate_app(app) {
 	return { runtime, secure };
 };
 
-function open_dir(secure, path) {
-	let handle = secure.open(path, { create: true, mode: 0o700, uid: 0 });
+function open_dir(env, path) {
+	let handle = env.secure.open(path, { create: true, mode: 0o700, uid: 0 }, env.lease);
 	if (type(handle) != 'object' || !valid_directory_identity(handle.identity, 0o700))
 		internal();
 	return handle;
 };
 
-function open_child_dir(secure, parent, name, create, expected) {
-	let handle = secure.open_at(parent, name,
-		{ create: create === true, mode: 0o700, uid: 0, expected });
+function open_child_dir(env, parent, name, create, expected) {
+	let handle = env.secure.open_at(parent, name,
+		{ create: create === true, mode: 0o700, uid: 0, expected }, env.lease);
 	if (type(handle) != 'object' || !valid_directory_identity(handle.identity, 0o700) ||
 	    (expected != null && !same_directory_identity(handle.identity, expected))) internal();
 	return handle;
@@ -152,7 +152,7 @@ function open_child_dir(secure, parent, name, create, expected) {
 
 function secure_read(env, directory, name, maximum, mode, expected) {
 	let captured = env.secure.read(directory, name,
-		{ maximum, mode, uid: 0, nlink: 1, expected });
+		{ maximum, mode, uid: 0, nlink: 1, expected }, env.lease);
 	if (type(captured?.content) != 'string' ||
 	    !valid_file_identity(captured?.identity, mode, length(captured.content)) ||
 	    length(captured.content) > maximum ||
@@ -167,7 +167,8 @@ function secure_read(env, directory, name, maximum, mode, expected) {
 
 function secure_create(env, directory, name, content, mode) {
 	if (type(content) != 'string') internal();
-	let identity = env.secure.create_exclusive(directory, name, content, { mode, uid: 0 });
+	let identity = env.secure.create_exclusive(directory, name, content,
+		{ mode, uid: 0 }, env.lease);
 	if (!valid_file_identity(identity, mode, length(content))) internal();
 	return secure_read(env, directory, name, length(content), mode, identity);
 };
@@ -175,13 +176,13 @@ function secure_create(env, directory, name, content, mode) {
 function secure_replace(env, directory, name, expected, content, mode) {
 	if (type(content) != 'string') internal();
 	let identity = env.secure.replace_atomic(directory, name, expected, content,
-		{ mode, uid: 0, nlink: 1 });
+		{ mode, uid: 0, nlink: 1 }, env.lease);
 	if (!valid_file_identity(identity, mode, length(content))) internal();
 	return secure_read(env, directory, name, length(content), mode, identity);
 };
 
-function safe_names(secure, directory, limit) {
-	let names = secure.list(directory);
+function safe_names(env, directory, limit) {
+	let names = env.secure.list(directory, env.lease);
 	if (type(names) != 'array' || length(names) > limit) internal();
 	let seen = {};
 	for (let name in names) {
@@ -485,9 +486,9 @@ function source_record(app, source_id, env) {
 	if (valid_id(source_id, 'b')) path = BACKUP_ROOT;
 	else if (valid_id(source_id, 'i')) path = IMPORT_ROOT;
 	else invalid();
-	let root = open_dir(env.secure, path);
-	if (env.secure.stat(root, source_id + '.json') == null ||
-	    env.secure.stat(root, source_id + '.tar') == null) errors.fail('NOT_FOUND');
+	let root = open_dir(env, path);
+	if (env.secure.stat(root, source_id + '.json', env.lease) == null ||
+	    env.secure.stat(root, source_id + '.tar', env.lease) == null) errors.fail('NOT_FOUND');
 	let sidecar_capture, archive, sidecar;
 	try {
 		sidecar_capture = secure_read(env, root, source_id + '.json', MAX_MANIFEST, 0o600);
@@ -504,14 +505,14 @@ function source_record(app, source_id, env) {
 function remove_tree(env, parent, name, expected, registered, registered_directories, relative) {
 	if (type(registered) != 'array' || type(registered_directories) != 'array') internal();
 	let directory;
-	try { directory = open_child_dir(env.secure, parent, name, false, expected); }
+	try { directory = open_child_dir(env, parent, name, false, expected); }
 	catch (error) { return false; }
 	let names;
-	try { names = safe_names(env.secure, directory, MAX_FILES * 3 + 16); }
+	try { names = safe_names(env, directory, MAX_FILES * 3 + 16); }
 	catch (error) { return false; }
 	let failed = false;
 	for (let child_name in names) {
-		let identity = env.secure.stat(directory, child_name);
+		let identity = env.secure.stat(directory, child_name, env.lease);
 		let child_path = length(relative ?? '') ? relative + '/' + child_name : child_name;
 		if (identity?.type == 'directory') {
 			let registration = null;
@@ -552,7 +553,8 @@ function remove_tree(env, parent, name, expected, registered, registered_directo
 				let captured = secure_read(env, directory, child_name, registration.size,
 					registration.mode, identity);
 				if (captured.size != registration.size || captured.sha256 != registration.sha256 ||
-			    env.secure.unlink_durable(directory, child_name, captured.identity) !== true)
+			    env.secure.unlink_durable(directory, child_name, captured.identity,
+				env.lease) !== true)
 					failed = true;
 			}
 			catch (error) { failed = true; }
@@ -560,7 +562,7 @@ function remove_tree(env, parent, name, expected, registered, registered_directo
 		else failed = true;
 	}
 	if (failed) return false;
-	try { return env.secure.rmdir_durable(parent, name, expected) === true; }
+	try { return env.secure.rmdir_durable(parent, name, expected, env.lease) === true; }
 	catch (error) { return false; }
 };
 
@@ -747,13 +749,14 @@ function journal_store(env, transaction) {
 };
 
 function journal_finish(env, transaction) {
-	if (env.secure.unlink_durable(transaction.root, transaction.name, transaction.identity) !== true)
+	if (env.secure.unlink_durable(transaction.root, transaction.name, transaction.identity,
+		env.lease) !== true)
 		internal();
 	return true;
 };
 
 function registered_file(env, directory, name, size, digest, recorded) {
-	let current = env.secure.stat(directory, name);
+	let current = env.secure.stat(directory, name, env.lease);
 	if (current == null) return null;
 	if (current.type != 'file' || current.uid != 0 || current.nlink != 1 ||
 	    current.size != size || (recorded != null &&
@@ -764,7 +767,7 @@ function registered_file(env, directory, name, size, digest, recorded) {
 };
 
 function recover_create(env, transaction) {
-	let record = transaction.record, root = open_dir(env.secure, BACKUP_ROOT);
+	let record = transaction.record, root = open_dir(env, BACKUP_ROOT);
 	let temp = registered_file(env, root, record.temp_name, record.archive_size,
 		record.archive_sha256, record.temp_identity);
 	let archive = registered_file(env, root, record.archive_name, record.archive_size,
@@ -779,7 +782,8 @@ function recover_create(env, transaction) {
 	}
 	for (let item in [ [ record.temp_name, temp ], [ record.archive_name, archive ],
 		[ record.sidecar_name, sidecar ] ])
-		if (item[1] != null) env.secure.unlink_durable(root, item[0], item[1].identity);
+		if (item[1] != null)
+			env.secure.unlink_durable(root, item[0], item[1].identity, env.lease);
 	journal_finish(env, transaction);
 	return true;
 };
@@ -792,16 +796,16 @@ function expected_prefix(files, path) {
 };
 
 function authenticate_stage(env, directory, relative, files, directories, seen, seen_directories) {
-	for (let name in safe_names(env.secure, directory, MAX_FILES + 8)) {
+	for (let name in safe_names(env, directory, MAX_FILES + 8)) {
 		let path = length(relative) ? relative + '/' + name : name;
-		let identity = env.secure.stat(directory, name);
+		let identity = env.secure.stat(directory, name, env.lease);
 		if (identity?.type == 'directory') {
 			let registration = null;
 			for (let item in directories) if (item.path == path) registration = item;
 			if (!expected_prefix(files, path) || registration?.identity == null) internal();
 			let expected = record_directory_identity(registration.identity);
 			if (!same_directory_identity(expected, identity)) internal();
-			let child = open_child_dir(env.secure, directory, name, false, expected);
+			let child = open_child_dir(env, directory, name, false, expected);
 			seen_directories[path] = true;
 			authenticate_stage(env, child, path, files, directories, seen, seen_directories);
 		}
@@ -819,13 +823,13 @@ function authenticate_stage(env, directory, relative, files, directories, seen, 
 };
 
 function recover_inspect(env, transaction, now) {
-	let record = transaction.record, root = open_dir(env.secure, INSPECT_ROOT);
-	let stat = env.secure.stat(root, record.inspection_id);
+	let record = transaction.record, root = open_dir(env, INSPECT_ROOT);
+	let stat = env.secure.stat(root, record.inspection_id, env.lease);
 	if (stat == null) { journal_finish(env, transaction); return true; }
 	if (record.stage_identity == null) internal();
 	let stage_expected = record_directory_identity(record.stage_identity);
 	if (!same_directory_identity(stage_expected, stat)) internal();
-	let stage = open_child_dir(env.secure, root, record.inspection_id, false, stage_expected);
+	let stage = open_child_dir(env, root, record.inspection_id, false, stage_expected);
 	let seen = {}, seen_directories = {};
 	authenticate_stage(env, stage, '', record.files, record.directories, seen, seen_directories);
 	for (let file in record.files)
@@ -848,21 +852,23 @@ function prune_candidate(env, root, original, tomb, size, digest, recorded) {
 };
 
 function recover_prune(env, transaction) {
-	let record = transaction.record, root = open_dir(env.secure, BACKUP_ROOT);
+	let record = transaction.record, root = open_dir(env, BACKUP_ROOT);
 	let archive = prune_candidate(env, root, record.archive_name, record.archive_tomb,
 		record.archive_size, record.archive_sha256, record.archive_identity);
 	let sidecar = prune_candidate(env, root, record.sidecar_name, record.sidecar_tomb,
 		record.sidecar_size, record.sidecar_sha256, record.sidecar_identity);
-	if (archive != null) env.secure.unlink_durable(root, archive.name, archive.capture.identity);
-	if (sidecar != null) env.secure.unlink_durable(root, sidecar.name, sidecar.capture.identity);
+	if (archive != null)
+		env.secure.unlink_durable(root, archive.name, archive.capture.identity, env.lease);
+	if (sidecar != null)
+		env.secure.unlink_durable(root, sidecar.name, sidecar.capture.identity, env.lease);
 	journal_finish(env, transaction);
 	return true;
 };
 
 function recover_transactions_locked(env) {
 	if (type(env?.lease) != 'object') internal();
-	let root = open_dir(env.secure, TRANSACTION_ROOT);
-	let names = sorted(safe_names(env.secure, root, MAX_TRANSACTIONS + 1));
+	let root = open_dir(env, TRANSACTION_ROOT);
+	let names = sorted(safe_names(env, root, MAX_TRANSACTIONS + 1));
 	if (length(names) > MAX_TRANSACTIONS) internal();
 	let now = env.runtime.clock.now(), transactions = [];
 	if (type(now) != 'int' || now < 0) internal();
@@ -895,8 +901,8 @@ function with_transaction_lease(env, worker) {
 function journal_begin(env, kind, created_at, initial) {
 	if (type(env?.lease) != 'object') internal();
 	recover_transactions_locked(env);
-	let root = open_dir(env.secure, TRANSACTION_ROOT);
-	if (length(safe_names(env.secure, root, MAX_TRANSACTIONS)) >= MAX_TRANSACTIONS)
+	let root = open_dir(env, TRANSACTION_ROOT);
+	if (length(safe_names(env, root, MAX_TRANSACTIONS)) >= MAX_TRANSACTIONS)
 		errors.fail('BUSY');
 	let nonce = env.runtime.random.hex(16);
 	if (!match(nonce, /^[0-9a-f]{32}$/)) internal();
@@ -912,8 +918,8 @@ function journal_begin(env, kind, created_at, initial) {
 
 function list_records(app, env) {
 	if (type(env?.lease) != 'object') internal();
-	let root = open_dir(env.secure, BACKUP_ROOT);
-	let names = safe_names(env.secure, root, MAX_FILES * 4 + 64), output = [];
+	let root = open_dir(env, BACKUP_ROOT);
+	let names = safe_names(env, root, MAX_FILES * 4 + 64), output = [];
 	for (let name in names) {
 		let found = match(name, /^(b-[0-9]{13}-[0-9a-f]{32})\.json$/);
 		if (found == null) continue;
@@ -950,7 +956,7 @@ function create_impl(app, options, source, env) {
 	if (type(env?.lease) != 'object') internal();
 	if (type(app.settings?.load) != 'function' ||
 	    type(app.settings?.validate_patch) != 'function') invalid();
-	let root = open_dir(env.secure, BACKUP_ROOT), include_secrets = options.include_secrets === true;
+	let root = open_dir(env, BACKUP_ROOT), include_secrets = options.include_secrets === true;
 	let now = env.runtime.clock.now(), nonce = env.runtime.random.hex(16);
 	if (type(now) != 'int' || now < 0 || !match(nonce, /^[0-9a-f]{32}$/)) internal();
 	let id = sprintf('b-%013d-%s', now, nonce), files = [], contents = {};
@@ -958,17 +964,17 @@ function create_impl(app, options, source, env) {
 	let side_name = id + '.json', side_identity = null, archive_identity = null;
 	let transaction = null;
 	try {
-		let clash = open_dir(env.secure, '/opt/clash');
+		let clash = open_dir(env, '/opt/clash');
 		if (include_secrets)
 			for (let profile in PROFILES) {
-				if (env.secure.stat(clash, profile) == null) continue;
+				if (env.secure.stat(clash, profile, env.lease) == null) continue;
 				let captured = secure_read(env, clash, profile, MAX_MEMBER, 0o600);
 				let path = 'configs/' + profile;
 				contents[path] = captured.content;
 				push(files, { path, size: captured.size, sha256: captured.sha256, secret: true });
 			}
-		let rules = open_child_dir(env.secure, clash, 'lst', true);
-		for (let name in sorted(safe_names(env.secure, rules, MAX_FILES))) {
+		let rules = open_child_dir(env, clash, 'lst', true);
+		for (let name in sorted(safe_names(env, rules, MAX_FILES))) {
 			if (!safe_ruleset_name(name)) continue;
 			let captured = secure_read(env, rules, name, MAX_MEMBER, 0o600);
 			let path = 'rulesets/' + name;
@@ -1022,7 +1028,7 @@ function create_impl(app, options, source, env) {
 		transaction.record.phase = 'side'; journal_store(env, transaction);
 		transaction.record.phase = 'publish_planned'; journal_store(env, transaction);
 		archive_identity = env.secure.rename_noreplace(root, temp_name, id + '.tar', temp_identity,
-			{ mode: 0o600, uid: 0, nlink: 1 });
+			{ mode: 0o600, uid: 0, nlink: 1 }, env.lease);
 		if (!valid_file_identity(archive_identity, 0o600, length(archive_bytes))) internal();
 		temp_identity = null;
 		transaction.record.temp_identity = null;
@@ -1086,11 +1092,11 @@ function inspect_impl(app, source_id, options, env) {
 	    source.sidecar.file_count != length(manifest.files) ||
 	    sprintf('%J', source.sidecar.includes) != sprintf('%J', manifest.includes))
 		errors.fail('VALIDATION_FAILED');
-	let root = open_dir(source.env.secure, INSPECT_ROOT), now = source.env.runtime.clock.now();
+	let root = open_dir(source.env, INSPECT_ROOT), now = source.env.runtime.clock.now();
 	let nonce = source.env.runtime.random.hex(16);
 	if (type(now) != 'int' || now < 0 || !match(nonce, /^[0-9a-f]{32}$/)) internal();
 	let id = sprintf('x-%013d-%s', now, nonce);
-	if (source.env.secure.stat(root, id) != null) internal();
+	if (source.env.secure.stat(root, id, source.env.lease) != null) internal();
 	let journal_files = [];
 	for (let file in manifest.files)
 		push(journal_files, { path: file.path, size: file.size, sha256: file.sha256,
@@ -1104,7 +1110,7 @@ function inspect_impl(app, source_id, options, env) {
 	});
 	let staging = null;
 	try {
-		staging = open_child_dir(source.env.secure, root, id, true);
+		staging = open_child_dir(source.env, root, id, true);
 		transaction.record.stage_identity = directory_identity_record(staging.identity);
 		transaction.record.phase = 'staging'; journal_store(source.env, transaction);
 		let captured = [];
@@ -1119,8 +1125,8 @@ function inspect_impl(app, source_id, options, env) {
 				for (let item in transaction.record.directories)
 					if (item.path == relative) registration = item;
 				if (registration == null) {
-					if (source.env.secure.stat(directory, part) != null) internal();
-					directory = open_child_dir(source.env.secure, directory, part, true);
+					if (source.env.secure.stat(directory, part, source.env.lease) != null) internal();
+					directory = open_child_dir(source.env, directory, part, true);
 					push(transaction.record.directories, {
 						path: relative, identity: directory_identity_record(directory.identity)
 					});
@@ -1128,7 +1134,7 @@ function inspect_impl(app, source_id, options, env) {
 				}
 				else {
 					let expected = record_directory_identity(registration.identity);
-					directory = open_child_dir(source.env.secure, directory, part, false, expected);
+					directory = open_child_dir(source.env, directory, part, false, expected);
 				}
 			}
 			let written = secure_create(source.env, directory, leaf,
@@ -1195,10 +1201,11 @@ export function inspect(app, source_id, options) {
 function inspection_record(app, inspected_id, env) {
 	if (type(env?.lease) != 'object') internal();
 	if (!valid_id(inspected_id, 'x')) invalid();
-	let root = open_dir(env.secure, INSPECT_ROOT), stat = env.secure.stat(root, inspected_id);
+	let root = open_dir(env, INSPECT_ROOT), stat =
+		env.secure.stat(root, inspected_id, env.lease);
 	if (stat == null) errors.fail('NOT_FOUND');
 	let staging;
-	try { staging = open_child_dir(env.secure, root, inspected_id, false, stat); }
+	try { staging = open_child_dir(env, root, inspected_id, false, stat); }
 	catch (error) { errors.fail('CORRUPT_STATE'); }
 	let report_capture, report;
 	try {
@@ -1253,8 +1260,8 @@ function inspection_record(app, inspected_id, env) {
 		let parts = split(file.path, '/'), directory = staging, leaf = pop(parts);
 		for (let part in parts) {
 			expected_top[part] = true;
-			let child = env.secure.stat(directory, part);
-			try { directory = open_child_dir(env.secure, directory, part, false, child); }
+			let child = env.secure.stat(directory, part, env.lease);
+			try { directory = open_child_dir(env, directory, part, false, child); }
 			catch (error) { errors.fail('CORRUPT_STATE'); }
 		}
 		let expected = { type: 'file', inode: captured.inode, uid: 0, mode: 0o400,
@@ -1267,7 +1274,7 @@ function inspection_record(app, inspected_id, env) {
 			errors.fail('CORRUPT_STATE');
 		contents[file.path] = current.content;
 	}
-	for (let name in safe_names(env.secure, staging, MAX_FILES + 8))
+	for (let name in safe_names(env, staging, MAX_FILES + 8))
 		if (!expected_top[name]) errors.fail('CORRUPT_STATE');
 	let staged_archive = {
 		members: [ { name: 'manifest.json', size: staged_manifest.size,
@@ -1322,7 +1329,7 @@ function validate_restore_contents(app, ctx, inspected) {
 };
 
 function prepare_restore_targets(inspected) {
-	let env = inspected.env, clash = open_dir(env.secure, '/opt/clash');
+	let env = inspected.env, clash = open_dir(env, '/opt/clash');
 	let rules = null, targets = [];
 	for (let file in inspected.manifest.files) {
 		let directory, name;
@@ -1331,14 +1338,14 @@ function prepare_restore_targets(inspected) {
 		}
 		else if (substr(file.path, 0, 9) == 'rulesets/') {
 			if (rules == null) {
-				let identity = env.secure.stat(clash, 'lst');
+				let identity = env.secure.stat(clash, 'lst', env.lease);
 				if (identity == null) internal();
-				rules = open_child_dir(env.secure, clash, 'lst', false, identity);
+				rules = open_child_dir(env, clash, 'lst', false, identity);
 			}
 			directory = rules; name = substr(file.path, 9);
 		}
 		else continue;
-		let expected = env.secure.stat(directory, name);
+		let expected = env.secure.stat(directory, name, env.lease);
 		if (expected != null && !valid_file_identity(expected, 0o600)) internal();
 		push(targets, { directory, name, expected,
 			content: inspected.contents[file.path] });
@@ -1348,7 +1355,7 @@ function prepare_restore_targets(inspected) {
 
 function revalidate_restore_targets(env, targets) {
 	for (let target in targets) {
-		let current = env.secure.stat(target.directory, target.name);
+		let current = env.secure.stat(target.directory, target.name, env.lease);
 		if (target.expected == null ? current != null :
 		    !same_file_identity(current, target.expected)) internal();
 	}
@@ -1363,28 +1370,28 @@ export function restore(app, inspected_id, options, source) {
 	validate_restore_app(app);
 	try {
 		let env = validate_app(app);
-		return with_transaction_lease(env, (leased) => {
-			recover_transactions_locked(leased);
-			return app.operations.submit('backup.restore', source, { inspection_id: inspected_id },
-			(ctx) => app.lock.with_lock(app.runtime, { barrier: 'normal', wait_ms: 0 }, () => {
-				ctx.stage('validating', 10, 'Validating backup');
-				let inspected = inspection_record(app, inspected_id, leased);
-				let settings_patch = validate_restore_contents(app, ctx, inspected);
-				let targets = prepare_restore_targets(inspected);
-				ctx.stage('snapshot', 30, 'Creating recovery snapshot');
-				let snapshot = create_impl(app, { include_secrets: true }, 'system', leased);
-				ctx.stage('committing', 60, 'Committing configuration');
-				revalidate_restore_targets(inspected.env, targets);
-				for (let target in targets)
-					secure_replace(inspected.env, target.directory, target.name,
-						target.expected, target.content, 0o600);
-				app.settings.save(app.runtime, settings_patch);
-				ctx.stage('reconcile', 90, 'Scheduling reconciliation');
-				let reconciliation = app.reconcile.run('backup_restore');
-				ctx.stage('complete', 100, 'Restore committed');
-				return { snapshot_id: snapshot.id, reconciliation };
+		return app.operations.submit('backup.restore', source, { inspection_id: inspected_id },
+			(ctx) => with_transaction_lease(env, (leased) => {
+				recover_transactions_locked(leased);
+				return app.lock.with_lock(app.runtime, { barrier: 'normal', wait_ms: 0 }, () => {
+					ctx.stage('validating', 10, 'Validating backup');
+					let inspected = inspection_record(app, inspected_id, leased);
+					let settings_patch = validate_restore_contents(app, ctx, inspected);
+					let targets = prepare_restore_targets(inspected);
+					ctx.stage('snapshot', 30, 'Creating recovery snapshot');
+					let snapshot = create_impl(app, { include_secrets: true }, 'system', leased);
+					ctx.stage('committing', 60, 'Committing configuration');
+					revalidate_restore_targets(inspected.env, targets);
+					for (let target in targets)
+						secure_replace(inspected.env, target.directory, target.name,
+							target.expected, target.content, 0o600);
+					app.settings.save(app.runtime, settings_patch);
+					ctx.stage('reconcile', 90, 'Scheduling reconciliation');
+					let reconciliation = app.reconcile.run('backup_restore');
+					ctx.stage('complete', 100, 'Restore committed');
+					return { snapshot_id: snapshot.id, reconciliation };
+				});
 			}));
-		});
 	}
 	catch (error) { errors.fail(errors.normalize(error).code); }
 };
@@ -1398,11 +1405,12 @@ function prune_impl(app, options, env) {
 		retain = app.settings.load(env.runtime)?.backup?.retention;
 	}
 	if (type(retain) != 'int' || retain < 1 || retain > 100) invalid();
-	let records = list_records(app, env), root = open_dir(env.secure, BACKUP_ROOT), removed = [];
+	let records = list_records(app, env), root = open_dir(env, BACKUP_ROOT), removed = [];
 	while (length(records) > retain) {
 		let item = shift(records), current = source_record(app, item.id, env);
 		let side_tomb = '.prune-' + item.id + '.json', archive_tomb = '.prune-' + item.id + '.tar';
-		if (env.secure.stat(root, side_tomb) != null || env.secure.stat(root, archive_tomb) != null)
+		if (env.secure.stat(root, side_tomb, env.lease) != null ||
+		    env.secure.stat(root, archive_tomb, env.lease) != null)
 			internal();
 		let transaction = journal_begin(env, 'prune', env.runtime.clock.now(), {
 			prune_id: item.id, archive_name: item.id + '.tar', sidecar_name: item.id + '.json',
@@ -1414,14 +1422,14 @@ function prune_impl(app, options, env) {
 		});
 		try {
 			let moved_side = env.secure.rename_noreplace(root, item.id + '.json', side_tomb,
-				current.sidecar_capture.identity, { mode: 0o600, uid: 0, nlink: 1 });
+				current.sidecar_capture.identity, { mode: 0o600, uid: 0, nlink: 1 }, env.lease);
 			transaction.record.phase = 'side_moved'; journal_store(env, transaction);
 			let moved_archive = env.secure.rename_noreplace(root, item.id + '.tar', archive_tomb,
-				current.archive.identity, { mode: 0o600, uid: 0, nlink: 1 });
+				current.archive.identity, { mode: 0o600, uid: 0, nlink: 1 }, env.lease);
 			transaction.record.phase = 'archive_moved'; journal_store(env, transaction);
 			transaction.record.phase = 'deleting'; journal_store(env, transaction);
-			if (env.secure.unlink_durable(root, archive_tomb, moved_archive) !== true ||
-			    env.secure.unlink_durable(root, side_tomb, moved_side) !== true) internal();
+			if (env.secure.unlink_durable(root, archive_tomb, moved_archive, env.lease) !== true ||
+			    env.secure.unlink_durable(root, side_tomb, moved_side, env.lease) !== true) internal();
 			journal_finish(env, transaction);
 		}
 		catch (error) {

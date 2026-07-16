@@ -1,6 +1,7 @@
 import { assert_equal, assert_match, assert_throws, assert_true } from 'testlib';
 import * as backup from 'miclash.backup';
 import * as fakes from 'fakes';
+import * as operations_domain from 'miclash.operations';
 import * as settings from 'miclash.settings';
 import { rand } from 'math';
 
@@ -35,12 +36,20 @@ function same_directory_identity(left, right) {
 
 function secure_fs(filesystem) {
 	let capability = { before: null, after: null, calls: [], replacement_nonce: 0,
-		lease_held: false, lease_nonce: 0 };
+		lease_held: false, lease_nonce: 0, active_lease: null,
+		enforce_active_lease: false, enforce_explicit_lease: false };
 	let handle_bindings = {}, next_handle = 0;
 	function hook(which, operation, directory, name, extra) {
 		push(capability.calls, { which, operation, name });
 		let callback = capability[which];
 		if (type(callback) == 'function') callback(operation, directory, name, extra);
+	};
+	function require_lease(lease) {
+		if (!capability.enforce_active_lease && !capability.enforce_explicit_lease) return;
+		if (capability.active_lease == null || capability.active_lease.active !== true)
+			die('INTERNAL');
+		if ((lease != null || capability.enforce_explicit_lease) &&
+		    lease !== capability.active_lease) die('INTERNAL');
 	};
 	function handle_path(handle) {
 		let binding = handle_bindings[handle?.token];
@@ -76,7 +85,8 @@ function secure_fs(filesystem) {
 		    (expected != null && !same_file_identity(current, expected))) die('INTERNAL');
 		return current;
 	};
-	capability.open = (path, options) => {
+	capability.open = (path, options, lease) => {
+		require_lease(lease);
 		hook('before', 'open', null, path, options);
 		if (filesystem.lstat(path) == null) {
 			if (options?.create !== true || filesystem.mkdir(path) !== true) die('INTERNAL');
@@ -89,7 +99,8 @@ function secure_fs(filesystem) {
 		identity = directory(path, identity);
 		return directory_handle(path, identity);
 	};
-	capability.open_at = (parent, name, options) => {
+	capability.open_at = (parent, name, options, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		if (!match(name, /^[A-Za-z0-9._-]+$/)) die('INTERNAL');
 		let parent_path = handle_path(parent), path = parent_path + '/' + name;
@@ -107,7 +118,8 @@ function secure_fs(filesystem) {
 		identity = directory(path, identity);
 		return directory_handle(path, identity);
 	};
-	capability.stat = (parent, name) => {
+	capability.stat = (parent, name, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		hook('before', 'stat', parent, name, null);
 		let identity = clone(filesystem.lstat(handle_path(parent) + '/' + name));
@@ -118,7 +130,8 @@ function secure_fs(filesystem) {
 		hook('after', 'stat', parent, name, identity);
 		return identity;
 	};
-	capability.list = (parent) => {
+	capability.list = (parent, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		hook('before', 'list', parent, null, null);
 		let names = clone(filesystem.lsdir(handle_path(parent)));
@@ -126,7 +139,8 @@ function secure_fs(filesystem) {
 		directory(parent, parent.identity);
 		return names;
 	};
-	capability.read = (parent, name, options) => {
+	capability.read = (parent, name, options, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		let path = handle_path(parent) + '/' + name;
 		hook('before', 'read', parent, name, options);
@@ -138,7 +152,8 @@ function secure_fs(filesystem) {
 		if (type(content) != 'string' || length(content) != after.size) die('INTERNAL');
 		return { content, identity: clone(after) };
 	};
-	capability.create_exclusive = (parent, name, content, options) => {
+	capability.create_exclusive = (parent, name, content, options, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		let path = handle_path(parent) + '/' + name;
 		let temp_name = '.secure-create-' + capability.replacement_nonce++ + '.tmp';
@@ -174,7 +189,8 @@ function secure_fs(filesystem) {
 			die(error);
 		}
 	};
-	capability.replace_atomic = (parent, name, expected, content, options) => {
+	capability.replace_atomic = (parent, name, expected, content, options, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		let path = handle_path(parent) + '/' + name;
 		let temp_name = '.secure-replace-' + capability.replacement_nonce++ + '.tmp';
@@ -217,14 +233,20 @@ function secure_fs(filesystem) {
 	capability.with_transaction_lease = (worker) => {
 		if (capability.lease_held) die('BUSY');
 		capability.lease_held = true;
-		let lease = { id: ++capability.lease_nonce };
+		let lease = { id: ++capability.lease_nonce, active: true };
+		capability.active_lease = lease;
 		let result;
 		try { result = worker(lease); }
-		catch (error) { capability.lease_held = false; die(error); }
+		catch (error) {
+			lease.active = false; capability.active_lease = null;
+			capability.lease_held = false; die(error);
+		}
+		lease.active = false; capability.active_lease = null;
 		capability.lease_held = false;
 		return result;
 	};
-	capability.rename_noreplace = (parent, from, to, expected, options) => {
+	capability.rename_noreplace = (parent, from, to, expected, options, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		let parent_path = handle_path(parent);
 		let from_path = parent_path + '/' + from, to_path = parent_path + '/' + to;
@@ -237,7 +259,8 @@ function secure_fs(filesystem) {
 		hook('after', 'rename_parent_fsync', parent, to, { from, expected, options, identity });
 		return clone(file(to_path, identity, options));
 	};
-	capability.unlink_durable = (parent, name, expected) => {
+	capability.unlink_durable = (parent, name, expected, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		let path = handle_path(parent) + '/' + name;
 		hook('before', 'unlink_durable', parent, name, expected);
@@ -247,7 +270,8 @@ function secure_fs(filesystem) {
 		hook('after', 'unlink_parent_fsync', parent, name, expected);
 		return true;
 	};
-	capability.rmdir_durable = (parent, name, expected) => {
+	capability.rmdir_durable = (parent, name, expected, lease) => {
+		require_lease(lease);
 		directory(parent, parent.identity);
 		let path = handle_path(parent) + '/' + name;
 		hook('before', 'rmdir_durable', parent, name, expected);
@@ -306,6 +330,33 @@ function make_app() {
 		archive: { create: () => die('adapter-used'), list: () => die('adapter-used'),
 			extract: () => die('adapter-used') } };
 	return { app, filesystem, runtime };
+};
+
+function controlled_clock(start) {
+	let current = start, timers = [];
+	return {
+		now: () => current,
+		set_timeout: (milliseconds, callback) => {
+			let timer = { due: current + milliseconds, callback, active: true };
+			timer.cancel = () => timer.active = false;
+			push(timers, timer); return timer;
+		},
+		elapse: (milliseconds) => current += milliseconds,
+		run_next: () => {
+			for (let timer in timers)
+				if (timer.active && timer.due <= current) {
+					timer.active = false; timer.callback(); return true;
+				}
+			return false;
+		}
+	};
+};
+
+function make_async_app() {
+	let box = make_app();
+	box.runtime.clock = controlled_clock(1700000000000);
+	box.app.operations = operations_domain.create(box.runtime);
+	return box;
 };
 
 const NUL = sprintf('%c', 0);
@@ -758,6 +809,114 @@ assert_equal(restore_box.filesystem.readfile('/opt/clash/config.yaml'), 'port: 1
 assert_equal(restore_box.runtime.uci.commit_calls, 1);
 assert_equal(length(restore_box.app.reconcile.calls), 1);
 assert_equal(length(backup.list(restore_box.app)), 1, 'recovery snapshot must remain');
+
+// The real operation manager runs mutation workers from a later zero-delay
+// timer. Enqueue must return before the restore lease is acquired; the worker
+// itself must own the lease when it touches any secure filesystem primitive.
+let async_restore = make_async_app(), async_seed = seed_import(async_restore,
+	'00000000000000000000000000000109', {
+		'configs/config.yaml': 'port: 9001\n', 'settings/settings.json': '{ }\n'
+	}, { secrets: { 'configs/config.yaml': true } });
+let async_preview = backup.inspect(async_restore.app, async_seed.id);
+async_restore.app.secure_fs.enforce_active_lease = true;
+let queued_restore = backup.restore(async_restore.app, async_preview.id, null, 'system');
+assert_equal(queued_restore.state, 'queued');
+assert_equal(async_restore.filesystem.readfile('/opt/clash/config.yaml'),
+	'port: 7890\nsecret: controller-password\n');
+backup.list(async_restore.app); // no restore lease is held while queued
+async_restore.app.secure_fs.enforce_explicit_lease = true;
+let async_phases = {}, async_probe = false, blocked_restore = null;
+async_restore.app.secure_fs.before = (operation, directory, name, extra) => {
+	let phase = operation == 'read' && name == '.inspection.json' ? 'validation' :
+		(operation == 'create_exclusive' && match(name, /\.tar\.tmp$/) ? 'snapshot' :
+		 (operation == 'replace_atomic' && name == 'config.yaml' ? 'commit' : null));
+	if (phase == null || async_phases[phase] || async_probe) return;
+	async_probe = true;
+	if (phase == 'validation') assert_throws(() => backup.list(async_restore.app), 'BUSY');
+	else if (phase == 'snapshot') {
+		assert_throws(() => backup.create(async_restore.app), 'BUSY');
+		assert_throws(() => backup.inspect(async_restore.app, async_seed.id), 'BUSY');
+	}
+	else {
+		async_restore.runtime.clock.elapse(900001);
+		assert_throws(() => backup.prune(async_restore.app, { retain: 1 }), 'BUSY');
+		blocked_restore = backup.restore(async_restore.app, async_preview.id, null, 'system');
+		assert_equal(blocked_restore.state, 'queued');
+	}
+	assert_equal(async_restore.filesystem.lstat('/tmp/miclash/backup-inspected/' +
+		async_preview.id) != null, true, 'active worker lost its preview at ' + phase);
+	async_phases[phase] = true; async_probe = false;
+};
+assert_equal(async_restore.runtime.clock.run_next(), true);
+let finished_restore = async_restore.app.operations.get(queued_restore.id);
+assert_equal(finished_restore.state, 'success',
+	'queued restore worker ran outside its transaction lease');
+assert_equal(async_restore.filesystem.readfile('/opt/clash/config.yaml'), 'port: 9001\n');
+for (let phase in [ 'validation', 'snapshot', 'commit' ])
+	assert_equal(async_phases[phase], true, 'async worker lease omitted ' + phase);
+assert_equal(async_restore.app.operations.get(blocked_restore.id).state, 'queued',
+	'competing restore entered while the active mutation held its lease');
+assert_equal(async_restore.runtime.uci.commit_calls, 1);
+assert_equal(length(async_restore.app.reconcile.calls), 1);
+async_restore.app.secure_fs.before = null;
+backup.list(async_restore.app); // success released lease; now expiry recovery may run
+assert_equal(async_restore.filesystem.lstat('/tmp/miclash/backup-inspected/' +
+	async_preview.id), null);
+
+// Lease tokens are exact, active capabilities: a released token is rejected
+// even while another lease owns the same secure filesystem.
+let token_box = make_app(), stale_token = null, token_root = null;
+token_box.app.secure_fs.enforce_explicit_lease = true;
+token_box.app.secure_fs.with_transaction_lease((lease) => {
+	stale_token = lease;
+	token_root = token_box.app.secure_fs.open('/tmp/miclash/token-bound',
+		{ create: true, mode: 0o700, uid: 0 }, lease);
+});
+assert_throws(() => token_box.app.secure_fs.list(token_root, stale_token), 'INTERNAL');
+token_box.app.secure_fs.with_transaction_lease((lease) => {
+	assert_throws(() => token_box.app.secure_fs.list(token_root, stale_token), 'INTERNAL');
+	assert_equal(length(token_box.app.secure_fs.list(token_root, lease)), 0);
+});
+
+function queued_failure(nonce, configure, before_run) {
+	let box = make_async_app(), seed = seed_import(box, nonce, {
+		'configs/config.yaml': 'port: 9010\n', 'settings/settings.json': '{ }\n'
+	}, { secrets: { 'configs/config.yaml': true } });
+	let preview = backup.inspect(box.app, seed.id);
+	box.app.secure_fs.enforce_explicit_lease = true;
+	if (configure != null) configure(box, preview);
+	let queued = backup.restore(box.app, preview.id, null, 'system');
+	assert_equal(queued.state, 'queued');
+	if (before_run != null) before_run(box, preview);
+	assert_equal(box.runtime.clock.run_next(), true);
+	let finished = box.app.operations.get(queued.id);
+	assert_equal(finished.state, 'failure');
+	box.app.secure_fs.before = null;
+	backup.list(box.app); // every failure path releases the worker lease
+	return { box, preview, finished };
+};
+
+let expired_queued = queued_failure('00000000000000000000000000000110', null,
+	(box, preview) => box.runtime.clock.elapse(900001));
+assert_equal(expired_queued.finished.error.code, 'NOT_FOUND');
+assert_equal(expired_queued.box.filesystem.readfile('/opt/clash/config.yaml'),
+	'port: 7890\nsecret: controller-password\n');
+assert_equal(expired_queued.box.runtime.uci.commit_calls, 0);
+
+let validation_queued = queued_failure('00000000000000000000000000000111',
+	(box, preview) => box.app.config.fail = true);
+assert_equal(validation_queued.finished.error.code, 'VALIDATION_FAILED');
+assert_equal(length(backup.list(validation_queued.box.app)), 0,
+	'validation failure created a recovery snapshot');
+assert_equal(validation_queued.box.runtime.uci.commit_calls, 0);
+
+let commit_queued = queued_failure('00000000000000000000000000000112',
+	(box, preview) => box.app.secure_fs.before = (operation, directory, name, extra) => {
+		if (operation == 'replace_atomic' && name == 'config.yaml') die('worker-commit-fault');
+	});
+assert_equal(commit_queued.finished.error.code, 'INTERNAL');
+assert_equal(commit_queued.box.runtime.uci.commit_calls, 0);
+assert_equal(length(commit_queued.box.app.reconcile.calls), 0);
 
 let invalid_box = make_app(), invalid_seed = seed_import(invalid_box,
 	'00000000000000000000000000000081', {
