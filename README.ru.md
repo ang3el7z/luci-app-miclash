@@ -23,6 +23,55 @@ MiClash — LuCI-приложение для управления Mihomo на Op
 
 Поддерживаемый установщик сам определяет `apk` или `opkg`, проверяет 20 новейших стабильных релизов и устанавливает первый релиз с полностью опубликованными manifest, пакетом и контрольными суммами. Если CI ещё собирает самый новый тег, терминальная установка сообщит об этом и выберет предыдущий готовый стабильный релиз.
 
+### Однократный переход v0.9.x → v2.x
+
+`install-miclash.sh` предназначен для чистой установки и обычных обновлений внутри одной major-версии. На установленной v0.9.x один раз запустите отдельный скрипт чистого перехода. Он сохраняет профили, установленное ядро Mihomo, rules/providers и старые настройки в `/root/miclash-v09-backup-*`, полностью удаляет v0.9, устанавливает выбранный v2 release и возвращает пользовательские файлы. Автоматического rollback и journal нет. После установки восстанавливается прежнее состояние Guard и службы; при ошибке backup остаётся для ручного восстановления. Во время короткого интервала чистой замены Guard не работает, поэтому при риске прямого выхода трафика запускайте команду из локальной сети.
+
+Скачайте отдельный установщик из первого готового стабильного v2 release: команда пропускает tag, если в нём нет скрипта или checksum, локально проверяет asset именно этого tag и только затем запускает его. Не передавайте скрипт чистого перехода напрямую в `ash`:
+
+```sh
+(
+umask 077
+work="$(mktemp -d /tmp/miclash-v09-clean.XXXXXX)" || exit 1
+trap 'rm -rf "$work"' EXIT INT TERM
+asset='install-miclash-upgrade-0-9-x-to-2.x.x.sh'
+checksum_name="$asset.sha256"
+catalog="$work/releases.json"
+wget --no-proxy -qO "$catalog" 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20' || exit 1
+jsonfilter -i "$catalog" -e '@[*].tag_name' > "$work/tags" || exit 1
+count=0
+while IFS= read -r tag; do
+  [ "$count" -lt 20 ] || break
+  count=$((count + 1))
+  printf '%s\n' "$tag" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' || continue
+  candidate="$work/$tag"
+  mkdir "$candidate" || exit 1
+  metadata="$candidate/release.json"
+  wget --no-proxy -qO "$metadata" "https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/tags/$tag" || { rm -rf "$candidate"; continue; }
+  [ "$(jsonfilter -i "$metadata" -e '@.tag_name')" = "$tag" ] && \
+    [ "$(jsonfilter -i "$metadata" -e '@.draft')" = false ] && \
+    [ "$(jsonfilter -i "$metadata" -e '@.prerelease')" = false ] || { rm -rf "$candidate"; continue; }
+  script="$candidate/$asset"
+  checksum="$candidate/$checksum_name"
+  wget --no-proxy -qO "$checksum" "https://github.com/ang3el7z/luci-app-miclash/releases/download/$tag/$checksum_name" || { rm -rf "$candidate"; continue; }
+  wget --no-proxy -qO "$script" "https://github.com/ang3el7z/luci-app-miclash/releases/download/$tag/$asset" || { rm -rf "$candidate"; continue; }
+  awk -v asset="$asset" '
+    NF == 2 {
+      name = $2
+      sub(/^\*/, "", name)
+      if (length($1) == 64 && $1 ~ /^[[:xdigit:]]+$/ && name == asset) matches++
+    }
+    END { exit !(NR == 1 && matches == 1) }
+  ' "$checksum" || exit 1
+  ( cd "$candidate" && sha256sum -c "$checksum" ) || exit 1
+  ash "$script" --release-tag "$tag"
+  exit $?
+done < "$work/tags"
+printf '%s\n' 'No ready stable v2 transition installer was published in the newest 20 releases.' >&2
+exit 1
+)
+```
+
 Через `wget` (работает, даже если установленный `curl` сломан):
 
 ```sh

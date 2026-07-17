@@ -18,6 +18,10 @@ for (const path of readmes) {
 	assert.doesNotMatch(text, /package="luci-app-miclash[-_]/,
 		`${path} must delegate exact package selection to the maintained installer`);
 	assert.match(text, /20/, `${path} must document the bounded ready-release scan`);
+	assert.match(text, /ash "\$script" --release-tag "\$tag"/,
+		`${path} must pass the selected stable tag into the transition`);
+	assert.match(text, /\^v2\\\.\[0-9\]\+\\\.\[0-9\]\+\$/,
+		`${path} must select only stable v2 transition releases`);
 }
 
 assert.match(readFileSync('README.md', 'utf8'), /does \*\*not\*\* fall back/);

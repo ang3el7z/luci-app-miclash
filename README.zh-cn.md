@@ -23,6 +23,55 @@ MiClash 是在 OpenWrt 上管理 Mihomo 的 LuCI 应用。配置、订阅、路�
 
 维护中的安装器会自动检测 `apk` 或 `opkg`，检查最新 20 个稳定 release，并选择 manifest、软件包及 checksum 均已发布的第一个版本。如果 CI 仍在构建最新 tag，终端安装会提示并选择上一个已就绪的稳定 release。
 
+### 一次性 v0.9.x → v2.x 过渡
+
+`install-miclash.sh` 用于全新安装和同一 major 版本内的常规更新。已安装 v0.9.x 的设备应只运行一次独立的 clean-upgrade 脚本。它会把 profiles、已安装的 Mihomo core、rules/providers 和旧 settings 保存到 `/root/miclash-v09-backup-*`，完整删除 v0.9，安装选定的 v2 release，再恢复用户文件。它不提供自动 rollback 或 journal。安装后会恢复原来的 Guard 和服务状态；如果安装失败，backup 会保留以便手动恢复。在短暂的 clean-replacement 期间 Guard 不工作；如果担心流量直连，请从本地网络运行该命令。
+
+请从第一个已就绪的稳定 v2 release 下载独立安装器：如果 tag 缺少脚本或 checksum，命令会跳过它；只会校验同一 tag 的本地 asset 后再执行。不要把 clean-upgrade 脚本直接 pipe 到 `ash`：
+
+```sh
+(
+umask 077
+work="$(mktemp -d /tmp/miclash-v09-clean.XXXXXX)" || exit 1
+trap 'rm -rf "$work"' EXIT INT TERM
+asset='install-miclash-upgrade-0-9-x-to-2.x.x.sh'
+checksum_name="$asset.sha256"
+catalog="$work/releases.json"
+wget --no-proxy -qO "$catalog" 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20' || exit 1
+jsonfilter -i "$catalog" -e '@[*].tag_name' > "$work/tags" || exit 1
+count=0
+while IFS= read -r tag; do
+  [ "$count" -lt 20 ] || break
+  count=$((count + 1))
+  printf '%s\n' "$tag" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' || continue
+  candidate="$work/$tag"
+  mkdir "$candidate" || exit 1
+  metadata="$candidate/release.json"
+  wget --no-proxy -qO "$metadata" "https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/tags/$tag" || { rm -rf "$candidate"; continue; }
+  [ "$(jsonfilter -i "$metadata" -e '@.tag_name')" = "$tag" ] && \
+    [ "$(jsonfilter -i "$metadata" -e '@.draft')" = false ] && \
+    [ "$(jsonfilter -i "$metadata" -e '@.prerelease')" = false ] || { rm -rf "$candidate"; continue; }
+  script="$candidate/$asset"
+  checksum="$candidate/$checksum_name"
+  wget --no-proxy -qO "$checksum" "https://github.com/ang3el7z/luci-app-miclash/releases/download/$tag/$checksum_name" || { rm -rf "$candidate"; continue; }
+  wget --no-proxy -qO "$script" "https://github.com/ang3el7z/luci-app-miclash/releases/download/$tag/$asset" || { rm -rf "$candidate"; continue; }
+  awk -v asset="$asset" '
+    NF == 2 {
+      name = $2
+      sub(/^\*/, "", name)
+      if (length($1) == 64 && $1 ~ /^[[:xdigit:]]+$/ && name == asset) matches++
+    }
+    END { exit !(NR == 1 && matches == 1) }
+  ' "$checksum" || exit 1
+  ( cd "$candidate" && sha256sum -c "$checksum" ) || exit 1
+  ash "$script" --release-tag "$tag"
+  exit $?
+done < "$work/tags"
+printf '%s\n' 'No ready stable v2 transition installer was published in the newest 20 releases.' >&2
+exit 1
+)
+```
+
 使用 `wget`（即使已安装的 `curl` 损坏也可工作）：
 
 ```sh

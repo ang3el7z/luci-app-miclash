@@ -378,7 +378,11 @@ jobs:
           grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/style.css$' "$package_entries"
           grep -Eq '(^|[.]/)usr/share/luci/menu.d/luci-app-miclash.json$' "$package_entries"
           grep -Eq '(^|[.]/)usr/sbin/miclashd$' "$package_entries"
-          grep -Eq '(^|[.]/)usr/libexec/miclash/migrate\.uc$' "$package_entries"
+          ! grep -Eq '(^|[.]/)usr/libexec/miclash/migrate\.uc$' "$package_entries"
+          grep -Eq '(^|[.]/)usr/share/miclash/mutation-lock\.sh$' "$package_entries"
+          grep -Eq '(^|[.]/)usr/share/miclash/guard-bootstrap\.uc$' "$package_entries"
+          grep -Eq '(^|[.]/)usr/share/miclash/guard-latch\.uc$' "$package_entries"
+          grep -Eq '(^|[.]/)usr/libexec/miclash/validate-config\.uc$' "$package_entries"
 
           cp -v -f "$src" "$dst"
           RELEASE_FILENAME="$(basename "$dst")"
@@ -418,6 +422,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ needs.sync-version.outputs.source_tag_sha }}
           fetch-depth: 0
 
       - name: Download Build Artifacts
@@ -438,6 +443,7 @@ jobs:
             --artifacts-dir artifacts \
             --output-dir release_files \
             --installer install-miclash.sh \
+            --transition-installer install-miclash-upgrade-0-9-x-to-2.x.x.sh \
             --tag "$TAG_NAME" \
             --source-tag-sha "$SOURCE_TAG_SHA" \
             --synced-build-sha "$SYNCED_BUILD_SHA"

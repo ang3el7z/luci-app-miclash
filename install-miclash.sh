@@ -20,6 +20,7 @@ MICLASH_IPK_SHA256_URL=""
 MICLASH_VER=""
 MICLASH_TAG_NAME=""
 MICLASH_TARGET_TAG=""
+MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v1"
 MICLASH_TEST_FIXTURE_DIR=""
 MICLASH_CATALOG_FILE=""
 MICLASH_FETCHED_FILE=""
@@ -41,7 +42,6 @@ OWNED_MARKERS=""
 NO_AUTOSTART_CLASH_MARKER="/tmp/miclash-package-no-autostart-clash"
 NO_AUTOSTART_AUTOUPDATE_MARKER="/tmp/miclash-package-no-autostart-autoupdate"
 HARD_REINSTALL_MARKER="/tmp/miclash-hard-reinstall"
-
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
     R=$(printf '\033[0;31m') G=$(printf '\033[0;32m') Y=$(printf '\033[1;33m')
     C=$(printf '\033[0;36m') B=$(printf '\033[1m') N=$(printf '\033[0m')
@@ -174,6 +174,28 @@ trap cleanup EXIT INT TERM
 
 normalize_version() {
     printf '%s' "$1" | sed 's/^v//; s/-r[0-9][0-9]*$//'
+}
+
+version_major() {
+    normalized="$(normalize_version "$1")"
+    printf '%s\n' "$normalized" |
+        grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+    printf '%s' "${normalized%%.*}"
+}
+
+cross_major_update() {
+    installed="$1"
+    target="$2"
+    [ -n "$installed" ] || return 1
+    installed_major="$(version_major "$installed")" || return 1
+    target_major="$(version_major "$target")" || return 1
+    [ "$installed_major" != "$target_major" ]
+}
+
+reject_unauthorized_cross_major() {
+    if cross_major_update "$MICLASH_INSTALLED_VER" "$MICLASH_VER"; then
+        die "Direct cross-major MiClash updates are refused; use the dedicated transition installer"
+    fi
 }
 
 validate_openwrt_support() {
@@ -713,6 +735,33 @@ install_miclash() {
     fi
 }
 
+run_clean_install_mode() {
+    MICLASH_TARGET_TAG=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --target-tag)
+                [ "$#" -gt 1 ] || die "missing value for --target-tag"
+                MICLASH_TARGET_TAG="$2"
+                shift 2
+                ;;
+            *) die "unknown clean-install argument: $1" ;;
+        esac
+    done
+    printf '%s\n' "$MICLASH_TARGET_TAG" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' ||
+        die "clean v0.9 upgrade requires a stable v2 target"
+    detect_openwrt
+    detect_installed_miclash
+    [ -z "$MICLASH_INSTALLED_VER" ] || die "clean-install requires the old package to be removed first"
+    prepare_work_dir
+    ensure_curl
+    fetch_miclash_release
+    INSTALL_ACTION="install"
+    pkg_update
+    install_deps
+    install_miclash
+    echo "MiClash package installed; services remain stopped"
+}
+
 run_app_mode() {
     INSTALL_ACTION="update"
 
@@ -758,6 +807,7 @@ run_app_mode() {
     ensure_curl
     fetch_miclash_release
     detect_installed_miclash
+    reject_unauthorized_cross_major
     pkg_update
     install_deps
     install_miclash
@@ -878,6 +928,7 @@ main() {
     detect_arch
     fetch_miclash_release
     detect_installed_miclash
+    reject_unauthorized_cross_major
     choose_install_action
     sep
 
@@ -944,6 +995,9 @@ elif [ "${1:-}" = "ready-release-selection-test" ]; then
 elif [ "${1:-}" = "app" ]; then
     shift
     run_app_mode "$@"
+elif [ "${1:-}" = "clean-install" ]; then
+    shift
+    run_clean_install_mode "$@"
 else
     main "$@"
 fi

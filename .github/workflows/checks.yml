@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sh -n install-miclash.sh tools/*.sh \
+          sh -n install-miclash.sh install-miclash-upgrade-0-9-x-to-2.x.x.sh tools/*.sh \
             luci-app-miclash/rootfs/etc/init.d/* \
             luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh \
             luci-app-miclash/rootfs/usr/share/miclash/package-remove \

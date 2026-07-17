@@ -24,21 +24,36 @@ export function verifyReleaseManifest({ manifestPath, assetsDir }) {
 	assert.equal(lstatSync(assetsDir).isSymbolicLink(), false, 'assets directory must not be a symlink');
 	assert.equal(lstatSync(assetsDir).isDirectory(), true, 'assets directory is invalid');
 	const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-	exactKeys(manifest, [ 'schema_version', 'tag', 'source_tag_sha', 'synced_build_sha', 'installer', 'artifacts' ],
+	exactKeys(manifest, [ 'schema_version', 'tag', 'source_tag_sha', 'synced_build_sha', 'installer',
+		'transition_installer', 'artifacts' ],
 		'release manifest');
 	assert.equal(manifest.schema_version, 1);
 	assert.match(manifest.tag, /^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$/);
 	assert.match(manifest.source_tag_sha, COMMIT_PATTERN);
 	assert.match(manifest.synced_build_sha, COMMIT_PATTERN);
-	exactKeys(manifest.installer, [ 'filename', 'sha256' ], 'installer');
-	assert.equal(manifest.installer.filename, 'install-miclash.sh');
-	assert.match(manifest.installer.sha256, SHA_PATTERN);
-	const installerChecksum = join(assetsDir, 'install-miclash.sh.sha256');
-	assert.equal(lstatSync(installerChecksum).isSymbolicLink(), false,
-		'installer checksum must not be a symlink');
-	assert.equal(lstatSync(installerChecksum).isFile(), true);
-	assert.equal(readFileSync(installerChecksum, 'utf8'),
-		`${manifest.installer.sha256}  install-miclash.sh\n`);
+	for (const [ field, filename ] of [
+		[ 'installer', 'install-miclash.sh' ],
+		[ 'transition_installer', 'install-miclash-upgrade-0-9-x-to-2.x.x.sh' ]
+	]) {
+		const installer = manifest[field];
+		exactKeys(installer, [ 'filename', 'size', 'sha256' ], field);
+		assert.equal(installer.filename, filename);
+		assert.ok(Number.isSafeInteger(installer.size) && installer.size > 0);
+		assert.match(installer.sha256, SHA_PATTERN);
+		const installerPath = join(assetsDir, filename);
+		assert.equal(lstatSync(installerPath).isSymbolicLink(), false,
+			`${field} must not be a symlink`);
+		assert.equal(lstatSync(installerPath).isFile(), true);
+		assert.equal(lstatSync(installerPath).size, installer.size,
+			`${field} content does not match its manifest size`);
+		assert.equal(sha256(installerPath), installer.sha256,
+			`${field} content does not match its manifest hash`);
+		const installerChecksum = `${installerPath}.sha256`;
+		assert.equal(lstatSync(installerChecksum).isSymbolicLink(), false,
+			`${field} checksum must not be a symlink`);
+		assert.equal(lstatSync(installerChecksum).isFile(), true);
+		assert.equal(readFileSync(installerChecksum, 'utf8'), `${installer.sha256}  ${filename}\n`);
+	}
 	assert.ok(Array.isArray(manifest.artifacts) && manifest.artifacts.length > 0,
 		'release manifest has no artifacts');
 	const filenames = manifest.artifacts.map((artifact) => artifact.filename);
@@ -68,7 +83,9 @@ export function verifyReleaseManifest({ manifestPath, assetsDir }) {
 		assert.equal(readFileSync(checksumPath, 'utf8'),
 			`${artifact.sha256}  ${artifact.filename}\n`);
 	}
-	const expectedFiles = [ MANIFEST_NAME, 'install-miclash.sh.sha256',
+	const expectedFiles = [ MANIFEST_NAME, 'install-miclash.sh', 'install-miclash.sh.sha256',
+		'install-miclash-upgrade-0-9-x-to-2.x.x.sh',
+		'install-miclash-upgrade-0-9-x-to-2.x.x.sh.sha256',
 		...filenames.flatMap((filename) => [ filename, `${filename}.sha256` ]) ].sort();
 	assert.deepEqual(readdirSync(assetsDir).sort(), expectedFiles,
 		'release directory contains stale, missing, or unmanifested files');
@@ -104,9 +121,11 @@ function runBuilderContracts() {
 		writeBuild(artifacts, 'a-ipk', ipk, Buffer.from('ipk fixture\n'));
 		const options = {
 			artifactsDir: artifacts, tag: 'v1.2.3', sourceTagSha: 'a'.repeat(40),
-			syncedBuildSha: 'b'.repeat(40), installerPath: join(root, 'install-miclash.sh')
+			syncedBuildSha: 'b'.repeat(40), installerPath: join(root, 'install-miclash.sh'),
+			transitionInstallerPath: join(root, 'install-miclash-upgrade-0-9-x-to-2.x.x.sh')
 		};
 		writeFileSync(options.installerPath, '#!/bin/sh\nexit 0\n');
+		writeFileSync(options.transitionInstallerPath, '#!/bin/sh\nexit 0\n');
 		process.env.GH_TOKEN = 'must-never-appear-in-release-output';
 		buildReleaseManifest({ ...options, outputDir: first });
 		buildReleaseManifest({ ...options, outputDir: second });
@@ -176,6 +195,8 @@ function runRepositoryContracts() {
 	assert.match(release, /RELEASE_METADATA_PATH="\$\{\{ github\.workspace \}\}\/release-metadata\.json"/);
 	assert.match(release, /node tools\/build-release-manifest\.mjs/);
 	assert.match(release, /--installer install-miclash\.sh/);
+	assert.match(release, /--transition-installer install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
+		'release manifest must include the standalone transition installer');
 	assert.match(release, /git rev-parse HEAD[\s\S]*SOURCE_TAG_SHA/,
 		'release assets must be generated from the tagged source checkout');
 	assert.match(release, /node tools\/check-release-manifest\.mjs/);
@@ -188,6 +209,19 @@ function runRepositoryContracts() {
 		release.indexOf('Upload Publication Manifest Last'),
 		'publication manifest must be uploaded only after asset verification');
 	assert.match(release, /\.sha256/);
+	assert.match(release, /install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
+		'release workflow must stage and publish the transition installer');
+	assert.doesNotMatch(release,
+		/^\s*grep -Eq .*usr\/libexec\/miclash\/migrate\\\.uc.*\$package_entries/m,
+		'release workflow must not require the retired migration helper');
+	assert.match(release,
+		/^\s*! grep -Eq .*usr\/libexec\/miclash\/migrate\\\.uc.*\$package_entries/m,
+		'release workflow must prove the retired migration helper is absent');
+	for (const asset of [ 'usr/share/miclash/mutation-lock.sh',
+		'usr/share/miclash/guard-bootstrap.uc', 'usr/share/miclash/guard-latch.uc',
+		'usr/libexec/miclash/validate-config.uc' ])
+		assert.ok(release.includes(asset.replaceAll('.', '\\.')),
+			`release package contract must require ${asset}`);
 	assert.deepEqual(sdkEntries(release, 'build:'), [
 		'24.10.7:ipk:x86/64', '25.12.5:apk:x86/64'
 	], 'release SDK matrix differs from the supported package formats');
@@ -214,6 +248,8 @@ function runRepositoryContracts() {
 		'check-hard-reinstall-marker.sh', 'check-ready-release-selection.sh',
 		'check-update-status-protocol.sh' ])
 		assert.match(checks, new RegExp(gate.replace('.', '\\.')));
+	assert.match(checks, /sh -n install-miclash\.sh install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
+		'CI shell syntax gate must parse the standalone transition installer');
 
 	const docs = [ 'README.md', 'README.ru.md', 'README.zh-cn.md' ];
 	const commands = [ '/status', '/health', '/memory', '/diagnostics', '/logs', '/help',
@@ -229,8 +265,51 @@ function runRepositoryContracts() {
 		assert.doesNotMatch(text, /23\.05/, `${path} still documents unsupported OpenWrt 23.05`);
 		for (const token of required)
 			assert.ok(text.toLowerCase().includes(token.toLowerCase()), `${path} is missing ${token}`);
-		assert.doesNotMatch(text, /v0\.9\.2|migration/i,
-			`${path} must not describe the retired in-package transition`);
+		assert.match(text, /v0\.9\.x[\s\S]*v2\.x/i,
+			`${path} must document the one-time v0.9.x to v2.x transition`);
+		assert.match(text, /install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
+			`${path} must name the standalone transition installer`);
+		assert.match(text, /mktemp[\s\S]*wget[\s\S]*\$script[\s\S]*ash "\$script"/i,
+			`${path} must download the transition installer to a secure local file before execution`);
+		assert.doesNotMatch(text, /upgrade-0-9-x-to-2\.x\.x\.sh\s*\|\s*ash/i,
+			`${path} must not pipe the stateful transition installer into ash`);
+		assert.doesNotMatch(text,
+			/raw\.githubusercontent\.com\/ang3el7z\/luci-app-miclash\/main\/install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/i,
+			`${path} must not execute a mutable raw-main transition installer`);
+		assert.match(text,
+			/https:\/\/api\.github\.com\/repos\/ang3el7z\/luci-app-miclash\/releases\?per_page=20/,
+			`${path} must query the bounded stable release catalog for the transition installer`);
+		assert.match(text, /jsonfilter/,
+			`${path} must use structured release metadata extraction`);
+		assert.match(text, /\^v2\\\.\[0-9\]\+\\\.\[0-9\]\+\$/,
+			`${path} must select only stable v2 transition tags`);
+		assert.match(text, /releases\/download\/\$tag\/\$asset/,
+			`${path} must derive the transition installer from the selected tag`);
+		assert.match(text, /releases\/download\/\$tag\/\$checksum_name/,
+			`${path} must derive the transition checksum from the selected tag`);
+		assert.match(text, /releases\/tags\/\$tag/,
+			`${path} must fetch exact structured metadata for each transition tag`);
+		for (const expression of [ '@.tag_name', '@.draft', '@.prerelease' ])
+			assert.ok(text.includes(expression),
+				`${path} must validate ${expression} in exact transition release metadata`);
+		assert.match(text, /awk -v asset="\$asset"/,
+			`${path} must compare the published checksum filename literally`);
+		assert.match(text, /name == asset/,
+			`${path} must reject a checksum for any other filename`);
+		assert.match(text, /sha256sum -c "\$checksum"/,
+			`${path} must verify the exact published transition checksum locally`);
+		assert.match(text, /ash "\$script"/,
+			`${path} must execute only the verified local transition installer`);
+		assert.match(text, /ash "\$script" --release-tag "\$tag"/,
+			`${path} must bind the transition to the selected strict stable tag`);
+		assert.match(text, /trap 'rm -rf "\$work"' EXIT INT TERM/,
+			`${path} must clean the secure transition workspace`);
+		assert.match(text, /continue/,
+			`${path} must fall back past incomplete newer transition releases`);
+		for (const token of [ 'install-miclash.sh', '/root/miclash-v09-backup-',
+			'rollback', 'journal', 'guard' ])
+			assert.ok(text.toLowerCase().includes(token.toLowerCase()),
+				`${path} transition documentation is missing ${token}`);
 		const commandBlocks = [ ...text.matchAll(/```text\r?\n([\s\S]*?)```/g) ];
 		assert.equal(commandBlocks.length, 1, `${path} must contain one Telegram command block`);
 		assert.deepEqual(commandBlocks[0][1].trim().split(/\r?\n/), commands,

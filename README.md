@@ -23,6 +23,55 @@ When Guard is enabled, MiClash is fail-closed. An early-boot Guard safety latch 
 
 The maintained installer detects `apk` or `opkg`, checks the newest 20 stable releases and installs the newest one whose manifest, package and published checksums are complete. If CI is still building the newest tag, terminal installation reports the fallback and uses the previous ready stable release.
 
+### One-time v0.9.x → v2.x transition
+
+`install-miclash.sh` is for clean installs and ordinary same-major updates. An installed v0.9.x system must run the standalone clean-upgrade script once. It copies profiles, the installed Mihomo core, rules/providers and legacy settings to `/root/miclash-v09-backup-*`, removes v0.9 completely, installs the selected v2 release and restores those user files. There is no automatic rollback or journal. The previous Guard and service state is restored after installation; the backup is kept for manual recovery if installation fails. Guard is not active during the short clean-replacement interval, so run the command from the local network when direct traffic exposure is a concern.
+
+Download the standalone installer from the first ready stable v2 release: the command skips a tag missing either the script or its checksum, verifies the exact tagged asset locally, then runs it. Do not pipe this clean-upgrade script into `ash`:
+
+```sh
+(
+umask 077
+work="$(mktemp -d /tmp/miclash-v09-clean.XXXXXX)" || exit 1
+trap 'rm -rf "$work"' EXIT INT TERM
+asset='install-miclash-upgrade-0-9-x-to-2.x.x.sh'
+checksum_name="$asset.sha256"
+catalog="$work/releases.json"
+wget --no-proxy -qO "$catalog" 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20' || exit 1
+jsonfilter -i "$catalog" -e '@[*].tag_name' > "$work/tags" || exit 1
+count=0
+while IFS= read -r tag; do
+  [ "$count" -lt 20 ] || break
+  count=$((count + 1))
+  printf '%s\n' "$tag" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' || continue
+  candidate="$work/$tag"
+  mkdir "$candidate" || exit 1
+  metadata="$candidate/release.json"
+  wget --no-proxy -qO "$metadata" "https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/tags/$tag" || { rm -rf "$candidate"; continue; }
+  [ "$(jsonfilter -i "$metadata" -e '@.tag_name')" = "$tag" ] && \
+    [ "$(jsonfilter -i "$metadata" -e '@.draft')" = false ] && \
+    [ "$(jsonfilter -i "$metadata" -e '@.prerelease')" = false ] || { rm -rf "$candidate"; continue; }
+  script="$candidate/$asset"
+  checksum="$candidate/$checksum_name"
+  wget --no-proxy -qO "$checksum" "https://github.com/ang3el7z/luci-app-miclash/releases/download/$tag/$checksum_name" || { rm -rf "$candidate"; continue; }
+  wget --no-proxy -qO "$script" "https://github.com/ang3el7z/luci-app-miclash/releases/download/$tag/$asset" || { rm -rf "$candidate"; continue; }
+  awk -v asset="$asset" '
+    NF == 2 {
+      name = $2
+      sub(/^\*/, "", name)
+      if (length($1) == 64 && $1 ~ /^[[:xdigit:]]+$/ && name == asset) matches++
+    }
+    END { exit !(NR == 1 && matches == 1) }
+  ' "$checksum" || exit 1
+  ( cd "$candidate" && sha256sum -c "$checksum" ) || exit 1
+  ash "$script" --release-tag "$tag"
+  exit $?
+done < "$work/tags"
+printf '%s\n' 'No ready stable v2 transition installer was published in the newest 20 releases.' >&2
+exit 1
+)
+```
+
 With `wget` (also works when the installed `curl` is broken):
 
 ```sh
