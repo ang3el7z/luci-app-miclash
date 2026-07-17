@@ -51,11 +51,11 @@ grep -Fq '[ ! -e /opt/clash/.dns_backup ]' "$makefile"
 }
 
 mount --make-rprivate /
-for path in /etc/miclash /opt/clash /var/run/miclash /etc/init.d /usr/share/miclash; do
+for path in /etc/miclash /opt/clash /var/run/miclash /tmp/miclash /etc/init.d /usr/share/miclash; do
 	mkdir -p "$path"
 	mount -t tmpfs -o mode=0755,size=2m miclash-dns-gate "$path"
 done
-chmod 0700 /etc/miclash /var/run/miclash
+chmod 0700 /etc/miclash /var/run/miclash /tmp/miclash
 
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT INT TERM
@@ -114,7 +114,10 @@ chmod 0700 /etc/init.d/dnsmasq
 
 module_dir="$(dirname -- "$UCODE_BIN")"
 export MICLASH_DNS_GATE_MODULE_DIR="$module_dir"
+dns_gate_run_count=0
 run_control() {
+	dns_gate_run_count=$((dns_gate_run_count + 1))
+	printf 'DNS lifecycle call %s: %s\n' "$dns_gate_run_count" "$1" >&2
 	"$UCODE_BIN" -L "$module_dir/*.so" -L "$fixture" \
 		-L "$repo_root/luci-app-miclash/rootfs/usr/share" "$control" "$1"
 }
