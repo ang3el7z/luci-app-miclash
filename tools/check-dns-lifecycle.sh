@@ -63,6 +63,7 @@ export MICLASH_DNS_GATE_STATE="$fixture/uci.json"
 export MICLASH_DNS_GATE_FAIL="$fixture/fail"
 export MICLASH_DNS_GATE_LOG="$fixture/lifecycle.log"
 export MICLASH_DNS_GATE_FIXTURE="$fixture"
+export MICLASH_DNS_GATE_TRACE=1
 
 cat > "$fixture/uci.uc" <<'EOF'
 let fs = require('fs');
