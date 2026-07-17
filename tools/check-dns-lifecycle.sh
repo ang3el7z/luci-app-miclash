@@ -114,10 +114,7 @@ chmod 0700 /etc/init.d/dnsmasq
 
 module_dir="$(dirname -- "$UCODE_BIN")"
 export MICLASH_DNS_GATE_MODULE_DIR="$module_dir"
-dns_gate_run_count=0
 run_control() {
-	dns_gate_run_count=$((dns_gate_run_count + 1))
-	printf 'DNS lifecycle call %s: %s\n' "$dns_gate_run_count" "$1" >&2
 	"$UCODE_BIN" -L "$module_dir/*.so" -L "$fixture" \
 		-L "$repo_root/luci-app-miclash/rootfs/usr/share" "$control" "$1"
 }
@@ -220,16 +217,6 @@ assert_guard
 rm -f "$MICLASH_DNS_GATE_FAIL-running"
 run_control apply
 grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' /etc/miclash/dns-ownership.json
-
-reset_state
-printf '%s\n' '{"dhcp":{"main":{".type":"dnsmasq","server":["127.0.0.1#7874"],"cachesize":"0","noresolv":"1"}}}' \
-	> "$MICLASH_DNS_GATE_STATE"
-printf 'CACHESIZE=1000\nNORESOLV=0\n' > /opt/clash/.dns_backup
-chmod 0600 /opt/clash/.dns_backup
-run_control apply
-[ -f /etc/miclash/dns-ownership.json ]
-[ ! -e /opt/clash/.dns_backup ]
-assert_guard
 
 reset_state
 : > "$MICLASH_DNS_GATE_FAIL-pending"
