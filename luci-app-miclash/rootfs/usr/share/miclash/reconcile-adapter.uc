@@ -12,6 +12,7 @@ export function create(app) {
 	    type(app?.service?.observe) != 'function' || type(app?.service?.start) != 'function' ||
 	    type(app?.service?.stop) != 'function' ||
 	    type(app?.service?.wait_ready) != 'function' ||
+	    type(app?.service?.recover) != 'function' ||
 	    type(app?.network?.apply) != 'function' || type(app?.network?.cleanup) != 'function' ||
 	    type(app?.settings?.get) != 'function' || type(app?.settings?.set) != 'function' ||
 	    type(app?.guard?.is_latched) != 'function' || type(app?.guard?.latch_set) != 'function' ||
@@ -89,6 +90,14 @@ export function create(app) {
 			fail('HEALTH_FAILED');
 		return true;
 	};
+	function health_options(desired) {
+		let mode = desired?.core?.proxy_mode;
+		return {
+			proxy_mode: mode,
+			tun_required: mode == 'tun' || mode == 'mixed',
+			guard_enabled: desired?.guard?.enabled === true
+		};
+	};
 	function restore_running(desired) {
 		try {
 			// disable() may have changed physical state before OFF verification
@@ -96,10 +105,8 @@ export function create(app) {
 			protect_transition(desired);
 			app.network.apply(desired);
 			app.service.start('config.yaml');
-			let ready = app.service.wait_ready(app.clock.now() + 5000, 'config.yaml', {
-				tun_required: desired?.core?.proxy_mode == 'tun',
-				guard_enabled: desired?.guard?.enabled === true
-			});
+			let ready = app.service.wait_ready(app.clock.now() + 5000, 'config.yaml',
+				health_options(desired));
 			if (ready?.ok !== true) fail('HEALTH_FAILED');
 			release_transition(desired);
 			return true;
@@ -141,13 +148,17 @@ export function create(app) {
 				? 'Starting Mihomo with native network state'
 				: (service_action == 'observe' ? 'Keeping running Mihomo instance' :
 					'Restarting Mihomo after configuration change'));
+			let service_health = health_options(desired);
 			if (service_action == 'start') app.service.start('config.yaml');
+			else if (service_action == 'repair') {
+				let repaired = app.service.recover('config.yaml', null, service_health);
+				ready = repaired?.ready;
+				if (repaired?.ok !== true) fail('HEALTH_FAILED');
+			}
 			else if (service_action != 'observe') app.service.restart_service('config.yaml');
 			stage?.('health', 75, 'Waiting for Mihomo and routing health');
-			ready = app.service.wait_ready(app.clock.now() + 5000, 'config.yaml', {
-				tun_required: desired?.core?.proxy_mode == 'tun',
-				guard_enabled: desired?.guard?.enabled === true
-			});
+			if (ready == null)
+				ready = app.service.wait_ready(app.clock.now() + 5000, 'config.yaml', service_health);
 			if (ready?.ok !== true) fail('HEALTH_FAILED');
 		}
 		catch (error) {
@@ -214,10 +225,12 @@ export function create(app) {
 		start: (trigger) => reconcile_now(reason(trigger), null, 'start')?.ready?.ok === true,
 		stop: (trigger) => stop_now(reason(trigger)),
 		restart: (trigger) => reconcile_now(reason(trigger), null, 'restart')?.ready?.ok === true,
+		reload: (trigger) => reconcile_now(reason(trigger), null, 'repair')?.ready?.ok === true,
+		external: (trigger) => reconcile_now(reason(trigger), null, 'repair')?.ready?.ok === true,
 		run: (trigger) => {
 			trigger = reason(trigger);
 			return app.operations.submit('system.reconcile', 'system', { trigger }, (ctx) => {
-				let reconciled = reconcile_now(trigger, ctx.stage, 'restart');
+				let reconciled = reconcile_now(trigger, ctx.stage, 'repair');
 				let desired = reconciled.desired, ready = reconciled.ready;
 				if (active_failure != null) {
 					let evidence = restoration(active_failure, desired, ready);

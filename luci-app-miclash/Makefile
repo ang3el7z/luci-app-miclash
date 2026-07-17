@@ -9,7 +9,7 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
 LUCI_TITLE:=LuCI Support for MiClash
-LUCI_DEPENDS:=+luci-base +zlib +libcurl +curl +coreutils-base64 +kmod-tun \
+LUCI_DEPENDS:=+luci-base +zlib +libcurl +curl +coreutils-base64 +ip-full +kmod-tun +kmod-nft-tproxy \
 	+nftables +coreutils-timeout +ucode +ucode-mod-fs +ucode-mod-math \
 	+ucode-mod-digest +ucode-mod-socket +ucode-mod-ubus +ucode-mod-uci +ucode-mod-uloop
 LUCI_PKGARCH:=all
@@ -114,6 +114,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-release $(1)/usr/share/miclash/
 	$(INSTALL_DIR) $(1)/usr/libexec/miclash
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/validate-config.uc $(1)/usr/libexec/miclash/
+	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/decompress-gzip $(1)/usr/libexec/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/mihomo-https.uc $(1)/usr/libexec/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/migrate.uc $(1)/usr/libexec/miclash/
 	$(INSTALL_DIR) $(1)/usr/sbin
@@ -228,9 +229,17 @@ define Package/$(PKG_NAME)/postrm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
 	HARD_REINSTALL=0
-	if [ -f /tmp/miclash-hard-reinstall ]; then
-		rm -f /tmp/miclash-hard-reinstall
-		HARD_REINSTALL=1
+	HARD_REINSTALL_MARKER=/tmp/miclash-hard-reinstall
+	if [ -e "$$HARD_REINSTALL_MARKER" ] || [ -L "$$HARD_REINSTALL_MARKER" ]; then
+		if [ ! -L "$$HARD_REINSTALL_MARKER" ] && [ -f "$$HARD_REINSTALL_MARKER" ] && \
+		   [ "$$(stat -c '%u:%a:%h' "$$HARD_REINSTALL_MARKER" 2>/dev/null)" = 0:600:1 ] && \
+		   [ "$$(readlink -f "$$HARD_REINSTALL_MARKER" 2>/dev/null)" = "$$HARD_REINSTALL_MARKER" ]; then
+			rm -f "$$HARD_REINSTALL_MARKER" || exit 1
+			HARD_REINSTALL=1
+		else
+			rm -f "$$HARD_REINSTALL_MARKER" 2>/dev/null || true
+			echo "Ignoring untrusted MiClash hard-reinstall marker" >&2
+		fi
 	fi
 
 	is_pkg_installed() {

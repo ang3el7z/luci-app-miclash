@@ -3,15 +3,19 @@
 import * as uloop from 'uloop';
 import * as runtime from 'miclash.runtime';
 import * as daemon from 'miclash.daemon';
+import * as daemon_readiness from 'miclash.daemon-readiness';
 import * as startup_guard from 'miclash.startup-guard';
 
 if (uloop.init() !== true)
 	die('INTERNAL');
 
 let environment = runtime.create();
+let readiness = daemon_readiness.create(environment);
+readiness.clear();
 let process = daemon.compose(environment);
 let shutting_down = false;
 let aborting = false;
+let ready_published = false;
 let startup = null;
 let observation_timer = null;
 
@@ -20,6 +24,7 @@ function abort_startup() {
 		die('INTERNAL');
 	aborting = true;
 	shutting_down = true;
+	try { readiness.revoke(); } catch (readiness_error) {}
 	try { startup?.close?.(); } catch (startup_error) {}
 	try { process.drain(); } catch (drain_error) {}
 	try { process.close(); } catch (close_error) {}
@@ -30,8 +35,11 @@ function abort_startup() {
 function start_normal_lifecycle() {
 	if (shutting_down)
 		return false;
-	if (environment.reconcile.startup('daemon-startup') !== true)
-		abort_startup();
+	if (!ready_published) {
+		try { readiness.activate(environment.reconcile, 'daemon-startup'); }
+		catch (error) { abort_startup(); }
+		ready_published = true;
+	}
 	if (observation_timer != null)
 		return true;
 	let candidate = uloop.timer(0, () => {
@@ -63,6 +71,7 @@ function shutdown() {
 	if (shutting_down)
 		return;
 	shutting_down = true;
+	readiness.revoke();
 	process.drain();
 	try { observation_timer.cancel(); } catch (timer_error) {}
 	try { startup.close(); } catch (startup_error) {}

@@ -12,17 +12,24 @@ function argument_after(args, name) {
 	return null;
 };
 
+function curl_config_paths(filesystem, args) {
+	let config_path = argument_after(args, '--config');
+	let config = filesystem.readfile(config_path);
+	let header = match(config, /dump-header = "([^"]+)"/);
+	let output = match(config, /output = "([^"]+)"/);
+	return { config_path, config, header_path: header?.[1], output_path: output?.[1] };
+};
+
 function http_environment(response) {
 	let filesystem = fakes.fs();
 	filesystem.mkdir('/tmp');
 	filesystem.mkdir('/tmp/miclash');
 	let process = fakes.process();
 	process.on_run = (request) => {
-		let header_path = argument_after(request.args, '--dump-header');
-		let output_path = argument_after(request.args, '--output');
-		filesystem.writefile(header_path, response?.headers ??
+		let paths = curl_config_paths(filesystem, request.args);
+		filesystem.writefile(paths.header_path, response?.headers ??
 			'HTTP/1.1 200 OK\r\nContent-Type: application/yaml\r\n\r\n');
-		filesystem.writefile(output_path, response?.body ??
+		filesystem.writefile(paths.output_path, response?.body ??
 			'proxies: []\nrules: []\n');
 	};
 	let runtime = {
@@ -39,8 +46,8 @@ assert_equal(type(http.request), 'function', 'HTTP module exports request()');
 assert_equal(type(http.download), 'function', 'HTTP module exports download()');
 assert_equal(type(subscription.create), 'function', 'subscription module exports create()');
 
-// A direct HTTPS request is an argv-only curl invocation. The bounded adapter
-// returns parsed status/headers/body and removes both owned Candidate files.
+// A direct HTTPS request exposes only an opaque root-owned curl config pathname
+// in argv. The config contains the credentials and all owned output paths.
 let direct = http_environment();
 let direct_result = http.request(direct.runtime, {
 	url: 'https://subscriptions.example.test/config.yaml',
@@ -55,9 +62,11 @@ assert_equal(direct_result.headers['content-type'], 'application/yaml');
 assert_equal(direct_result.body, 'proxies: []\nrules: []\n');
 assert_equal(direct.process.calls[0].command, '/usr/bin/curl');
 assert_true(type(direct.process.calls[0].args) == 'array');
+assert_equal(length(direct.process.calls[0].args), 2);
+assert_equal(direct.process.calls[0].args[0], '--config');
 assert_true(index(direct.process.calls[0].args,
-	'https://subscriptions.example.test/config.yaml') >= 0);
-assert_true(index(direct.process.calls[0].args, 'Accept: application/yaml') >= 0);
+	'https://subscriptions.example.test/config.yaml') < 0);
+assert_true(index(direct.process.calls[0].args, 'Accept: application/yaml') < 0);
 assert_equal(length(direct.filesystem.lsdir('/tmp/miclash/http')), 0);
 assert_equal(direct.filesystem.mode('/tmp/miclash'), 0o700);
 assert_equal(direct.filesystem.mode('/tmp/miclash/http'), 0o700);
@@ -163,11 +172,10 @@ assert_equal(length(replaced_candidate_create.process.calls), 0);
 let replaced_during_curl = http_environment();
 replaced_during_curl.filesystem.set_mode('/tmp/miclash', 0o700);
 replaced_during_curl.process.on_run = (request) => {
-	let header_path = argument_after(request.args, '--dump-header');
-	let output_path = argument_after(request.args, '--output');
-	replaced_during_curl.filesystem.writefile(header_path,
+	let paths = curl_config_paths(replaced_during_curl.filesystem, request.args);
+	replaced_during_curl.filesystem.writefile(paths.header_path,
 		'HTTP/1.1 200 OK\r\n\r\n');
-	replaced_during_curl.filesystem.writefile(output_path, 'proxies: []\n');
+	replaced_during_curl.filesystem.writefile(paths.output_path, 'proxies: []\n');
 	replaced_during_curl.filesystem.bump_inode('/tmp/miclash/http');
 };
 assert_throws(() => http.request(replaced_during_curl.runtime, {
@@ -177,12 +185,12 @@ let candidate_during_curl = http_environment();
 candidate_during_curl.filesystem.set_mode('/tmp/miclash', 0o700);
 candidate_during_curl.filesystem.writefile('/tmp/foreign-curl-target', 'foreign');
 candidate_during_curl.process.on_run = (request) => {
-	let header_path = argument_after(request.args, '--dump-header');
-	let output_path = argument_after(request.args, '--output');
-	candidate_during_curl.filesystem.writefile(header_path,
+	let paths = curl_config_paths(candidate_during_curl.filesystem, request.args);
+	candidate_during_curl.filesystem.writefile(paths.header_path,
 		'HTTP/1.1 200 OK\r\n\r\n');
-	candidate_during_curl.filesystem.writefile(output_path, 'proxies: []\n');
-	candidate_during_curl.filesystem.set_symlink(output_path, '/tmp/foreign-curl-target');
+	candidate_during_curl.filesystem.writefile(paths.output_path, 'proxies: []\n');
+	candidate_during_curl.filesystem.set_symlink(paths.output_path,
+		'/tmp/foreign-curl-target');
 };
 assert_throws(() => http.request(candidate_during_curl.runtime, {
 	url: 'https://subscriptions.example.test/config.yaml'
@@ -228,7 +236,8 @@ let redirect = http_environment({ headers:
 assert_equal(http.request(redirect.runtime, {
 	url: 'https://subscriptions.example.test/config.yaml', max_redirects: 2
 }).status, 200);
-assert_true(index(redirect.process.calls[0].args, '--proto-redir') >= 0);
+assert_true(index(curl_config_paths(redirect.filesystem,
+	redirect.process.calls[0].args).config, 'proto-redir = "=https"') >= 0);
 assert_throws(() => http.request(http_environment({ headers:
 	'HTTP/1.1 302 Found\r\nLocation: http://plain.example.test/config.yaml\r\n\r\n' +
 	'HTTP/1.1 200 OK\r\n\r\n' }).runtime, {

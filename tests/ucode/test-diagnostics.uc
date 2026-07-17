@@ -295,6 +295,49 @@ assert_throws(() => center.read_report({
 	id: '../../etc/shadow', format: 'json'
 }), 'INVALID_ARGUMENT');
 
+// Route diagnostics derive bypass destinations from the active Mihomo config.
+assert_equal(join(',', route_test.proxy_servers(
+	'external-controller: 127.0.0.1:9090\n' +
+	'proxies:\n' +
+	'  - name: primary\n' +
+	'    type: socks5\n' +
+	'    server: proxy.example.test\n' +
+	'  - name: duplicate\n' +
+	'    server: "proxy.example.test"\n' +
+	'  - name: ipv6\n' +
+	"    server: '2001:db8::1'\n" +
+	'proxy-groups:\n' +
+	'  - name: ignored\n' +
+	'    server: ignored.example.test\n')), 'proxy.example.test,2001:db8::1');
+assert_equal(length(route_test.proxy_servers('rules:\n  - MATCH,DIRECT\n')), 0);
+assert_equal(join(',', route_test.proxy_servers(
+	'proxies:\n' +
+	'- name: canonical\n' +
+	'  type: socks5\n' +
+	'  server: canonical.example.test\n')), 'canonical.example.test');
+assert_equal(join(',', route_test.proxy_servers(
+	'proxies:\n' +
+	'  - { name: flow, type: socks5, server: flow.example.test, port: 443 }\n')),
+	'flow.example.test');
+assert_equal(join(',', route_test.proxy_servers(
+	'proxies: # endpoint list\n' +
+	'- name: commented\n' +
+	'  server: commented.example.test\n')), 'commented.example.test');
+assert_equal(join(',', route_test.proxy_servers(
+	'proxies:\n' +
+	'  - { name: flow, server: flow-comment.example.test } # endpoint\n')),
+	'flow-comment.example.test');
+assert_equal(join(',', route_test.proxy_servers(
+	'proxies:\n' +
+	'  - name: nested\n' +
+	'    plugin-opts:\n' +
+	'      server: nested.example.test\n' +
+	'    server: endpoint.example.test\n')), 'endpoint.example.test');
+assert_throws(() => route_test.proxy_servers('proxies:\n  - server: bad host name\n'),
+	'INVALID_ARGUMENT');
+assert_throws(() => route_test.proxy_servers(repeated('x', 1048577)),
+	'INVALID_ARGUMENT');
+
 let route_scenarios = fixture('route-scenarios.json');
 for (let scenario in route_scenarios) {
 	let http_calls = [], process_calls = [];

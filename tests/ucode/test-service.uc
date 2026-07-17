@@ -56,6 +56,7 @@ function env(options) {
 	let http = options.http ?? make_http(options.replies);
 	let clock = options.clock ?? fakes.clock(1000);
 	let observers = options.observers ?? {
+		dataplane: () => ({ ready: true }),
 		dns: () => ({ ready: true }),
 		tun: () => ({ ready: true }),
 		policy: () => ({ ready: true }),
@@ -84,6 +85,26 @@ assert_equal(api_env.http.calls[0].host, '127.0.0.1');
 assert_equal(api_env.http.calls[0].port, 9090);
 assert_equal(api_env.http.calls[0].headers.Authorization, 'Bearer ' + SECRET);
 assert_equal(index(sprintf('%J', version), SECRET), -1);
+
+// DNS diagnostics use Mihomo's controller without widening the generic path allowlist.
+let dns_env = env({ replies: {
+	'GET:/dns/query?name=domain.example.test&type=A': {
+		status: 200,
+		body: '{"Status":0,"Answer":[{"name":"domain.example.test.","type":1,"TTL":60,"data":"198.51.100.10"}]}'
+	}
+} });
+let dns_reply = mihomo_api.dns_query(dns_env.rt, 'domain.example.test', 'A',
+	'config.yaml');
+assert_equal(dns_reply.ok, true);
+assert_equal(dns_reply.data.Answer[0].data, '198.51.100.10');
+assert_equal(dns_env.http.calls[0].path,
+	'/dns/query?name=domain.example.test&type=A');
+assert_throws(() => mihomo_api.dns_query(dns_env.rt, 'bad host name', 'A'),
+	'INVALID_ARGUMENT');
+assert_throws(() => mihomo_api.dns_query(dns_env.rt, 'domain.example.test', 'TXT'),
+	'INVALID_ARGUMENT');
+assert_throws(() => mihomo_api.request(dns_env.rt, 'GET',
+	'/dns/query?name=domain.example.test&type=A'), 'INVALID_ARGUMENT');
 assert_throws(() => mihomo_api.request(api_env.rt, 'DELETE', '/version'), 'INVALID_ARGUMENT');
 assert_throws(() => mihomo_api.request(api_env.rt, 'GET', '//version'), 'INVALID_ARGUMENT');
 assert_throws(() => mihomo_api.request(api_env.rt, 'GET', '/version/../configs'), 'INVALID_ARGUMENT');
@@ -275,6 +296,44 @@ assert_equal(state_calls[0].data.spawn, false);
 assert_equal(state_calls[1].data.spawn, true);
 assert_throws(() => actions_service.reload('config4.yaml'), 'INVALID_ARGUMENT');
 
+// Bounded recovery always attempts the least disruptive action first and
+// stops as soon as full readiness is observed.
+function recovery_http(outcomes) {
+	let fake = { calls: [], outcomes: [ ...outcomes ] };
+	fake.request = (request) => {
+		push(fake.calls, request.method + ':' + request.path);
+		let status = length(fake.outcomes) ? shift(fake.outcomes) : 200;
+		return { status, body: request.path == '/version' ? '{"version":"1"}' : '{}' };
+	};
+	return fake;
+};
+let reload_http = recovery_http([ 200, 200 ]);
+let reload_recovery = env({ running: true, http: reload_http });
+let reload_result = service.create(reload_recovery.rt).recover('config.yaml');
+assert_equal(reload_result.ok, true);
+assert_equal(reload_result.stage, 'reload');
+assert_equal(join(',', reload_http.calls), 'PUT:/configs?force=true,GET:/version');
+
+let core_http = recovery_http([ 503, 200, 200 ]);
+let core_recovery = env({ running: true, http: core_http });
+let core_result = service.create(core_recovery.rt).recover('config.yaml');
+assert_equal(core_result.ok, true);
+assert_equal(core_result.stage, 'restart_core');
+assert_equal(join(',', core_http.calls),
+	'PUT:/configs?force=true,POST:/restart,GET:/version');
+
+let service_http = recovery_http([ 503, 503, 200 ]);
+let service_recovery = env({ running: true, http: service_http });
+let service_result = service.create(service_recovery.rt).recover('config.yaml');
+assert_equal(service_result.ok, true);
+assert_equal(service_result.stage, 'restart_service');
+assert_equal(join(',', service_http.calls),
+	'PUT:/configs?force=true,POST:/restart,GET:/version');
+let recovery_state_calls = filter(service_recovery.ubus.calls, (call) => call.method == 'state');
+assert_equal(length(recovery_state_calls), 2);
+assert_equal(recovery_state_calls[0].data.spawn, false);
+assert_equal(recovery_state_calls[1].data.spawn, true);
+
 let unknown_service_env = env();
 unknown_service_env.ubus.list_error = true;
 let unknown_service = service.create(unknown_service_env.rt);
@@ -320,6 +379,19 @@ assert_equal(join(',', order), 'dns,tun,policy,forward');
 let no_tun = service.create(ready_env.rt).wait_ready(1100, 'config.yaml', { tun_required: false });
 assert_equal(join(',', map(no_tun.components, (item) => item.component)),
 	'process,api,dns,policy,forward');
+
+let incompatible_dataplane = env({ running: true, observers: {
+	dataplane: () => ({ ready: false }), dns: () => ({ ready: true }),
+	tun: () => ({ ready: true }), policy: () => ({ ready: true }),
+	forward: () => ({ ready: true })
+} });
+let incompatible_ready = service.create(incompatible_dataplane.rt).wait_ready(
+	1020, 'config.yaml', { proxy_mode: 'tproxy' });
+assert_equal(incompatible_ready.ok, false);
+let dataplane_component = filter(incompatible_ready.components,
+	(item) => item.component == 'dataplane')[0];
+assert_equal(dataplane_component.ready, false,
+	'incompatible Mihomo listener contract was accepted as ready');
 
 let missing_observer = env({ running: true, observers: {
 	dns: () => ({ ready: true }), tun: () => ({ ready: true }),

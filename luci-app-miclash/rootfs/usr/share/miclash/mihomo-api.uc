@@ -14,6 +14,18 @@ const PATHS = {
 	'/restart': { POST: true }
 };
 
+function domain(value) {
+	if (type(value) != 'string' || !length(value) || length(value) > 253 ||
+	    match(value, /[[:cntrl:]]/) || substr(value, 0, 1) == '.' ||
+	    substr(value, -1) == '.')
+		return false;
+	for (let label in split(value, '.'))
+		if (!length(label) || length(label) > 63 ||
+		    !match(label, /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/))
+			return false;
+	return true;
+};
+
 function scalar(value) {
 	value = trim(value);
 	if (!length(value))
@@ -232,9 +244,8 @@ function https_request(runtime, controller, method, path, body) {
 	return response;
 };
 
-export function request(runtime, method, path, body, profile, config_content) {
-	if (type(method) != 'string' || !exists(METHODS, method) ||
-	    type(path) != 'string' || !exists(PATHS, path) || !exists(PATHS[path], method))
+function perform_request(runtime, method, path, body, profile, config_content) {
+	if (type(method) != 'string' || !exists(METHODS, method) || type(path) != 'string')
 		fail('INVALID_ARGUMENT');
 	if (body != null && type(body) != 'object')
 		fail('INVALID_ARGUMENT');
@@ -275,4 +286,17 @@ export function request(runtime, method, path, body, profile, config_content) {
 		status: response.status,
 		data
 	};
+};
+
+export function request(runtime, method, path, body, profile, config_content) {
+	if (type(path) != 'string' || !exists(PATHS, path) || !exists(PATHS[path], method))
+		fail('INVALID_ARGUMENT');
+	return perform_request(runtime, method, path, body, profile, config_content);
+};
+
+export function dns_query(runtime, name, query_type, profile, config_content) {
+	if (!domain(name) || (query_type != 'A' && query_type != 'AAAA'))
+		fail('INVALID_ARGUMENT');
+	return perform_request(runtime, 'GET', '/dns/query?name=' + lc(name) +
+		'&type=' + query_type, null, profile, config_content);
 };

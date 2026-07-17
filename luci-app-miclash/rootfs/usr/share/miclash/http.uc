@@ -82,7 +82,7 @@ function verify_candidate(runtime, owned) {
 		errors.fail('INTERNAL');
 };
 
-function candidate(runtime, suffix) {
+function candidate(runtime, suffix, content) {
 	for (let attempt = 0; attempt < 16; attempt++) {
 		let entropy = runtime.random.hex(8);
 		if (type(entropy) != 'string' || !match(entropy, /^[0-9a-f]{16}$/))
@@ -92,7 +92,18 @@ function candidate(runtime, suffix) {
 		if (handle == null)
 			continue;
 		let opened = runtime.fs.fstat(handle);
-		if (runtime.fs.close(handle) != true || opened?.type != 'file' ||
+		let written = true;
+		if (content != null) {
+			let offset = 0;
+			while (offset < length(content)) {
+				let amount = runtime.fs.write(handle, substr(content, offset));
+				if (type(amount) != 'int' || amount < 1) { written = false; break; }
+				offset += amount;
+			}
+			if (written && runtime.fs.flush(handle) != true)
+				written = false;
+		}
+		if (runtime.fs.close(handle) != true || !written || opened?.type != 'file' ||
 		    opened.nlink != 1 || opened.mode != 0o600 ||
 		    (opened.uid != null && opened.uid != 0)) {
 			try {
@@ -110,6 +121,27 @@ function candidate(runtime, suffix) {
 		return { path, identity };
 	}
 	errors.fail('INTERNAL');
+};
+
+function curl_quote(value) {
+	return '"' + replace(replace(value, /\\/g, '\\\\'), /"/g, '\\"') + '"';
+};
+
+function curl_config(clean, header_path, output_path) {
+	let lines = [
+		'silent', 'show-error', 'location', 'proto = "=http,https"',
+		'proto-redir = ' + curl_quote(clean.insecure ? '=http,https' : '=https'),
+		'connect-timeout = ' + curl_quote(sprintf('%.3f', clean.connect / 1000.0)),
+		'max-time = ' + curl_quote(sprintf('%.3f', clean.total / 1000.0)),
+		'max-redirs = ' + curl_quote(sprintf('%d', clean.redirects)),
+		'max-filesize = ' + curl_quote(sprintf('%d', clean.maximum)),
+		'dump-header = ' + curl_quote(header_path),
+		'output = ' + curl_quote(output_path)
+	];
+	for (let name, value in clean.headers)
+		push(lines, 'header = ' + curl_quote(name + ': ' + value));
+	push(lines, 'url = ' + curl_quote(clean.url));
+	return join('\n', lines) + '\n';
 };
 
 function read_bounded(runtime, owned, maximum) {
@@ -267,7 +299,7 @@ function clean_options(runtime, options) {
 export function request(runtime, options) {
 	let clean = clean_options(runtime, options);
 	let authority = ensure_root(runtime);
-	let output = null, header = null;
+	let output = null, header = null, config = null;
 	let result = null;
 	let failure = null;
 	try {
@@ -275,28 +307,24 @@ export function request(runtime, options) {
 		output = candidate(runtime, 'body');
 		verify_authority(runtime, authority);
 		header = candidate(runtime, 'headers');
-		let args = [ '--silent', '--show-error', '--location', '--proto', '=http,https',
-			'--proto-redir', clean.insecure ? '=http,https' : '=https',
-			'--connect-timeout', sprintf('%.3f', clean.connect / 1000.0),
-			'--max-time', sprintf('%.3f', clean.total / 1000.0),
-			'--max-redirs', sprintf('%d', clean.redirects),
-			'--max-filesize', sprintf('%d', clean.maximum), '--dump-header', header.path,
-			'--output', output.path ];
-		for (let name, value in clean.headers)
-			push(args, '--header', name + ': ' + value);
-		push(args, '--', clean.url);
+		verify_authority(runtime, authority);
+		config = candidate(runtime, 'curl-config',
+			curl_config(clean, header.path, output.path));
+		let args = [ '--config', config.path ];
 		// curl only accepts output pathnames. Root-owned 0700 parent/root
 		// authorities prevent unprivileged replacement in the remaining open
 		// window; exact identities are checked on both sides of process.run().
 		verify_authority(runtime, authority);
 		verify_candidate(runtime, output);
 		verify_candidate(runtime, header);
+		verify_candidate(runtime, config);
 		let reply = runtime.process.run({
 			command: '/usr/bin/curl', args, timeout_ms: clean.total
 		});
 		verify_authority(runtime, authority);
 		verify_candidate(runtime, output);
 		verify_candidate(runtime, header);
+		verify_candidate(runtime, config);
 		if (!adapter_reply(reply))
 			errors.fail('INTERNAL');
 		if (reply.code != 0)
@@ -308,7 +336,7 @@ export function request(runtime, options) {
 			url: clean.url, insecure: clean.insecure };
 	}
 	catch (error) { failure = errors.normalize(error).code; }
-	for (let owned in [ header, output ]) {
+	for (let owned in [ config, header, output ]) {
 		if (owned == null)
 			continue;
 		try {

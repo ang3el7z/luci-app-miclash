@@ -75,9 +75,9 @@ export function create(runtime) {
 			path: '/opt/clash/' + value
 		}, value, controller_config);
 	};
-	function restart_core(value) {
+	function restart_core(value, controller_config) {
 		value = profile(value);
-		return mihomo_api.request(runtime, 'POST', '/restart', {}, value);
+		return mihomo_api.request(runtime, 'POST', '/restart', {}, value, controller_config);
 	};
 	function wait_stopped(value, deadline) {
 		while (true) {
@@ -102,12 +102,12 @@ export function create(runtime) {
 		service_state(true);
 		return { changed: true, state: 'restarting' };
 	};
-	function observer_record(name) {
+	function observer_record(name, argument) {
 		let observer = runtime.observers?.[name];
 		if (type(observer) != 'function')
 			return component(name, 'unknown');
 		let result;
-		try { result = observer(); }
+		try { result = observer(argument); }
 		catch (error) { return component(name, 'failed'); }
 		let record = component(name, result?.ready === true ? 'ready' : (result?.state ?? 'failed'));
 		for (let field in [ 'observed_at', 'generation', 'enabled' ])
@@ -132,6 +132,8 @@ export function create(runtime) {
 		push(records, component('api', api?.ok === true ? 'ready' : 'failed'));
 		if (api?.ok !== true)
 			return records;
+		if (options.proxy_mode != null)
+			push(records, observer_record('dataplane', options.proxy_mode));
 		push(records, observer_record('dns'));
 		if (options.tun_required)
 			push(records, observer_record('tun'));
@@ -171,9 +173,50 @@ export function create(runtime) {
 			runtime.clock.sleep(min(poll_interval, deadline - now));
 		}
 	};
+	function recover(value, controller_config, options) {
+		value = profile(value);
+		options = { ...(options ?? {}) };
+		if (type(options) != 'object') fail('INVALID_ARGUMENT');
+		if (options.proxy_mode == null) {
+			let selected = null;
+			try { selected = runtime.uci.cursor().get('miclash', 'core', 'proxy_mode'); }
+			catch (error) {}
+			options.proxy_mode = selected == 'tun' || selected == 'mixed' ? selected : 'tproxy';
+		}
+		if (options.proxy_mode != 'tproxy' && options.proxy_mode != 'tun' &&
+		    options.proxy_mode != 'mixed')
+			fail('INVALID_ARGUMENT');
+		if (options.proxy_mode == 'tun' || options.proxy_mode == 'mixed')
+			options.tun_required = true;
+		let ready = null;
+		try {
+			let result = reload(value, controller_config);
+			if (result === true || result?.ok === true) {
+				ready = wait_ready(runtime.clock.now() + 5000, value, options);
+				if (ready.ok) return { ok: true, stage: 'reload', ready };
+			}
+		}
+		catch (error) {}
+		try {
+			let result = restart_core(value, controller_config);
+			if (result === true || result?.ok === true) {
+				ready = wait_ready(runtime.clock.now() + 5000, value, options);
+				if (ready.ok) return { ok: true, stage: 'restart_core', ready };
+			}
+		}
+		catch (error) {}
+		try {
+			restart_service(value);
+			ready = wait_ready(runtime.clock.now() + 5000, value, options);
+			return { ok: ready.ok === true, stage: 'restart_service', ready };
+		}
+		catch (error) {
+			return { ok: false, stage: 'restart_service', ready };
+		}
+	};
 
 	return {
-		observe, start, stop, reload, restart_core, restart_service, wait_ready,
+		observe, start, stop, reload, restart_core, restart_service, wait_ready, recover,
 		health: (value) => wait_ready(runtime.clock.now() + 5000, value).ok
 	};
 };

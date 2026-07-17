@@ -84,6 +84,7 @@ assert_true(type(production.observers?.dns) == 'function');
 assert_true(type(production.observers?.tun) == 'function');
 assert_true(type(production.observers?.policy) == 'function');
 assert_true(type(production.observers?.forward) == 'function');
+assert_true(type(production.observers?.dataplane) == 'function');
 assert_true(type(production.events?.emit) == 'function');
 assert_true(type(production.events?.subscribe) == 'function');
 assert_true(type(production.reboot) == 'function');
@@ -91,6 +92,43 @@ assert_true(type(production.mutation_lock_self?.boot) == 'string');
 assert_true(type(production.mutation_lock_self?.pid) == 'int');
 assert_true(type(production.mutation_lock_self?.start) == 'int');
 assert_true(type(production.core_available) == 'bool');
+
+let socket_fs = fakes.fs({
+	'/proc/net/tcp': '  sl  local_address rem_address   st\n' +
+		'   0: 00000000:1EC2 00000000:0000 0A\n' +
+		'   1: 00000000:1ED6 00000000:0000 0A\n',
+	'/proc/net/tcp6': '  sl  local_address rem_address   st\n',
+	'/proc/net/udp': '  sl  local_address rem_address   st\n' +
+		'   0: 00000000:1EC2 00000000:0000 07\n' +
+		'   1: 00000000:1ED6 00000000:0000 07\n',
+	'/proc/net/udp6': '  sl  local_address rem_address   st\n'
+});
+let socket_runtime = runtime.create({
+	fs: socket_fs, digest: fakes.digest(socket_fs), random: fakes.entropy(),
+	clock: fakes.clock(0), process: fakes.process(), uci: fakes.uci({}),
+	ubus: { connect: () => null }, http: { request: () => null }
+});
+assert_equal(socket_runtime.observers.dataplane('tproxy').ready, false,
+	'IPv4-only TPROXY listeners were accepted for dual-stack native rules');
+socket_fs.files['/proc/net/tcp6'] = '  sl  local_address rem_address   st\n' +
+	'   0: 00000000000000000000000001000000:1ED6 00000000000000000000000000000000:0000 0A\n';
+socket_fs.files['/proc/net/udp6'] = '  sl  local_address rem_address   st\n' +
+	'   0: 00000000000000000000000001000000:1ED6 00000000000000000000000000000000:0000 07\n';
+assert_equal(socket_runtime.observers.dataplane('tproxy').ready, true);
+assert_equal(socket_runtime.observers.dataplane('mixed').ready, true);
+assert_equal(socket_runtime.observers.dataplane('tun').ready, true);
+socket_fs.files['/proc/net/udp'] =
+	'  sl  local_address rem_address   st\n   0: 00000000:1ED6 00000000:0000 07\n';
+assert_equal(socket_runtime.observers.dataplane('tproxy').ready, false,
+	'missing Mihomo DNS listener was accepted');
+socket_fs.files['/proc/net/tcp'] = '  sl  local_address rem_address   st\n' +
+	'   0: 0101A8C0:1EC2 00000000:0000 0A\n' +
+	'   1: 0101A8C0:1ED6 00000000:0000 0A\n';
+socket_fs.files['/proc/net/udp'] = '  sl  local_address rem_address   st\n' +
+	'   0: 0101A8C0:1EC2 00000000:0000 07\n' +
+	'   1: 0101A8C0:1ED6 00000000:0000 07\n';
+assert_equal(socket_runtime.observers.dataplane('tproxy').ready, false,
+	'LAN-only listeners were accepted for loopback native targets');
 assert_equal(production.rulesets.validate('safe.txt', 'DOMAIN,example.test\n'), true);
 assert_equal(production.rulesets.validate('../unsafe.txt', 'DOMAIN,example.test\n'), false);
 assert_equal(production.rulesets.validate('safe.txt', 'DOMAIN,' + sprintf('%c', 1) + '\n'), false);

@@ -8,7 +8,7 @@ const aclPath = 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.j
 const menuPath = 'luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json';
 const makefilePath = 'luci-app-miclash/Makefile';
 
-const expectedNames = 'status,health,operation_get,operation_list,operation_start,' +
+const expectedNames = 'status,health,operation_get,operation_list,' +
 	'service_start,service_stop,service_reload,service_restart,config_list,config_read,' +
 	'config_read_draft,config_save_draft,config_validate,config_apply,' +
 	'operational_settings_apply,config_swap,config_external_adopt,settings_get,settings_set,' +

@@ -40,4 +40,6 @@ if "$installer" status-protocol-test --status-file /tmp/foreign.status \
 	exit 1
 fi
 
+"$installer" installer-security-test
+
 echo 'update status protocol integration passed'

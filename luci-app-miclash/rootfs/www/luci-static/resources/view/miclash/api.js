@@ -6,7 +6,6 @@ const METHOD_SPECS = [
 	{ name: 'health', params: [], operation: false, access: 'read' },
 	{ name: 'operation_get', params: ['operation_id'], operation: false, access: 'read' },
 	{ name: 'operation_list', params: ['state', 'kind', 'source'], operation: false, access: 'read' },
-	{ name: 'operation_start', params: ['kind', 'arguments', 'source'], operation: true, access: 'write' },
 	{ name: 'service_start', params: ['profile', 'source'], operation: true, access: 'write' },
 	{ name: 'service_stop', params: ['profile', 'source'], operation: true, access: 'write' },
 	{ name: 'service_reload', params: ['profile', 'source'], operation: true, access: 'write' },

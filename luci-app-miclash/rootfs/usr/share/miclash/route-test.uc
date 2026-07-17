@@ -8,6 +8,7 @@ const RULE_TYPES = {
 	'IP-CIDR': true, 'IP-CIDR6': true, MATCH: true
 };
 const MAX_STEPS = 16;
+const MAX_CONFIG = 1048576;
 
 function invalid() { fail('INVALID_ARGUMENT'); };
 function ipv4(value) {
@@ -101,6 +102,161 @@ function classify(value) {
 	if (type(value) == 'string' && match(value, /^[0-9.]+$/)) invalid();
 	if (domain(value)) return 'domain';
 	invalid();
+};
+function yaml_scalar(value) {
+	value = trim(value);
+	if (!length(value)) invalid();
+	if (substr(value, 0, 1) == '"') {
+		let parsed;
+		try { parsed = json(value); } catch (error) { invalid(); }
+		if (type(parsed) != 'string') invalid();
+		return parsed;
+	}
+	if (substr(value, 0, 1) == "'") {
+		if (length(value) < 2 || substr(value, -1) != "'") invalid();
+		return replace(substr(value, 1, length(value) - 2), "''", "'");
+	}
+	let comment = index(value, ' #');
+	if (comment >= 0) value = trim(substr(value, 0, comment));
+	if (!length(value) || match(value, /[[:cntrl:]]/)) invalid();
+	return value;
+};
+
+function indentation(line) {
+	let amount = 0;
+	while (amount < length(line) && substr(line, amount, 1) == ' ') amount++;
+	if (amount < length(line) && substr(line, amount, 1) == '\t') invalid();
+	return amount;
+};
+
+function strip_yaml_comment(value) {
+	let quote = null, escaped = false;
+	for (let offset = 0; offset < length(value); offset++) {
+		let character = substr(value, offset, 1);
+		if (quote != null) {
+			if (quote == '"' && character == '\\' && !escaped) {
+				escaped = true; continue;
+			}
+			if (character == quote && !escaped) {
+				if (quote == "'" && substr(value, offset + 1, 1) == "'") {
+					offset++; continue;
+				}
+				quote = null;
+			}
+			escaped = false;
+			continue;
+		}
+		if (character == '"' || character == "'") { quote = character; continue; }
+		if (character == '#' && (offset == 0 || match(substr(value, offset - 1, 1), /^\s$/)))
+			return replace(substr(value, 0, offset), /\s+$/, '');
+	}
+	return value;
+};
+
+function flow_fields(value) {
+	if (substr(value, 0, 1) != '{' || substr(value, -1) != '}') invalid();
+	value = substr(value, 1, length(value) - 2);
+	let fields = [], start = 0, quote = null, depth = 0, escaped = false;
+	for (let offset = 0; offset < length(value); offset++) {
+		let character = substr(value, offset, 1);
+		if (quote != null) {
+			if (quote == '"' && character == '\\' && !escaped) {
+				escaped = true; continue;
+			}
+			if (character == quote && !escaped) {
+				if (quote == "'" && substr(value, offset + 1, 1) == "'") {
+					offset++; continue;
+				}
+				quote = null;
+			}
+			escaped = false;
+			continue;
+		}
+		if (character == '"' || character == "'") { quote = character; continue; }
+		if (character == '{' || character == '[') { depth++; continue; }
+		if (character == '}' || character == ']') {
+			if (depth < 1) invalid();
+			depth--; continue;
+		}
+		if (character == ',' && depth == 0) {
+			push(fields, trim(substr(value, start, offset - start)));
+			start = offset + 1;
+		}
+	}
+	if (quote != null || depth != 0) invalid();
+	push(fields, trim(substr(value, start)));
+	return fields;
+};
+
+function mapping_server(value, flow) {
+	let fields = flow ? flow_fields(value) : [ trim(value) ], server = null;
+	for (let field in fields) {
+		if (!length(field)) continue;
+		let colon = index(field, ':');
+		if (colon < 1) {
+			if (!flow) return null;
+			invalid();
+		}
+		let key = trim(substr(field, 0, colon));
+		if (!match(key, /^[A-Za-z0-9_-]+$/)) invalid();
+		if (key != 'server') continue;
+		if (server != null) invalid();
+		server = yaml_scalar(substr(field, colon + 1));
+	}
+	return server;
+};
+
+export function proxy_servers(config_content) {
+	if (type(config_content) != 'string' || length(config_content) > MAX_CONFIG)
+		invalid();
+	let active = false, item = false, sequence_indent = null,
+		field_indent = null, item_server = null, values = [], seen = {};
+	function finish_item() {
+		if (item_server == null) return;
+		let kind = classify(item_server);
+		let normalized = kind == 'ipv6' ? normalize_ipv6(item_server) : lc(item_server);
+		if (!seen[normalized]) {
+			if (length(values) >= 128) invalid();
+			seen[normalized] = true;
+			push(values, normalized);
+		}
+		item_server = null;
+	};
+	for (let line in split(config_content, '\n')) {
+		line = strip_yaml_comment(line);
+		if (!length(trim(line))) continue;
+		let indent = indentation(line), body = substr(line, indent);
+		if (!active) {
+			if (indent != 0) continue;
+			let colon = index(line, ':');
+			active = colon > 0 && trim(substr(line, 0, colon)) == 'proxies' &&
+				!length(trim(substr(line, colon + 1)));
+			continue;
+		}
+		let sequence = match(body, /^-\s*(.*)$/);
+		if (sequence != null && (sequence_indent == null || indent == sequence_indent)) {
+			if (sequence_indent == null) sequence_indent = indent;
+			finish_item();
+			item = true; field_indent = null;
+			let first = trim(sequence[1]);
+			if (length(first))
+				item_server = mapping_server(first, substr(first, 0, 1) == '{');
+			continue;
+		}
+		if (sequence_indent == null || indent <= sequence_indent) {
+			finish_item(); active = false; item = false; continue;
+		}
+		if (!item) invalid();
+		if (field_indent == null) field_indent = indent;
+		if (indent != field_indent) continue;
+		let server = mapping_server(body, false);
+		if (server != null) {
+			if (item_server != null) invalid();
+			item_server = server;
+		}
+	}
+	finish_item();
+	return values;
 };
 function safe_mac(value) {
 	return type(value) == 'string' && match(value,
@@ -506,7 +662,7 @@ export function create(dependencies) {
 				matched: interface_policy.matched },
 				interface_policy.decision);
 			let proxy_servers = bypass(desired.proxy_servers, input);
-			if (candidate == 'unknown' && proxy_servers.matched) {
+			if (candidate != 'BLOCK' && proxy_servers.matched) {
 				candidate = 'DIRECT'; candidate_source = 'proxy_server_bypass';
 			}
 			step(steps, 'proxy_server_bypass', { available: proxy_servers.available,

@@ -382,7 +382,7 @@ function download(runtime, url, maximum) {
 
 function published_hash(runtime, resolved, compressed, local_hash) {
 	if (resolved.checksum_url == null)
-		return false;
+		errors.fail('INVALID_RESPONSE');
 	let body = download(runtime, resolved.checksum_url, 65536);
 	let found = match(trim(body), /^([0-9A-Fa-f]{64})[ \t]+\*?([^ \t\r\n]+)$/);
 	if (found == null || found[2] != resolved.asset_name)
@@ -683,7 +683,7 @@ function install_kernel(app, candidate, resolved, ctx, transaction) {
 
 function parse_installer_checksum(runtime, resolved, installer, local_hash) {
 	if (resolved.checksum_url == null)
-		return false;
+		errors.fail('INVALID_RESPONSE');
 	let body = download(runtime, resolved.checksum_url, 65536);
 	let found = match(trim(body), /^([0-9A-Fa-f]{64})[ \t]+\*?install-miclash\.sh$/);
 	if (found == null)

@@ -2071,3 +2071,39 @@ msgstr "Не удалось изменить состояние защиты."
 
 msgid "The provider update interval will be learned during the next protected subscription update. The selected interval is used until then."
 msgstr "Интервал обновления провайдера будет получен при следующем защищённом обновлении подписки. До этого используется выбранный интервал."
+
+msgid "Sections"
+msgstr "Разделы"
+
+msgid "Inherit"
+msgstr "Наследовать"
+
+msgid "Proxy"
+msgstr "Прокси"
+
+msgid "Direct"
+msgstr "Напрямую"
+
+msgid "Block"
+msgstr "Блокировать"
+
+msgid "Monday"
+msgstr "Понедельник"
+
+msgid "Tuesday"
+msgstr "Вторник"
+
+msgid "Wednesday"
+msgstr "Среда"
+
+msgid "Thursday"
+msgstr "Четверг"
+
+msgid "Friday"
+msgstr "Пятница"
+
+msgid "Saturday"
+msgstr "Суббота"
+
+msgid "Sunday"
+msgstr "Воскресенье"

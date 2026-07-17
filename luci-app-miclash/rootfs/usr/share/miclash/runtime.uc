@@ -500,6 +500,24 @@ function readiness_observers(runtime) {
 			catch (error) { return { ready: false, state: 'failed' }; }
 		};
 	};
+	function socket_open(protocol, family, port, states) {
+		let suffix = family == 'ipv4' ? '' : (family == 'ipv6' ? '6' : null);
+		if (suffix == null) return false;
+		let data = runtime.fs.readfile('/proc/net/' + protocol + suffix);
+		if (type(data) != 'string' || length(data) > 1048576) return false;
+		for (let line in split(data, '\n')) {
+			let found = match(line,
+				/^[ \t]*[0-9]+:[ \t]+([0-9A-Fa-f]+):([0-9A-Fa-f]{4})[ \t]+[0-9A-Fa-f]+:[0-9A-Fa-f]{4}[ \t]+([0-9A-Fa-f]{2})/);
+			let address = uc(found?.[1] ?? '');
+			let compatible = suffix == ''
+				? (address == '00000000' || address == '0100007F')
+				: (address == '00000000000000000000000000000000' ||
+				   address == '00000000000000000000000001000000');
+			if (found != null && compatible && uc(found[2]) == port && states[uc(found[3])])
+				return true;
+		}
+		return false;
+	};
 	return {
 		guard: safe((enabled) => {
 			if (type(enabled) != 'bool') return { ready: false, state: 'failed' };
@@ -539,6 +557,20 @@ function readiness_observers(runtime) {
 				return { ready: true, state: 'ready' };
 			let legacy = iptables.observe(runtime);
 			let ready = legacy?.valid === true && legacy.installed === true;
+			return { ready, state: ready ? 'ready' : 'failed' };
+		}),
+		dataplane: safe((proxy_mode) => {
+			if (proxy_mode != 'tproxy' && proxy_mode != 'mixed' && proxy_mode != 'tun')
+				return { ready: false, state: 'failed' };
+			let dns_ready = socket_open('tcp', 'ipv4', '1EC2', { '0A': true }) &&
+				socket_open('udp', 'ipv4', '1EC2', { '07': true, '0A': true });
+			let tcp_ready = proxy_mode == 'tun' ||
+				(socket_open('tcp', 'ipv4', '1ED6', { '0A': true }) &&
+				 socket_open('tcp', 'ipv6', '1ED6', { '0A': true }));
+			let udp_ready = proxy_mode != 'tproxy' ||
+				(socket_open('udp', 'ipv4', '1ED6', { '07': true, '0A': true }) &&
+				 socket_open('udp', 'ipv6', '1ED6', { '07': true, '0A': true }));
+			let ready = dns_ready && tcp_ready && udp_ready;
 			return { ready, state: ready ? 'ready' : 'failed' };
 		})
 	};

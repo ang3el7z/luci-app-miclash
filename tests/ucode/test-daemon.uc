@@ -1,4 +1,4 @@
-import { assert_equal, assert_throws, assert_true } from 'testlib';
+import { assert_equal, assert_match, assert_throws, assert_true } from 'testlib';
 import * as daemon from 'miclash.daemon';
 import * as real_api from 'miclash.api';
 import * as real_application from 'miclash.application';
@@ -55,7 +55,9 @@ let factories = {
 		return {};
 	} },
 	history: { create: () => ({}) },
-	config: { create: () => { push(order, 'config'); return {}; } },
+	config: { create: () => { push(order, 'config'); return {
+		adopt_external: () => ({ id: 'id' }), read_active: () => ''
+	}; } },
 	state: { create: () => state_model },
 	application: { create: () => application },
 	settings: { load: () => ({
@@ -75,7 +77,8 @@ let factories = {
 	},
 	devices: {
 		discover: () => [], timezones: (app) => app.timezones.list(), policy_list: () => [],
-		policy_set: () => ({}), policy_delete: () => true
+		policy_set: () => ({}), policy_delete: () => true,
+		effective: () => ({ action: 'inherit' })
 	},
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
 	subscription: { create: () => ({
@@ -84,8 +87,13 @@ let factories = {
 	}) },
 	updates: { create: () => ({
 		release_info: () => ({}), update_miclash: () => ({ id: 'id' }),
-		update_mihomo: () => ({ id: 'id' })
+		update_mihomo: () => ({ id: 'id' }), status: () => ({ state: 'idle' })
 	}) },
+	diagnostics: { create: () => ({ summary: () => ({ schema_version: 1 }),
+		create_report: () => ({ id: 'rpt_' + sprintf('%032x', 1) }),
+		read_report: () => ({ content: '{}' }) }) },
+	route_test: { create: () => ({ run: () => ({ decision: 'unknown', steps: [] }) }) },
+	routing: { observe: () => ({ rules: [], routes: [] }) },
 	api: { create_transfers: () => ({ begin: () => ({}), write: () => ({}), read: () => ({}),
 		finish: () => ({}), abort: () => ({}), close: () => true }), register: real_api.register }
 };
@@ -161,7 +169,9 @@ let failed_desired = {
 };
 let failed_factories = {
 	operations: { create: () => failed_operations }, service: { create: () => ({}) },
-	history: { create: () => ({}) }, config: { create: () => ({}) },
+	history: { create: () => ({}) }, config: { create: () => ({
+		adopt_external: () => ({}), read_active: () => ''
+	}) },
 	state: { create: () => failed_state }, application: { create: () => failed_application },
 	settings: { load: () => failed_desired,
 		validate_patch: (patch) => patch, save: () => ({}) },
@@ -175,15 +185,19 @@ let failed_factories = {
 	backup: { list: () => [], create: () => ({}), inspect: () => ({}),
 		restore: () => ({}), transfer_download: () => ({}), transfer_import: () => ({}) },
 	devices: { discover: () => [], timezones: () => [ 'UTC' ], policy_list: () => [],
-		policy_set: () => ({}), policy_delete: () => true },
+		policy_set: () => ({}), policy_delete: () => true,
+		effective: () => ({ action: 'inherit' }) },
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
 	subscription: { create: () => ({
 		get_redacted: () => ({ configured: false }), set_url: () => ({}),
 		probe: () => ({}), update: () => ({}), replace: () => ({})
 	}) },
 	updates: { create: () => ({
-		release_info: () => ({}), update_miclash: () => ({}), update_mihomo: () => ({})
+		release_info: () => ({}), update_miclash: () => ({}), update_mihomo: () => ({}),
+		status: () => ({ state: 'idle' })
 	}) },
+	diagnostics: factories.diagnostics, route_test: factories.route_test,
+	routing: factories.routing,
 	api: { create_transfers: () => { failed_transfer_attempts++; die('HEALTH_FAILED'); },
 		register: real_api.register }
 };
@@ -306,7 +320,14 @@ let integrated_factories = {
 					enabled: guard_actual, observed_at: 1700000000000, generation: 1 },
 				{ component: 'dns', ready: true, observed_at: 1700000000000 },
 				{ component: 'forward', ready: true, observed_at: 1700000000000 }
-			] })
+			] }),
+		recover: () => ({ ok: guard_actual == desired.guard.enabled, stage: 'reload',
+			ready: { ok: guard_actual == desired.guard.enabled, components: [
+				{ component: 'guard', ready: guard_actual == desired.guard.enabled,
+					enabled: guard_actual, observed_at: 1700000000000, generation: 1 },
+				{ component: 'dns', ready: true, observed_at: 1700000000000 },
+				{ component: 'forward', ready: true, observed_at: 1700000000000 }
+			] } })
 	}) },
 	history: { create: () => ({
 		list: () => [], diff: () => ({ text: '' }), open_draft: () => ({ id: 'operation-history' }),
@@ -317,6 +338,7 @@ let integrated_factories = {
 		read_draft: () => 'mode: rule\n', save_draft: () => ({ id: 'operation-draft' }),
 		validate: () => ({ id: 'operation-validate' }), apply: () => ({ id: 'operation-apply' }),
 		apply_operational: () => ({ id: 'operation-settings-apply' }),
+		adopt_external: () => ({ id: 'operation-external-adopt' }),
 		swap: (profile, source, transaction) => {
 			integrated_swap_transaction = transaction;
 			integrated_swap_before = transaction.prepare();
@@ -381,6 +403,7 @@ let integrated_factories = {
 		}
 	}) },
 	updates: { create: () => ({
+		status: () => ({ state: 'idle' }), release_info: () => ({}),
 		update_miclash: (options, source) => {
 			push(telegram_backend_calls, { method: 'miclash', options, source });
 			return { id: 'miclash-operation', kind: 'updates.miclash' };
@@ -415,11 +438,13 @@ let integrated_factories = {
 		discover: (app) => { devices_app_seen = app; return [ { mac: '02:00:00:00:00:01' } ]; },
 		timezones: (app) => app.timezones.list(), policy_list: () => [],
 		policy_set: () => ({ id: 'dp_1_0000000000000000', revision: 1 }),
-		policy_delete: () => true
+		policy_delete: () => true, effective: () => ({ action: 'inherit' })
 	},
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
 	reconcile_adapter: real_reconcile_adapter,
 	network: { create: () => ({ apply: () => true, cleanup: () => true }) },
+	diagnostics: factories.diagnostics, route_test: factories.route_test,
+	routing: factories.routing,
 	api: {
 		create_transfers: (dependencies) => {
 			fake_transfers = {
@@ -834,6 +859,16 @@ let persisted_memory = sprintf('%J\n', {
 let production_fs = fakes.fs({
 	'/proc/sys/kernel/random/boot_id': '11111111-1111-1111-1111-111111111111\n',
 	'/proc/self/stat': '123 (ucode) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 200 21 22\n',
+	'/proc/net/tcp': '  sl  local_address rem_address   st\n' +
+		'   0: 00000000:1EC2 00000000:0000 0A\n' +
+		'   1: 00000000:1ED6 00000000:0000 0A\n',
+	'/proc/net/tcp6': '  sl  local_address rem_address   st\n' +
+		'   0: 00000000000000000000000001000000:1ED6 00000000000000000000000000000000:0000 0A\n',
+	'/proc/net/udp': '  sl  local_address rem_address   st\n' +
+		'   0: 00000000:1EC2 00000000:0000 07\n' +
+		'   1: 00000000:1ED6 00000000:0000 07\n',
+	'/proc/net/udp6': '  sl  local_address rem_address   st\n' +
+		'   0: 00000000000000000000000001000000:1ED6 00000000000000000000000000000000:0000 07\n',
 	'/proc/123/stat': '123 (ucode) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 200 21 22\n',
 	'/var/run/miclash/memory.json': persisted_memory,
 	'/var/run/miclash/routing-ownership.json': sprintf('%J\n', {
@@ -856,7 +891,12 @@ let production_fs = fakes.fs({
 	}),
 	'/var/run/miclash/.keep': '', '/tmp/miclash/.keep': '',
 	'/etc/miclash/.keep': '', '/opt/clash/.keep': '',
-	'/opt/clash/config.yaml': 'external-controller: 127.0.0.1:9090\n',
+	'/opt/clash/config.yaml': 'external-controller: 127.0.0.1:9090\n' +
+		'proxies:\n' +
+		'  - name: upstream\n' +
+		'    type: socks5\n' +
+		'    server: proxy.example.test\n' +
+		'    port: 443\n',
 	'/opt/clash/bin/clash': 'binary',
 	'/usr/libexec/miclash/validate-config.uc': 'helper',
 	'/etc/openwrt_release': "DISTRIB_RELEASE='24.10.2'\nDISTRIB_ARCH='aarch64_cortex-a53'\n",
@@ -912,7 +952,10 @@ let production_runtime = runtime_module.create({
 	clock: production_clock,
 	process: production_process,
 	uci: fakes.uci({ miclash: {
-		core: { '.type': 'core' }, interfaces: { '.type': 'interfaces' },
+		core: { '.type': 'core' }, interfaces: { '.type': 'interfaces',
+			mode: 'explicit', auto_detect_lan: '1', auto_detect_wan: '1',
+			detected_lan: 'br-lan', detected_wan: 'pppoe-wan',
+			included: [ 'wlan0' ], excluded: [ 'wwan0' ] },
 		guard: { '.type': 'guard' }, memory: { '.type': 'memory' },
 		updates: { '.type': 'updates' }, telegram: { '.type': 'telegram' },
 		notifications: { '.type': 'notifications' }, backup: { '.type': 'backup' },
@@ -921,7 +964,11 @@ let production_runtime = runtime_module.create({
 		cachesize: '0', noresolv: '1' } } }),
 	ubus: { connect: () => production_connection },
 	http: { request: (request) => ({ status: production_http_healthy ? 200 : 503,
-		body: request.path == '/version' ? '{"version":"v1.20.0"}' : '{}' }) }
+		body: request.path == '/version' ? '{"version":"v1.20.0"}' :
+			request.path == '/dns/query?name=domain.example.test&type=A' ?
+				'{"Status":0,"Answer":[{"name":"domain.example.test.","type":1,"TTL":60,"data":"198.51.100.10"}]}' :
+			request.path == '/dns/query?name=domain.example.test&type=AAAA' ?
+				'{"Status":0,"Answer":[]}' : '{}' }) }
 });
 let production_daemon = daemon.compose(production_runtime);
 assert_true(type(production_runtime.rulesets?.validate) == 'function');
@@ -938,6 +985,82 @@ assert_equal(production_interfaces.detected_wan, 'pppoe-wan');
 assert_equal(production_methods.memory_status.call({ args: {} }).baseline_rss_kb, 64000);
 assert_equal(production_methods.devices_timezones.call({ args: {} })[0], 'UTC');
 assert_equal(length(production_methods.backup_list.call({ args: {} })), 0);
+let production_diagnostics = production_methods.diagnostics_summary.call({ args: {} });
+assert_equal(production_diagnostics.schema_version, 1,
+	'production daemon did not compose the diagnostics domain: ' + sprintf('%J', production_diagnostics));
+let external_adoption = production_methods.config_external_adopt.call({ args: {
+	profile: 'config.yaml', source: 'luci'
+} });
+production_clock.advance(0);
+assert_equal(production_daemon.app.operation_get(external_adoption.operation_id).state, 'success',
+	'production daemon did not compose external config adoption');
+let production_report = production_methods.diagnostics_create_report.call({ args: {} });
+assert_match(production_report.id, /^rpt_[0-9a-f]{32}$/,
+	'production daemon did not compose diagnostic report creation');
+let report_download = production_methods.transfer_begin.call({ args: {
+	direction: 'download', kind: 'report', object_id: production_report.id,
+	size: 0, sha256: '', metadata: { format: 'json' }
+} });
+let report_chunk = production_methods.transfer_read.call({ args: {
+	transfer_id: report_download.transfer_id, seq: 0
+} });
+assert_equal(json(b64dec(report_chunk.data)).schema_version, 1,
+	'production diagnostic report was not available through the transfer API');
+assert_equal(production_methods.transfer_finish.call({ args: {
+	transfer_id: report_download.transfer_id
+} }).completed, true);
+let production_route_test = production_methods.diagnostics_route_test.call({ args: {
+	target: '198.51.100.10', device: '', interface: 'br-lan'
+} });
+assert_equal(production_route_test.steps[0].source, 'input',
+	'production daemon did not compose the routing diagnostics domain');
+assert_equal(production_route_test.steps[3].source, 'interface_policy');
+assert_equal(production_route_test.steps[3].decision, 'PROXY',
+	'auto-detected LAN did not use the explicit-mode firewall projection');
+let production_route_included = production_methods.diagnostics_route_test.call({ args: {
+	target: '198.51.100.10', device: '', interface: 'wlan0'
+} });
+assert_equal(production_route_included.steps[3].decision, 'PROXY',
+	'explicitly included interface did not match the firewall projection');
+let production_route_unmatched = production_methods.diagnostics_route_test.call({ args: {
+	target: '198.51.100.10', device: '', interface: 'eth9'
+} });
+assert_equal(production_route_unmatched.steps[3].decision, 'DIRECT',
+	'unmatched explicit-mode interface was not diagnosed as direct');
+assert_equal(production_route_test.steps[length(production_route_test.steps) - 1].source, 'guard');
+let exclude_settings = production_methods.settings_set.call({ args: { settings: { interfaces: {
+	mode: 'exclude', auto_detect_lan: true, auto_detect_wan: true,
+	detected_lan: 'br-lan', detected_wan: 'pppoe-wan',
+	included: [ 'wlan0' ], excluded: [ 'wwan0' ]
+} }, source: 'luci' } });
+production_clock.advance(0);
+assert_equal(production_daemon.app.operation_get(exclude_settings.operation_id).state, 'success');
+let production_route_excluded = production_methods.diagnostics_route_test.call({ args: {
+	target: '198.51.100.10', device: '', interface: 'pppoe-wan'
+} });
+assert_equal(production_route_excluded.steps[3].decision, 'DIRECT',
+	'auto-detected WAN did not use the exclude-mode firewall projection');
+let production_route_proxy_default = production_methods.diagnostics_route_test.call({ args: {
+	target: '198.51.100.10', device: '', interface: 'eth9'
+} });
+assert_equal(production_route_proxy_default.steps[3].decision, 'PROXY',
+	'unmatched exclude-mode interface was not diagnosed as proxied');
+let production_route_domain = production_methods.diagnostics_route_test.call({ args: {
+	target: 'domain.example.test', device: '', interface: 'eth9'
+} });
+assert_equal(production_route_domain.steps[1].source, 'dns');
+assert_equal(production_route_domain.steps[1].evidence.available, true,
+	'production route diagnostics did not query Mihomo DNS');
+assert_equal(length(production_route_domain.steps[1].evidence.answers), 1,
+	'production route diagnostics did not retain bounded DNS evidence');
+let production_route_bypass = production_methods.diagnostics_route_test.call({ args: {
+	target: 'proxy.example.test', device: '', interface: 'eth9'
+} });
+assert_equal(production_route_bypass.steps[4].source, 'proxy_server_bypass');
+assert_equal(production_route_bypass.steps[4].evidence.matched, true,
+	'production route diagnostics did not derive proxy server bypasses from active config');
+assert_equal(production_route_bypass.decision, 'DIRECT',
+	sprintf('proxy bypass was not final: %J', production_route_bypass));
 // The production lifecycle itself must create exactly one restoration event:
 // a failed Mihomo/API observation followed by fresh API, DNS, routing and
 // applied Guard verification. No test-only event injection is accepted here.

@@ -99,15 +99,23 @@ function bindTabGroup(root, options) {
 	Object.keys(panes).forEach((name) => {
 		paneNodes[name] = root.querySelector(panes[name]);
 	});
+	if (tabs[0]?.parentElement) {
+		tabs[0].parentElement.setAttribute('role', 'group');
+		tabs[0].parentElement.setAttribute('aria-label', opts.label || _('Sections'));
+	}
 
 	function setActive(name) {
 		tabs.forEach((tab) => {
-			const active = tab.getAttribute('data-' + tabAttr) === name;
+			const tabName = tab.getAttribute('data-' + tabAttr);
+			const active = tabName === name;
 			if (activeClass) tab.classList.toggle(activeClass, active);
 			if (tab.classList.contains('cbi-tab') || tab.classList.contains('cbi-tab-disabled')) {
 				tab.classList.toggle('cbi-tab', active);
 				tab.classList.toggle('cbi-tab-disabled', !active);
 			}
+			tab.setAttribute('aria-pressed', active ? 'true' : 'false');
+			const pane = paneNodes[tabName];
+			if (pane?.id) tab.setAttribute('aria-controls', pane.id);
 		});
 
 		Object.keys(paneNodes).forEach((paneName) => {

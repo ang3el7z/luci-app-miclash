@@ -270,8 +270,8 @@ function setOperationError(error, options) {
 	const message = getOperationMessage(error);
 	setOperationStatus('error', _('Error: %s').format(message), Object.assign({
 		detail: detail,
-		dismissible: false,
-		autoClearMs: opts.autoClearMs == null ? 3000 : Number(opts.autoClearMs)
+		dismissible: true,
+		autoClearMs: opts.autoClearMs == null ? 0 : Number(opts.autoClearMs)
 	}, opts));
 }
 
@@ -2033,7 +2033,7 @@ function buildSettingsPaneHtml() {
 			'<div id="sbox-settings-status" class="cbi-section-descr sbox-settings-status">' +
 				'<div class="sbox-settings-summary-grid">' +
 					'<div class="sbox-settings-summary-current">' + buildSettingsSummary() + '</div>' +
-					'<div id="sbox-diagnostics-summary" class="sbox-diagnostics-summary" aria-live="polite"></div>' +
+					'<div id="sbox-diagnostics-summary" class="sbox-diagnostics-summary"></div>' +
 				'</div>' +
 			'</div>' +
 			buildReleaseChannelSectionHtml(s) +
@@ -2081,7 +2081,7 @@ function buildSettingsPaneHtml() {
 				'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
 					'<h4>' + safeText(_('Additional')) + '</h4>' +
 					'<div id="sbox-tun-stack-row" class="sbox-settings-field"' + (showTunStack ? '' : ' hidden') + '>' +
-						'<label>' + safeText(_('Tun stack')) + '</label>' +
+						'<label for="sbox-tun-stack">' + safeText(_('Tun stack')) + '</label>' +
 						'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
 							'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
 							'<option value="gvisor"' + ((s.tunStack || 'system') === 'gvisor' ? ' selected' : '') + '>gvisor</option>' +
@@ -2111,20 +2111,20 @@ function buildSettingsPaneHtml() {
 				'</label>' +
 				'<div class="sbox-form-grid">' +
 					'<div>' +
-						'<label>' + safeText(_('User-Agent')) + '</label>' +
+						'<label for="sbox-hwid-user-agent">' + safeText(_('User-Agent')) + '</label>' +
 						'<input id="sbox-hwid-user-agent" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidUserAgent || 'MiClash') + '" />' +
 					'</div>' +
 					'<div>' +
-						'<label>' + safeText(_('Device OS')) + '</label>' +
+						'<label for="sbox-hwid-device-os">' + safeText(_('Device OS')) + '</label>' +
 						'<input id="sbox-hwid-device-os" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidDeviceOS || 'OpenWrt') + '" />' +
 					'</div>' +
 				'</div>' +
 			'</section>' +
 			'</div>' +
 			'<div id="sbox-management-panels" class="sbox-management-grid">' +
-				'<section id="sbox-management-settings" class="sbox-management-module sbox-management-settings" aria-live="polite"></section>' +
-				'<section id="sbox-management-backup" class="cbi-section sbox-settings-block sbox-management-module" aria-live="polite"></section>' +
-				'<section id="sbox-management-devices" class="cbi-section sbox-settings-block sbox-management-module sbox-management-wide" aria-live="polite"></section>' +
+				'<section id="sbox-management-settings" class="sbox-management-module sbox-management-settings"></section>' +
+				'<section id="sbox-management-backup" class="cbi-section sbox-settings-block sbox-management-module"></section>' +
+				'<section id="sbox-management-devices" class="cbi-section sbox-settings-block sbox-management-module sbox-management-wide"></section>' +
 			'</div>' +
 
 			'<div class="sbox-settings-save-wrap">' +
@@ -2163,7 +2163,7 @@ function buildPageHtml() {
 				'<button id="sbox-kernel-action" type="button" class="cbi-button ' + kernelActionState.className + ' sbox-version-action-button" title="' + safeText(kernelActionState.title) + '" aria-label="' + safeText(kernelActionState.title) + '">' + buildVersionActionIcon(kernelActionState) + '</button>' +
 			'</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
-			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select">' +
+			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select" aria-label="' + safeText(_('Mode')) + '">' +
 				'<option value="tproxy"' + (appState.proxyMode === 'tproxy' ? ' selected' : '') + '>tproxy</option>' +
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
@@ -2191,7 +2191,7 @@ function buildPageHtml() {
 						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop core')) + '</button>' +
 						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
-					'<div id="sbox-operation-status" class="sbox-operation-status" hidden></div>' +
+					'<div id="sbox-operation-status" class="sbox-operation-status" role="status" aria-live="polite" aria-atomic="true" hidden></div>' +
 				'</div>' +
 		'</div>' +
 
@@ -2204,8 +2204,8 @@ function buildPageHtml() {
 
 				'<div id="sbox-pane-config">' +
 					'<div class="sbox-config-toolbar">' +
-						'<select id="sbox-config-select" class="cbi-input-select sbox-select">' + buildConfigOptionsHtml() + '</select>' +
-						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
+						'<select id="sbox-config-select" class="cbi-input-select sbox-select" aria-label="' + safeText(_('Config')) + '">' + buildConfigOptionsHtml() + '</select>' +
+						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" aria-label="' + safeText(_('Subscription URL')) + '" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
 						'<div class="sbox-subscription-actions">' +
 							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-positive sbox-subscription-action">' + safeText(_('Save')) + '</button>' +
 							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action">' + safeText(_('Update')) + '</button>' +
@@ -2278,16 +2278,22 @@ function updateHeaderAndControlDom() {
 			operationStatus.innerHTML = '';
 			operationStatus.className = 'sbox-operation-status';
 			operationStatus.removeAttribute('title');
+			operationStatus.setAttribute('role', 'status');
+			operationStatus.setAttribute('aria-live', 'polite');
 		} else {
 			const type = /^(running|error|success)$/.test(String(state.type || '')) ? state.type : 'running';
 			operationStatus.hidden = false;
 			operationStatus.className = 'sbox-operation-status sbox-operation-status-' + type;
+			operationStatus.setAttribute('role', type === 'error' ? 'alert' : 'status');
+			operationStatus.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
 			operationStatus.innerHTML =
 				'<span class="sbox-operation-status-content">' +
 				'<span class="sbox-operation-status-message">' + safeText(state.message) + '</span>' +
-				'</span>' +
-				'</span>';
+				'</span>' + (state.dismissible ?
+				'<button type="button" class="cbi-button cbi-button-neutral sbox-operation-dismiss" aria-label="' + safeText(_('Dismiss')) + '">' + safeText(_('Dismiss')) + '</button>' : '');
 			operationStatus.title = state.message;
+			const dismiss = operationStatus.querySelector('.sbox-operation-dismiss');
+			if (dismiss) dismiss.addEventListener('click', clearOperationStatus, { once: true });
 		}
 	}
 

@@ -99,7 +99,7 @@ function validate_and_discover(value) {
 		else if (kind == 'object')
 			for (let name, child in item.value)
 				push(stack, { value: child, key: name, depth: item.depth + 1, sensitive });
-		else if (kind != 'null' && kind != 'bool' && kind != 'int' && kind != 'double')
+		else if (kind != null && kind != 'bool' && kind != 'int' && kind != 'double')
 			errors.fail('INVALID_RESPONSE');
 		if (aggregate > MAX_INPUT) errors.fail('RESPONSE_TOO_LARGE');
 	}
@@ -185,7 +185,7 @@ function sanitize(value) {
 	return safe;
 };
 function call(source, name) {
-	try { return source[name](); }
+	try { return json(sprintf('%J', source[name]())); }
 	catch (error) { return { state: 'unknown', code: 'UNAVAILABLE' }; }
 };
 function collect(sources) {

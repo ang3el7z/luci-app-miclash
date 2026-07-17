@@ -260,7 +260,7 @@ const devicesApi = {
 };
 const devicesPanel = dynamicLoad(devices).create({ api: devicesApi, document: documentMock, window: windowMock });
 const devicesHost = new MiniNode('div'); devicesPanel.mount(devicesHost); await tick();
-assert.match(devicesHost.textContent, /proxy/, 'lowercase domain MAC did not match the displayed device policy');
+assert.match(devicesHost.textContent, /Proxy/, 'lowercase domain MAC did not match the localized device policy');
 assert.equal(devicesHost.querySelector('script'), null, 'hostile hostname was interpreted as HTML');
 assert.match(devicesHost.textContent, /Guard has highest precedence/);
 const deviceModal = devicesPanel.openEditor('AA:BB:CC:DD:EE:FF', { hostname: 'router' }, knownPolicy);

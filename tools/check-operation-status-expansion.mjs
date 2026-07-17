@@ -50,25 +50,26 @@ check(configTabBindingBlock.includes("settings: '#sbox-pane-settings'"),
 check(!controlTabBindingBlock.includes("settings: '#sbox-pane-settings'"),
 	'Settings pane must not remain wired to the control tab group.');
 
-check(config.includes('detail:') && config.includes('autoClearMs == null ? 3000'),
-	'operationStatus errors must store detail but auto-clear after 3 seconds by default.');
+check(config.includes('detail:') && config.includes('autoClearMs: opts.autoClearMs == null ? 0'),
+	'operationStatus errors must store detail and persist by default.');
 check(!setOperationErrorBlock.includes('getOperationRecommendation('),
 	'Visible operation errors must not append recommendation text.');
-check(setOperationErrorBlock.includes('dismissible: false') &&
-	setOperationErrorBlock.includes('autoClearMs == null ? 3000'),
-	'Operation errors must not be manually dismissible and must auto-clear after 3 seconds.');
+check(setOperationErrorBlock.includes('dismissible: true') &&
+	setOperationErrorBlock.includes('autoClearMs: opts.autoClearMs == null ? 0'),
+	'Operation errors must remain manually dismissible without automatic timeout.');
 check(!config.includes('sbox-operation-status-detail') &&
 	!config.includes('sbox-operation-status-close'),
-	'Operation status DOM must not render inline details or close controls.');
+	'Operation status DOM must not expose verbose details or the obsolete close control.');
 check(!style.includes('.sbox-operation-status-detail') &&
 	!style.includes('.sbox-operation-status-close') &&
 	!style.includes('.sbox-operation-status-action'),
 	'Operation status detail and close control styles must be removed.');
 check(operationStatusRenderBlock.indexOf('sbox-operation-status-content') >= 0 &&
 	operationStatusRenderBlock.includes('sbox-operation-status-message') &&
+	operationStatusRenderBlock.includes('sbox-operation-dismiss') &&
 	!operationStatusRenderBlock.includes('sbox-operation-status-detail') &&
 	!operationStatusRenderBlock.includes('sbox-operation-status-close'),
-	'Operation status must render only the message content.');
+	'Operation status must render the concise message and accessible dismiss action.');
 check(!operationStatusRenderBlock.includes('sbox-operation-status-spacer') &&
 	!style.includes('.sbox-operation-status-spacer'),
 	'Operation status must not use a spacer between details and close.');

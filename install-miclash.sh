@@ -15,6 +15,8 @@ MIHOMO_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 CLASH_BIN="/opt/clash/bin/clash"
 MICLASH_APK_URL=""
 MICLASH_IPK_URL=""
+MICLASH_APK_SHA256_URL=""
+MICLASH_IPK_SHA256_URL=""
 MICLASH_VER=""
 MICLASH_TAG_NAME=""
 MICLASH_TARGET_TAG=""
@@ -30,7 +32,9 @@ CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
 PKG_FILE=""
 TEMP_FILES=""
-PACKAGE_MARKERS_ACTIVE=0
+TEMP_DIRS=""
+WORK_DIR=""
+OWNED_MARKERS=""
 NO_AUTOSTART_CLASH_MARKER="/tmp/miclash-package-no-autostart-clash"
 NO_AUTOSTART_AUTOUPDATE_MARKER="/tmp/miclash-package-no-autostart-autoupdate"
 HARD_REINSTALL_MARKER="/tmp/miclash-hard-reinstall"
@@ -106,15 +110,61 @@ validate_status_authority() {
     fi
 }
 
+validate_work_dir() {
+    [ -n "$WORK_DIR" ] || return 1
+    case "$WORK_DIR" in
+        /tmp/miclash/updates) ;;
+        /tmp/miclash-install.*)
+            printf '%s\n' "${WORK_DIR#/tmp/miclash-install.}" |
+                grep -Eq '^[A-Za-z0-9]{6,32}$' || return 1
+            ;;
+        *) return 1 ;;
+    esac
+    [ ! -L "$WORK_DIR" ] && [ -d "$WORK_DIR" ] || return 1
+    [ "$(stat -c '%u:%a' "$WORK_DIR" 2>/dev/null)" = 0:700 ] || return 1
+    [ "$(readlink -f "$WORK_DIR" 2>/dev/null)" = "$WORK_DIR" ] || return 1
+}
+
+prepare_work_dir() {
+    if [ -n "$STATUS_FILE" ]; then
+        WORK_DIR="${STATUS_FILE%/*}"
+    else
+        umask 077
+        WORK_DIR=$(mktemp -d /tmp/miclash-install.XXXXXX) || die "Failed to create installer workspace"
+        chmod 0700 "$WORK_DIR" || die "Failed to secure installer workspace"
+        TEMP_DIRS="$TEMP_DIRS $WORK_DIR"
+    fi
+    validate_work_dir || die "invalid installer workspace authority"
+}
+
+marker_owned() {
+    marker="$1"
+    [ ! -L "$marker" ] && [ -f "$marker" ] || return 1
+    [ "$(stat -c '%u:%a:%h' "$marker" 2>/dev/null)" = 0:600:1 ] || return 1
+    [ "$(readlink -f "$marker" 2>/dev/null)" = "$marker" ] || return 1
+}
+
+create_marker() {
+    marker="$1"
+    [ ! -e "$marker" ] && [ ! -L "$marker" ] || return 1
+    (umask 077; set -C; : > "$marker") 2>/dev/null || return 1
+    if ! marker_owned "$marker"; then
+        return 1
+    fi
+    OWNED_MARKERS="$OWNED_MARKERS $marker"
+}
+
 cleanup() {
     for file in $TEMP_FILES; do
         [ -n "$file" ] && rm -f "$file" 2>/dev/null || true
     done
-    if [ "$PACKAGE_MARKERS_ACTIVE" = "1" ]; then
-        rm -f "$NO_AUTOSTART_CLASH_MARKER" \
-            "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
-            "$HARD_REINSTALL_MARKER" 2>/dev/null || true
-    fi
+    for marker in $OWNED_MARKERS; do
+        marker_owned "$marker" && rm -f "$marker" 2>/dev/null || true
+    done
+    for directory in $TEMP_DIRS; do
+        WORK_DIR="$directory"
+        validate_work_dir && rm -rf "$directory" 2>/dev/null || true
+    done
 }
 
 trap cleanup EXIT INT TERM
@@ -205,7 +255,8 @@ download_artifact() {
     url="$1"
     target="$2"
     label="$3"
-    error_file="/tmp/miclash-download-error-$$"
+    validate_work_dir || die "installer workspace authority changed"
+    error_file="$WORK_DIR/download-error-$$"
 
     write_status running download "Downloading $label"
     rm -f "$target" "$error_file"
@@ -224,6 +275,25 @@ download_artifact() {
     detail=$(tail -n 3 "$error_file" 2>/dev/null | tr '\r\n' '  ')
     rm -f "$error_file"
     die "Failed to download $label: ${detail:-download returned an empty file}"
+}
+
+verify_download_checksum() {
+    artifact="$1"
+    checksum_url="$2"
+    artifact_name="$3"
+    checksum_file="$WORK_DIR/$artifact_name.sha256"
+    TEMP_FILES="$TEMP_FILES $checksum_file"
+    download_artifact "$checksum_url" "$checksum_file" "$artifact_name checksum"
+    checksum_line=$(cat "$checksum_file" 2>/dev/null) || die "Failed to read $artifact_name checksum"
+    expected=$(printf '%s\n' "$checksum_line" | sed -n \
+        "s/^\([0-9A-Fa-f]\{64\}\)[[:space:]][[:space:]]*\\*\?$artifact_name\$/\1/p")
+    [ -n "$expected" ] && [ "$(printf '%s\n' "$checksum_line" | wc -l | tr -d ' ')" = 1 ] \
+        || die "Invalid published checksum for $artifact_name"
+    actual=$(sha256sum "$artifact" 2>/dev/null | awk '{print $1}') \
+        || die "Failed to hash $artifact_name"
+    [ "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" = \
+      "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ] \
+        || die "Checksum mismatch for $artifact_name"
 }
 
 pkg_update() {
@@ -318,7 +388,7 @@ fetch_miclash_release() {
         MICLASH_RELEASE_API="$MICLASH_API"
     fi
 
-    release_file="/tmp/miclash-release-$$.json"
+    release_file="$WORK_DIR/miclash-release.json"
     TEMP_FILES="$TEMP_FILES $release_file"
     download_artifact "$MICLASH_RELEASE_API" "$release_file" "MiClash release metadata"
     RELEASE_JSON=$(cat "$release_file" 2>/dev/null) || die "Failed to read MiClash release data"
@@ -328,6 +398,9 @@ fetch_miclash_release() {
         | grep '"tag_name"' | head -1 \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
     [ -n "$MICLASH_TAG_NAME" ] || die "Failed to parse MiClash version"
+    printf '%s\n' "$MICLASH_TAG_NAME" |
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' \
+        || die "Invalid MiClash release tag"
     MICLASH_VER=$(normalize_version "$MICLASH_TAG_NAME")
     [ -n "$MICLASH_VER" ] || die "Failed to normalize MiClash version"
 
@@ -340,6 +413,20 @@ fetch_miclash_release() {
         | grep '"browser_download_url"' \
         | grep 'luci-app-miclash_.*\.ipk"' | head -1 \
         | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+
+    release_prefix="https://github.com/ang3el7z/luci-app-miclash/releases/download/${MICLASH_TAG_NAME}/"
+    if [ -n "$MICLASH_APK_URL" ]; then
+        case "$MICLASH_APK_URL" in "$release_prefix"luci-app-miclash-*.apk) ;; *) die "Invalid MiClash .apk asset URL" ;; esac
+        MICLASH_APK_SHA256_URL="${MICLASH_APK_URL}.sha256"
+        printf '%s' "$RELEASE_JSON" | grep -Fq "\"$MICLASH_APK_SHA256_URL\"" \
+            || die "No published checksum for MiClash .apk"
+    fi
+    if [ -n "$MICLASH_IPK_URL" ]; then
+        case "$MICLASH_IPK_URL" in "$release_prefix"luci-app-miclash_*.ipk) ;; *) die "Invalid MiClash .ipk asset URL" ;; esac
+        MICLASH_IPK_SHA256_URL="${MICLASH_IPK_URL}.sha256"
+        printf '%s' "$RELEASE_JSON" | grep -Fq "\"$MICLASH_IPK_SHA256_URL\"" \
+            || die "No published checksum for MiClash .ipk"
+    fi
 
     info "Latest MiClash: ${B}${MICLASH_TAG_NAME}${N}"
     MICLASH_RELEASE_NORM=$(normalize_version "$MICLASH_VER")
@@ -455,18 +542,20 @@ install_miclash() {
         *)         log "Installing MiClash v${MICLASH_VER}..." ;;
     esac
 
-    PACKAGE_MARKERS_ACTIVE=1
-    touch "$NO_AUTOSTART_CLASH_MARKER" "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
+    create_marker "$NO_AUTOSTART_CLASH_MARKER" \
+        || die "Failed to prepare package service state"
+    create_marker "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
         || die "Failed to prepare package service state"
     if [ "$INSTALL_ACTION" = "reinstall" ]; then
-        touch "$HARD_REINSTALL_MARKER" || die "Failed to prepare hard reinstall"
+        create_marker "$HARD_REINSTALL_MARKER" || die "Failed to prepare hard reinstall"
     fi
 
     if [ "$PKG_MGR" = "apk" ]; then
-        PKG_FILE="/tmp/luci-app-miclash.apk"
+        PKG_FILE="$WORK_DIR/${MICLASH_APK_URL##*/}"
         TEMP_FILES="$TEMP_FILES $PKG_FILE"
         write_status running download "Downloading MiClash package"
         download_artifact "$MICLASH_APK_URL" "$PKG_FILE" "MiClash .apk"
+        verify_download_checksum "$PKG_FILE" "$MICLASH_APK_SHA256_URL" "${MICLASH_APK_URL##*/}"
         write_status running install "Installing MiClash package"
         if [ "$INSTALL_ACTION" = "reinstall" ]; then
             apk add "$PKG_FILE" --allow-untrusted --force-overwrite \
@@ -476,10 +565,11 @@ install_miclash() {
         fi
         rm -f "$PKG_FILE"
     else
-        PKG_FILE="/tmp/luci-app-miclash.ipk"
+        PKG_FILE="$WORK_DIR/${MICLASH_IPK_URL##*/}"
         TEMP_FILES="$TEMP_FILES $PKG_FILE"
         write_status running download "Downloading MiClash package"
         download_artifact "$MICLASH_IPK_URL" "$PKG_FILE" "MiClash .ipk"
+        verify_download_checksum "$PKG_FILE" "$MICLASH_IPK_SHA256_URL" "${MICLASH_IPK_URL##*/}"
         write_status running install "Installing MiClash package"
         if [ "$INSTALL_ACTION" = "reinstall" ]; then
             opkg install --force-reinstall "$PKG_FILE" || die "Failed to reinstall MiClash .ipk"
@@ -533,6 +623,7 @@ run_app_mode() {
     esac
 
     validate_status_authority || die "invalid update status authority"
+    prepare_work_dir
     write_status running queued "Starting MiClash package update" || die "failed to write update status"
     detect_openwrt
     ensure_curl
@@ -562,13 +653,30 @@ run_status_protocol_test() {
     done
     STATUS_TARGET_VERSION="$MICLASH_TARGET_TAG"
     validate_status_authority || return 65
+    prepare_work_dir
     write_status success done || return 70
+}
+
+run_installer_security_test() {
+    STATUS_FILE=""
+    prepare_work_dir
+    validate_work_dir || return 65
+    test_marker="/tmp/miclash-package-no-autostart-clash"
+    [ ! -e "$test_marker" ] && [ ! -L "$test_marker" ] || return 66
+    ln -s /etc/passwd "$test_marker" || return 67
+    if create_marker "$test_marker"; then return 68; fi
+    [ -L "$test_marker" ] || return 69
+    rm -f "$test_marker" || return 70
+    create_marker "$test_marker" || return 71
+    marker_owned "$test_marker" || return 72
+    return 0
 }
 
 install_mihomo() {
     log "Fetching latest Mihomo release..."
-    mihomo_release_file="/tmp/mihomo-release-$$.json"
-    TEMP_FILES="$TEMP_FILES $mihomo_release_file /tmp/clash.gz"
+    mihomo_release_file="$WORK_DIR/mihomo-release.json"
+    mihomo_archive="$WORK_DIR/clash.gz"
+    TEMP_FILES="$TEMP_FILES $mihomo_release_file $mihomo_archive"
     download_artifact "$MIHOMO_API" "$mihomo_release_file" "Mihomo release metadata"
     MIHOMO_JSON=$(cat "$mihomo_release_file" 2>/dev/null) || die "Failed to read Mihomo release data"
     [ -n "$MIHOMO_JSON" ] || die "Mihomo release API returned empty response"
@@ -582,12 +690,13 @@ install_mihomo() {
     info "Latest Mihomo: ${B}${MIHOMO_VER}${N}"
     info "Kernel URL: ${MIHOMO_URL}"
 
-    download_artifact "$MIHOMO_URL" /tmp/clash.gz "Mihomo kernel"
+    download_artifact "$MIHOMO_URL" "$mihomo_archive" "Mihomo kernel"
+    verify_download_checksum "$mihomo_archive" "${MIHOMO_URL}.sha256" "${MIHOMO_URL##*/}"
 
     mkdir -p "$(dirname "$CLASH_BIN")"
-    gunzip -c /tmp/clash.gz > "$CLASH_BIN" || die "Failed to unpack Mihomo kernel"
+    gunzip -c "$mihomo_archive" > "$CLASH_BIN" || die "Failed to unpack Mihomo kernel"
     chmod +x "$CLASH_BIN" || die "Failed to chmod Mihomo kernel"
-    rm -f /tmp/clash.gz
+    rm -f "$mihomo_archive"
     rm -f /opt/clash/bin/meta-backup 2>/dev/null
 
     VERSION_OUT=$("$CLASH_BIN" -v 2>/dev/null || true)
@@ -604,6 +713,7 @@ main() {
     sep
 
     detect_openwrt
+    prepare_work_dir
     ensure_curl
     detect_arch
     fetch_miclash_release
@@ -665,6 +775,9 @@ main() {
 if [ "${1:-}" = "status-protocol-test" ]; then
     shift
     run_status_protocol_test "$@"
+elif [ "${1:-}" = "installer-security-test" ]; then
+    shift
+    run_installer_security_test "$@"
 elif [ "${1:-}" = "app" ]; then
     shift
     run_app_mode "$@"

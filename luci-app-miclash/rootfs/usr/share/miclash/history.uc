@@ -668,7 +668,7 @@ export function create(runtime, options) {
 	api.mark_activation = (profile, revision, result) => {
 		recover_profile(profile);
 		if (type(result) != 'string' ||
-		    (result != 'success' && result != 'health_failed' &&
+		    (result != 'success' && result != 'adopted' && result != 'health_failed' &&
 		     result != 'validation_failed' && result != 'failed'))
 			errors.fail('INVALID_ARGUMENT');
 		let destination = revision_files(profile, revision);

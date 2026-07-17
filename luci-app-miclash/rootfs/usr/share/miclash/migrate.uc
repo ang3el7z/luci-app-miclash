@@ -7,23 +7,54 @@ import { with_lock } from 'miclash.mutation_lock';
 const JOURNAL = '/etc/miclash/migration-v1.json';
 const LEGACY_SETTINGS = '/opt/clash/settings';
 const CANONICAL_MARKER = '/etc/miclash/canonical-preexisting';
+const DAEMON_READY = '/tmp/miclash/daemon-ready.json';
 const PHASES = { prepared: 1, applying: 2, applied: 3, verified: 4, complete: 5 };
 
 function invalid() { fail('INVALID_ARGUMENT'); };
 function internal() { fail('INTERNAL'); };
 
+export function daemon_ready(runtime) {
+	if (type(runtime?.fs?.readfile) != 'function' || type(runtime?.fs?.lstat) != 'function' ||
+	    type(runtime?.ubus?.connect) != 'function')
+		return false;
+	let marker;
+	try {
+		let stat = runtime.fs.lstat(DAEMON_READY);
+		let text = runtime.fs.readfile(DAEMON_READY);
+		if (stat?.type != 'file' || (stat.uid != null && stat.uid != 0) ||
+		    (stat.mode != null && stat.mode != 0o600) || type(text) != 'string' ||
+		    !length(text) || length(text) > 4096)
+			return false;
+		marker = json(text);
+		if (type(marker) != 'object' || marker.schema_version != 1 ||
+		    marker.startup_reconciled !== true || type(marker.ready_at_ms) != 'int')
+			return false;
+	}
+	catch (error) { return false; }
+	let connection = null, healthy = false;
+	try {
+		connection = runtime.ubus.connect();
+		if (type(connection?.call) == 'function') {
+			let reply = connection.call('service', 'list', { name: 'miclashd', verbose: true });
+			let running = false;
+			for (let name, instance in reply?.miclashd?.instances ?? {})
+				if (instance?.running === true) { running = true; break; }
+			if (running) {
+				let health = connection.call('miclash', 'health', {});
+				healthy = type(health) == 'object' && health.error == null;
+			}
+		}
+	}
+	catch (error) { healthy = false; }
+	try { connection?.disconnect?.(); } catch (error) {}
+	return healthy;
+};
+
 function default_adapters(runtime) {
 	function daemon_verify() {
 		let deadline = runtime.clock.now() + 5000;
 		while (true) {
-			try {
-				let reply = runtime.ubus.connect()?.call('service', 'list', {
-					name: 'miclashd', verbose: true
-				});
-				for (let name, instance in reply?.miclashd?.instances ?? {})
-					if (instance?.running === true) return true;
-			}
-			catch (error) {}
+			if (daemon_ready(runtime)) return true;
 			if (runtime.clock.now() >= deadline) return false;
 			runtime.clock.sleep(min(100, deadline - runtime.clock.now()));
 		}

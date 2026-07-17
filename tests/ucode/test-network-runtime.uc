@@ -88,7 +88,7 @@ function environment(failure) {
 
 let settings = {
 	core: { proxy_mode: 'tproxy', block_quic: false },
-	interfaces: { mode: 'include', included: [], excluded: [],
+	interfaces: { mode: 'explicit', included: [], excluded: [],
 		auto_detect_lan: false, auto_detect_wan: false },
 	guard: { enabled: false }
 };

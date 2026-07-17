@@ -889,6 +889,51 @@ assert_equal(restore_box.filesystem.lstat('/tmp/miclash/imports/' + restore_seed
 assert_equal(restore_box.filesystem.lstat('/tmp/miclash/imports/' + restore_seed.id + '.json'), null,
 	'successful restore retained its import metadata');
 
+// Restore is one logical transaction. A later target CAS failure rolls back
+// every earlier file, and a reconcile failure rolls back both files and the
+// exact settings fields touched by the archive.
+let target_rollback = make_app(), target_rollback_seed = seed_import(target_rollback,
+	'00000000000000000000000000000130', {
+		'configs/config.yaml': 'port: 20001\n',
+		'configs/config2.yaml': 'port: 20002\n',
+		'settings/settings.json': '{ }\n'
+	}, { secrets: { 'configs/config.yaml': true, 'configs/config2.yaml': true } });
+let target_rollback_preview = backup.inspect(target_rollback.app, target_rollback_seed.id);
+let target_failure_fired = false;
+target_rollback.app.secure_fs.before = (operation, directory, name) => {
+	if (!target_failure_fired && operation == 'replace_atomic' && name == 'config2.yaml') {
+		target_failure_fired = true;
+		die('INTERNAL');
+	}
+};
+assert_throws(() => backup.restore(target_rollback.app, target_rollback_preview.id),
+	'INTERNAL');
+assert_equal(target_failure_fired, true);
+assert_equal(target_rollback.filesystem.readfile('/opt/clash/config.yaml'),
+	'port: 7890\nsecret: controller-password\n');
+assert_equal(target_rollback.filesystem.readfile('/opt/clash/config2.yaml'), 'port: 7891\n');
+assert_equal(target_rollback.runtime.uci.commit_calls, 0,
+	'file-phase failure must not touch settings');
+
+let reconcile_rollback = make_app(), previous_proxy_mode =
+	settings.load(reconcile_rollback.runtime).core.proxy_mode;
+let reconcile_rollback_seed = seed_import(reconcile_rollback,
+	'00000000000000000000000000000131', {
+		'configs/config.yaml': 'port: 21001\n',
+		'settings/settings.json': sprintf('%J\n', { core: { proxy_mode: 'tun' } })
+	}, { secrets: { 'configs/config.yaml': true, 'settings/settings.json': true } });
+let reconcile_rollback_preview = backup.inspect(reconcile_rollback.app,
+	reconcile_rollback_seed.id);
+reconcile_rollback.app.reconcile.run = () => die('HEALTH_FAILED');
+assert_throws(() => backup.restore(reconcile_rollback.app,
+	reconcile_rollback_preview.id), 'HEALTH_FAILED');
+assert_equal(reconcile_rollback.filesystem.readfile('/opt/clash/config.yaml'),
+	'port: 7890\nsecret: controller-password\n');
+assert_equal(settings.load(reconcile_rollback.runtime).core.proxy_mode,
+	previous_proxy_mode, 'settings preimage must be restored after reconcile failure');
+assert_equal(reconcile_rollback.runtime.uci.commit_calls, 2,
+	'failed settings transaction commits candidate then exact preimage');
+
 // The real operation manager runs mutation workers from a later zero-delay
 // timer. Enqueue must return before the restore lease is acquired; the worker
 // itself must own the lease when it touches any secure filesystem primitive.

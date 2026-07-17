@@ -1558,7 +1558,9 @@ function prepare_restore_targets(inspected) {
 		else continue;
 		let expected = env.secure.stat(directory, name, env.lease);
 		if (expected != null && !valid_file_identity(expected, 0o600)) internal();
-		push(targets, { directory, name, expected,
+		let previous = expected == null ? null :
+			secure_read(env, directory, name, MAX_MEMBER, 0o600, expected);
+		push(targets, { directory, name, expected, previous,
 			content: inspected.contents[file.path] });
 	}
 	return targets;
@@ -1570,6 +1572,40 @@ function revalidate_restore_targets(env, targets) {
 		if (target.expected == null ? current != null :
 		    !same_file_identity(current, target.expected)) internal();
 	}
+	return true;
+};
+
+function settings_preimage(current, patch) {
+	let previous = {};
+	for (let section, values in patch) {
+		if (type(current?.[section]) != 'object') internal();
+		previous[section] = {};
+		for (let option in values) {
+			if (!exists(current[section], option)) internal();
+			previous[section][option] = clone(current[section][option]);
+		}
+	}
+	return previous;
+};
+
+function rollback_restore(app, env, committed, previous_settings, settings_attempted) {
+	let failed = false;
+	for (let index = length(committed) - 1; index >= 0; index--) {
+		let item = committed[index], target = item.target;
+		try {
+			if (target.previous == null) {
+				if (env.secure.unlink_durable(target.directory, target.name,
+					item.identity, env.lease) !== true) internal();
+			}
+			else secure_replace(env, target.directory, target.name, item.identity,
+				target.previous.content, 0o600);
+		}
+		catch (error) { failed = true; }
+	}
+	if (settings_attempted)
+		try { app.settings.save(app.runtime, previous_settings); }
+		catch (error) { failed = true; }
+	if (failed) internal();
 	return true;
 };
 
@@ -1588,17 +1624,31 @@ export function restore(app, inspected_id, options, source) {
 					ctx.stage('validating', 10, 'Validating backup');
 					let inspected = inspection_record(app, inspected_id, leased);
 					let settings_patch = validate_restore_contents(app, ctx, inspected);
+					let previous_settings = settings_preimage(
+						app.settings.load(app.runtime), settings_patch);
 					let targets = prepare_restore_targets(inspected);
 					ctx.stage('snapshot', 30, 'Creating recovery snapshot');
 					let snapshot = create_impl(app, { include_secrets: true }, 'system', leased);
 					ctx.stage('committing', 60, 'Committing configuration');
 					revalidate_restore_targets(inspected.env, targets);
-					for (let target in targets)
-						secure_replace(inspected.env, target.directory, target.name,
-							target.expected, target.content, 0o600);
-					app.settings.save(app.runtime, settings_patch);
-					ctx.stage('reconcile', 90, 'Scheduling reconciliation');
-					let reconciliation = app.reconcile.run('backup_restore');
+					let committed = [], settings_attempted = false, reconciliation;
+					try {
+						for (let target in targets) {
+							let capture = secure_replace(inspected.env, target.directory,
+								target.name, target.expected, target.content, 0o600);
+							push(committed, { target, identity: capture.identity });
+						}
+						settings_attempted = true;
+						app.settings.save(app.runtime, settings_patch);
+						ctx.stage('reconcile', 90, 'Scheduling reconciliation');
+						reconciliation = app.reconcile.run('backup_restore');
+					}
+					catch (error) {
+						let original = errors.normalize(error).code;
+						rollback_restore(app, inspected.env, committed,
+							previous_settings, settings_attempted);
+						errors.fail(original);
+					}
 					if (valid_id(inspected.report.source_id, 'i'))
 						try { remove_source_locked(leased, inspected.report.source_id); }
 						catch (cleanup_error) {}

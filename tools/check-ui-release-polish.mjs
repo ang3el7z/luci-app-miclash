@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 const config = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js', 'utf8');
 const css = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css', 'utf8');
 const ru = readFileSync('luci-app-miclash/rootfs/po/ru/miclash.po', 'utf8');
+const settingsPanels = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/settings-panels.js', 'utf8');
+const historyPanel = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/history-panel.js', 'utf8');
+const uiShell = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/ui-shell.js', 'utf8');
+const devicesPanel = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/devices-panel.js', 'utf8');
 
 function cssBlock(selector) {
 	const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -38,11 +42,34 @@ const checks = [
 			!/sbox-clear-sub-url[\s\S]{0,260}>(?:x|&times;)<\/button>/.test(config)
 	},
 	{
-		name: 'operation status error bar is passive and auto-clears instead of adding inline controls',
+		name: 'operation errors persist as dismissible assertive live alerts',
 		pass: !config.includes('sbox-operation-status-detail') &&
-			!config.includes('sbox-operation-status-close') &&
-			config.includes('autoClearMs == null ? 3000') &&
-			config.includes('dismissible: false')
+			config.includes('sbox-operation-dismiss') &&
+			config.includes("type === 'error' ? 'alert' : 'status'") &&
+			config.includes('autoClearMs: opts.autoClearMs == null ? 0') &&
+			config.includes('dismissible: true')
+	},
+	{
+		name: 'primary controls expose accessible names and tab state',
+		pass: /sbox-mode-select[^>]*aria-label/.test(config) &&
+			/sbox-config-select[^>]*aria-label/.test(config) &&
+			/sbox-subscription-url[^>]*aria-label/.test(config) &&
+			/sbox-notification-test-channel[\s\S]{0,180}aria-label/.test(settingsPanels) &&
+			uiShell.includes("const tabName = tab.getAttribute('data-' + tabAttr)") &&
+			uiShell.includes("const pane = paneNodes[tabName]") &&
+			uiShell.includes("setAttribute('aria-pressed'") && uiShell.includes("setAttribute('aria-controls'")
+	},
+	{
+		name: 'periodic panel repaints are not broad live regions',
+		pass: !/sbox-diagnostics-summary[^>]*aria-live/.test(config) &&
+			!/sbox-management-(?:settings|backup|devices)[^>]*aria-live/.test(config)
+	},
+	{
+		name: 'history retains native button roles and device choices are localized',
+		pass: !historyPanel.includes("'role': 'listitem'") &&
+			devicesPanel.includes("inherit: () => _('Inherit')") &&
+			devicesPanel.includes("() => _('Monday')") &&
+			!devicesPanel.includes('}), String(day)')
 	},
 	{
 		name: 'header version actions render normalized SVG icons instead of font glyphs',

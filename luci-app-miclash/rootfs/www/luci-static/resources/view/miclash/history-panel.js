@@ -142,9 +142,9 @@ function create(options) {
 		} catch (error) { if (current(token, ownedProfile)) status((error.code ? error.code + ': ' : '') + error.message, true); }
 	}
 	function renderList(token, ownedProfile) {
-		const list = E('div', { 'class': 'sbox-history-list', 'role': 'list', 'aria-label': _('Configuration revisions') });
+		const list = E('div', { 'class': 'sbox-history-list', 'role': 'group', 'aria-label': _('Configuration revisions') });
 		for (const record of records) {
-			const button = E('button', { 'type': 'button', 'class': 'sbox-history-item', 'role': 'listitem',
+			const button = E('button', { 'type': 'button', 'class': 'sbox-history-item',
 				'data-revision': record.revision }, [
 				E('strong', {}, [ Number.isFinite(Number(record.timestamp)) ? new Date(Number(record.timestamp)).toLocaleString() : '—' ]),
 				E('span', { 'class': 'sbox-history-source', 'data-source': String(record.source || '') },

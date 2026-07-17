@@ -2015,3 +2015,42 @@ msgstr "无法切换保护状态。"
 
 msgid "The provider update interval will be learned during the next protected subscription update. The selected interval is used until then."
 msgstr "提供方更新间隔将在下一次受保护的订阅更新时获取。在此之前将使用所选间隔。"
+
+msgid "Sections"
+msgstr "分区"
+
+msgid "Subscription URL"
+msgstr "订阅 URL"
+
+msgid "Inherit"
+msgstr "继承"
+
+msgid "Proxy"
+msgstr "代理"
+
+msgid "Direct"
+msgstr "直连"
+
+msgid "Block"
+msgstr "阻止"
+
+msgid "Monday"
+msgstr "星期一"
+
+msgid "Tuesday"
+msgstr "星期二"
+
+msgid "Wednesday"
+msgstr "星期三"
+
+msgid "Thursday"
+msgstr "星期四"
+
+msgid "Friday"
+msgstr "星期五"
+
+msgid "Saturday"
+msgstr "星期六"
+
+msgid "Sunday"
+msgstr "星期日"

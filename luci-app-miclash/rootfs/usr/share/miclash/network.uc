@@ -12,19 +12,36 @@ function unique(values) {
 	return result;
 };
 
-function firewall_desired(settings, observed, additions) {
-	let interfaces = settings?.interfaces, core = settings?.core;
-	if (type(interfaces) != 'object' || type(core) != 'object' ||
-	    type(settings?.guard?.enabled) != 'bool') fail('INVALID_ARGUMENT');
+export function interface_projection(settings) {
+	let interfaces = settings?.interfaces;
+	if (type(interfaces) != 'object' ||
+	    (interfaces.mode != 'explicit' && interfaces.mode != 'exclude'))
+		fail('INVALID_ARGUMENT');
 	let lan = [ ...(interfaces.included ?? []) ], wan = [ ...(interfaces.excluded ?? []) ];
 	if (interfaces.auto_detect_lan === true && length(interfaces.detected_lan ?? ''))
 		push(lan, interfaces.detected_lan);
 	if (interfaces.auto_detect_wan === true && length(interfaces.detected_wan ?? ''))
 		push(wan, interfaces.detected_wan);
+	return { mode: interfaces.mode, lan: unique(lan), wan: unique(wan) };
+};
+
+export function interface_decision(settings, name) {
+	let projection = interface_projection(settings);
+	if (type(name) != 'string' || !length(name)) fail('INVALID_ARGUMENT');
+	if (projection.mode == 'explicit')
+		return index(projection.lan, name) >= 0 ? 'PROXY' : 'DIRECT';
+	return index(projection.wan, name) >= 0 ? 'DIRECT' : 'PROXY';
+};
+
+function firewall_desired(settings, observed, additions) {
+	let interfaces = settings?.interfaces, core = settings?.core;
+	if (type(interfaces) != 'object' || type(core) != 'object' ||
+	    type(settings?.guard?.enabled) != 'bool') fail('INVALID_ARGUMENT');
+	let projection = interface_projection(settings);
 	return {
 		proxy_mode: core.proxy_mode,
-		interface_mode: interfaces.mode,
-		lan: unique(lan), wan: unique(wan),
+		interface_mode: projection.mode,
+		lan: projection.lan, wan: projection.wan,
 		guard: settings.guard.enabled,
 		quic: core.block_quic,
 		server_ips: additions?.server_ips ?? [],

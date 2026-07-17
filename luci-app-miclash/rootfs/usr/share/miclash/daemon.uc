@@ -22,10 +22,33 @@ import * as updates from 'miclash.updates';
 import * as http from 'miclash.http';
 import * as redact from 'miclash.redact';
 import * as mihomo_api from 'miclash.mihomo-api';
+import * as diagnostics from 'miclash.diagnostics';
+import * as route_test from 'miclash.route-test';
+import * as routing from 'miclash.routing';
 
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
 	catch (error) { errors.fail('INVALID_ARGUMENT'); }
+};
+
+function memory_download(runtime, content) {
+	if (type(content) != 'string') errors.fail('INVALID_RESPONSE');
+	let size = length(content), sha256 = runtime.digest.sha256(content), closed = false;
+	if (!match(sha256, /^[0-9a-f]{64}$/)) errors.fail('INTERNAL');
+	return {
+		size, sha256,
+		read: (offset, amount) => {
+			if (closed || type(offset) != 'int' || type(amount) != 'int' || offset < 0 ||
+			    amount < 0 || offset > size || amount > size - offset)
+				errors.fail('INVALID_ARGUMENT');
+			return substr(content, offset, amount);
+		},
+		finish: () => {
+			if (closed || runtime.digest.sha256(content) != sha256) errors.fail('CORRUPT_STATE');
+			return { size, sha256 };
+		},
+		close: () => { if (closed) return false; closed = true; content = null; return true; }
+	};
 };
 
 function same(left, right) {
@@ -317,7 +340,8 @@ export function compose(runtime, overrides) {
 	let modules = {
 		operations, settings, storage, history, diff, service, config, state, application,
 		api, memory, backup, devices, notify, telegram, mutation_lock,
-		reconcile_adapter, network, subscription, updates, http,
+		reconcile_adapter, network, subscription, updates, http, diagnostics, route_test, routing,
+		mihomo_api,
 		...(overrides ?? {})
 	};
 	let operation_manager = modules.operations.create(runtime);
@@ -850,6 +874,7 @@ export function compose(runtime, overrides) {
 			...service_adapter,
 			start: () => runtime.reconcile.start('service-start'),
 			stop: () => runtime.reconcile.stop('service-stop'),
+			reload: () => runtime.reconcile.reload('service-reload'),
 			restart_service: () => runtime.reconcile.restart('service-restart')
 		};
 		let app = modules.application.create({
@@ -928,6 +953,89 @@ export function compose(runtime, overrides) {
 			if (type(previous_id) != 'string') errors.fail('NOT_FOUND');
 			return updates_domain.rollback_mihomo({ id: previous_id }, arguments.source);
 		};
+		app.config_external_adopt = (arguments) => configuration.adopt_external(
+			arguments.profile, arguments.source);
+		function last_repair() {
+			let records = operation_manager.list(), result = { state: 'none' };
+			for (let index = length(records) - 1; index >= 0; index--)
+				if (records[index]?.kind == 'system.reconcile' ||
+				    records[index]?.kind == 'memory.recovery') {
+					result = records[index]; break;
+				}
+			return result;
+		};
+		let diagnostics_domain = modules.diagnostics.create({ runtime, sources: {
+			versions: () => { let info = bounded_system_info(runtime); return {
+				miclash: info.app_version, mihomo: info.mihomo.version }; },
+			architecture: () => bounded_system_info(runtime).architecture,
+			state: app.status, health: app.health, memory: app.memory_status,
+			updates: updates_domain.status, settings: settings_domain.get,
+			last_repair,
+			config: () => configuration.read_active('config.yaml'),
+			process: () => service_adapter.observe('config.yaml'),
+			logs: () => bounded_logs(runtime), uci: settings_domain.get,
+			operations: () => operation_manager.list()
+		} });
+		app.diagnostics_summary = () => diagnostics_domain.summary();
+		app.diagnostics_create_report = () => diagnostics_domain.create_report();
+		app.diagnostics_route_test = (arguments) => {
+			let wanted = settings_domain.get(), device_policies = [], interface_policies = [],
+				config_content = configuration.read_active('config.yaml');
+			if (arguments.device != null) {
+				let effective = modules.devices.effective({ ...device_app,
+					core_available: runtime.core_available }, {
+					mac: arguments.device, interfaces: arguments.interface == null
+						? [] : [ arguments.interface ], timestamp: int(runtime.clock.now() / 1000)
+				});
+				push(device_policies, { mac: arguments.device, decision: uc(effective.action) });
+			}
+			// Diagnose the queried interface from the exact projection used to compile
+			// nftables. Supplying the queried fallback is important: in explicit mode an
+			// unmatched ingress is DIRECT, while in exclude mode it is PROXY.
+			if (arguments.interface != null)
+				push(interface_policies, { name: arguments.interface,
+					decision: modules.network.interface_decision(wanted, arguments.interface) });
+			function dns_values(reply, record_type) {
+				if (reply?.ok !== true) errors.fail('HEALTH_FAILED');
+				let data = reply.data;
+				if (type(data) != 'object' || type(data.Status) != 'int')
+					errors.fail('INVALID_RESPONSE');
+				if (data.Status != 0) return [];
+				if (data.Answer == null) return [];
+				if (type(data.Answer) != 'array' || length(data.Answer) > 32)
+					errors.fail('INVALID_RESPONSE');
+				let values = [];
+				for (let answer in data.Answer) {
+					if (type(answer) != 'object' || type(answer.type) != 'int' ||
+					    type(answer.data) != 'string' || length(answer.data) > 253)
+						errors.fail('INVALID_RESPONSE');
+					if (answer.type == record_type) push(values, answer.data);
+				}
+				return values;
+			};
+			let engine = modules.route_test.create({ runtime, profile: 'config.yaml',
+				config_content,
+				desired: () => ({ guard: wanted.guard, devices: device_policies,
+					interfaces: interface_policies,
+					proxy_servers: modules.route_test.proxy_servers(config_content) }),
+				observed: () => ({ routing: modules.routing.observe(runtime) }),
+				dns_answers: (name) => {
+					let values = [], seen = {};
+					for (let item in [
+						...dns_values(modules.mihomo_api.dns_query(runtime, name, 'A',
+							'config.yaml', config_content), 1),
+						...dns_values(modules.mihomo_api.dns_query(runtime, name, 'AAAA',
+							'config.yaml', config_content), 28)
+					]) {
+						if (seen[item]) continue;
+						if (length(values) >= 16) errors.fail('RESPONSE_TOO_LARGE');
+						seen[item] = true; push(values, item);
+					}
+					return values;
+				}
+			});
+			return engine.run(arguments);
+		};
 		if (type(desired.telegram) == 'object') {
 			let telegram_app = {
 				runtime, http: modules.http, operations: operation_manager,
@@ -974,7 +1082,14 @@ export function compose(runtime, overrides) {
 		transfers = modules.api.create_transfers({
 			runtime,
 			uploads: { backup: (staged) => backup_domain.import(staged) },
-			downloads: { backup: (id) => backup_domain.download(id) }
+			downloads: {
+				backup: (id) => backup_domain.download(id),
+				report: (id, metadata) => {
+					let report = diagnostics_domain.read_report({ id,
+						format: metadata?.format ?? 'json' });
+					return memory_download(runtime, report.content);
+				}
+			}
 		});
 		let published = modules.api.register(connection, app, transfers);
 		let closed = false;

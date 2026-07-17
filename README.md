@@ -6,91 +6,200 @@ Read in: <strong>English</strong> | <a href="README.ru.md">Русский</a> | 
 
 # MiClash
 
-LuCI application for managing Mihomo/Clash on OpenWrt.
+MiClash is a LuCI application for managing Mihomo on OpenWrt. It combines configuration, subscriptions, routing, Guard protection, diagnostics, updates, notifications and recovery in one interface.
 
-Supported platform: OpenWrt 24.10+ with firewall4.
+Supported platform: **OpenWrt 24.10+ with firewall4**.
 
-## Auto Install
+- OpenWrt 25.12 stable uses APK.
+- OpenWrt 24.10 old-stable uses opkg.
 
-Recommended (`wget`, works even when the installed `curl` is broken):
+## Architecture and safety
+
+`miclashd` is the only MiClash management backend. LuCI and Telegram call the same typed `ubus` API; the browser does not run shell commands, package managers or arbitrary file operations. Settings are stored in `UCI` at `/etc/config/miclash`, while profiles, rulesets and the Mihomo core live under `/opt/clash`.
+
+When Guard is enabled, MiClash is fail-closed. An early-boot Guard safety latch protects selected traffic before `miclashd` or Mihomo is ready. A daemon crash, missing core, failed upgrade or unsuccessful repair must not silently expose protected traffic directly. Only an explicit Guard disable transition may clear the latch. Device policies never override this invariant.
+
+## Automatic installation
+
+The bootstrap downloads the tagged installer into a private directory and verifies its published checksum before execution (`wget` also works when the installed `curl` is broken):
 
 ```sh
-wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+set -eu
+umask 077
+work=$(mktemp -d /tmp/miclash-bootstrap.XXXXXX)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+release=$(wget --no-proxy -qO- https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
+printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
+wget --no-proxy -qO "$work/install-miclash.sh" "https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/${release}/install-miclash.sh"
+wget --no-proxy -qO "$work/install-miclash.sh.sha256" "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/install-miclash.sh.sha256"
+(cd "$work" && sha256sum -c install-miclash.sh.sha256)
+ash "$work/install-miclash.sh"
 ```
 
-Alternative (`curl`):
+The installer verifies that `curl` can start and repairs mismatched `zlib`/`libcurl4` packages before downloading a release. On an existing installation it offers update, reinstall, removal or skip.
+
+## Manual installation
+
+### OpenWrt 25.12 (APK)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-```
-
-The auto-installer checks that `curl` can actually start. If an existing OpenWrt `curl` binary is broken because `zlib` or `libcurl4` is missing or mismatched, it repairs those packages before fetching MiClash releases.
-
-If `luci-app-miclash` is already installed, the interactive installer will offer `update / reinstall / delete / skip`.
-When started through `wget ... | ash` or `curl ... | ash` without a TTY, deletion is not performed automatically: the script will choose the safe `update` or `skip` path.
-
-## OpenWrt 25.x
-
-```sh
+set -eu
 apk update
 apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64
 curl --version >/dev/null 2>&1 || apk fix zlib libcurl4 curl
 curl --version >/dev/null 2>&1 || exit 1
 release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash-${release#v}.apk" -o /tmp/luci-app-miclash.apk
-apk add /tmp/luci-app-miclash.apk --allow-untrusted
-rm -f /tmp/luci-app-miclash.apk
+printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
+umask 077; work=$(mktemp -d /tmp/miclash-install.XXXXXX); trap 'rm -rf "$work"' EXIT HUP INT TERM
+package="luci-app-miclash-${release#v}.apk"
+curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}" -o "$work/$package"
+curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}.sha256" -o "$work/$package.sha256"
+(cd "$work" && sha256sum -c "$package.sha256")
+apk add "$work/$package" --allow-untrusted
 ```
 
-## OpenWrt 24.10+ (opkg)
+### OpenWrt 24.10+ (opkg)
 
 ```sh
+set -eu
 opkg update
 opkg install --force-reinstall zlib libcurl4 curl
 opkg install kmod-nft-tproxy kmod-tun coreutils-base64
 curl --version >/dev/null 2>&1 || exit 1
 release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash_${release#v}_all.ipk" -o /tmp/luci-app-miclash.ipk
-opkg install /tmp/luci-app-miclash.ipk
-rm -f /tmp/luci-app-miclash.ipk
+printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
+umask 077; work=$(mktemp -d /tmp/miclash-install.XXXXXX); trap 'rm -rf "$work"' EXIT HUP INT TERM
+package="luci-app-miclash_${release#v}_all.ipk"
+curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}" -o "$work/$package"
+curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}.sha256" -o "$work/$package.sha256"
+(cd "$work" && sha256sum -c "$package.sha256")
+opkg install "$work/$package"
 ```
 
-## Mihomo
+Each release also contains a `.sha256` file for every package and `miclash-release-manifest.json`. The manifest records the tag, source tag SHA, synced build SHA, OpenWrt SDK release/target, package type, size and SHA-256.
 
-After installing MiClash, open LuCI -> Services -> MiClash -> Settings -> Kernel and install the Mihomo core from the interface.
-MiClash detects the router architecture, downloads the matching archive, replaces `/opt/clash/bin/clash`, and restarts the service if it was running.
+## First setup
 
-Manual installation is also possible:
+Open **LuCI → Services → MiClash**.
 
-```sh
-mkdir -p /opt/clash/bin
-release=$(curl -s -L https://github.com/MetaCubeX/mihomo/releases/latest | grep "title>Release" | cut -d " " -f 4)
-curl -L "https://github.com/MetaCubeX/mihomo/releases/download/${release}/mihomo-linux-arm64-${release}.gz" -o /tmp/clash.gz
-gunzip -c /tmp/clash.gz > /opt/clash/bin/clash
-chmod 0755 /opt/clash/bin/clash
-rm -f /tmp/clash.gz
+1. Install the Mihomo core in **Settings → Kernel**. MiClash detects the architecture, downloads and verifies the selected release, stages the replacement, then keeps or restores the previous core if activation fails.
+2. Add a subscription or edit a YAML profile.
+3. Validate the Draft. Validation never changes live routing.
+4. Apply it to make that revision Active.
+5. Select TPROXY, TUN or MIXED mode and the included/excluded interfaces.
+6. Enable Guard only after reviewing which devices/interfaces it protects.
+
+An invalid profile remains Draft and is not applied. The previous Active configuration continues running, so repeated editing does not lose the user’s work.
+
+## Main functions
+
+- **Draft / Active configuration:** separate saved Draft and running Active revisions, validation, atomic activation and failure rollback.
+- **Configuration history:** revision metadata and escaped diff, open an older revision as Draft, or perform an explicit history restore. A recovery snapshot is created before rollback.
+- **Subscriptions and updates:** three profile URLs, manual and scheduled subscription update, MiClash update, verified Mihomo update and Mihomo rollback.
+- **Routing:** TPROXY, TUN and MIXED modes, interface inclusion/exclusion, automatic LAN/WAN discovery, QUIC blocking and local rulesets.
+- **Diagnostics:** component health for Mihomo, DNS, firewall, routing and Guard; a redacted diagnostic report; and an ordered route test for a domain/IP with optional device/interface.
+- **Self-heal and memory recovery:** drift reconciliation and staged Mihomo recovery (`reload → internal core restart → service restart`) with health checks and a long failure cooldown.
+- **Notifications:** in-app events for failures, Internet recovery, updates, Guard and memory actions; optional Telegram delivery.
+- **Backup / restore:** bounded export/import, optional secrets warning, mandatory inspection preview and a recovery snapshot before restore.
+- **Device policies:** discovered clients and schedules with inherit, proxy, direct or block actions. Guard remains authoritative.
+
+## Telegram control
+
+In **Settings → Telegram**, enable the integration and enter the token issued by **BotFather** plus your numeric Telegram user ID. The token is stored as a secret and is never returned to LuCI. Saving later with an empty token keeps the existing value.
+
+Security model:
+
+- outbound HTTPS long polling only; no inbound router port;
+- exactly one configured user ID;
+- private chats only, with sender ID and chat ID both matching;
+- no confirmation or one-time token;
+- duplicate updates, edited/channel/group messages and unknown commands are rejected;
+- bounded logs/diagnostics, redacted audit data, rate limiting and retry backoff.
+
+Approved commands:
+
+```text
+/status
+/health
+/memory
+/diagnostics
+/logs
+/help
+/start
+/stop
+/restart
+/reload
+/reboot
+/subscription URL
+/update_subscription
+/update_miclash
+/update_mihomo
+/guard_on
+/guard_off
+/backup
 ```
 
-For other architectures, choose the matching file on the Mihomo releases page: <https://github.com/MetaCubeX/mihomo/releases>.
+`/reboot` reboots the router immediately after authorization; there is intentionally no confirmation prompt.
 
-## Features
+## UCI settings
 
-- Native MiClash LuCI page without a separate custom theme switcher.
-- Clash service controls: start, stop, restart, reload.
-- YAML config editor with validation before applying changes.
-- Subscription download into `/opt/clash/config.yaml`.
-- Local rulesets in `/opt/clash/lst`.
-- TPROXY/TUN/MIXED modes, interface selection, QUIC blocking, tmpfs for rules/providers.
-- MiClash and Mihomo updates through router-side scripts so LuCI does not keep long operations in the UI.
-
-## Removal
+The LuCI page is the recommended editor. For inspection:
 
 ```sh
-# OpenWrt 25.x:
+uci show miclash
+ubus call miclash status '{}'
+ubus call miclash health '{}'
+```
+
+The main UCI sections are `core`, `interfaces`, `guard`, `memory`, `updates`, `telegram`, `notifications`, `backup` and `meta`. Keep `/etc/config/miclash` readable only by root because it may contain subscription URLs and the Telegram token.
+
+## One-time v0.9.2 migration
+
+The first upgrade from v0.9.2 performs a journaled, idempotent migration. It preserves configuration profiles, UCI-compatible settings, rulesets, subscriptions, the installed Mihomo core, Guard desired state and DNS restoration data. Legacy cron/hotplug/backend scripts are removed only after `miclashd` registers, reconciliation succeeds and the migration verifies.
+
+If migration cannot verify, package installation fails instead of pretending success. With Guard ON, the safety latch remains protected; retry the package configuration after fixing the reported error.
+
+## Safe update and recovery
+
+- Config activation validates first and rolls back partial DNS/firewall/routing changes on failure.
+- Mihomo update uses a staged artifact and preserves a rollback candidate.
+- Auto-update and manual update are serialized with other mutations.
+- Health reconciliation repairs owned DNS, firewall and routing drift; it does not adopt unrelated rules.
+- Memory Guard acts only on abnormal Mihomo growth plus system memory pressure, checks whether memory actually fell after each stage, then enters cooldown instead of restarting forever.
+- Internet-restored and repair events appear as notifications and can be sent to Telegram.
+
+Before a major change, create a backup without secrets for routine support, or explicitly enable secrets only for a protected local archive.
+
+## Troubleshooting
+
+```sh
+/etc/init.d/miclashd status
+/etc/init.d/clash status
+ubus call miclash status '{}'
+ubus call miclash health '{}'
+logread -e miclashd
+```
+
+Use **Download diagnostic report** for support and **route test** to explain the chosen path. If an operation fails, review its stage/error in LuCI and retry only after the previous operation is terminal.
+
+When Guard is enabled, do not manually delete its nftables/routing rules or the Guard latch. Restore normal service through LuCI, reinstall the package, or explicitly disable Guard if direct traffic is acceptable.
+
+## Safe removal
+
+```sh
+# OpenWrt 25.12:
 apk del luci-app-miclash
 
-# OpenWrt 24.10+ (opkg):
+# OpenWrt 24.10+:
 opkg remove luci-app-miclash
+```
 
+The package removal protocol first protects Guard traffic, stops services, restores owned DNS/firewall/routing state and only then removes the backend. A failed cleanup remains retryable instead of leaving a false success.
+
+The interactive installer can additionally purge `/opt/clash`. Non-interactive removal keeps the runtime/config directory. To erase it manually after successful package removal:
+
+```sh
 rm -rf /opt/clash
 ```
+
+This final purge is irreversible; export a backup first.

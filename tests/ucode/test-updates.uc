@@ -25,6 +25,14 @@ function fixture(name) {
 	return require('fs').readfile('tests/fixtures/releases/' + name);
 };
 
+function curl_request(filesystem, args) {
+	let config_path = args[1], config = filesystem.readfile(config_path);
+	let output = match(config, /output = "([^"]+)"/);
+	let header = match(config, /dump-header = "([^"]+)"/);
+	let url = match(config, /url = "([^"]+)"/);
+	return { output: output?.[1], header: header?.[1], url: url?.[1] };
+};
+
 function environment(options) {
 	options ??= {};
 	let old = options.old ?? 'old mihomo binary';
@@ -70,7 +78,9 @@ function environment(options) {
 		[MICLASH_TAG]: fixture('miclash-release.json'),
 		[MICLASH_RELEASES]: '[' + replace(fixture('miclash-release.json'),
 			'"prerelease": false', '"prerelease": true') + ']',
-		[MICLASH_INSTALLER]: options.installer ?? '#!/bin/sh\nexit 0\n'
+		[MICLASH_INSTALLER]: options.installer ?? '#!/bin/sh\nexit 0\n',
+		[MICLASH_CHECKSUM]: require('digest').sha256(
+			options.installer ?? '#!/bin/sh\nexit 0\n') + '  install-miclash.sh\n'
 	};
 	for (let url, body in options.responses ?? {})
 		responses[url] = body;
@@ -118,16 +128,14 @@ function environment(options) {
 	};
 	process.on_run = (request) => {
 		if (request.command == '/usr/bin/curl') {
-			let output = request.args[index(request.args, '--output') + 1];
-			let header = request.args[index(request.args, '--dump-header') + 1];
-			let url = request.args[length(request.args) - 1];
-			let body = responses[url];
+			let curl = curl_request(filesystem, request.args);
+			let body = responses[curl.url];
 			if (body == null) {
 				process.replies[request.command + ':' + join(' ', request.args)] = { code: 22 };
 				body = '';
 			}
-			filesystem.writefile(output, body);
-			filesystem.writefile(header, 'HTTP/1.1 200 OK\r\nContent-Length: ' +
+			filesystem.writefile(curl.output, body);
+			filesystem.writefile(curl.header, 'HTTP/1.1 200 OK\r\nContent-Length: ' +
 				length(body) + '\r\n\r\n');
 		}
 		else if (request.command == '/bin/gzip' ||
@@ -248,9 +256,10 @@ let without_checksum = environment({ responses: {
 } });
 let local_op = without_checksum.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
 without_checksum.clock.advance(0);
-assert_equal(without_checksum.ops.get(local_op.id).state, 'success');
-assert_equal(without_checksum.updater.status().published_checksum_verified, false);
-assert_true(match(without_checksum.updater.status().sha256, /^[0-9a-f]{64}$/));
+assert_equal(without_checksum.ops.get(local_op.id).state, 'failure');
+assert_equal(without_checksum.ops.get(local_op.id).error.code, 'INVALID_RESPONSE');
+assert_equal(length(without_checksum.service_calls), 0,
+	'checksumless Mihomo release fails before service stop');
 
 let mismatch = environment({ checksum: sprintf('%064d', 0) +
 	'  mihomo-linux-arm64-v1.2.3.gz\n' });
@@ -482,6 +491,21 @@ let manifest_release = json(fixture('miclash-release.json'));
 manifest_release.assets = [ { name: 'install-miclash.sh.sha256',
 	browser_download_url: MICLASH_CHECKSUM } ];
 let installer_body = '#!/bin/sh\nexit 0\n';
+let checksumless_release = json(fixture('miclash-release.json'));
+checksumless_release.assets = [];
+let checksumless_installer = environment({ installer: installer_body, responses: {
+	[MICLASH_TAG]: sprintf('%J', checksumless_release)
+} });
+let checksumless_installer_op = checksumless_installer.updater.update_miclash(
+	{ version: 'v9.9.9' }, 'luci');
+checksumless_installer.clock.advance(0);
+assert_equal(checksumless_installer.ops.get(checksumless_installer_op.id).state,
+	'failure');
+let checksumless_ash = [];
+for (let call in checksumless_installer.process.calls)
+	if (call.command == '/bin/busybox') push(checksumless_ash, call);
+assert_equal(length(checksumless_ash), 0,
+	'checksumless installer fails before syntax check or execution');
 let manifest = environment({ installer: installer_body, responses: {
 	[MICLASH_TAG]: sprintf('%J', manifest_release),
 	[MICLASH_CHECKSUM]: require('digest').sha256(installer_body) +

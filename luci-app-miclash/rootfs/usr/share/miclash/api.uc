@@ -6,13 +6,6 @@ const MAX_CONTENT = 1048576;
 const MUTATION_SOURCES = [ 'luci', 'telegram' ];
 const OPERATION_SOURCES = [ 'luci', 'telegram', 'auto', 'system' ];
 const OPERATION_STATES = [ 'queued', 'running', 'success', 'failure', 'interrupted' ];
-const OPERATION_KINDS = [
-	'service.start', 'service.stop', 'service.reload', 'service.restart',
-	'config.validate', 'config.apply', 'config.external_adopt', 'history.restore',
-	'subscription.set', 'subscription.update', 'update.miclash', 'update.mihomo',
-	'update.rollback_mihomo', 'memory.reset_baseline', 'backup.create', 'backup.restore',
-	'devices.policy_set', 'devices.policy_delete'
-];
 const TRANSFER_ROOT = '/tmp/miclash/transfers';
 const TRANSFER_TTL = 300000;
 const TRANSFER_CHUNK = 49152;
@@ -595,13 +588,6 @@ export function method_table(app, transfers) {
 				/^[A-Za-z0-9][A-Za-z0-9._-]*$/))
 				errors.fail('INVALID_ARGUMENT');
 			return { operations: redact.value('operations', app.operation_list(arguments)) };
-		}),
-		operation_start: method({ kind: '', arguments: {}, source: '' }, (arguments) => {
-			exact(arguments, { kind: { type: 'string', required: true },
-				arguments: { type: 'object', required: true }, source: { type: 'string' } });
-			return domain_operation('operation_start', {
-				kind: schema.enum_value(arguments.kind, OPERATION_KINDS),
-				arguments: transfer_metadata(arguments.arguments), source: source(arguments) });
 		}),
 		service_start: method(service_policy, (arguments) => {
 			exact(arguments, { profile: { type: 'string' }, source: { type: 'string' } });

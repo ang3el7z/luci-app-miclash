@@ -75,6 +75,14 @@ function create(options) {
 		const key = String(mac || '').toLowerCase();
 		return policies.find((item) => item?.scope === 'device' && String(item.mac || '').toLowerCase() === key) || null;
 	}
+	const actionLabels = {
+		inherit: () => _('Inherit'), proxy: () => _('Proxy'),
+		direct: () => _('Direct'), block: () => _('Block')
+	};
+	const dayLabels = [
+		() => _('Monday'), () => _('Tuesday'), () => _('Wednesday'),
+		() => _('Thursday'), () => _('Friday'), () => _('Saturday'), () => _('Sunday')
+	];
 	function table() {
 		const rows = devices.slice(0, 512).map((device) => {
 			const mac = device.mac && MAC.test(device.mac) ? device.mac.toUpperCase() : '';
@@ -85,7 +93,7 @@ function create(options) {
 			return E('tr', {}, [
 				E('td', {}, text(device.hostname, _('Unknown device'))), E('td', {}, text(mac)),
 				E('td', {}, currentAddresses(device).join(', ') || '-'), E('td', {}, when(device.last_seen)),
-				E('td', {}, text(policy?.action, 'inherit')), E('td', {}, edit)
+				E('td', {}, (actionLabels[policy?.action || 'inherit'] || actionLabels.inherit)()), E('td', {}, edit)
 			]);
 		});
 		if (!rows.length) rows.push(E('tr', {}, [ E('td', { 'colspan': '6', 'class': 'sbox-muted' }, _('No devices discovered.')) ]));
@@ -104,14 +112,14 @@ function create(options) {
 	function optionSelect(policy) {
 		return E('select', { 'id': 'sbox-device-policy-action', 'class': 'cbi-input-select' }, ACTIONS.map((name) => {
 			const attrs = { 'value': name }; if ((policy?.action || 'inherit') === name) attrs.selected = 'selected';
-			return E('option', attrs, name);
+			return E('option', attrs, actionLabels[name]());
 		}));
 	}
 	function dayChecks(schedule) {
 		const selected = Array.isArray(schedule?.days) ? schedule.days : [];
 		return E('div', { 'class': 'sbox-device-days', 'aria-label': _('Schedule days') },
 			[ 1, 2, 3, 4, 5, 6, 7 ].map((day) => E('label', {}, [
-				E('input', { 'type': 'checkbox', 'data-day': day, 'checked': selected.includes(day) ? 'checked' : null }), String(day)
+				E('input', { 'type': 'checkbox', 'data-day': day, 'checked': selected.includes(day) ? 'checked' : null }), dayLabels[day - 1]()
 			])));
 	}
 	function openEditor(mac, device, policy) {

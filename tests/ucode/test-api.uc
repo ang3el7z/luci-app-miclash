@@ -268,7 +268,7 @@ let app = {
 let methods = api.method_table(app);
 let names = sort(keys(methods));
 json_equal(names, sort([
-	'status', 'health', 'operation_get', 'operation_list', 'operation_start',
+	'status', 'health', 'operation_get', 'operation_list',
 	'service_start', 'service_stop', 'service_reload', 'service_restart',
 	'config_list', 'config_read', 'config_read_draft', 'config_save_draft',
 	'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
@@ -574,9 +574,6 @@ for (let entry in canonical) {
 	assert_equal(rejected.error.code, 'INVALID_ARGUMENT', entry.name + ' accepted unknown field');
 	assert_equal(length(delegation), before + 1, entry.name + ' delegated unknown field');
 }
-assert_equal(contract_methods.operation_start.call({ args: {
-	kind: 'arbitrary.shell', arguments: {}, source: 'luci'
-} }).error.code, 'INVALID_ARGUMENT');
 assert_equal(contract_methods.subscription_set.call({ args: {
 	profile: 'config.yaml', url: 'http://', source: 'luci'
 } }).error.code, 'INVALID_ARGUMENT');

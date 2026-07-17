@@ -2,6 +2,42 @@ import * as migrate from 'miclash.migrate';
 import { assert_equal, assert_true, assert_throws } from 'testlib';
 import { fail } from 'miclash.errors';
 
+assert_equal(type(migrate.daemon_ready), 'function',
+	'migration must verify daemon startup reconciliation readiness');
+
+function readiness(marker, running, health) {
+	let disconnects = 0;
+	let runtime = {
+		fs: {
+			readfile: (path) => path == '/tmp/miclash/daemon-ready.json' ? marker : null,
+			lstat: (path) => path == '/tmp/miclash/daemon-ready.json' && marker != null
+				? { type: 'file', mode: 0o600, uid: 0 } : null
+		},
+		ubus: { connect: () => ({
+			call: (object, method) => object == 'service' && method == 'list'
+				? { miclashd: { instances: { instance1: { running } } } }
+				: (object == 'miclash' && method == 'health' ? health : null),
+			disconnect: () => { disconnects++; return true; }
+		}) }
+	};
+	return { runtime, disconnects: () => disconnects };
+};
+
+let ready_marker = sprintf('%J\n', {
+	schema_version: 1, startup_reconciled: true, ready_at_ms: 1700000000000
+});
+assert_equal(migrate.daemon_ready(readiness(null, true, { state: 'healthy' }).runtime), false,
+	'procd running without a startup reconcile marker was accepted');
+assert_equal(migrate.daemon_ready(readiness(ready_marker, true,
+	{ error: { code: 'HEALTH_FAILED' } }).runtime), false,
+	'daemon marker without a successful typed health call was accepted');
+assert_equal(migrate.daemon_ready(readiness(ready_marker, false, { state: 'healthy' }).runtime), false,
+	'a stopped daemon with a stale readiness marker was accepted');
+let ready = readiness(ready_marker, true, { state: 'healthy' });
+assert_equal(migrate.daemon_ready(ready.runtime), true,
+	'daemon with startup reconcile marker and typed health call was rejected');
+assert_equal(ready.disconnects(), 1, 'migration readiness leaked its ubus connection');
+
 function harness(files, canonical) {
 	let state = canonical ?? { guard: { enabled: false }, core: { proxy_mode: 'tproxy' } };
 	let fs = { files: files ?? {}, fail_write: false };

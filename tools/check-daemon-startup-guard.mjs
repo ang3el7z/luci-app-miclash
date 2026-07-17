@@ -19,8 +19,8 @@ check(daemon.includes("from 'miclash.startup-guard'"),
 	'miclashd must import the production startup Guard recovery module');
 check(daemon.includes('on_ready: start_normal_lifecycle'),
 	'miclashd must arm normal observation only through startup Guard readiness');
-check(daemon.indexOf("environment.reconcile.startup('daemon-startup')") > arm &&
-	daemon.indexOf("environment.reconcile.startup('daemon-startup')") < observation,
+check(daemon.indexOf("readiness.activate(environment.reconcile, 'daemon-startup')") > arm &&
+	daemon.indexOf("readiness.activate(environment.reconcile, 'daemon-startup')") < observation,
 	'native firewall, routing and DNS reconciliation must gate normal observation');
 check(create >= 0 && compose > create && arm > compose && observation > arm &&
 	startup > observation && start > startup,

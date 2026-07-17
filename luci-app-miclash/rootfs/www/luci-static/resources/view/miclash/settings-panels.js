@@ -193,7 +193,8 @@ function create(options) {
 			channels.includes(name), 'channel', name));
 		const eventNodes = KNOWN_EVENTS.map((name) => check('sbox-notify-event-' + name, EVENT_LABELS[name](),
 			events.includes(name), 'event', name));
-		const select = E('select', { 'id': 'sbox-notification-test-channel', 'class': 'cbi-input-select' },
+		const select = E('select', { 'id': 'sbox-notification-test-channel', 'class': 'cbi-input-select',
+			'aria-label': _('Channels') },
 			KNOWN_CHANNELS.map((name) => E('option', { 'value': name }, name)));
 		return E('section', { 'class': 'cbi-section sbox-settings-block sbox-management-card sbox-management-wide',
 			'data-panel': 'notifications' }, [

@@ -17,7 +17,7 @@
     "write": {
       "ubus": {
         "miclash": [
-          "operation_start", "service_start", "service_stop", "service_reload",
+          "service_start", "service_stop", "service_reload",
           "service_restart", "config_read", "config_read_draft", "config_save_draft",
           "config_validate", "config_apply", "operational_settings_apply", "config_swap",
           "config_external_adopt", "settings_set", "guard_transition", "history_diff",

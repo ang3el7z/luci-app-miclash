@@ -27,6 +27,8 @@ function ensure_directory(runtime, path) {
 
 function healthy(service, profile, controller_config) {
 	try {
+		if (type(service.recover) == 'function')
+			return service.recover(profile, controller_config)?.ok === true;
 		let reloaded = service.reload(profile, controller_config);
 		if (reloaded !== true && reloaded?.ok !== true)
 			return false;
@@ -614,12 +616,25 @@ export function create(runtime, operations, history) {
 					if (candidate_hash != external.hash)
 						errors.fail('INTERNAL');
 					assert_active_state(profile, external);
-					history.snapshot_bytes(profile, 'external', candidate, {
+					let snapshot = history.snapshot_bytes(profile, 'external', candidate, {
 						validation_result: 'success',
-						activation_result: 'adopted',
+						activation_result: 'pending',
 						operation_id: ctx.id
 					});
 					assert_active_state(profile, external);
+					let converged = false;
+					try {
+						converged = type(runtime.reconcile?.external) == 'function'
+							? runtime.reconcile.external('external-config-adopt') === true
+							: healthy(runtime.service, profile, external.content);
+					}
+					catch (error) { converged = false; }
+					if (!converged) {
+						history.mark_activation(profile, snapshot.revision, 'health_failed');
+						errors.fail('HEALTH_FAILED');
+					}
+					assert_active_state(profile, external);
+					history.mark_activation(profile, snapshot.revision, 'adopted');
 					record_active(profile, external.hash, ctx.id);
 					return { ok: true };
 				}));

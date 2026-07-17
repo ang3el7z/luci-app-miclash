@@ -5,10 +5,12 @@ let records = [], events = [], ready = false, guard_enabled = true, now = 170000
 let guard_latched = false, guard_physical = true, guard_persist_fails = false;
 let guard_latch_clear_fails = false;
 let guard_disable_failures = 0, guard_verify_off_failures = 0;
-let service_restarts = 0, service_state = 'running', service_starts = 0, service_stops = 0;
+let service_restarts = 0, service_repairs = 0,
+	service_state = 'running', service_starts = 0, service_stops = 0;
 let network_applies = 0, network_cleanups = 0, network_fails = false;
 let network_guard_protected = [];
 let network_cleanup_failures = 0;
+let proxy_mode = 'tproxy', wait_options = [];
 let sequence = 0;
 let reconciler = adapter.create({
 	operations: { submit: (kind, source, context, worker) => {
@@ -21,13 +23,23 @@ let reconciler = adapter.create({
 		start: () => { service_starts++; service_state = 'running'; return true; },
 		stop: () => { service_stops++; service_state = 'stopped'; return true; },
 		restart_service: () => { service_restarts++; service_state = 'running'; return true; },
-		wait_ready: () => ({ ok: ready, components: ready ? [
+		recover: () => { service_repairs++; service_state = 'running'; return {
+			ok: ready, stage: ready ? 'reload' : 'restart_service', ready: { ok: ready,
+				components: ready ? [
+					{ component: 'process', ready: true }, { component: 'api', ready: true },
+					{ component: 'dns', ready: true, observed_at: now },
+					{ component: 'forward', ready: true, observed_at: now },
+					{ component: 'guard', ready: true, observed_at: now,
+						enabled: guard_enabled, generation: 7 }
+				] : [] }
+		}; },
+		wait_ready: (deadline, profile, options) => { push(wait_options, options); return { ok: ready, components: ready ? [
 			{ component: 'process', ready: true }, { component: 'api', ready: true },
 			{ component: 'dns', ready: true, observed_at: now },
 			{ component: 'forward', ready: true, observed_at: now },
 			{ component: 'guard', ready: true, observed_at: now,
 				enabled: guard_enabled, generation: 7 }
-		] : [] }) },
+		] : [] }; } },
 	network: { apply: () => {
 		network_applies++;
 		push(network_guard_protected, guard_physical);
@@ -39,11 +51,11 @@ let reconciler = adapter.create({
 		return true;
 	} },
 	settings: {
-		get: () => ({ core: { proxy_mode: 'tproxy' }, guard: { enabled: guard_enabled } }),
+		get: () => ({ core: { proxy_mode }, guard: { enabled: guard_enabled } }),
 		set: (patch) => {
 			if (guard_persist_fails) die('INTERNAL');
 			guard_enabled = patch.guard.enabled;
-			return { core: { proxy_mode: 'tproxy' }, guard: { enabled: guard_enabled } };
+			return { core: { proxy_mode }, guard: { enabled: guard_enabled } };
 		}
 	},
 	guard: {
@@ -71,6 +83,8 @@ let reconciler = adapter.create({
 });
 
 assert_equal(reconciler.run('automatic').state, 'failure');
+assert_equal(service_repairs, 1,
+	'production reconciliation did not invoke bounded Mihomo recovery');
 assert_equal(events[0].type, 'failure');
 assert_equal(events[0].data.component, 'mihomo');
 assert_equal(events[1].type, 'fail_closed');
@@ -206,12 +220,16 @@ assert_equal(service_starts, 0, 'daemon startup started an explicitly stopped se
 // no consumer and no physical Guard.
 service_state = 'running'; guard_enabled = false; guard_latched = false;
 guard_physical = false; ready = true; network_cleanup_failures = 1; now++;
+proxy_mode = 'mixed';
 let stop_failed = false, starts_before_stop_fault = service_starts;
 try { reconciler.stop('luci-stop'); } catch (error) { stop_failed = true; }
 assert_equal(stop_failed, true, 'cleanup-failed stop falsely reported success');
 assert_equal(service_state, 'running', 'cleanup-failed stop left Mihomo stopped');
 assert_equal(service_starts, starts_before_stop_fault + 1,
 	'cleanup-failed stop did not restore Mihomo');
+assert_equal(wait_options[length(wait_options) - 1].proxy_mode, 'mixed');
+assert_equal(wait_options[length(wait_options) - 1].tun_required, true,
+	'mixed-mode restoration omitted the canonical TUN/dataplane readiness contract');
 assert_equal(guard_physical, false,
 	'restored Guard-OFF stop retained temporary protection after recovery');
 
@@ -219,6 +237,7 @@ assert_equal(guard_physical, false,
 // disable failure after clean network teardown restores the network+core, then
 // retries release only after readiness instead of leaving a router-wide block.
 service_state = 'running'; guard_physical = false; ready = true;
+proxy_mode = 'tproxy';
 guard_disable_failures = 1; now++;
 let disable_fault_starts = service_starts;
 stop_failed = false;

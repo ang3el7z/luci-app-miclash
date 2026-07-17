@@ -44,13 +44,18 @@ jobs:
           git ls-files -z '*.po' |
             xargs -0 -r -n1 msgfmt --check --output-file=/dev/null
 
-      - name: Check test runner shell syntax
-        run: >-
-          sh -n tools/run-ucode-tests.sh tools/check-routing-netns.sh
-          tools/check-package-release.sh tools/check-native-cutover.sh
-          tools/check-mutation-lock.sh tools/check-dns-lifecycle.sh
-          tools/check-guard-runtime.sh tools/check-package-cleanup.sh
-          tools/check-package-removal.sh
+      - name: Check shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n install-miclash.sh tools/*.sh \
+            luci-app-miclash/rootfs/etc/init.d/* \
+            luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh \
+            luci-app-miclash/rootfs/usr/share/miclash/package-remove \
+            luci-app-miclash/rootfs/usr/share/miclash/package-release
+
+      - name: Check GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
   ucode-tests:
     name: Host ucode tests
@@ -126,22 +131,28 @@ jobs:
           sudo env UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
             LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" tools/check-guard-runtime.sh
           sudo tools/check-package-cleanup.sh
+          sudo tools/check-package-release.sh
           sudo tools/check-package-removal.sh
+          sudo tools/check-hard-reinstall-marker.sh
           sudo tools/check-mutation-lock.sh
+          tools/check-update-status-protocol.sh
 
   package-build:
-    name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }})
+    name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }}, ${{ matrix.arch }})
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - sdk_version: "24.10.2"
+          - sdk_version: "24.10.7"
             package_manager: opkg
             arch: x86/64
           - sdk_version: "25.12.5"
             package_manager: apk
             arch: x86/64
+          - sdk_version: "25.12.5"
+            package_manager: apk
+            arch: mediatek/filogic
     env:
       PACKAGE_NAME: luci-app-miclash
       SDK_NAME: -sdk-
@@ -153,7 +164,9 @@ jobs:
       - name: Install SDK build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -yq gettext libncurses5-dev rsync xsltproc build-essential gawk unzip
+          sudo apt-get install -yq \
+            bison build-essential clang file flex g++ gawk gcc-multilib gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools rsync swig unzip wget xsltproc zstd
 
       - name: Create build directories
         run: |
@@ -189,5 +202,65 @@ jobs:
           ./scripts/feeds update > /dev/null 2>&1
           ./scripts/feeds install -a > /dev/null 2>&1
           ln -s "${{ github.workspace }}/luci-app-miclash" "package/$PACKAGE_NAME"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("Config-build.in")
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          current = ""
+          package_defaults = 0
+          required_defaults = {"PACKAGE_kmod-nf-tproxy"}
+          retained_defaults = set()
+          for index, line in enumerate(lines):
+              if line.startswith("config "):
+                  current = line.removeprefix("config ").strip()
+              replacement = None
+              if current.startswith("PACKAGE_") and line.strip() == "default m":
+                  if current in required_defaults:
+                      retained_defaults.add(current)
+                  else:
+                      replacement = "default n"
+                      package_defaults += 1
+              elif current in {"ALL", "ALL_KMODS", "ALL_NONSHARED", "BUILDBOT"} and \
+                   line.strip() == "default y":
+                  replacement = "default n"
+              if replacement is not None:
+                  indent = line[:len(line) - len(line.lstrip())]
+                  ending = "\n" if line.endswith("\n") else ""
+                  lines[index] = f"{indent}{replacement}{ending}"
+          if package_defaults == 0 or retained_defaults != required_defaults:
+              raise SystemExit("SDK package defaults were not found")
+          with path.open("w", encoding="utf-8", newline="\n") as handle:
+              handle.write("".join(lines))
+          PY
+          printf '%s\n' \
+            '# CONFIG_ALL is not set' \
+            '# CONFIG_ALL_KMODS is not set' \
+            '# CONFIG_ALL_NONSHARED is not set' \
+            '# CONFIG_BUILDBOT is not set' \
+            'CONFIG_PACKAGE_kmod-nf-tproxy=m' \
+            'CONFIG_PACKAGE_luci-app-miclash=m' > .config
           make defconfig > /dev/null 2>&1
+          grep -qx '# CONFIG_ALL is not set' .config
+          grep -qx '# CONFIG_ALL_KMODS is not set' .config
+          grep -qx '# CONFIG_ALL_NONSHARED is not set' .config
+          grep -qx '# CONFIG_BUILDBOT is not set' .config
+          grep -qx 'CONFIG_PACKAGE_luci-app-miclash=m' .config
+          grep -qx 'CONFIG_PACKAGE_kmod-nf-tproxy=m' .config
+          selected_kmods="$(grep -Ec '^CONFIG_PACKAGE_kmod-.*=[ym]$' .config || true)"
+          selected_modules="$(grep -Ec '^CONFIG_PACKAGE_.*=m$' .config || true)"
+          test "$selected_kmods" -le 64
+          test "$selected_modules" -le 64
+          if grep -q '^CONFIG_PACKAGE_kmod-hwmon-nct6775=m$' .config; then
+            echo "SDK-wide kernel modules remained selected." >&2
+            exit 1
+          fi
           make -j"$(nproc)" "package/${PACKAGE_NAME}/compile" V=s
+
+          case "${{ matrix.package_manager }}" in
+            opkg) package="$(find "$SDK_HOME/bin" -type f -name "${PACKAGE_NAME}_*.ipk" -print -quit)" ;;
+            apk) package="$(find "$SDK_HOME/bin" -type f -name "${PACKAGE_NAME}-*.apk" -print -quit)" ;;
+            *) echo "Unsupported package manager: ${{ matrix.package_manager }}" >&2; exit 1 ;;
+          esac
+          test -n "$package" && test -s "$package"
+          ls -lh "$package"

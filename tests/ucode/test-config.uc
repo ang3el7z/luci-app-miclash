@@ -427,6 +427,24 @@ assert_equal(transition_calls[0].controller_config, 'original-active\n');
 assert_equal(transition_calls[0].active, transition_candidate);
 assert_equal(transition_env.fs.readfile('/opt/clash/config.yaml'), transition_candidate);
 
+let recover_calls = [], recover_env;
+recover_env = environment({
+	reload: () => die('legacy reload path used'),
+	health: () => die('legacy health path used'),
+	recover: (profile, controller_config) => {
+		push(recover_calls, { profile, controller_config,
+			active: recover_env.fs.readfile('/opt/clash/config.yaml') });
+		return { ok: true, stage: 'reload', ready: { ok: true, components: [] } };
+	}
+});
+let recover_candidate = fixture('valid.yaml') + '# bounded recovery\n';
+let recover_apply = recover_env.cfg.apply('config.yaml', recover_candidate, 'luci');
+assert_equal(finish(recover_env, recover_apply).state, 'success');
+assert_equal(length(recover_calls), 1);
+assert_equal(recover_calls[0].profile, 'config.yaml');
+assert_equal(recover_calls[0].controller_config, 'original-active\n');
+assert_equal(recover_calls[0].active, recover_candidate);
+
 // A live Active mutation during byte snapshotting fails before replacement;
 // the snapshot still contains only the captured original bytes.
 let activation_race = environment();
@@ -463,14 +481,32 @@ assert_equal(env.revisions.read('config.yaml', restored_history[2].revision), be
 // External edits are detected by persisted hash, validated, and snapshotted as
 // the external source; invalid external data is never overwritten.
 env.fs.writefile('/opt/clash/config.yaml', fixture('valid.yaml') + '# external\n');
+let external_convergences = 0;
+env.rt.reconcile = { external: (trigger) => {
+	external_convergences++;
+	assert_equal(trigger, 'external-config-adopt');
+	return true;
+} };
 let detected = env.cfg.detect_external('config.yaml');
 assert_equal(detected.changed, true);
 assert_equal(detected.hash, env.rt.digest.sha256(fixture('valid.yaml') + '# external\n'));
 let adopted = env.cfg.adopt_external('config.yaml', 'system');
 assert_equal(finish(env, adopted).state, 'success');
+assert_equal(external_convergences, 1,
+	'external adoption recorded convergence without invoking the guarded reconciler');
 let external_history = env.revisions.list('config.yaml');
 assert_equal(external_history[length(external_history) - 1].source, 'external');
 assert_equal(env.cfg.detect_external('config.yaml').changed, false);
+
+let failed_convergence = environment();
+failed_convergence.rt.reconcile = { external: () => false };
+failed_convergence.fs.writefile('/opt/clash/config.yaml', fixture('valid.yaml') + '# not live\n');
+let failed_external = failed_convergence.cfg.adopt_external('config.yaml', 'system');
+assert_equal(finish(failed_convergence, failed_external).error.code, 'HEALTH_FAILED');
+assert_equal(failed_convergence.cfg.detect_external('config.yaml').changed, true,
+	'failed live convergence committed the external tracking hash');
+assert_equal(failed_convergence.revisions.list('config.yaml')[0].activation_result,
+	'health_failed');
 
 // External adoption snapshots the exact validated bytes. A mutation after the
 // snapshot but before tracking fails closed and never marks the race as adopted.
