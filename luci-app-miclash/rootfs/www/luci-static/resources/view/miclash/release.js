@@ -75,6 +75,7 @@ async function fetchGithubRelease(kind, includePrereleases) {
 		const channel = includePrereleases ? 'prerelease' : 'release';
 		const data = await api.update_release(kind, channel);
 		if (!data || typeof data.version !== 'string') return null;
+		if (kind === 'miclash' && data.ready !== true) return null;
 		const assets = data.asset_name ? [ {
 			name: String(data.asset_name), browser_download_url: 'managed-by-miclash'
 		} ] : [];
