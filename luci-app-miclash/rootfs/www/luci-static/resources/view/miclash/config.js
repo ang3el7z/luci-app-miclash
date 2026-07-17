@@ -1,6 +1,5 @@
 'use strict';
 'require view';
-'require fs';
 'require ui';
 'require view.miclash.utils';
 'require view.miclash.store';
@@ -23,6 +22,7 @@
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
 const CONFIG_PROFILES = view_miclash_store.CONFIG_PROFILES;
+const selectActiveOperation = view_miclash_store.selectActiveOperation;
 const RULESET_PATH = view_miclash_rulesets_model.RULESET_PATH;
 const FAKEIP_WHITELIST_FILENAME = view_miclash_rulesets_model.FAKEIP_WHITELIST_FILENAME;
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
@@ -189,9 +189,8 @@ function notify(type, message) {
 
 async function logUiAction(level, message) {
 	const cleanLevel = /^(info|warn|err)$/.test(String(level || '')) ? level : 'info';
-	try {
-		await fs.exec('/usr/bin/logger', ['-p', 'daemon.' + cleanLevel, '-t', 'miclash', String(message || '')]);
-	} catch (e) {}
+	const logger = cleanLevel === 'err' ? console.error : (cleanLevel === 'warn' ? console.warn : console.info);
+	logger.call(console, '[MiClash]', String(message || '').slice(0, 512));
 }
 
 function delay(ms) {
@@ -320,6 +319,7 @@ const getConfigLabel = view_miclash_store.getConfigLabel;
 const getConfigPathByName = view_miclash_store.getConfigPathByName;
 const readConfigFileByName = view_miclash_store.readConfigFileByName;
 const writeConfigFileByName = view_miclash_store.writeConfigFileByName;
+const swapConfigProfiles = view_miclash_store.swapConfigProfiles;
 const ensureConfigProfilesReady = view_miclash_store.ensureConfigProfilesReady;
 const readSubscriptionUrl = view_miclash_store.readSubscriptionUrl;
 const saveSubscriptionUrl = view_miclash_store.saveSubscriptionUrl;
@@ -354,12 +354,14 @@ const looksLikeUriSubscription = view_miclash_subscription.looksLikeUriSubscript
 const looksLikeBase64Blob = view_miclash_subscription.looksLikeBase64Blob;
 const looksLikeYamlConfig = view_miclash_subscription.looksLikeYamlConfig;
 
-async function typedSettings() {
+async function typedCall(callback) {
 	const owned = !configApi;
 	const api = configApi || view_miclash_api.create();
-	try { return await api.settings_get(); }
+	try { return await callback(api); }
 	finally { if (owned) api.destroy(); }
 }
+
+async function typedSettings() { return typedCall((api) => api.settings_get()); }
 
 async function loadOperationalSettings() {
 	const [ legacy, typed ] = await Promise.all([
@@ -409,49 +411,16 @@ async function refreshCanonicalGuardState() {
 }
 
 async function getVersions() {
-	const info = { app: 'unknown', clash: 'unknown' };
-	const packageName = 'luci-app-miclash';
-
-	try {
-		const clashV = await fs.exec('/opt/clash/bin/clash', ['-v']);
-		const clashVersion = String(clashV.stdout || clashV.stderr || '');
-		if (clashVersion) {
-			info.clash = parseVersion(clashVersion, 'installed');
-		} else {
-			const alt = await fs.exec('/opt/clash/bin/clash', ['version']);
-			info.clash = parseVersion(alt.stdout || alt.stderr, 'installed');
-		}
-	} catch (e) {}
-
-	try {
-		const result = await fs.exec('/bin/opkg', ['list-installed', packageName]);
-		const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-		const parsed = parsePackageVersion(raw, packageName);
-		if (parsed) info.app = normalizeAppVersion(parsed);
-	} catch (_) {
-		try {
-			const result = await fs.exec('/usr/bin/apk', ['info', '-v', packageName]);
-			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-			const parsed = parsePackageVersion(raw, packageName);
-			if (parsed) info.app = normalizeAppVersion(parsed);
-		} catch (_) {}
-	}
-
-	if (info.app === 'unknown') {
-		try {
-			const opkgStatusRaw = await fs.read('/usr/lib/opkg/status');
-			const parsed = parseVersionFromOpkgStatus(opkgStatusRaw, [packageName]);
-			if (parsed) info.app = normalizeAppVersion(parsed);
-		} catch (_) {}
-	}
-
-	return info;
+	const system = await typedCall((api) => api.system_info());
+	return {
+		app: normalizeAppVersion(system?.app_version || 'unknown'),
+		clash: system?.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : 'unknown'
+	};
 }
 async function detectSystemArchitecture() {
 	try {
-		const releaseInfo = await L.resolveDefault(fs.read('/etc/openwrt_release'), null);
-		const match = String(releaseInfo || '').match(/^DISTRIB_ARCH=['"]?([^'"\n]+)['"]?/m);
-		const distribArch = match ? match[1] : '';
+		const system = await typedCall((api) => api.system_info());
+		const distribArch = String(system?.architecture || '');
 
 		if (!distribArch) return 'amd64';
 		if (distribArch.startsWith('aarch64_')) return 'arm64';
@@ -472,28 +441,11 @@ async function detectSystemArchitecture() {
 }
 
 async function getMihomoStatus() {
-	const binPath = '/opt/clash/bin/clash';
-
 	try {
-		const stat = await L.resolveDefault(fs.stat(binPath), null);
-		if (!stat) return { installed: false, version: null };
-	} catch (e) {
-		return { installed: false, version: null };
-	}
-
-	try {
-		const result = await fs.exec(binPath, ['-v']);
-		const output = String(result.stdout || result.stderr || '').trim();
-		if (output) return { installed: true, version: parseVersion(output, _('Installed')) };
-	} catch (e) {}
-
-	try {
-		const result = await fs.exec(binPath, ['version']);
-		const output = String(result.stdout || result.stderr || '').trim();
-		if (output) return { installed: true, version: parseVersion(output, _('Installed')) };
-	} catch (e) {}
-
-	return { installed: true, version: _('Installed') };
+		const system = await typedCall((api) => api.system_info());
+		return { installed: system?.mihomo?.installed === true,
+			version: system?.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : null };
+	} catch (e) { return { installed: false, version: null }; }
 }
 
 async function ensureMihomoKernelInstalled() {
@@ -566,7 +518,8 @@ function resolveKernelActionState() {
 	);
 	const latest = normalizeVersion(appState.releaseMeta?.kernelVersion || '');
 	const cmp = compareNumericVersions(local, latest);
-	const hasUpdate = installed && !!latest && (!local || cmp === -1 || (cmp === null && local !== latest));
+	const hasUpdate = installed && !!local && !!latest &&
+		(cmp === -1 || (cmp === null && local !== latest));
 
 	if (!installed) {
 		return {
@@ -657,11 +610,10 @@ function parseMiClashServiceStatus(raw) {
 }
 
 async function readMiClashUpdateStatus() {
-	const result = await fs.exec('/opt/clash/bin/miclash-update', ['status']);
-	if (result.code !== 0) {
-		throw new Error(String(result.stderr || result.stdout || _('Failed to read update status.')).trim());
-	}
-	return parseMiClashUpdateStatus(result.stdout || '');
+	const reply = await typedCall((api) => api.operation_list(null, null, 'luci'));
+	const operations = Array.isArray(reply?.operations) ? reply.operations : [];
+	const current = selectActiveOperation(operations, 'updates.');
+	return current ? { state: 'running', phase: current.stage || '', operation_id: current.id } : { state: 'idle' };
 }
 
 function formatMiClashUpdateStatus(status, fallback) {
@@ -682,15 +634,22 @@ function formatMiClashUpdateStatus(status, fallback) {
 }
 
 async function clearMiClashUpdateStatus() {
-	await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-update', ['clear-status']), null);
+	appState.pendingUpdateOperation = null;
 }
 
 async function readMiClashServiceState() {
-	const result = await fs.exec('/opt/clash/bin/miclash-service', ['state']);
-	if (result.code !== 0) {
-		throw new Error(String(result.stderr || result.stdout || _('Failed to read service status.')).trim());
-	}
-	return parseMiClashServiceStatus(result.stdout || '');
+	const snapshot = await typedCall((api) => api.status());
+	const observed = snapshot?.observed || {};
+	const service = observed.service || {};
+	const readiness = observed.readiness || {};
+	const running = service.running === true || service.state === 'running';
+	const current = selectActiveOperation(snapshot?.recent_operations, 'service.');
+	return {
+		service: running ? 'running' : 'stopped',
+		health: running ? (readiness.ok === true ? 'ready' : 'not_ready') : 'stopped',
+		operation: current ? 'running' : 'idle', phase: current?.stage || '',
+		message: readiness?.message || ''
+	};
 }
 
 function getServiceOperationState(status) {
@@ -737,7 +696,7 @@ function formatMiClashServiceStatus(status, fallback) {
 }
 
 async function clearMiClashServiceStatus() {
-	await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-service', ['clear-status']), null);
+	appState.pendingServiceOperation = null;
 }
 
 function getOperationTokenStorageKey(kind) {
@@ -777,64 +736,33 @@ function isCurrentOperationToken(kind, status) {
 
 async function startMiClashUpdateJob(kind, args) {
 	await clearMiClashUpdateStatus();
-	const token = createOperationToken('update');
-	const result = await fs.exec('/opt/clash/bin/miclash-update', ['job', '--token', token, kind].concat(args || []));
-	if (result.code !== 0) {
-		clearStoredOperationToken('update', token);
-		throw new Error(String(result.stderr || result.stdout || _('Failed to start update job.')).trim());
-	}
+	const reply = kind === 'kernel'
+		? await configApi.update_mihomo(normalizeReleaseChannel(
+			appState.settings?.mihomoReleaseChannel), 'luci')
+		: await configApi.update_miclash(normalizeReleaseChannel(
+			appState.settings?.miclashReleaseChannel), 'luci');
+	appState.pendingUpdateOperation = reply;
 	return true;
 }
 
 async function startMiClashServiceJob(action) {
 	await clearMiClashServiceStatus();
-	const token = createOperationToken('service');
-	const result = await fs.exec('/opt/clash/bin/miclash-service', ['job', '--token', token, action]);
-	if (result.code !== 0) {
-		clearStoredOperationToken('service', token);
-		throw new Error(String(result.stderr || result.stdout || _('Failed to start service job.')).trim());
-	}
+	const method = configApi['service_' + action];
+	if (typeof method !== 'function') throw new Error('Unsupported service action');
+	appState.pendingServiceOperation = await method('config.yaml', 'luci');
 	return true;
 }
 
 async function pollMiClashUpdateJob(initialMessage, options) {
-	const opts = options || {};
-	const timeoutMs = opts.timeoutMs || UPDATE_JOB_TIMEOUT_MS;
-	const startedAt = Date.now();
 	const fallback = initialMessage || _('Updating MiClash...');
 
 	appState.updateJobBusy = true;
 	setOperationStatus('running', fallback);
 
 	try {
-		while (Date.now() - startedAt < timeoutMs) {
-			await delay(UPDATE_JOB_POLL_MS);
-
-			let status;
-			try {
-				status = await readMiClashUpdateStatus();
-			} catch (e) {
-				if (isRpcReconnectLikeError(e.message)) throw e;
-				setOperationStatus('running', fallback);
-				continue;
-			}
-
-			const state = String(status.state || 'idle');
-			if (state === 'success') {
-				clearStoredOperationToken('update', status.token);
-				clearOperationStatus();
-				return status;
-			}
-			if (state === 'failed') {
-				clearStoredOperationToken('update', status.token);
-				throw new Error(status.message || _('Update failed.'));
-			}
-			if (state === 'running') {
-				setOperationStatus('running', formatMiClashUpdateStatus(status, fallback));
-			}
-		}
-
-		throw new Error(_('Update exceeded timeout. Please check MiClash logs and retry.'));
+		await awaitTypedOperation(appState.pendingUpdateOperation, fallback);
+		clearOperationStatus();
+		return { state: 'success', phase: 'done', message: '' };
 	} finally {
 		appState.updateJobBusy = false;
 		updateHeaderAndControlDom();
@@ -842,45 +770,16 @@ async function pollMiClashUpdateJob(initialMessage, options) {
 }
 
 async function pollMiClashServiceJob(initialMessage, options) {
-	const opts = options || {};
-	const timeoutMs = opts.timeoutMs || SERVICE_JOB_TIMEOUT_MS;
-	const startedAt = Date.now();
 	const fallback = initialMessage || _('Updating service status...');
 
 	appState.serviceJobBusy = true;
 	setOperationStatus('running', fallback);
 
 	try {
-		while (Date.now() - startedAt < timeoutMs) {
-			await delay(SERVICE_JOB_POLL_MS);
-
-			let status;
-			try {
-				status = await readMiClashServiceState();
-				applyServiceState(status);
-			} catch (e) {
-				if (isRpcReconnectLikeError(e.message)) throw e;
-				setOperationStatus('running', fallback);
-				continue;
-			}
-
-			const state = getServiceOperationState(status);
-			if (state === 'success') {
-				clearStoredOperationToken('service', status.token);
-				await refreshServiceState();
-				clearOperationStatus();
-				return status;
-			}
-			if (state === 'failed') {
-				clearStoredOperationToken('service', status.token);
-				throw new Error(status.message || _('Service operation failed.'));
-			}
-			if (state === 'running') {
-				setOperationStatus('running', formatMiClashServiceStatus(status, fallback));
-			}
-		}
-
-		throw new Error(_('Service operation exceeded timeout. Please retry the action.'));
+		await awaitTypedOperation(appState.pendingServiceOperation, fallback);
+		const status = await refreshServiceState();
+		clearOperationStatus();
+		return status;
 	} finally {
 		appState.serviceJobBusy = false;
 		updateHeaderAndControlDom();
@@ -897,6 +796,7 @@ async function resumeMiClashUpdateJobStatus() {
 	const state = String(status.state || 'idle');
 
 	if (state === 'running') {
+		appState.pendingUpdateOperation = { operation_id: status.operation_id };
 		await pollMiClashUpdateJob(formatMiClashUpdateStatus(status, _('Updating MiClash...')));
 		return;
 	}
@@ -918,6 +818,9 @@ async function resumeMiClashServiceJobStatus() {
 	const state = getServiceOperationState(status);
 
 	if (state === 'running') {
+		const snapshot = await typedCall((api) => api.status());
+		const current = selectActiveOperation(snapshot?.recent_operations, 'service.');
+		appState.pendingServiceOperation = { operation_id: current?.id };
 		await pollMiClashServiceJob(formatMiClashServiceStatus(status, _('Updating service status...')));
 		return;
 	}
@@ -1266,14 +1169,6 @@ async function applySubscriptionOnRouter(url, targetName, settings, appVersion, 
 	});
 }
 
-async function probeSubscriptionUpdateIntervalOnRouter(url, settings, appVersion) {
-	return view_miclash_subscription.probeSubscriptionUpdateIntervalOnRouter({
-		url: url,
-		settings: settings,
-		appVersion: appVersion
-	});
-}
-
 function normalizeAutoUpdateIntervalHours(value) {
 	const clean = String(value || '').trim();
 	const parsed = parseInt(clean, 10);
@@ -1299,26 +1194,8 @@ async function applySubscriptionProfileUpdateInterval(hours) {
 }
 
 async function probeAutoUpdateIntervalFromSubscription() {
-	const url = String(await readSubscriptionUrl(MAIN_CONFIG_NAME) || '').trim();
-	if (!url || !isValidUrl(url)) return false;
-
-	setOperationStatus('running', _('Checking subscription update interval...'));
-	try {
-		const settingsMap = await readSettingsMap();
-		const versions = await getVersions();
-		const intervalInfo = await probeSubscriptionUpdateIntervalOnRouter(url, settingsMap, versions.app);
-		const interval = normalizeAutoUpdateIntervalHours(intervalInfo && intervalInfo.profileUpdateIntervalHours);
-		if (!interval) return false;
-
-		await applySubscriptionProfileUpdateInterval(intervalInfo.profileUpdateIntervalHours);
-		return true;
-	} catch (e) {
-		await logUiAction('warn', 'Failed to probe subscription update interval: ' + e.message);
-		return false;
-	} finally {
-		await view_miclash_subscription.cleanupTemp();
-		clearOperationStatus();
-	}
+	notify('info', _('The provider update interval will be learned during the next protected subscription update. The selected interval is used until then.'));
+	return false;
 }
 
 async function testConfigContent(content, keepOnSuccess, targetPath) {
@@ -1418,7 +1295,7 @@ async function openDashboard() {
 			return;
 		}
 
-		const config = await fs.read(CONFIG_PATH);
+		const config = await readConfigFileByName(MAIN_CONFIG_NAME);
 		const configIssue = getDashboardConfigIssue(config);
 		if (configIssue) {
 			notify('error', configIssue);
@@ -1549,10 +1426,7 @@ async function switchProxyModeFromHeader(targetMode) {
 	appState.proxyMode = normalizeProxyMode(appState.settings.proxyMode || nextMode);
 	appState.serviceRunning = await getServiceStatus();
 
-	const freshConfig = await L.resolveDefault(
-		fs.read(getConfigPathByName(appState.selectedConfigName)),
-		''
-	);
+	const freshConfig = await L.resolveDefault(readConfigFileByName(appState.selectedConfigName), '');
 	appState.configContent = freshConfig;
 	if (editor) {
 		editor.setValue(String(freshConfig || ''), -1);
@@ -1846,7 +1720,7 @@ async function openRulesetsModal() {
 				await ensureRulesetEditor();
 				const content = rulesetCache[currentRuleset] != null
 					? rulesetCache[currentRuleset]
-					: await L.resolveDefault(fs.read(RULESET_PATH + currentRuleset), '');
+					: await L.resolveDefault(view_miclash_rulesets_model.readFile(currentRuleset), '');
 				rulesetCache[currentRuleset] = content;
 				rulesetMainEditor.setValue(String(content || ''), -1);
 				rulesetMainEditor.clearSelection();
@@ -1982,15 +1856,9 @@ async function openRulesetsModal() {
 			setOperationStatus('running', _('Saving IP-CIDR list...'));
 			const raw = String(rulesetWhitelistEditor.getValue() || '').replace(/\r\n/g, '\n');
 			const finalContent = raw.trim() ? raw.trimEnd() + '\n' : '';
-			const update = await saveRulesetWhitelist(finalContent);
-			if (update && update.code === 0) {
-				setOperationSuccess(_('IP-CIDR list saved and firewall rules updated.'));
-				notify('info', _('IP-CIDR list saved and firewall rules updated.'));
-			} else {
-				const errMsg = String(update?.stderr || update?.stdout || _('unknown error')).trim();
-				setOperationError(new Error(errMsg));
-				notify('warning', _('IP-CIDR list saved, but firewall update failed: %s').format(errMsg));
-			}
+			await saveRulesetWhitelist(finalContent);
+			setOperationSuccess(_('IP-CIDR list saved and firewall rules updated.'));
+			notify('info', _('IP-CIDR list saved and firewall rules updated.'));
 		}).catch((e) => {
 			setOperationError(e);
 			notify('error', _('Failed to save IP-CIDR list: %s').format(e.message));
@@ -2671,10 +2539,7 @@ function bindSettingsPaneEvents() {
 				normalizeReleaseChannel(appState.settings.miclashReleaseChannel) !== previousMiClashReleaseChannel ||
 				normalizeReleaseChannel(appState.settings.mihomoReleaseChannel) !== previousMihomoReleaseChannel;
 
-			const freshConfig = await L.resolveDefault(
-				fs.read(getConfigPathByName(appState.selectedConfigName)),
-				''
-			);
+			const freshConfig = await L.resolveDefault(readConfigFileByName(appState.selectedConfigName), '');
 			appState.configContent = freshConfig;
 			if (editor) {
 				editor.setValue(String(freshConfig || ''), -1);
@@ -2936,25 +2801,7 @@ async function setSelectedConfigAsMain() {
 	if (selected === MAIN_CONFIG_NAME) return;
 	setOperationStatus('running', _('Setting selected config as Main...'));
 
-	const [mainContent, selectedContent, mainUrl, selectedUrl] = await Promise.all([
-		readConfigFileByName(MAIN_CONFIG_NAME),
-		readConfigFileByName(selected),
-		readSubscriptionUrl(MAIN_CONFIG_NAME),
-		readSubscriptionUrl(selected)
-	]);
-
-	if (!(await validateContentAsMainConfig(selectedContent))) return;
-	const wasRunning = await getServiceStatus();
-
-	await writeConfigFileByName(MAIN_CONFIG_NAME, selectedContent);
-	await writeConfigFileByName(selected, mainContent);
-	await saveSubscriptionUrl(selectedUrl, MAIN_CONFIG_NAME);
-	await saveSubscriptionUrl(mainUrl, selected);
-
-	if (wasRunning) {
-		setOperationStatus('running', _('Reloading Mihomo configuration...'));
-		await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
-	}
+	await swapConfigProfiles(selected);
 	appState.serviceRunning = await getServiceStatus();
 	await switchConfigProfile(MAIN_CONFIG_NAME);
 	await refreshHeaderAndControl();
@@ -3036,13 +2883,15 @@ function bindConfigEvents() {
 	if (updateUrlBtn) {
 		updateUrlBtn.addEventListener('click', () => withButtons(updateUrlBtn, async () => {
 			const url = String(subInput?.value || '').trim();
-			if (!url) throw new Error(_('Subscription URL is empty.'));
-			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
+			const selectedProfile = normalizeConfigProfileName(appState.selectedConfigName);
+			const savedSubscription = url ? null : await typedCall((api) => api.subscription_get(selectedProfile));
+			if (!url && !savedSubscription?.configured) throw new Error(_('Subscription URL is empty.'));
+			if (url && !isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
 			if (subscriptionUpdateBusy || draftActions?.isBusy()) throw new Error(_('An operation is already running.'));
 			subscriptionUpdateBusy = true;
 			return draftActions.runExternal(async ({ profile: selectedConfig }) => {
 			setOperationStatus('running', _('Saving subscription URL...'));
-			await saveSubscriptionUrl(url, selectedConfig);
+			if (url) await saveSubscriptionUrl(url, selectedConfig);
 			appState.subscriptionUrl = url;
 			appState.serviceRunning = await getServiceStatus();
 			updateHeaderAndControlDom();
@@ -3243,7 +3092,7 @@ return view.extend({
 
 	load: function() {
 		return Promise.all([
-			L.resolveDefault(fs.read(CONFIG_PATH), ''),
+			L.resolveDefault(readConfigFileByName(MAIN_CONFIG_NAME), ''),
 			readSubscriptionUrl(),
 			loadOperationalSettings(),
 			getNetworkInterfaces(),

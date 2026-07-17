@@ -115,6 +115,111 @@ for (let profile in [ 'config0.yaml', 'config1.yaml', 'config4.yaml', '../config
 let env = environment();
 assert_equal(join(',', env.cfg.list_profiles()), 'config.yaml,config2.yaml,config3.yaml');
 assert_equal(env.cfg.read_active('config.yaml'), 'original-active\n');
+
+// Promoting a secondary profile is one serialized domain operation: both
+// profiles are validated and swapped, while a running Mihomo receives only
+// the new Main profile (never the temporary backup profile).
+let swap_calls = [];
+let swap_env = environment({
+	observe: () => ({ state: 'running', running: true }),
+	reload: (profile, controller_config) => {
+		push(swap_calls, { profile, controller_config });
+		return true;
+	},
+	health: () => true
+});
+let swapped = swap_env.cfg.swap('config2.yaml', 'luci');
+assert_equal(finish(swap_env, swapped).state, 'success');
+assert_equal(swap_env.fs.readfile('/opt/clash/config.yaml'), 'second-active\n');
+assert_equal(swap_env.fs.readfile('/opt/clash/config2.yaml'), 'original-active\n');
+assert_equal(length(swap_calls), 1);
+assert_equal(swap_calls[0].profile, 'config.yaml');
+assert_equal(swap_calls[0].controller_config, 'original-active\n');
+
+// A failed promoted profile is one atomic rollback boundary: profile bytes,
+// active revision markers, and coupled subscription settings all return to
+// their pre-swap values before the operation reports failure.
+let swap_settings = { main: 'https://main.example/sub', selected: 'https://backup.example/sub' };
+let rollback_calls = 0;
+let unhealthy_swap = environment({
+	observe: () => ({ state: 'running', running: true }),
+	reload: () => true,
+	health: () => false
+});
+let failed_swap = unhealthy_swap.cfg.swap('config2.yaml', 'luci', {
+	prepare: () => json(sprintf('%J', swap_settings)),
+	commit: (before) => {
+		let value = swap_settings.main;
+		swap_settings.main = swap_settings.selected;
+		swap_settings.selected = value;
+		return true;
+	},
+	rollback: (before) => { rollback_calls++; swap_settings = before; return true; }
+});
+let failed_swap_done = finish(unhealthy_swap, failed_swap);
+assert_equal(failed_swap_done.error.code, 'HEALTH_FAILED');
+assert_equal(unhealthy_swap.fs.readfile('/opt/clash/config.yaml'), 'original-active\n');
+assert_equal(unhealthy_swap.fs.readfile('/opt/clash/config2.yaml'), 'second-active\n');
+assert_equal(unhealthy_swap.cfg.detect_external('config.yaml').changed, false);
+assert_equal(unhealthy_swap.cfg.detect_external('config2.yaml').changed, false);
+assert_equal(swap_settings.main, 'https://main.example/sub');
+assert_equal(swap_settings.selected, 'https://backup.example/sub');
+assert_equal(rollback_calls, 1);
+
+// A transaction which persisted settings and then failed its runtime-state
+// commit is still partial work and must be rolled back.
+let partial_settings = { main: 'main-before', selected: 'selected-before' };
+let partial_rollbacks = 0;
+let partial_env = environment({ reload: () => true, health: () => true });
+let partial_swap = partial_env.cfg.swap('config2.yaml', 'luci', {
+	prepare: () => json(sprintf('%J', partial_settings)),
+	commit: (before) => {
+		partial_settings.main = 'selected-before';
+		partial_settings.selected = 'main-before';
+		die('INTERNAL');
+		return before;
+	},
+	rollback: (before) => {
+		partial_rollbacks++; partial_settings = before; return true;
+	}
+});
+finish(partial_env, partial_swap);
+assert_equal(partial_env.fs.readfile('/opt/clash/config.yaml'), 'original-active\n');
+assert_equal(partial_env.fs.readfile('/opt/clash/config2.yaml'), 'second-active\n');
+assert_equal(partial_settings.main, 'main-before');
+assert_equal(partial_settings.selected, 'selected-before');
+assert_equal(partial_rollbacks, 1);
+
+// Operational UI settings and their generated Main configuration commit in
+// one operation. A health failure retains the user's Draft but restores both
+// active configuration and settings/revision state.
+let operational_settings = { proxy_mode: 'tproxy' }, operational_rollbacks = 0;
+let operational_env = environment({ reload: () => true, health: () => false });
+let operational_content = fixture('valid.yaml');
+let operational = operational_env.cfg.apply_operational('config.yaml',
+	operational_content, 'luci', {
+		prepare: () => json(sprintf('%J', operational_settings)),
+		commit: () => { operational_settings.proxy_mode = 'tun'; return true; },
+		rollback: (before) => {
+			operational_rollbacks++; operational_settings = before; return true;
+		}
+	});
+let operational_done = finish(operational_env, operational);
+assert_equal(operational_done.error.code, 'HEALTH_FAILED');
+assert_equal(operational_env.fs.readfile('/opt/clash/config.yaml'), 'original-active\n');
+assert_equal(operational_env.cfg.read_draft('config.yaml'), operational_content);
+assert_equal(operational_env.cfg.detect_external('config.yaml').changed, false);
+assert_equal(operational_settings.proxy_mode, 'tproxy');
+assert_equal(operational_rollbacks, 1);
+
+let rejected_swap = environment();
+let rejected = rejected_swap.cfg.swap('config2.yaml', 'luci');
+rejected_swap.process.replies[validation_key(rejected.id)] = { code: 1 };
+assert_equal(finish(rejected_swap, rejected).error.code, 'VALIDATION_FAILED');
+assert_equal(rejected_swap.fs.readfile('/opt/clash/config.yaml'), 'original-active\n');
+assert_equal(rejected_swap.fs.readfile('/opt/clash/config2.yaml'), 'second-active\n');
+assert_throws(() => rejected_swap.cfg.swap('config.yaml', 'luci'), 'INVALID_ARGUMENT');
+
 assert_equal(env.cfg.detect_external('config.yaml').changed, true);
 assert_equal(env.cfg.read_draft('config.yaml'), null);
 assert_equal(finish(env, env.cfg.save_draft('config.yaml', 'draft-secret: value\n', 'luci')).state,

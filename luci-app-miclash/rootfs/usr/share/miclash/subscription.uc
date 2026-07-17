@@ -317,7 +317,8 @@ export function create(app) {
 		update(options, source, pre_enqueue);
 	api.set_url = (options, source) => {
 		exact(options, { profile: true, url: true, interval_hours: true });
-		let profile = schema.profile_name(options.profile), url = schema.url(options.url);
+		let profile = schema.profile_name(options.profile);
+		let url = options.url === '' ? '' : schema.url(options.url);
 		let hours = options.interval_hours;
 		if (type(hours) != 'int' || hours < 1 || hours > 8760)
 			invalid();
@@ -327,7 +328,7 @@ export function create(app) {
 		};
 		patch = app.settings.validate(patch);
 		return app.operations.submit('subscription.set_url', source,
-			{ profile, insecure: match(url, /^http:\/\//) != null }, (ctx) => {
+			{ profile, insecure: length(url) ? match(url, /^http:\/\//) != null : false }, (ctx) => {
 				ctx.stage('settings', 50, 'Saving subscription settings');
 				app.settings.set(patch);
 				return true;

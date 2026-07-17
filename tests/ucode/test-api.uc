@@ -104,6 +104,10 @@ let config = {
 	apply: (profile, content, source) => {
 		push(config_calls, { method: 'apply', profile, content, source });
 		return operations.submit('config.apply', source, { profile }, () => null);
+	},
+	swap: (profile, source) => {
+		push(config_calls, { method: 'swap', profile, source });
+		return operations.submit('config.swap', source, { profile }, () => null);
 	}
 };
 
@@ -208,6 +212,18 @@ let app = {
 	config_apply: (profile, content, source) => {
 		application_writable(); return config.apply(profile, content, source);
 	},
+	operational_settings_apply: (profile, content, patch, source) => {
+		application_writable();
+		patch = settings_domain.validate(patch);
+		return config.apply_operational(profile, content, source, {
+			prepare: () => settings_domain.get(),
+			commit: () => { state_model.set_desired(settings_domain.set(patch)); return true; },
+			rollback: (before) => { state_model.set_desired(settings_domain.set(before)); return true; }
+		});
+	},
+	config_swap: (profile, source) => {
+		application_writable(); return config.swap(profile, source);
+	},
 	settings_get: () => settings_domain.get(),
 	settings_set: (patch, source) => {
 		application_writable();
@@ -230,6 +246,22 @@ let app = {
 		generation: arguments.generation ?? 'ng_00000000000000000000000000000001',
 		cursor: arguments.cursor, stale: false, events: [], has_more: false
 	}),
+	logs_read: (arguments) => ({
+		generation: 'log_0000000000000001', cursor: arguments.cursor,
+		next_cursor: arguments.cursor + 1,
+		lines: [ 'miclash: https://user:pass@example.test/sub?token=log-secret bearer log-bearer' ],
+		has_more: false
+	}),
+	system_info: () => ({ app_version: '0.9.2', mihomo: { installed: true, version: '1.0.0' },
+		openwrt_version: '24.10.2', architecture: 'aarch64_cortex-a53', model: 'Router',
+		hwid: '0123456789abcd' }),
+	network_interfaces: () => ({ interfaces: [ 'br-lan', 'wan' ],
+		detected_lan: 'br-lan', detected_wan: 'wan' }),
+	ruleset_list: () => ({ names: [ 'ads.txt' ] }),
+	ruleset_read: (arguments) => ({ name: arguments.name, content: 'DOMAIN-SUFFIX,example.test\n' }),
+	ruleset_write: (arguments) => operations.submit('rulesets.write', arguments.source, arguments, () => true),
+	ruleset_delete: (arguments) => operations.submit('rulesets.delete', arguments.source, arguments, () => true),
+	ruleset_apply_whitelist: (arguments) => operations.submit('rulesets.whitelist', arguments.source, arguments, () => true),
 	devices_timezones: () => [ 'UTC', 'Europe/Berlin' ],
 	set_draining: (value) => application_draining = value
 };
@@ -239,10 +271,10 @@ json_equal(names, sort([
 	'status', 'health', 'operation_get', 'operation_list', 'operation_start',
 	'service_start', 'service_stop', 'service_reload', 'service_restart',
 	'config_list', 'config_read', 'config_read_draft', 'config_save_draft',
-	'config_validate', 'config_apply',
+	'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
 	'config_external_adopt', 'settings_get', 'settings_set', 'guard_transition',
 	'history_list', 'history_diff', 'history_open_draft', 'history_restore',
-	'subscription_get', 'subscription_set', 'subscription_update', 'subscription_probe',
+	'subscription_get', 'subscription_set', 'subscription_update',
 	'update_release', 'update_miclash', 'update_mihomo', 'update_rollback_mihomo',
 	'memory_status', 'memory_reset_baseline', 'memory_settings',
 	'diagnostics_summary', 'diagnostics_create_report', 'diagnostics_route_test',
@@ -250,6 +282,8 @@ json_equal(names, sort([
 	'telegram_status', 'telegram_settings', 'telegram_test',
 	'devices_list', 'devices_timezones', 'devices_policy_list', 'devices_policy_set', 'devices_policy_delete',
 	'notifications_settings', 'notifications_test', 'notifications_list',
+	'logs_read', 'system_info', 'network_interfaces',
+	'ruleset_list', 'ruleset_read', 'ruleset_write', 'ruleset_delete', 'ruleset_apply_whitelist',
 	'transfer_begin', 'transfer_write', 'transfer_read', 'transfer_finish', 'transfer_abort'
 ]));
 assert_equal(api.register(connection, app).registered, true);
@@ -280,6 +314,7 @@ json_equal(methods.service_start.args, { profile: '', source: '' });
 json_equal(methods.config_validate.args, { profile: '', content: '', source: '' });
 json_equal(methods.config_read_draft.args, { profile: '' });
 json_equal(methods.config_save_draft.args, { profile: '', content: '', source: '' });
+json_equal(methods.config_swap.args, { profile: '', source: '' });
 json_equal(methods.history_open_draft.args, { profile: '', revision: '', source: '' });
 json_equal(methods.settings_set.args, { settings: {}, source: '' });
 json_equal(methods.guard_transition.args, { enabled: false, source: '' });
@@ -287,6 +322,11 @@ json_equal(methods.telegram_status.args, {});
 json_equal(methods.telegram_settings.args, {});
 	json_equal(methods.telegram_test.args, {});
 	json_equal(methods.notifications_list.args, { generation: '', cursor: 0, limit: 0 });
+	json_equal(methods.logs_read.args, { generation: '', cursor: 0, limit: 0 });
+	json_equal(methods.system_info.args, {});
+	json_equal(methods.network_interfaces.args, {});
+	json_equal(methods.ruleset_read.args, { name: '' });
+	json_equal(methods.ruleset_write.args, { name: '', content: '', source: '' });
 for (let name in names) {
 	assert_equal(type(methods[name].call), 'function');
 	assert_equal(type(methods[name].args), 'object');
@@ -313,6 +353,20 @@ assert_equal(index(sprintf('%J', invoke('telegram_status')), 'telegram-secret'),
 assert_equal(invoke('telegram_status').user_id, '42');
 assert_equal(invoke('telegram_settings').token, '[REDACTED]');
 json_equal(invoke('telegram_test'), { sent: true });
+let logs_reply = invoke('logs_read', { generation: null, cursor: 4, limit: 20 });
+assert_equal(logs_reply.cursor, 4);
+assert_equal(logs_reply.next_cursor, 5);
+assert_equal(length(logs_reply.lines), 1);
+assert_equal(index(logs_reply.lines[0], 'user:pass'), -1);
+assert_equal(index(logs_reply.lines[0], 'log-secret'), -1);
+assert_equal(index(logs_reply.lines[0], 'log-bearer'), -1);
+assert_match(logs_reply.lines[0], /\*\*\*:\*\*\*@example\.test/);
+json_equal(invoke('operation_list', { state: null, kind: null, source: 'luci' }).operations, []);
+assert_equal(invoke('system_info').architecture, 'aarch64_cortex-a53');
+assert_equal(invoke('network_interfaces').detected_wan, 'wan');
+assert_equal(invoke('ruleset_read', { name: 'ads.txt' }).name, 'ads.txt');
+assert_match(invoke('ruleset_write', { name: 'ads.txt', content: 'DOMAIN,example.test\n' }).operation_id,
+	/^[A-Za-z0-9._-]+$/);
 
 // Domain config mutations already submit; the transport returns only their durable ID.
 let before_submits = length(submitted);
@@ -326,6 +380,9 @@ json_equal(keys(validate_reply), [ 'operation_id' ]);
 let apply_reply = invoke('config_apply', { profile: 'config.yaml', content: 'mode: direct\n' });
 json_equal(keys(apply_reply), [ 'operation_id' ]);
 assert_equal(config_calls[length(config_calls) - 1].source, 'luci');
+let swap_reply = invoke('config_swap', { profile: 'config2.yaml', source: 'luci' });
+json_equal(keys(swap_reply), [ 'operation_id' ]);
+assert_equal(config_calls[length(config_calls) - 1].method, 'swap');
 assert_equal(invoke('config_read_draft', { profile: 'config.yaml' }).content, 'draft: true\n');
 let save_draft_reply = invoke('config_save_draft', {
 	profile: 'config.yaml', content: 'draft: changed\n', source: 'luci'
@@ -369,19 +426,29 @@ assert_invalid('service_start', { profile: 'config4.yaml' });
 assert_invalid('service_start', { source: 'auto' });
 assert_invalid('config_validate', { profile: 'config.yaml', content: '', source: 'luci' });
 assert_invalid('config_apply', { profile: 'config.yaml', content: sprintf('%01048577d', 0) });
+assert_invalid('config_swap', { profile: 'config.yaml', source: 'luci' });
 assert_invalid('operation_get', {});
 assert_invalid('operation_get', { operation_id: '../bad' });
 assert_invalid('operation_list', { state: 'raw-state' });
 assert_invalid('settings_set', { settings: { core: { proxy_mode: 'bad' } } });
 assert_invalid('guard_transition', { enabled: 'true' });
+assert_invalid('logs_read', { cursor: -1, limit: 20 });
+assert_invalid('logs_read', { cursor: 0, limit: 201 });
+assert_invalid('logs_read', { generation: 'log_wrong', cursor: 0, limit: 20 });
+assert_invalid('ruleset_read', { name: '../ads.txt' });
+assert_invalid('ruleset_write', { name: 'ads.txt', content: sprintf('%04194305d', 0) });
 
 // Draining rejects every new mutation with BUSY while reads remain available.
 api.set_draining(app, true);
 for (let name in [ 'service_start', 'service_stop', 'service_reload', 'service_restart',
-	'config_save_draft', 'config_validate', 'config_apply', 'settings_set', 'guard_transition' ]) {
+	'config_save_draft', 'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
+	'settings_set', 'guard_transition' ]) {
 	let args = name == 'settings_set' ? { settings: {} } :
 		(name == 'guard_transition' ? { enabled: true } :
-		(index(name, 'config_') == 0 ? { profile: 'config.yaml', content: 'mode: rule\n' } : {}));
+		(name == 'config_swap' ? { profile: 'config2.yaml' } :
+		(name == 'operational_settings_apply'
+			? { profile: 'config.yaml', content: 'mode: rule\n', settings: {} }
+			: (index(name, 'config_') == 0 ? { profile: 'config.yaml', content: 'mode: rule\n' } : {}))));
 	assert_equal(invoke(name, args).error.code, 'BUSY', name);
 }
 assert_true(invoke('status').desired != null);
@@ -408,6 +475,7 @@ function valid_contract_arguments(entry) {
 		arguments: { profile: 'config.yaml' }, profile: 'config.yaml', content: 'mode: rule\n',
 		settings: {}, limit: 10, from_revision: 'rev-from', to_revision: 'rev-to',
 		enabled: true,
+		name: 'ads.txt',
 		revision: 'rev-one', url: 'https://example.test/subscription', channel: 'stable',
 		generation: 'ng_00000000000000000000000000000001', cursor: 0,
 		target: 'example.test', device: 'AA:BB:CC:DD:EE:FF', interface: 'lan', options: {},
@@ -420,6 +488,8 @@ function valid_contract_arguments(entry) {
 		seq: 0, data: b64enc('x')
 	};
 	if (entry.name == 'update_release') values.kind = 'miclash';
+	if (entry.name == 'config_swap') values.profile = 'config2.yaml';
+	if (entry.name == 'logs_read') values.generation = 'log_0000000000000001';
 	let arguments = {};
 	for (let name in entry.params) arguments[name] = values[name];
 	return arguments;
@@ -434,6 +504,9 @@ function expected_delegate_arguments(name, arguments) {
 	if (name == 'config_read' || name == 'config_read_draft') return [ arguments.profile ];
 	if (name == 'config_save_draft' || name == 'config_validate' || name == 'config_apply')
 		return [ arguments.profile, arguments.content, arguments.source ];
+	if (name == 'operational_settings_apply')
+		return [ arguments.profile, arguments.content, arguments.settings, arguments.source ];
+	if (name == 'config_swap') return [ arguments.profile, arguments.source ];
 	if (name == 'settings_set') return [ arguments.settings, arguments.source ];
 	if (name == 'guard_transition') return [ arguments.enabled, arguments.source ];
 	return [ arguments ];
@@ -449,6 +522,9 @@ function contract_delegate(name, operation) {
 		if (name == 'config_list') return [ { marker: 'read:' + name } ];
 		if (name == 'config_read' || name == 'config_read_draft') return 'read:' + name;
 		if (name == 'operation_list') return [ { marker: 'read:' + name } ];
+		if (name == 'logs_read') return { generation: args[0].generation,
+			cursor: args[0].cursor, next_cursor: args[0].cursor,
+			lines: [ 'miclash: ready' ], has_more: false, stale: false };
 		return { marker: 'read:' + name };
 	};
 };
@@ -474,6 +550,9 @@ function expected_read_reply(entry, arguments) {
 	if (entry.name == 'config_read' || entry.name == 'config_read_draft')
 		return { profile: arguments.profile, content: 'read:' + entry.name };
 	if (entry.name == 'telegram_test') return { sent: true };
+	if (entry.name == 'logs_read') return { generation: arguments.generation,
+		cursor: arguments.cursor, next_cursor: arguments.cursor,
+		lines: [ 'miclash: ready' ], has_more: false, stale: false };
 	return marker;
 };
 for (let entry in canonical) {
@@ -500,9 +579,6 @@ assert_equal(contract_methods.operation_start.call({ args: {
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(contract_methods.subscription_set.call({ args: {
 	profile: 'config.yaml', url: 'http://', source: 'luci'
-} }).error.code, 'INVALID_ARGUMENT');
-assert_equal(contract_methods.subscription_probe.call({ args: {
-	profile: 'config.yaml', url: 'https://user@example.test/path'
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(contract_methods.devices_policy_delete.call({ args: {
 	policy_id: 'not-an-id', expected_revision: 1, source: 'luci'

@@ -19,6 +19,8 @@ import * as reconcile_adapter from 'miclash.reconcile-adapter';
 import * as subscription from 'miclash.subscription';
 import * as updates from 'miclash.updates';
 import * as http from 'miclash.http';
+import * as redact from 'miclash.redact';
+import * as mihomo_api from 'miclash.mihomo-api';
 
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
@@ -73,7 +75,7 @@ function bounded_logs(runtime) {
 	if (type(popen) != 'function') return '';
 	let pipe = null, output = '';
 	try {
-		pipe = popen('/sbin/logread -e miclash 2>/dev/null', 'r');
+		pipe = popen('/sbin/logread 2>/dev/null', 'r');
 		if (pipe == null) return '';
 		while (length(output) < 32768) {
 			let chunk = pipe.read(min(4096, 32768 - length(output)));
@@ -83,7 +85,228 @@ function bounded_logs(runtime) {
 	}
 	catch (error) { output = ''; }
 	if (pipe != null) try { pipe.close(); } catch (error) { output = ''; }
-	return output;
+	let selected = [];
+	for (let line in split(output, '\n'))
+		if (match(lc(line), /(clash(-rules|-hotplug)?|miclash)(\[[0-9]+\])?:/))
+			push(selected, redact.sanitize(line));
+	if (length(selected) > 1000)
+		selected = slice(selected, length(selected) - 1000);
+	return join('\n', selected);
+};
+
+function bounded_log_page(runtime, arguments) {
+	let generation = arguments?.generation, cursor = arguments?.cursor ?? 0,
+		limit = arguments?.limit ?? 100;
+	if (type(cursor) != 'int' || cursor < 0 || type(limit) != 'int' || limit < 1 || limit > 200)
+		errors.fail('INVALID_ARGUMENT');
+	let source = bounded_logs(runtime);
+	let lines = length(source) ? split(source, '\n') : [];
+	if (cursor > length(lines)) cursor = length(lines);
+	let page = slice(lines, cursor, min(length(lines), cursor + limit));
+	let next = cursor + length(page);
+	let digest = runtime.digest.sha256(source);
+	if (type(digest) != 'string' || !match(digest, /^[0-9a-f]{64}$/))
+		errors.fail('INTERNAL');
+	let current_generation = 'log_' + substr(digest, 0, 16);
+	if (generation != null && generation != current_generation)
+		return { generation: current_generation, cursor: 0, next_cursor: 0,
+			lines: [], has_more: length(lines) > 0, stale: true };
+	return { generation: current_generation, cursor,
+		next_cursor: next, lines: page, has_more: next < length(lines), stale: false };
+};
+
+function bounded_file(runtime, path, limit) {
+	let value = null;
+	try { value = runtime.fs?.readfile(path); }
+	catch (error) { value = null; }
+	if (type(value) != 'string') return '';
+	return substr(value, 0, limit);
+};
+
+function release_value(source, name) {
+	for (let line in split(source, '\n')) {
+		let prefix = name + '=';
+		if (substr(line, 0, length(prefix)) != prefix) continue;
+		let value = substr(line, length(prefix));
+		if (length(value) >= 2 && ((substr(value, 0, 1) == "'" && substr(value, -1) == "'") ||
+		    (substr(value, 0, 1) == '"' && substr(value, -1) == '"')))
+			value = substr(value, 1, length(value) - 2);
+		return substr(value, 0, 128);
+	}
+	return '';
+};
+
+function mihomo_version(runtime, core) {
+	if (core?.type != 'file' || core.nlink != 1 || (core.uid != null && core.uid != 0) ||
+	    runtime.fs?.realpath('/opt/clash/bin/clash') != '/opt/clash/bin/clash')
+		return '';
+	let response = null;
+	try {
+		response = mihomo_api.request(runtime, 'GET', '/version', null, 'config.yaml');
+	}
+	catch (error) { return ''; }
+	let output = response?.ok === true && type(response?.data?.version) == 'string'
+		? response.data.version : '';
+	if (length(output) > 128 || match(output, /[[:cntrl:]]/)) return '';
+	let found = match(output, /^v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?)$/);
+	return found == null ? '' : substr(found[1], 0, 64);
+};
+
+function stable_mac(runtime) {
+	let names = [];
+	try { names = sort(runtime.fs?.lsdir('/sys/class/net') ?? []); }
+	catch (error) { names = []; }
+	for (let name in names) {
+		if (type(name) != 'string' || name == 'lo' ||
+		    !match(name, /^[A-Za-z0-9_.:@-]{1,64}$/)) continue;
+		let value = lc(trim(bounded_file(runtime, '/sys/class/net/' + name + '/address', 64)));
+		if (match(value, /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/) && value != '00:00:00:00:00:00')
+			return value;
+	}
+	return '';
+};
+
+function bounded_system_info(runtime) {
+	let release = bounded_file(runtime, '/etc/openwrt_release', 4096);
+	let model = trim(bounded_file(runtime, '/tmp/sysinfo/model', 256));
+	let mac = stable_mac(runtime);
+	let identifier = runtime.digest.sha256(mac + '|' + model);
+	if (type(identifier) != 'string' || !match(identifier, /^[0-9a-f]{64}$/))
+		errors.fail('INTERNAL');
+	let core = null;
+	try { core = runtime.fs?.lstat('/opt/clash/bin/clash'); }
+	catch (error) { core = null; }
+	let package_manager = '';
+	for (let candidate in [ [ 'apk', '/usr/bin/apk' ], [ 'apk', '/bin/apk' ],
+	    [ 'opkg', '/bin/opkg' ], [ 'opkg', '/usr/bin/opkg' ] ]) {
+		let stat = null;
+		try { stat = runtime.fs?.lstat(candidate[1]); } catch (error) {}
+		if (stat?.type == 'file') { package_manager = candidate[0]; break; }
+	}
+	return {
+		app_version: substr(runtime.app_version ?? '', 0, 64),
+		mihomo: { installed: core?.type == 'file', version: mihomo_version(runtime, core) },
+		openwrt_version: release_value(release, 'DISTRIB_RELEASE'),
+		architecture: release_value(release, 'DISTRIB_ARCH'),
+		model: substr(model, 0, 128), hwid: substr(identifier, 0, 14), package_manager
+	};
+};
+
+function bounded_network_interfaces(runtime, settings_domain) {
+	let names = [];
+	try { names = runtime.fs?.lsdir('/sys/class/net') ?? []; }
+	catch (error) { names = []; }
+	if (type(names) != 'array') names = [];
+	let interfaces = [];
+	for (let name in names) {
+		if (length(interfaces) >= 128) break;
+		if (type(name) != 'string' || !match(name, /^[A-Za-z0-9_.:@-]{1,64}$/) ||
+		    name == 'lo' || name == 'clash-tun' || index(interfaces, name) >= 0)
+			continue;
+		push(interfaces, name);
+	}
+	interfaces = sort(interfaces);
+	let configured = settings_domain.get().interfaces;
+	let lan = configured.detected_lan, wan = configured.detected_wan;
+	if (type(lan) != 'string' || index(interfaces, lan) < 0)
+		lan = index(interfaces, 'br-lan') >= 0 ? 'br-lan' :
+			(index(interfaces, 'lan') >= 0 ? 'lan' : '');
+	if (type(wan) != 'string' || index(interfaces, wan) < 0) {
+		wan = '';
+		let routes = bounded_file(runtime, '/proc/net/route', 65536);
+		for (let line in split(routes, '\n')) {
+			let found = match(line,
+				/^([A-Za-z0-9_.:@-]{1,64})[ \t]+00000000[ \t]+[0-9A-Fa-f]{8}[ \t]+/);
+			if (found != null && index(interfaces, found[1]) >= 0) { wan = found[1]; break; }
+		}
+		if (!length(wan) && index(interfaces, 'wan') >= 0) wan = 'wan';
+	}
+	return { interfaces, detected_lan: lan, detected_wan: wan };
+};
+
+const RULESET_ROOT = '/opt/clash/lst';
+const WHITELIST_RULESET = 'fakeip-whitelist-ipcidr.txt';
+
+function ruleset_name(value) {
+	if (type(value) != 'string' || length(value) < 5 || length(value) > 90 ||
+	    !match(value, /^[a-z0-9][a-z0-9_-]*\.txt$/))
+		errors.fail('INVALID_ARGUMENT');
+	return value;
+};
+
+function ruleset_path(name) { return RULESET_ROOT + '/' + ruleset_name(name); };
+
+function ensure_ruleset_root(runtime) {
+	let stat = runtime.fs.lstat(RULESET_ROOT);
+	if (stat == null) {
+		if (runtime.fs.mkdir(RULESET_ROOT) !== true) errors.fail('INTERNAL');
+		stat = runtime.fs.lstat(RULESET_ROOT);
+	}
+	if (stat?.type != 'directory' || (stat.uid != null && stat.uid != 0) ||
+	    runtime.fs.realpath(RULESET_ROOT) != RULESET_ROOT)
+		errors.fail('INTERNAL');
+	if (stat.mode != 0o700 && runtime.fs.chmod(RULESET_ROOT, 0o700) !== true)
+		errors.fail('INTERNAL');
+	return true;
+};
+
+function ruleset_read(runtime, name) {
+	let path = ruleset_path(name), before = runtime.fs.lstat(path);
+	if (before?.type != 'file' || before.nlink != 1 || before.size > 4194304 ||
+	    runtime.fs.realpath(path) != path)
+		errors.fail('NOT_FOUND');
+	let content = runtime.fs.readfile(path), after = runtime.fs.lstat(path);
+	if (after?.type != 'file' || after.nlink != 1 ||
+	    before.inode != after.inode || before.dev?.major != after.dev?.major ||
+	    before.dev?.minor != after.dev?.minor ||
+	    runtime.rulesets.validate(name, content) !== true)
+		errors.fail('NOT_FOUND');
+	return { name, content };
+};
+
+function ruleset_list(runtime) {
+	ensure_ruleset_root(runtime);
+	let names = [];
+	for (let name in runtime.fs.lsdir(RULESET_ROOT) ?? []) {
+		if (length(names) >= 128 || name == WHITELIST_RULESET ||
+		    type(name) != 'string' || !match(name, /^[a-z0-9][a-z0-9_-]*\.txt$/))
+			continue;
+		let path = RULESET_ROOT + '/' + name, stat = runtime.fs.lstat(path);
+		if (stat?.type == 'file' && stat.nlink == 1 && runtime.fs.realpath(path) == path)
+			push(names, name);
+	}
+	return { names: sort(names) };
+};
+
+function ruleset_write(runtime, manager, arguments, whitelist) {
+	let name = whitelist ? WHITELIST_RULESET : ruleset_name(arguments.name);
+	let content = arguments.content;
+	if (runtime.rulesets.validate(name, content) !== true) errors.fail('INVALID_ARGUMENT');
+	return manager.submit(whitelist ? 'rulesets.whitelist' : 'rulesets.write', arguments.source,
+		{ name }, (ctx) => {
+			ctx.stage('write', 30, 'write'); ensure_ruleset_root(runtime);
+			storage.atomic_write(runtime, ruleset_path(name), content, 0o600);
+			if (whitelist) {
+				ctx.stage('apply', 70, 'apply');
+				if (runtime.process.run({ command: '/opt/clash/bin/clash-rules',
+					args: [ 'update-ip-whitelist' ] })?.code != 0)
+					errors.fail('HEALTH_FAILED');
+			}
+			ctx.stage('complete', 100, 'complete'); return { name };
+		});
+};
+
+function ruleset_delete(runtime, manager, arguments) {
+	let name = ruleset_name(arguments.name);
+	if (name == WHITELIST_RULESET) errors.fail('INVALID_ARGUMENT');
+	return manager.submit('rulesets.delete', arguments.source, { name }, (ctx) => {
+		ctx.stage('delete', 50, 'delete');
+		let path = ruleset_path(name), stat = runtime.fs.lstat(path);
+		if (stat?.type != 'file' || stat.nlink != 1 || runtime.fs.realpath(path) != path ||
+		    runtime.fs.unlink(path) !== true)
+			errors.fail('NOT_FOUND');
+		ctx.stage('complete', 100, 'complete'); return { name };
+	});
 };
 
 export function compose(runtime, overrides) {
@@ -637,16 +860,69 @@ export function compose(runtime, overrides) {
 			guard: { transition: guard_transition },
 			clock: runtime.clock
 		});
+		let domain_settings = { get: reconcile_settings.get, set: reconcile_settings.set,
+			validate: settings_domain.validate };
+		let subscription_domain = modules.subscription.create({
+			runtime, http: modules.http, operations: operation_manager,
+			config: configuration, settings: domain_settings
+		});
+		// Profile bytes and their subscription URL share one transaction. The
+		// configuration domain invokes rollback after any failed activation.
+		app.config_swap = (profile, source) => configuration.swap(profile, source, {
+			prepare: () => clone(reconcile_settings.get()),
+			commit: (before) => {
+				let selected_key = profile == 'config2.yaml'
+					? 'subscription_url_config2_yaml' : 'subscription_url_config3_yaml';
+				let main = before.core.subscription_url_config_yaml;
+				if (!length(main ?? '')) main = before.core.subscription_url;
+				let selected = before.core[selected_key];
+				reconcile_settings.set({ core: {
+					subscription_url: selected, subscription_url_config_yaml: selected,
+					[selected_key]: main
+				} });
+				return true;
+			},
+			rollback: (before) => {
+				reconcile_settings.set(before);
+				return true;
+			}
+		});
+		let updates_domain = modules.updates.create({
+			runtime, operations: operation_manager, service: service_adapter,
+			settings: domain_settings
+		});
+		app.logs_read = (arguments) => bounded_log_page(runtime, arguments);
+		app.system_info = () => bounded_system_info(runtime);
+		app.network_interfaces = () => bounded_network_interfaces(runtime, settings_domain);
+		app.ruleset_list = () => ruleset_list(runtime);
+		app.ruleset_read = (arguments) => ruleset_read(runtime, arguments.name);
+		app.ruleset_write = (arguments) => ruleset_write(runtime, operation_manager, arguments, false);
+		app.ruleset_delete = (arguments) => ruleset_delete(runtime, operation_manager, arguments);
+		app.ruleset_apply_whitelist = (arguments) => ruleset_write(runtime, operation_manager, arguments, true);
+		app.subscription_get = (arguments) => subscription_domain.get_redacted(arguments.profile);
+		app.subscription_set = (arguments) => subscription_domain.set_url({
+			profile: arguments.profile, url: arguments.url,
+			interval_hours: reconcile_settings.get().updates.interval_hours
+		}, arguments.source);
+		app.subscription_update = (arguments) => subscription_domain.update({
+			profile: arguments.profile, url: null
+		}, arguments.source);
+		app.update_release = (arguments) => updates_domain.release_info({
+			kind: arguments.kind, channel: arguments.channel, version: null
+		});
+		app.update_miclash = (arguments) => updates_domain.update_miclash({
+			version: null, channel: arguments.channel
+		}, arguments.source);
+		app.update_mihomo = (arguments) => updates_domain.update_mihomo({
+			version: null, channel: arguments.channel
+		}, arguments.source);
+		app.update_rollback_mihomo = (arguments) => {
+			let previous_id = updates_domain.status().previous_id;
+			if (type(previous_id) != 'string') errors.fail('NOT_FOUND');
+			return updates_domain.rollback_mihomo({ id: previous_id }, arguments.source);
+		};
 		if (type(desired.telegram) == 'object') {
 			let unavailable = () => errors.fail('HEALTH_FAILED');
-			let subscription_domain = modules.subscription.create({
-				runtime, http: modules.http, operations: operation_manager,
-				config: configuration, settings: settings_domain
-			});
-			let updates_domain = modules.updates.create({
-				runtime, operations: operation_manager, service: service_adapter,
-				settings: settings_domain
-			});
 			let telegram_app = {
 				runtime, http: modules.http, operations: operation_manager,
 				logger: runtime.logger, audit: runtime.audit,

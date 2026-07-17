@@ -59,27 +59,20 @@ check((config.includes('Configuration applied and Mihomo reloaded.') ||
 	config.includes('Subscription downloaded and applied.') &&
 	config.includes("restartOrReloadServiceOrThrow('reload'"),
 	'Config save/update flows must keep using reload but report Mihomo hot reload to the user.');
-check(setMainBlock.includes('const wasRunning = await getServiceStatus();') &&
-	setMainBlock.includes('if (wasRunning)') &&
-	setMainBlock.includes("await restartOrReloadServiceOrThrow('reload'") &&
-	!setMainBlock.includes("restartOrReloadServiceOrThrow('restart'"),
-	'Set as Main must hot reload only when MiClash was running and must not start/restart a stopped service.');
+check(setMainBlock.includes('await swapConfigProfiles(selected)') &&
+	!setMainBlock.includes('writeConfigFileByName') &&
+	!setMainBlock.includes('restartOrReloadServiceOrThrow'),
+	'Set as Main must use the single typed config swap operation; backend service state owns reload.');
 
-check(subscription.includes('TMP_SUBSCRIPTION_HEADERS_PATH') &&
-	subscription.includes("'-D'") &&
-	subscription.includes('readProfileUpdateIntervalHours') &&
-	subscription.includes('Profile-Update-Interval') &&
-	subscription.includes('return { content:') &&
-	subscription.includes('profileUpdateIntervalHours:'),
-	'Subscription downloads must capture response headers and expose Profile-Update-Interval hours with the content.');
+check(!subscription.includes('api.subscription_probe('),
+	'LuCI must not expose an unpinned arbitrary-URL subscription probe.');
 check(!subscription.includes('SUPPORTED_PROFILE_UPDATE_INTERVAL_HOURS') &&
 	subscription.includes('parseInt(match[1], 10)') &&
 	subscription.includes('value > 0 ? String(value)'),
 	'Subscription Profile-Update-Interval must accept provider-supplied positive hour values such as 3.');
 check(config.includes('applySubscriptionProfileUpdateInterval') &&
-	config.includes('appliedInfo.profileUpdateIntervalHours') &&
-	config.includes('intervalInfo.profileUpdateIntervalHours'),
-	'Config update/probe flows must persist a supported Profile-Update-Interval value from router-side subscription downloads.');
+	config.includes('appliedInfo.profileUpdateIntervalHours'),
+	'Protected subscription updates must persist the provider Profile-Update-Interval.');
 check(config.includes('AUTO_UPDATE_PRESET_INTERVAL_HOURS') &&
 	config.includes("['2', '4', '12', '24']") &&
 	config.includes('buildAutoUpdateIntervalChoicesHtml') &&
@@ -94,11 +87,11 @@ check(config.includes('AUTO_UPDATE_PRESET_INTERVAL_HOURS.includes(current)') &&
 check(settings.includes('autoUpdateConfig: true') &&
 	settings.includes("autoUpdateIntervalHours: '4'") &&
 	settings.includes('autoUpdateIntervalStored: false') &&
-	settings.includes("case 'AUTO_UPDATE_CONFIG'") &&
-	settings.includes("case 'AUTO_UPDATE_INTERVAL_HOURS'") &&
+	settings.includes('updates.auto_subscription') &&
+	settings.includes('updates.interval_hours') &&
 	settings.includes('settings.autoUpdateIntervalStored = true') &&
-	settings.includes('settings.AUTO_UPDATE_CONFIG =') &&
-	settings.includes('settings.AUTO_UPDATE_INTERVAL_HOURS ='),
+	settings.includes('auto_subscription: autoUpdateConfig') &&
+	settings.includes('interval_hours: parseInt('),
 	'Settings model must load, default, save, and expose whether auto-update interval was explicitly stored.');
 check(config.includes('id="sbox-auto-update-config"') &&
 	config.includes('id="sbox-auto-update-interval"') &&
@@ -110,12 +103,9 @@ check(config.includes('id="sbox-auto-update-config"') &&
 	config.includes('autoUpdateIntervalHours'),
 	'Settings pane must expose auto-update checkbox and interval choices without a redundant Every label.');
 check(config.includes('async function probeAutoUpdateIntervalFromSubscription()') &&
-	config.includes('readSubscriptionUrl(MAIN_CONFIG_NAME)') &&
-	config.includes('probeSubscriptionUpdateIntervalOnRouter') &&
-	config.includes('applySubscriptionProfileUpdateInterval(intervalInfo.profileUpdateIntervalHours)') &&
-	!blockBetween('async function probeAutoUpdateIntervalFromSubscription()', 'async function testConfigContent', config).includes('downloadSubscriptionWithProfile') &&
-	config.includes("setOperationStatus('running', _('Checking subscription update interval...'))"),
-	'Settings pane must probe subscription Profile-Update-Interval through the router-side helper when enabling auto-update without a stored interval.');
+	!config.includes('probeSubscriptionUpdateIntervalOnRouter') &&
+	config.includes('will be learned during the next protected subscription update'),
+	'Settings pane must explain the safe default without issuing an arbitrary router GET.');
 check(config.includes('syncAutoUpdateInterval = async () =>') &&
 	config.includes('autoUpdateConfigEl.checked && !(appState.settings && appState.settings.autoUpdateIntervalStored)') &&
 	config.includes('await probeAutoUpdateIntervalFromSubscription();') &&
@@ -158,10 +148,9 @@ check(makefile.includes('rootfs/opt/clash/bin/miclash-autoupdate') &&
 	'Makefile must install auto-update without starting it from package hooks.');
 check(!/CRON_LINE=.*miclash-autoupdate/.test(makefile),
 	'Auto-update config must not be scheduled through cron.');
-check(acl.includes('"/opt/clash/bin/miclash-autoupdate": [ "read", "stat", "exec" ]') &&
-	acl.includes('"/opt/clash/bin/miclash-autoupdate": [ "exec" ]') &&
-	acl.includes('"/etc/init.d/miclash-autoupdate": [ "exec" ]'),
-	'ACL must allow LuCI to inspect and restart the auto-update service.');
+check(acl.includes('"subscription_update"') && acl.includes('"update_miclash"') &&
+	!acl.includes('"file"') && !acl.includes('miclash-autoupdate": [ "exec" ]'),
+	'ACL must expose only typed update methods, not executable access.');
 
 if (failed) process.exit(1);
 console.log('hot reload and auto-update check passed');

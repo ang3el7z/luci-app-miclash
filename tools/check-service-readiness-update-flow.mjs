@@ -60,9 +60,10 @@ check(config.includes('detail:') &&
 	!config.includes('sbox-operation-status-close'),
 	'UI must keep operation error details internally while showing a passive 3-second error bar.');
 check(config.includes('startMiClashServiceJob') && config.includes('pollMiClashServiceJob'),
-	'Start/stop/restart UI must use detached service jobs and polling.');
-check(config.includes('readMiClashServiceState') && config.includes("['state']"),
-	'UI must read the combined router-side service state from miclash-service state.');
+	'Start/stop/restart UI must use typed service operations and progress watching.');
+check(config.includes('readMiClashServiceState') && config.includes('api.status()') &&
+	config.includes('snapshot?.observed'),
+	'UI must read combined service state from the typed MiClash snapshot.');
 check(config.includes('refreshServiceState') && config.includes('appState.serviceHealth'),
 	'UI controls must be refreshed from the combined service state.');
 check(!config.includes("dispatchServiceActionsAndWaitOrThrow(['enable', 'start']"),
@@ -82,14 +83,11 @@ check(installMiClashUiBlock.includes("['--target-tag', release.version, '--mode'
 check(!installMiClashUiBlock.includes('asset.browser_download_url') &&
 	!installMiClashUiBlock.includes('findMiClashAsset('),
 	'MiClash app updates must not pass a package asset URL from LuCI.');
-check(config.includes('createOperationToken(') &&
-	config.includes('getStoredOperationToken(') &&
-	config.includes('clearStoredOperationToken(') &&
-	config.includes('isCurrentOperationToken('),
-	'UI must track operation tokens in sessionStorage.');
-check(config.includes("['job', '--token', token, kind]") &&
-	config.includes("['job', '--token', token, action]"),
-	'UI must pass operation tokens to update and service jobs.');
+check(config.includes('watchOperation') && config.includes('operation_id'),
+	'UI must track durable typed operation IDs.');
+check(config.includes("configApi['service_' + action]") &&
+	config.includes('configApi.update_miclash(') && config.includes('configApi.update_mihomo('),
+	'UI must submit typed service and update operations.');
 check(config.includes('updateJobBusy: false') &&
 	config.includes('appState.updateJobBusy = true') &&
 	config.includes('appState.updateJobBusy = false'),
@@ -198,10 +196,10 @@ check(makefile.includes('rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*') &
 	!makefile.includes('rm -rf /tmp/luci-indexcache /tmp/luci-modulecache') &&
 	!makefile.includes('rm -f /tmp/luci-*'),
 	'Package postinst must clear only LuCI index/module cache patterns after install.');
-check(acl.includes('"/opt/clash/bin/miclash-service": [ "read", "stat", "exec" ]'),
-	'ACL read permissions must allow LuCI to inspect and execute miclash-service.');
-check(acl.includes('"/opt/clash/bin/miclash-service": [ "exec" ]'),
-	'ACL write permissions must allow LuCI to start miclash-service jobs.');
+check(acl.includes('"status"') && acl.includes('"health"') && !acl.includes('miclash-service": [ "exec" ]'),
+	'ACL read permissions must expose typed service state only.');
+check(acl.includes('"service_start"') && acl.includes('"service_restart"'),
+	'ACL write permissions must expose typed service operations.');
 
 check(rules.includes('health_service_process') &&
 	rules.includes('health_clash_api') &&
@@ -222,11 +220,10 @@ check(update.includes('write_status()') && update.includes('run_job()'),
 	'Update script must support detached job status reporting.');
 check(update.includes('case "${1:-}" in') && update.includes('status)') && update.includes('clear-status)'),
 	'Update script must expose status and clear-status commands.');
-check(release.includes("'require fs';") &&
-	release.includes("fs.exec('/opt/clash/bin/miclash-update'") &&
-	release.includes("['release', kind, channel]") &&
-	!release.includes('await fetch('),
-	'Release metadata must be fetched by the router through miclash-update, not by the browser.');
+check(release.includes("'require view.miclash.api';") &&
+	release.includes('api.update_release(kind, channel)') &&
+	!release.includes('fs.') && !release.includes('await fetch('),
+	'Release metadata must be fetched through the typed router backend.');
 check(update.includes('print_release_info()') &&
 	update.includes('MICLASH_RELEASE_API=') &&
 	update.includes('MIHOMO_RELEASE_API=') &&

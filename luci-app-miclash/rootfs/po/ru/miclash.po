@@ -2068,3 +2068,6 @@ msgstr "Применение настройки защиты..."
 
 msgid "Guard transition failed."
 msgstr "Не удалось изменить состояние защиты."
+
+msgid "The provider update interval will be learned during the next protected subscription update. The selected interval is used until then."
+msgstr "Интервал обновления провайдера будет получен при следующем защищённом обновлении подписки. До этого используется выбранный интервал."

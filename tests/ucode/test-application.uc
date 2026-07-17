@@ -53,7 +53,14 @@ let config = {
 	validate: (profile, content, source) =>
 		operations.submit('config.validate', source, { profile }, () => null),
 	apply: (profile, content, source) =>
-		operations.submit('config.apply', source, { profile }, () => null)
+		operations.submit('config.apply', source, { profile }, () => null),
+	apply_operational: (profile, content, source, transaction) =>
+		operations.submit('settings.apply', source, { profile }, () => {
+			let prepared = transaction.prepare();
+			return transaction.commit(prepared);
+		}),
+	swap: (profile, source) =>
+		operations.submit('config.swap', source, { profile }, () => null)
 };
 let history = {
 	list: (profile, limit) => [
@@ -173,15 +180,24 @@ assert_equal(length(submitted), before_config + 1);
 app.config_apply('config.yaml', 'valid\n', 'luci');
 assert_equal(length(submitted), before_config + 2);
 app.config_save_draft('config.yaml', 'draft\n', 'luci');
+app.config_swap('config2.yaml', 'luci');
 app.history_open_draft({ profile: 'config.yaml', revision: 'rev-1', source: 'luci' });
 app.history_restore({ profile: 'config.yaml', revision: 'rev-1', source: 'luci' });
-assert_equal(length(submitted), before_config + 5);
+assert_equal(length(submitted), before_config + 6);
+
+let operational_record = app.operational_settings_apply('config.yaml', 'generated\n',
+	{ core: { proxy_mode: 'mixed' } }, 'luci');
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(operational_record.id, submitted[length(submitted) - 1].record.id);
+assert_equal(settings_value.core.proxy_mode, 'mixed');
+assert_throws(() => app.operational_settings_apply('config.yaml', 'generated\n',
+	{ guard: { enabled: false } }, 'luci'), 'INVALID_ARGUMENT');
 
 let setting_record = app.settings_set({ core: { proxy_mode: 'tun' } }, 'luci');
-assert_equal(validated, 1);
-assert_equal(saved, 0);
-submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(validated, 3);
 assert_equal(saved, 1);
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(saved, 2);
 assert_equal(desired.core.proxy_mode, 'tun');
 assert_equal(length(management_calls), 4);
 assert_equal(setting_record.id, submitted[length(submitted) - 1].record.id);
@@ -325,6 +341,7 @@ for (let mutation in [
 	() => app.service_start('config.yaml', 'luci'),
 	() => app.config_validate('config.yaml', 'valid\n', 'luci'),
 	() => app.config_save_draft('config.yaml', 'draft\n', 'luci'),
+	() => app.config_swap('config2.yaml', 'luci'),
 	() => app.history_open_draft({ profile: 'config.yaml', revision: 'rev-1', source: 'luci' }),
 	() => app.settings_set({}, 'luci'),
 	() => app.memory_reset_baseline({ source: 'luci' }),

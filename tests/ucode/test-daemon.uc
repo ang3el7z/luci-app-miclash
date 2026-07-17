@@ -41,6 +41,8 @@ let application = {
 	config_list: () => [], config_read: () => '',
 	config_read_draft: () => '', config_save_draft: () => ({ id: 'id' }),
 	config_validate: () => ({ id: 'id' }), config_apply: () => ({ id: 'id' }),
+	operational_settings_apply: () => ({ id: 'id' }),
+	config_swap: () => ({ id: 'id' }),
 	settings_get: () => ({}), settings_set: () => ({ id: 'id' }),
 	guard_transition: () => ({ id: 'id' }),
 	set_draining: (value) => { if (value) drained++; return value; }
@@ -76,6 +78,14 @@ let factories = {
 		policy_set: () => ({}), policy_delete: () => true
 	},
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
+	subscription: { create: () => ({
+		get_redacted: () => ({ configured: false }), set_url: () => ({ id: 'id' }),
+		probe: () => ({}), update: () => ({ id: 'id' })
+	}) },
+	updates: { create: () => ({
+		release_info: () => ({}), update_miclash: () => ({ id: 'id' }),
+		update_mihomo: () => ({ id: 'id' })
+	}) },
 	api: { create_transfers: () => ({ begin: () => ({}), write: () => ({}), read: () => ({}),
 		finish: () => ({}), abort: () => ({}), close: () => true }), register: real_api.register }
 };
@@ -140,7 +150,9 @@ let failed_application = {
 	service_start: () => ({}), service_stop: () => ({}), service_reload: () => ({}),
 	service_restart: () => ({}), config_list: () => [], config_read: () => '',
 	config_read_draft: () => '', config_save_draft: () => ({}),
-	config_validate: () => ({}), config_apply: () => ({}), settings_get: () => ({}),
+	config_validate: () => ({}), config_apply: () => ({}),
+	operational_settings_apply: () => ({}), config_swap: () => ({}),
+	settings_get: () => ({}),
 	settings_set: () => ({}), guard_transition: () => ({}), set_draining: () => true
 };
 let failed_desired = {
@@ -165,6 +177,13 @@ let failed_factories = {
 	devices: { discover: () => [], timezones: () => [ 'UTC' ], policy_list: () => [],
 		policy_set: () => ({}), policy_delete: () => true },
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
+	subscription: { create: () => ({
+		get_redacted: () => ({ configured: false }), set_url: () => ({}),
+		probe: () => ({}), update: () => ({})
+	}) },
+	updates: { create: () => ({
+		release_info: () => ({}), update_miclash: () => ({}), update_mihomo: () => ({})
+	}) },
 	api: { create_transfers: () => { failed_transfer_attempts++; die('HEALTH_FAILED'); },
 		register: real_api.register }
 };
@@ -219,6 +238,10 @@ let integrated_operations = {
 	}
 };
 let desired = {
+	core: { subscription_url: 'https://main.example/sub',
+		subscription_url_config_yaml: 'https://main.example/sub',
+		subscription_url_config2_yaml: 'https://backup.example/sub',
+		subscription_url_config3_yaml: '' },
 	memory: { enabled: false, sample_interval_ms: 60000 },
 	notifications: { auto_hide: true, channels: [ 'syslog', 'luci', 'telegram' ],
 		events: [ 'failure', 'subscription_outcome' ] },
@@ -227,10 +250,14 @@ let desired = {
 	telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42' }
 };
 let guard_persist_failures = 0, guard_on_persist_failures = 0;
-let integrated_state_updates = 0;
+let integrated_state_updates = 0, integrated_state_failures = 0;
 let integrated_state = {
 	snapshot: () => ({ desired }), health: () => ({ ready: true }),
-	set_desired: (value) => { integrated_state_updates++; desired = value; }, observe: () => null,
+	set_desired: (value) => {
+		integrated_state_updates++;
+		if (integrated_state_failures > 0) { integrated_state_failures--; die('INTERNAL'); }
+		desired = value;
+	}, observe: () => null,
 	close: () => { push(integrated_closes, 'state'); return true; }, flush: () => true
 };
 let guard_settings_calls = 0;
@@ -265,6 +292,7 @@ let telegram_backend_calls = [];
 let auto_backup_attempts = 0, auto_backup_prunes = 0, auto_backup_options = [];
 let fail_next_auto_backup = true;
 let failed_auto_prune = false, backup_list_calls = 0;
+let integrated_swap_transaction = null, integrated_swap_before = null;
 let fake_transfers = null;
 let guard_actual = false, guard_latched = false, guard_failure_mode = null, guard_backend_calls = [];
 let guard_protect_failures = 0;
@@ -288,6 +316,14 @@ let integrated_factories = {
 		list_profiles: () => [ 'config.yaml' ], read_active: () => 'mode: rule\n',
 		read_draft: () => 'mode: rule\n', save_draft: () => ({ id: 'operation-draft' }),
 		validate: () => ({ id: 'operation-validate' }), apply: () => ({ id: 'operation-apply' }),
+		apply_operational: () => ({ id: 'operation-settings-apply' }),
+		swap: (profile, source, transaction) => {
+			integrated_swap_transaction = transaction;
+			integrated_swap_before = transaction.prepare();
+			try { transaction.commit(integrated_swap_before); }
+			catch (error) { transaction.rollback(integrated_swap_before); die(error); }
+			return { id: 'operation-swap' };
+		},
 		validate_in_operation: () => ({ ok: true })
 	}) },
 	state: { create: () => integrated_state },
@@ -448,6 +484,16 @@ assert_equal(telegram_facade.update_miclash('telegram').id, 'miclash-operation')
 assert_equal(telegram_facade.update_mihomo('telegram').id, 'mihomo-operation');
 assert_equal(length(telegram_backend_calls), 3);
 assert_true(type(telegram_facade.logs_read()) == 'string');
+assert_equal(integrated.app.config_swap('config2.yaml', 'luci').id, 'operation-swap');
+assert_equal(desired.core.subscription_url_config_yaml, 'https://backup.example/sub');
+assert_equal(desired.core.subscription_url_config2_yaml, 'https://main.example/sub');
+assert_true(integrated_swap_transaction.rollback(integrated_swap_before));
+assert_equal(desired.core.subscription_url_config_yaml, 'https://main.example/sub');
+assert_equal(desired.core.subscription_url_config2_yaml, 'https://backup.example/sub');
+integrated_state_failures = 1;
+assert_throws(() => integrated.app.config_swap('config2.yaml', 'luci'), 'INTERNAL');
+assert_equal(desired.core.subscription_url_config_yaml, 'https://main.example/sub');
+assert_equal(desired.core.subscription_url_config2_yaml, 'https://backup.example/sub');
 // Fresh-install canonical OFF -> LuCI ON uses the typed method and proves real
 // backend state, then Telegram traverses the exact same transition function.
 let clean_ui_guard_on = integration_methods.guard_transition.call({ args: { enabled: true, source: 'luci' } });
@@ -796,7 +842,13 @@ let production_fs = fakes.fs({
 	'/etc/miclash/.keep': '', '/opt/clash/.keep': '',
 	'/opt/clash/config.yaml': 'external-controller: 127.0.0.1:9090\n',
 	'/opt/clash/bin/clash': 'binary',
-	'/usr/libexec/miclash/validate-config.uc': 'helper'
+	'/usr/libexec/miclash/validate-config.uc': 'helper',
+	'/etc/openwrt_release': "DISTRIB_RELEASE='24.10.2'\nDISTRIB_ARCH='aarch64_cortex-a53'\n",
+	'/tmp/sysinfo/model': 'Router Without eth0\n',
+	'/sys/class/net/br-lan/address': '02:00:00:00:00:01\n',
+	'/sys/class/net/pppoe-wan/address': '02:00:00:00:00:02\n',
+	'/proc/net/route': 'Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n' +
+		'pppoe-wan\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\n'
 });
 production_fs.set_mode('/opt/clash', 0o700);
 production_fs.set_mode('/opt/clash/config.yaml', 0o600);
@@ -809,6 +861,8 @@ production_fs.popen = (command, mode) => {
 		output = '[{"type":"local","dst":"default","dev":"lo","table":100,"protocol":242,"scope":"host"}]\n';
 	else if (index(command, 'nft -j list table inet miclash') >= 0)
 		output = '{"nftables":[{"chain":{"family":"inet","table":"miclash","name":"prerouting","type":"filter","hook":"prerouting","prio":-150,"policy":"accept"}},{"rule":{"family":"inet","table":"miclash","chain":"prerouting","expr":[{"jump":{"target":"prerouting_g_aaaaaaaaaaaa"}}]}}]}';
+	else if (index(command, '/opt/clash/bin/clash -v') >= 0)
+		die('system_info must not execute Mihomo through a shell');
 	let offset = 0;
 	return { read: (amount) => { let chunk = substr(output, offset, amount);
 		offset += length(chunk); return chunk; }, close: () => 0 };
@@ -828,13 +882,21 @@ let production_runtime = runtime_module.create({
 	}, dhcp: { dnsmasq: { '.type': 'dnsmasq', server: [ '127.0.0.1#7874' ],
 		cachesize: '0', noresolv: '1' } } }),
 	ubus: { connect: () => production_connection },
-	http: { request: () => ({ status: production_http_healthy ? 200 : 503, body: '{}' }) }
+	http: { request: (request) => ({ status: production_http_healthy ? 200 : 503,
+		body: request.path == '/version' ? '{"version":"v1.20.0"}' : '{}' }) }
 });
 let production_daemon = daemon.compose(production_runtime);
 assert_true(type(production_runtime.rulesets?.validate) == 'function');
 assert_true(type(production_runtime.reconcile?.run) == 'function');
 assert_true(type(production_methods?.settings_get?.call) == 'function');
 assert_true(type(production_methods?.transfer_begin?.call) == 'function');
+let production_system = production_methods.system_info.call({ args: {} });
+assert_equal(production_system.mihomo.version, '1.20.0');
+assert_equal(production_system.hwid,
+	substr(production_runtime.digest.sha256('02:00:00:00:00:01|Router Without eth0'), 0, 14));
+let production_interfaces = production_methods.network_interfaces.call({ args: {} });
+assert_equal(production_interfaces.detected_lan, 'br-lan');
+assert_equal(production_interfaces.detected_wan, 'pppoe-wan');
 assert_equal(production_methods.memory_status.call({ args: {} }).baseline_rss_kb, 64000);
 assert_equal(production_methods.devices_timezones.call({ args: {} })[0], 'UTC');
 assert_equal(length(production_methods.backup_list.call({ args: {} })), 0);

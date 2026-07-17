@@ -2012,3 +2012,6 @@ msgstr "正在应用保护设置..."
 
 msgid "Guard transition failed."
 msgstr "无法切换保护状态。"
+
+msgid "The provider update interval will be learned during the next protected subscription update. The selected interval is used until then."
+msgstr "提供方更新间隔将在下一次受保护的订阅更新时获取。在此之前将使用所选间隔。"

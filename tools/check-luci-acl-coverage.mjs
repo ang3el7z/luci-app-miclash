@@ -13,20 +13,6 @@ for (const scope of ['read', 'write']) {
 	}
 }
 
-const knownDynamicExecArgs = new Set([
-	'config.js::binPath',
-	'package.js::checks[i].bin',
-	'package.js::bin'
-]);
-
-const knownDynamicCommands = [
-	'/opt/clash/bin/clash',
-	'/usr/bin/apk',
-	'/bin/apk',
-	'/bin/opkg',
-	'/usr/bin/opkg'
-];
-
 let failed = false;
 
 function fail(message) {
@@ -85,10 +71,7 @@ for (const filePath of listJsFiles(viewRoot)) {
 		const literal = firstArg.match(/^(['"])(.*?)\1$/);
 
 		if (!literal) {
-			const key = base + '::' + firstArg;
-			if (!knownDynamicExecArgs.has(key)) {
-				fail(`Unknown dynamic fs.exec command argument ${firstArg} at ${rel}:${line}`);
-			}
+			fail(`Dynamic fs.exec command argument ${firstArg} at ${rel}:${line}`);
 			continue;
 		}
 
@@ -103,11 +86,7 @@ for (const filePath of listJsFiles(viewRoot)) {
 	}
 }
 
-for (const command of knownDynamicCommands) {
-	if (!hasExecPermission(command)) {
-		fail(`ACL is missing exec permission for known dynamic command ${command}`);
-	}
-}
+if (aclEntries.length !== 0) fail('LuCI ACL must not expose rpcd filesystem authority');
 
 if (failed) process.exit(1);
 console.log('LuCI ACL coverage check passed');

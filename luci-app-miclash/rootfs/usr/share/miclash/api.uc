@@ -69,6 +69,20 @@ function safe_text(value, maximum) {
 	return value;
 };
 
+function safe_ruleset_name(value) {
+	if (type(value) != 'string' || length(value) < 5 || length(value) > 90 ||
+	    !match(value, /^[a-z0-9][a-z0-9_-]*\.txt$/))
+		errors.fail('INVALID_ARGUMENT');
+	return value;
+};
+
+function ruleset_content(value) {
+	if (type(value) != 'string' || length(value) > 4194304 ||
+	    index(value, sprintf('%c', 0)) >= 0)
+		errors.fail('INVALID_ARGUMENT');
+	return value;
+};
+
 function operation_reply(record) {
 	if (type(record?.id) != 'string')
 		errors.fail('INTERNAL');
@@ -528,7 +542,7 @@ export function method_table(app, transfers) {
 		'status', 'health', 'operation_get', 'operation_list',
 		'service_start', 'service_stop', 'service_reload', 'service_restart',
 		'config_list', 'config_read', 'config_read_draft', 'config_save_draft',
-		'config_validate', 'config_apply',
+		'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
 		'settings_get', 'settings_set', 'guard_transition', 'set_draining'
 	]) if (type(app?.[name]) != 'function')
 		errors.fail('INVALID_ARGUMENT');
@@ -569,8 +583,9 @@ export function method_table(app, transfers) {
 		}),
 		operation_list: method({ state: '', kind: '', source: '' }, (arguments) => {
 			exact(arguments, {
-				state: { type: 'string' }, kind: { type: 'string', max_length: 128 },
-				source: { type: 'string' }
+				state: { type: 'string', nullable: true },
+				kind: { type: 'string', max_length: 128, nullable: true },
+				source: { type: 'string', nullable: true }
 			});
 			if (arguments.state != null)
 				schema.enum_value(arguments.state, OPERATION_STATES);
@@ -646,6 +661,21 @@ export function method_table(app, transfers) {
 			return operation_reply(app.config_apply(profile(arguments),
 				content(arguments), source(arguments)));
 		}),
+		operational_settings_apply: method({ profile: '', content: '', settings: {}, source: '' },
+			(arguments) => {
+				exact(arguments, {
+					profile: { type: 'string' }, content: { type: 'string', required: true },
+					settings: { type: 'object', required: true }, source: { type: 'string' }
+				});
+				return operation_reply(app.operational_settings_apply(profile(arguments),
+					content(arguments), arguments.settings, source(arguments)));
+			}),
+		config_swap: method(service_policy, (arguments) => {
+			exact(arguments, { profile: { type: 'string' }, source: { type: 'string' } });
+			let selected = profile(arguments);
+			if (selected == 'config.yaml') errors.fail('INVALID_ARGUMENT');
+			return operation_reply(app.config_swap(selected, source(arguments)));
+		}),
 		config_external_adopt: method(service_policy, (arguments) => {
 			exact(arguments, { profile: { type: 'string' }, source: { type: 'string' } });
 			return domain_operation('config_external_adopt', {
@@ -700,19 +730,14 @@ export function method_table(app, transfers) {
 		subscription_set: method({ profile: '', url: '', source: '' }, (arguments) => {
 			exact(arguments, { profile: { type: 'string' },
 				url: { type: 'string', required: true }, source: { type: 'string' } });
+			let url = length(arguments.url) ? schema.url(arguments.url) : '';
 			return domain_operation('subscription_set', { profile: profile(arguments),
-				url: schema.url(arguments.url), source: source(arguments) });
+				url, source: source(arguments) });
 		}),
 		subscription_update: method(service_policy, (arguments) => {
 			exact(arguments, { profile: { type: 'string' }, source: { type: 'string' } });
 			return domain_operation('subscription_update', {
 				profile: profile(arguments), source: source(arguments) });
-		}),
-		subscription_probe: method({ profile: '', url: '' }, (arguments) => {
-			exact(arguments, { profile: { type: 'string' },
-				url: { type: 'string', required: true } });
-			return domain_read('subscription_probe', { profile: profile(arguments),
-				url: schema.url(arguments.url) });
 		}),
 		update_release: method({ kind: '', channel: '' }, (arguments) => {
 			exact(arguments, { kind: { type: 'string', required: true },
@@ -851,6 +876,57 @@ export function method_table(app, transfers) {
 			if (cursor < 0 || limit < 1 || limit > 200)
 				errors.fail('INVALID_ARGUMENT');
 			return domain_read('notifications_list', { generation, cursor, limit });
+		}),
+		logs_read: method({ generation: '', cursor: 0, limit: 0 }, (arguments) => {
+			exact(arguments, { generation: { type: 'string', nullable: true },
+				cursor: { type: 'int' }, limit: { type: 'int' } });
+			let generation = arguments.generation;
+			if (generation != null && !match(generation, /^log_[0-9a-f]{16}$/))
+				errors.fail('INVALID_ARGUMENT');
+			let cursor = arguments.cursor ?? 0, limit = arguments.limit ?? 100;
+			if (cursor < 0 || limit < 1 || limit > 200)
+				errors.fail('INVALID_ARGUMENT');
+			let reply = domain_read('logs_read', { generation, cursor, limit });
+			if (type(reply?.lines) != 'array') errors.fail('INVALID_RESPONSE');
+			let safe_lines = [];
+			for (let line in reply.lines) {
+				if (type(line) != 'string' || length(line) > 4096) errors.fail('INVALID_RESPONSE');
+				push(safe_lines, redact.sanitize(line));
+			}
+			reply.lines = safe_lines;
+			return reply;
+		}),
+		system_info: method(empty, (arguments) => {
+			exact(arguments, {});
+			return domain_read('system_info', {});
+		}),
+		network_interfaces: method(empty, (arguments) => {
+			exact(arguments, {});
+			return domain_read('network_interfaces', {});
+		}),
+		ruleset_list: method(empty, (arguments) => {
+			exact(arguments, {});
+			return domain_read('ruleset_list', {});
+		}),
+		ruleset_read: method({ name: '' }, (arguments) => {
+			exact(arguments, { name: { type: 'string', required: true } });
+			return domain_read('ruleset_read', { name: safe_ruleset_name(arguments.name) });
+		}),
+		ruleset_write: method({ name: '', content: '', source: '' }, (arguments) => {
+			exact(arguments, { name: { type: 'string', required: true },
+				content: { type: 'string', required: true }, source: { type: 'string' } });
+			return domain_operation('ruleset_write', { name: safe_ruleset_name(arguments.name),
+				content: ruleset_content(arguments.content), source: source(arguments) });
+		}),
+		ruleset_delete: method({ name: '', source: '' }, (arguments) => {
+			exact(arguments, { name: { type: 'string', required: true }, source: { type: 'string' } });
+			return domain_operation('ruleset_delete', { name: safe_ruleset_name(arguments.name),
+				source: source(arguments) });
+		}),
+		ruleset_apply_whitelist: method({ content: '', source: '' }, (arguments) => {
+			exact(arguments, { content: { type: 'string', required: true }, source: { type: 'string' } });
+			return domain_operation('ruleset_apply_whitelist', {
+				content: ruleset_content(arguments.content), source: source(arguments) });
 		}),
 		transfer_begin: method({ direction: '', kind: '', object_id: '', size: 0,
 			sha256: '', metadata: {} }, (arguments) => {

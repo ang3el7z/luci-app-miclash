@@ -206,9 +206,12 @@ const prermEnd = makefile.indexOf('endef', prermStart);
 const prerm = prermStart >= 0 && prermEnd > prermStart ? makefile.slice(prermStart, prermEnd) : '';
 assert.match(prerm, /package-remove/);
 assert.match(packageRemoval, /stop_disable miclash-memory-guard/);
-assert.match(acl, /"\/opt\/clash\/bin\/miclash-memory-guard": \[ "exec" \]/);
+assert.match(acl, /"memory_reset_baseline"/);
+assert.match(acl, /"guard_transition"/);
+assert.doesNotMatch(acl, /miclash-memory-guard": \[ "exec" \]/);
 assert.match(settingsModel, /enableMemoryGuard: false/);
-assert.match(settingsModel, /case 'ENABLE_MEMORY_GUARD': settings\.enableMemoryGuard = value === 'true'/);
+assert.match(settingsModel, /settings\.enableMemoryGuard = memory\.enabled === true/);
+assert.match(settingsModel, /api\.settings_get\(\)/);
 assert.doesNotMatch(settingsModel, /settings\.ENABLE_MEMORY_GUARD = enableMemoryGuard/,
 	'the legacy serializer must not own Memory Guard writes');
 assert.doesNotMatch(config, /id="sbox-memory-guard"|id="sbox-auto-hide-notifications"/,

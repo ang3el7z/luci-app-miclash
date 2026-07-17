@@ -1,5 +1,5 @@
 'use strict';
-'require fs';
+'require view.miclash.api';
 'require view.miclash.utils';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -7,23 +7,29 @@ const SYSLOG_APP_RE = /\w+\.(\w+)\s+((?:clash(?:-rules|-hotplug)?)|miclash)(?:\[
 const LOG_FILTER_RE = /\b(?:clash(?:-rules|-hotplug)?|miclash)(?:\[\d+\])?:/i;
 
 async function readRaw() {
+	const api = view_miclash_api.create();
+	const lines = [];
+	let generation = null, cursor = 0, restarts = 0;
 	try {
-		const all = await fs.exec('/sbin/logread', []);
-		if (all.code === 0) {
-			return String(all.stdout || '')
-				.split('\n')
-				.filter((line) => LOG_FILTER_RE.test(line))
-				.join('\n')
-				.trim();
+		for (let page = 0; page < 8 && lines.length < 1000; page++) {
+			const reply = await api.logs_read(generation, cursor, 200);
+			if (reply?.stale === true && restarts++ < 1) {
+				generation = null; cursor = 0; lines.length = 0; page = -1; continue;
+			}
+			if (!reply || reply.cursor !== cursor || !Array.isArray(reply.lines)) break;
+			if (generation != null && reply.generation !== generation) break;
+			if (generation == null && typeof reply.generation === 'string') generation = reply.generation;
+			reply.lines.slice(0, 200).forEach((line) => lines.push(String(line || '')));
+			if (!reply.has_more) break;
+			if (!Number.isInteger(reply.next_cursor) || reply.next_cursor <= cursor) break;
+			cursor = reply.next_cursor;
 		}
-	} catch (e) {}
-
-	try {
-		const direct = await fs.exec('/sbin/logread', ['-e', 'clash']);
-		if (direct.code === 0) return String(direct.stdout || '').trim();
-	} catch (e) {}
-
-	return '';
+		return lines.join('\n').trim();
+	} catch (e) {
+		return '';
+	} finally {
+		api.destroy();
+	}
 }
 
 function extractLogTime(line) {

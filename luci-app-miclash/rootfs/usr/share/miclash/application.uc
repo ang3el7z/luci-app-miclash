@@ -35,6 +35,7 @@ export function create(dependencies) {
 	    type(dependencies?.settings?.set) != 'function' ||
 	    type(dependencies?.config?.validate) != 'function' ||
 	    type(dependencies?.config?.apply) != 'function' ||
+	    type(dependencies?.config?.swap) != 'function' ||
 	    type(dependencies?.config?.read_draft) != 'function' ||
 	    type(dependencies?.config?.save_draft) != 'function' ||
 	    type(dependencies?.history?.list) != 'function' ||
@@ -132,6 +133,32 @@ export function create(dependencies) {
 		config_apply: (profile, content, source) => {
 			writable();
 			return dependencies.config.apply(profile, content, source);
+		},
+		operational_settings_apply: (profile, content, patch, source) => {
+			writable();
+			if (type(dependencies.config.apply_operational) != 'function')
+				errors.fail('HEALTH_FAILED');
+			patch = dependencies.settings.validate(patch);
+			let allowed = { core: true, interfaces: true, updates: true };
+			for (let section in keys(patch))
+				if (allowed[section] !== true) errors.fail('INVALID_ARGUMENT');
+			return dependencies.config.apply_operational(profile, content, source, {
+				prepare: () => clone(dependencies.settings.get()),
+				commit: () => {
+					let saved = dependencies.settings.set(patch);
+					dependencies.state.set_desired(saved);
+					return true;
+				},
+				rollback: (before) => {
+					let saved = dependencies.settings.set(before);
+					dependencies.state.set_desired(saved);
+					return true;
+				}
+			});
+		},
+		config_swap: (profile, source) => {
+			writable();
+			return dependencies.config.swap(profile, source);
 		},
 		history_list: (arguments) => {
 			let records = dependencies.history.list(arguments.profile), output = [];

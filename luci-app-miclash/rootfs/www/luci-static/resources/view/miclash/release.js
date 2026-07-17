@@ -1,5 +1,5 @@
 'use strict';
-'require fs';
+'require view.miclash.api';
 
 function parseVersion(raw, fallback) {
 	const str = String(raw || '').trim();
@@ -70,22 +70,19 @@ function normalizeGithubRelease(data) {
 }
 
 async function fetchGithubRelease(kind, includePrereleases) {
+	const api = view_miclash_api.create();
 	try {
 		const channel = includePrereleases ? 'prerelease' : 'release';
-		const result = await fs.exec('/opt/clash/bin/miclash-update', ['release', kind, channel]);
-		if (result.code !== 0 || !result.stdout) return null;
-		const data = JSON.parse(result.stdout);
-		if (Array.isArray(data)) {
-			for (let i = 0; i < data.length; i++) {
-				const release = normalizeGithubRelease(data[i]);
-				if (release) return release;
-			}
-			return null;
-		}
-		return normalizeGithubRelease(data);
+		const data = await api.update_release(kind, channel);
+		if (!data || typeof data.version !== 'string') return null;
+		const assets = data.asset_name ? [ {
+			name: String(data.asset_name), browser_download_url: 'managed-by-miclash'
+		} ] : [];
+		return { version: data.version, assets, prerelease: channel === 'prerelease',
+			architecture: data.architecture || '' };
 	} catch (e) {
 		return null;
-	}
+	} finally { api.destroy(); }
 }
 
 function getLatestMihomoRelease(includePrereleases) {

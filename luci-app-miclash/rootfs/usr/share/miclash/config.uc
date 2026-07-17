@@ -355,6 +355,164 @@ export function create(runtime, operations, history) {
 	api.apply = (profile, content, source) => submit(
 		'config.apply', source, profile, (ctx) => complete_result(ctx,
 			api.apply_in_operation(ctx, profile, content, source)));
+	api.apply_operational = (profile, content, source, transaction) => {
+		if (type(transaction) != 'object' || length(keys(transaction)) != 3 ||
+		    type(transaction.prepare) != 'function' ||
+		    type(transaction.commit) != 'function' ||
+		    type(transaction.rollback) != 'function')
+			errors.fail('INVALID_ARGUMENT');
+		return submit('settings.apply', source, profile, (ctx) => {
+			api.save_draft_in_operation(ctx, profile, content);
+			return complete_result(ctx, with_candidate(ctx, profile, content,
+				(candidate, candidate_hash) => {
+					let previous = read_active_state(profile);
+					let prepared = transaction.prepare();
+					let snapshot = history.snapshot_bytes(profile, source, previous.content, {
+						validation_result: 'success', activation_result: 'pending',
+						operation_id: ctx.id
+					});
+					assert_active_state(profile, previous);
+					storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
+					record_active(profile, candidate_hash, ctx.id);
+					let committed = false, failure = null;
+					try {
+						if (transaction.commit(prepared) !== true)
+							errors.fail('INTERNAL');
+						committed = true;
+					}
+					catch (error) { failure = errors.normalize(error).code; }
+					let rollback = () => {
+						let failed = false;
+						try {
+							storage.atomic_write(runtime, active_path(profile), previous.content, 0o600);
+							record_active(profile, previous.hash, ctx.id);
+						}
+						catch (error) { failed = true; }
+						// Commit may have changed persistent state before throwing, so
+						// rollback is required for both complete and partial commits.
+						try {
+							if (transaction.rollback(prepared) !== true) failed = true;
+						}
+						catch (error) { failed = true; }
+						return !failed;
+					};
+					if (failure != null) {
+						let rolled_back = rollback();
+						history.mark_activation(profile, snapshot.revision, 'write_failed');
+						return { ok: false, activated: true, reload_ok: false,
+							error: errors.new(rolled_back ? failure : 'INTERNAL',
+								rolled_back ? failure : 'INTERNAL', { profile }) };
+					}
+					if (!healthy(runtime.service, profile, previous.content)) {
+						let rolled_back = rollback();
+						if (rolled_back) healthy(runtime.service, profile, candidate);
+						history.mark_activation(profile, snapshot.revision, 'health_failed');
+						return { ok: false, activated: true, reload_ok: false,
+							error: errors.new(rolled_back ? 'HEALTH_FAILED' : 'INTERNAL',
+								rolled_back ? 'HEALTH_FAILED' : 'INTERNAL', { profile }) };
+					}
+					history.mark_activation(profile, snapshot.revision, 'success');
+					return { ok: true, activated: true, reload_ok: true };
+				}));
+		});
+	};
+	api.swap = (profile, source, transaction) => {
+		profile = schema.profile_name(profile);
+		if (profile == 'config.yaml')
+			errors.fail('INVALID_ARGUMENT');
+		if (transaction != null && (type(transaction) != 'object' ||
+		    length(keys(transaction)) != 3 || type(transaction.prepare) != 'function' ||
+		    type(transaction.commit) != 'function' ||
+		    type(transaction.rollback) != 'function'))
+			errors.fail('INVALID_ARGUMENT');
+		return operations.submit('config.swap', source, {
+			profile: 'config.yaml', selected_profile: profile
+		}, (ctx) => {
+			let main = read_active_state('config.yaml');
+			let selected = read_active_state(profile);
+			let checked = with_candidate(ctx, 'config.yaml', selected.content,
+				() => ({ ok: true }));
+			if (!complete_result(ctx, checked))
+				return false;
+			checked = with_candidate(ctx, profile, main.content, () => ({ ok: true }));
+			if (!complete_result(ctx, checked))
+				return false;
+			let transaction_state = transaction != null ? transaction.prepare() : null;
+
+			let main_snapshot = history.snapshot_bytes('config.yaml', source,
+				main.content, { validation_result: 'success', activation_result: 'pending',
+					operation_id: ctx.id });
+			let selected_snapshot = history.snapshot_bytes(profile, source,
+				selected.content, { validation_result: 'success', activation_result: 'pending',
+					operation_id: ctx.id });
+			assert_active_state('config.yaml', main);
+			assert_active_state(profile, selected);
+
+			let transaction_attempted = false;
+			let rollback = () => {
+				let failed = false;
+				try {
+					storage.atomic_write(runtime, active_path('config.yaml'), main.content, 0o600);
+					record_active('config.yaml', main.hash, ctx.id);
+					storage.atomic_write(runtime, active_path(profile), selected.content, 0o600);
+					record_active(profile, selected.hash, ctx.id);
+				}
+				catch (error) { failed = true; }
+				if (transaction_attempted)
+					try {
+						if (transaction.rollback(transaction_state) !== true) failed = true;
+					}
+					catch (error) { failed = true; }
+				return !failed;
+			};
+			let write_failed = false;
+			try {
+				storage.atomic_write(runtime, active_path(profile), main.content, 0o600);
+				record_active(profile, main.hash, ctx.id);
+				assert_active_state('config.yaml', main);
+				storage.atomic_write(runtime, active_path('config.yaml'), selected.content, 0o600);
+				record_active('config.yaml', selected.hash, ctx.id);
+				if (transaction != null) {
+					transaction_attempted = true;
+					if (transaction.commit(transaction_state) !== true)
+						errors.fail('INTERNAL');
+				}
+			}
+			catch (error) {
+				write_failed = true;
+			}
+			if (write_failed) {
+				let rolled_back = rollback();
+				history.mark_activation('config.yaml', main_snapshot.revision, 'write_failed');
+				history.mark_activation(profile, selected_snapshot.revision, 'write_failed');
+				errors.fail('INTERNAL');
+			}
+
+			let reload = true;
+			if (type(runtime.service.observe) == 'function') {
+				try {
+					let observed = runtime.service.observe('config.yaml');
+					reload = observed?.state != 'stopped' && observed?.state != 'missing_kernel';
+				}
+				catch (error) { reload = true; }
+			}
+			if (reload && !healthy(runtime.service, 'config.yaml', main.content)) {
+				let rolled_back = rollback();
+				if (rolled_back)
+					healthy(runtime.service, 'config.yaml', selected.content);
+				history.mark_activation('config.yaml', main_snapshot.revision, 'health_failed');
+				history.mark_activation(profile, selected_snapshot.revision, 'health_failed');
+				ctx.complete(errors.new(rolled_back ? 'HEALTH_FAILED' : 'INTERNAL',
+					rolled_back ? 'HEALTH_FAILED' : 'INTERNAL', {
+					profile: 'config.yaml', selected_profile: profile
+				}));
+				return false;
+			}
+			history.mark_activation('config.yaml', main_snapshot.revision, 'success');
+			history.mark_activation(profile, selected_snapshot.revision, 'success');
+			return true;
+		});
+	};
 	api.restore = (profile, revision, source) => {
 		revision = schema.operation_id(revision);
 		return submit('history.restore', source, profile, (ctx) => complete_result(ctx,

@@ -1,93 +1,36 @@
 {
-    "luci-app-miclash": {
-        "description": "Grant access to Clash procedures",
-        "read": {
-            "file": {
-                "/etc/openwrt_release": [ "read" ],
-                "/opt/clash/config.yaml": [ "read", "stat" ],
-                "/opt/clash/settings": [ "read" ],
-                "/opt/clash/bin/clash": [ "read", "stat", "exec" ],
-                "/opt/clash/bin/clash-rules": [ "read", "stat", "exec" ],
-                "/opt/clash/bin/miclash-subscription": [ "read", "stat", "exec" ],
-                "/opt/clash/bin/miclash-update": [ "read", "stat", "exec" ],
-                "/opt/clash/bin/miclash-service": [ "read", "stat", "exec" ],
-                "/opt/clash/bin/miclash-autoupdate": [ "read", "stat", "exec" ],
-                "/opt/clash/bin/miclash-memory-guard": [ "read", "stat", "exec" ],
-                "/opt/clash/lst/": [ "list" ],
-                "/opt/clash/lst/*.txt": [ "read" ],
-                "/proc/net/dev": [ "read" ],
-                "/proc/net/route": [ "read" ],
-                "/sys/class/net": [ "list" ],
-                "/sys/class/net/*": [ "list", "read" ],
-                "/sys/class/net/*/address": [ "read" ],
-                "/tmp/sysinfo/model": [ "read" ],
-                "/sbin/logread": [ "exec" ],
-                "/bin/ls": [ "exec" ],
-                "/sbin/ip": [ "exec" ],
-                "/usr/sbin/brctl": [ "exec" ],
-                "/bin/sh": [ "exec" ],
-                "/bin/cat": [ "exec" ],
-                "/usr/bin/tr": [ "exec" ],
-                "/usr/bin/md5sum": [ "exec" ],
-                "/usr/bin/cut": [ "exec" ],
-                "/usr/lib/opkg/status": [ "read" ],
-                "/usr/lib/apk/db/installed": [ "read" ],
-                "/lib/apk/db/installed": [ "read" ],
-                "/opt/clash/config2.yaml": [ "read", "stat" ],
-                "/opt/clash/config3.yaml": [ "read", "stat" ],
-                "/tmp/miclash-*": [ "read", "stat" ],
-                "/bin/opkg": [ "exec" ],
-                "/usr/bin/opkg": [ "exec" ],
-                "/bin/apk": [ "exec" ],
-                "/usr/bin/apk": [ "exec" ]
-            },
-            "ubus": {
-                "file": [ "read", "stat", "exec" ],
-                "miclash": [
-                    "status", "health", "operation_get", "operation_list",
-                    "config_list", "config_read", "config_read_draft", "settings_get",
-                    "history_list", "history_diff", "subscription_get", "subscription_probe",
-                    "update_release", "memory_status", "memory_settings",
-                    "diagnostics_summary", "diagnostics_create_report", "diagnostics_route_test",
-                    "backup_list", "backup_inspect", "telegram_status", "telegram_settings",
-                    "devices_list", "devices_timezones", "devices_policy_list",
-                    "notifications_settings", "notifications_list",
-                    "transfer_begin", "transfer_read", "transfer_finish", "transfer_abort"
-                ],
-                "service": [ "list" ]
-            }
-        },
-        "write": {
-            "file": {
-                "/opt/clash/config.yaml": [ "write", "stat" ],
-                "/opt/clash/settings": [ "write" ],
-                "/opt/clash/bin/clash": [ "write" ],
-                "/opt/clash/lst/*.txt": [ "write", "remove" ],
-                "/opt/clash/bin/clash-rules": [ "exec" ],
-                "/opt/clash/bin/miclash-subscription": [ "exec" ],
-                "/opt/clash/bin/miclash-update": [ "exec" ],
-                "/opt/clash/bin/miclash-service": [ "exec" ],
-                "/opt/clash/bin/miclash-autoupdate": [ "exec" ],
-                "/opt/clash/bin/miclash-memory-guard": [ "exec" ],
-                "/tmp/mihomo-*": [ "write", "remove" ],
-                "/etc/init.d/clash": [ "exec" ],
-                "/etc/init.d/miclash-autoupdate": [ "exec" ],
-                "/usr/bin/curl": [ "exec" ],
-                "/bin/gzip": [ "exec" ],
-                "/bin/mv": [ "exec" ],
-                "/bin/chmod": [ "exec" ],
-                "/bin/rm": [ "exec" ],
-                "/bin/mkdir": [ "exec" ],
-                "/opt/clash/config2.yaml": [ "write", "stat" ],
-                "/opt/clash/config3.yaml": [ "write", "stat" ],
-                "/tmp/miclash-*": [ "write", "remove" ],
-                "/usr/bin/chmod": [ "exec" ],
-                "/usr/bin/logger": [ "exec" ]
-            },
-            "ubus": {
-                "file": [ "write", "exec" ],
-                "miclash": [ "*" ]
-            }
-        }
+  "luci-app-miclash": {
+    "description": "Grant access to the typed MiClash management API",
+    "read": {
+      "ubus": {
+        "miclash": [
+          "status", "health", "operation_get", "operation_list",
+          "config_list", "config_read", "config_read_draft", "settings_get",
+          "history_list", "history_diff", "subscription_get",
+          "update_release", "memory_status", "memory_settings",
+          "diagnostics_summary", "diagnostics_create_report", "diagnostics_route_test",
+          "backup_list", "backup_inspect", "telegram_status", "telegram_settings",
+          "devices_list", "devices_timezones", "devices_policy_list",
+          "notifications_settings", "notifications_list", "logs_read", "system_info",
+          "network_interfaces", "ruleset_list", "ruleset_read", "transfer_read"
+        ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "miclash": [
+          "operation_start", "service_start", "service_stop", "service_reload",
+          "service_restart", "config_save_draft", "config_validate", "config_apply", "operational_settings_apply", "config_swap",
+          "config_external_adopt", "settings_set", "guard_transition",
+          "history_open_draft", "history_restore", "subscription_set",
+          "subscription_update", "update_miclash", "update_mihomo",
+          "update_rollback_mihomo", "memory_reset_baseline", "backup_create",
+          "backup_restore", "telegram_test", "devices_policy_set",
+          "devices_policy_delete", "notifications_test", "ruleset_write",
+          "ruleset_delete", "ruleset_apply_whitelist", "transfer_begin",
+          "transfer_write", "transfer_finish", "transfer_abort"
+        ]
+      }
     }
+  }
 }

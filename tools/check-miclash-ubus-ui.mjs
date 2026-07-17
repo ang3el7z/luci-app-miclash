@@ -6,6 +6,8 @@ import { join, relative } from 'node:path';
 const fixturePath = 'tests/fixtures/api/methods.json';
 const uiPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/api.js';
 const backendPath = 'luci-app-miclash/rootfs/usr/share/miclash/api.uc';
+const daemonPath = 'luci-app-miclash/rootfs/usr/share/miclash/daemon.uc';
+const storePath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/store.js';
 const aclPath = 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json';
 assert.ok(existsSync(uiPath), `missing ${uiPath}`);
 
@@ -14,13 +16,25 @@ const names = fixture.methods.map((entry) => entry.name);
 assert.equal(new Set(names).size, names.length, 'canonical methods must be unique');
 const ui = readFileSync(uiPath, 'utf8');
 const backend = readFileSync(backendPath, 'utf8');
+const daemon = readFileSync(daemonPath, 'utf8');
+const store = readFileSync(storePath, 'utf8');
 const acl = JSON.parse(readFileSync(aclPath, 'utf8'))['luci-app-miclash'];
 const readMethods = acl?.read?.ubus?.miclash || [];
 const writeMethods = acl?.write?.ubus?.miclash || [];
 assert.ok(!readMethods.includes('*'), 'read-only LuCI ACL must not expose mutating MiClash methods');
 assert.ok(readMethods.includes('settings_get') && readMethods.includes('operation_get'));
-assert.ok(writeMethods.includes('*') || writeMethods.includes('guard_transition'),
-	'write LuCI ACL must permit typed Guard transitions');
+assert.ok(!writeMethods.includes('*'), 'write LuCI ACL must enumerate typed methods');
+assert.ok(writeMethods.includes('guard_transition'), 'write LuCI ACL must permit typed Guard transitions');
+assert.ok(!names.includes('subscription_swap') &&
+	!readMethods.includes('subscription_swap') && !writeMethods.includes('subscription_swap') &&
+	!ui.includes("name: 'subscription_swap'") &&
+	!backend.includes('subscription_swap: method(') &&
+	!daemon.includes('app.subscription_swap') && !store.includes('swapSubscriptionUrls'),
+	'config_swap must be the only public profile/URL swap boundary');
+assert.deepEqual(readMethods.filter((name) => writeMethods.includes(name)), [],
+	'LuCI ACL read/write authorities must not overlap');
+assert.deepEqual([ ...new Set(readMethods.concat(writeMethods)) ].sort(), names.slice().sort(),
+	'LuCI ACL must cover every canonical method exactly by typed API authority');
 const declared = [ ...ui.matchAll(/\{ name: '([a-z0-9_]+)', params: \[([^\]]*)\], operation: (true|false) \}/g) ]
 	.map((match) => ({
 		name: match[1],
@@ -120,7 +134,7 @@ for (const path of walk(viewRoot)) {
 	const name = relative(viewRoot, path).replaceAll('\\', '/');
 	const lines = readFileSync(path, 'utf8').split(/\r?\n/)
 		.map((line) => line.trim()).filter((line) => forbidden.test(line));
-	assert.deepEqual(lines, legacy[name] || [], `${name} has an unapproved direct backend call`);
+	assert.deepEqual(lines, [], `${name} has a direct backend call`);
 }
 
 assert.match(ui, /function normalizeReply\(/);

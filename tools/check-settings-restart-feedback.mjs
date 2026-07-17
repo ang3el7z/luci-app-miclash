@@ -64,10 +64,10 @@ check(restartButtonBlock.includes('withRestartButtonFeedback(async () => {'),
 	'The Restart button must use the shared restart feedback helper.');
 check(!restartButtonBlock.includes('withButtons(restartBtn'),
 	'The Restart button should not bypass service restart feedback.');
-check(settingsModel.includes('const settings = await view_miclash_store.readSettingsMap();') &&
-	settingsModel.includes('await view_miclash_store.writeSettingsMap(settings);') &&
-	!settingsModel.includes('await view_miclash_store.writeTextFile(SETTINGS_PATH, settingsContent);'),
-	'Operational settings save must preserve existing settings keys such as subscription URLs.');
+check(settingsModel.includes('api.operational_settings_apply(') &&
+	!settingsModel.includes('api.config_save_draft(') &&
+	!settingsModel.includes("'require fs'"),
+	'Operational settings and generated config must use one typed transaction.');
 check(makefile.includes('/opt/clash/settings') &&
 	makefile.includes('.settings.upgrade.bak') &&
 	makefile.includes('/opt/clash/bin/clash-rules guard_refresh'),

@@ -144,19 +144,18 @@ check(updateHandler.includes('const freshConfig = await readConfigFileByName(sel
 	'Subscription update must refresh Active state while preserving the editor Draft.');
 check(updateHandler.includes('applySubscriptionProfileUpdateInterval(appliedInfo.profileUpdateIntervalHours)'),
 	'Subscription update handler must preserve Profile-Update-Interval from the router-side helper.');
-check(intervalProbe.includes('probeSubscriptionUpdateIntervalOnRouter('),
-	'Auto-update interval probe must read subscription headers through the router-side helper.');
-check(!intervalProbe.includes('downloadSubscriptionWithProfile('),
-	'Auto-update interval probe must not read subscription payload back into LuCI JS.');
+check(!intervalProbe.includes('probeSubscriptionUpdateIntervalOnRouter(') &&
+	intervalProbe.includes('next protected subscription update'),
+	'Auto-update interval discovery must wait for a protected subscription update.');
 
 check(subscription.includes('async function applySubscriptionOnRouter('),
 	'Subscription module must expose a router-side apply wrapper.');
-check(subscription.includes('async function probeSubscriptionUpdateIntervalOnRouter('),
-	'Subscription module must expose a router-side interval probe wrapper.');
-check(subscription.includes("fs.exec('/opt/clash/bin/miclash-subscription'"),
-	'Subscription module must execute /opt/clash/bin/miclash-subscription.');
-check(subscription.includes('parseKeyValueStatus('),
-	'Subscription module must parse helper key=value status output.');
+check(!subscription.includes('subscription_probe('),
+	'Subscription module must not expose an arbitrary-URL probe wrapper.');
+check(subscription.includes('api.subscription_update(') && !subscription.includes('fs.'),
+	'Subscription module must submit a typed backend operation.');
+check(subscription.includes('record?.result?.interval_hours'),
+	'Subscription module must expose typed operation interval metadata.');
 
 check(existsSync(files.helper), 'Router-side subscription helper must be installed in rootfs.');
 check(helper.includes('download_subscription()'),
@@ -208,10 +207,11 @@ check(applyBlock.indexOf('[ -x "$CLASH_BIN" ]') >= 0 &&
 
 check(makefile.includes('rootfs/opt/clash/bin/miclash-subscription'),
 	'Package install must include the router-side subscription helper.');
-check(acl.includes('"/opt/clash/bin/miclash-subscription": [ "read", "stat", "exec" ]'),
-	'LuCI ACL read permissions must allow executing the router-side subscription helper.');
-check(acl.includes('"/opt/clash/bin/miclash-subscription": [ "exec" ]'),
-	'LuCI ACL write permissions must allow executing the router-side subscription helper.');
+check(acl.includes('"subscription_get"') && !acl.includes('"subscription_probe"'),
+	'LuCI ACL must expose safe subscription metadata without arbitrary network probes.');
+check(acl.includes('"subscription_set"') && acl.includes('"subscription_update"') &&
+	!acl.includes('miclash-subscription": [ "exec" ]'),
+	'LuCI ACL write permissions must expose typed subscription mutations only.');
 
 const savedSettingsResult = runSavedSettingsFixture();
 check(savedSettingsResult.code === 0,
