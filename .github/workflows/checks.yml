@@ -112,7 +112,11 @@ jobs:
 
       - name: Run ucode tests
         shell: bash
-        run: UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/run-ucode-tests.sh
+        run: |
+          sudo env \
+            UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
+            tools/run-ucode-tests.sh
 
       - name: Run isolated routing lifecycle and producer deadline gates
         shell: bash

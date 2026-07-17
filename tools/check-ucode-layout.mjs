@@ -24,6 +24,7 @@ const composition = readFileSync('luci-app-miclash/rootfs/usr/share/miclash/daem
 const api = readFileSync('luci-app-miclash/rootfs/usr/share/miclash/api.uc', 'utf8');
 const init = readFileSync('luci-app-miclash/rootfs/etc/init.d/miclashd', 'utf8');
 const makefile = readFileSync('luci-app-miclash/Makefile', 'utf8');
+const checksWorkflow = readFileSync('.github/workflows/checks.yml', 'utf8');
 
 function makeAssignment(name) {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -86,5 +87,8 @@ assert.match(makefile, /rootfs\/usr\/sbin\/miclashd/,
 	'miclashd must be installed at final cutover');
 assert.doesNotMatch(api, /\.submit\(|\.stage\(|wait_ready|settings\.set/,
 	'api.uc must remain transport-only');
+assert.match(checksWorkflow,
+	/sudo env\s+\\\s+UCODE_BIN="\$RUNNER_TEMP\/ucode-build\/ucode"\s+\\\s+LD_LIBRARY_PATH="\$RUNNER_TEMP\/ucode-build"\s+\\\s+tools\/run-ucode-tests\.sh/,
+	'host ucode tests exercise root-owned runtime authority directories and must run as root');
 
 console.log('ucode layout check passed');
