@@ -25,6 +25,7 @@ import * as mihomo_api from 'miclash.mihomo-api';
 import * as diagnostics from 'miclash.diagnostics';
 import * as route_test from 'miclash.route-test';
 import * as routing from 'miclash.routing';
+import * as platform from 'miclash.platform';
 
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
@@ -184,20 +185,6 @@ export function parse_openwrt_version(openwrt_release, os_release) {
 	return primary_distrib || fallback_distrib;
 };
 
-export function detect_package_manager(runtime) {
-	for (let candidate in [ [ 'apk', '/usr/bin/apk' ], [ 'apk', '/bin/apk' ],
-	    [ 'opkg', '/bin/opkg' ], [ 'opkg', '/usr/bin/opkg' ] ]) {
-		let result = null;
-		try {
-			result = runtime.process?.run({ command: candidate[1], args: [ '--version' ],
-				timeout_ms: 5000 });
-		}
-		catch (error) { result = null; }
-		if (result?.code === 0) return candidate[0];
-	}
-	return '';
-};
-
 function mihomo_version(runtime, core) {
 	if (core?.type != 'file' || core.nlink != 1 || (core.uid != null && core.uid != 0) ||
 	    runtime.fs?.realpath('/opt/clash/bin/clash') != '/opt/clash/bin/clash')
@@ -239,7 +226,7 @@ function bounded_system_info(runtime) {
 	let core = null;
 	try { core = runtime.fs?.lstat('/opt/clash/bin/clash'); }
 	catch (error) { core = null; }
-	let package_manager = detect_package_manager(runtime);
+	let package_manager = platform.detect_package_manager(runtime);
 	return {
 		app_version: substr(runtime.app_version ?? '', 0, 64),
 		mihomo: { installed: core?.type == 'file', version: mihomo_version(runtime, core) },

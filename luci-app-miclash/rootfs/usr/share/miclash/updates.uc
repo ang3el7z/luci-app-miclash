@@ -1,6 +1,7 @@
 import * as errors from 'miclash.errors';
 import * as http from 'miclash.http';
 import * as storage from 'miclash.storage';
+import * as platform from 'miclash.platform';
 
 const MIHOMO_LATEST =
 	'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest';
@@ -328,6 +329,9 @@ function resolve_mihomo(runtime, selected_channel, requested) {
 };
 
 function choose_miclash(runtime, selected_channel, requested) {
+	let manager = platform.detect_package_manager(runtime);
+	if (manager == '')
+		errors.fail('HEALTH_FAILED');
 	let payload = github_json(runtime,
 		requested != null ?
 			'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/tags/' + requested :
@@ -345,22 +349,32 @@ function choose_miclash(runtime, selected_channel, requested) {
 		catch (error) { continue; }
 		if (requested != null && tag != requested)
 			continue;
-		let checksum = null;
+		let expected = platform.miclash_assets(manager, substr(tag, 1));
+		let required = [ expected.package_name, expected.checksum_name,
+			expected.installer_checksum_name, expected.manifest_name ];
+		let present = {};
 		if (type(release.assets) != 'array')
 			errors.fail('INVALID_RESPONSE');
-		for (let asset in release.assets)
-			if (asset?.name == 'install-miclash.sh.sha256') {
-				if (checksum != null) errors.fail('INVALID_RESPONSE');
-				if (type(asset.browser_download_url) != 'string' ||
-				    asset.browser_download_url !=
-				      'https://github.com/ang3el7z/luci-app-miclash/releases/download/' +
-				      tag + '/install-miclash.sh.sha256')
-					errors.fail('INVALID_RESPONSE');
-				checksum = asset.browser_download_url;
-			}
+		let prefix = 'https://github.com/ang3el7z/luci-app-miclash/releases/download/' +
+			tag + '/';
+		for (let asset in release.assets) {
+			if (index(required, asset?.name) < 0)
+				continue;
+			if (present[asset.name] != null ||
+			    type(asset.browser_download_url) != 'string' ||
+			    asset.browser_download_url != prefix + asset.name)
+				errors.fail('INVALID_RESPONSE');
+			present[asset.name] = true;
+		}
+		let ready = true;
+		for (let name in required)
+			if (present[name] !== true)
+				ready = false;
 		return { version: tag,
 			installer_url: MICLASH_RAW + tag + '/install-miclash.sh',
-			checksum_url: checksum };
+			checksum_url: present[expected.installer_checksum_name] === true
+				? prefix + expected.installer_checksum_name : null,
+			ready, readiness: ready ? 'ready' : 'assets_pending' };
 	}
 	errors.fail('NOT_FOUND');
 };
@@ -777,6 +791,7 @@ export function create(app) {
 			let resolved = choose_miclash(app.runtime, selected_channel, requested);
 			return { kind: 'miclash', channel: selected_channel,
 				version: resolved.version,
+				ready: resolved.ready, readiness: resolved.readiness,
 				published_checksum_available: resolved.checksum_url != null };
 		}
 		return public_release(resolve_mihomo(app.runtime, selected_channel, requested),
@@ -874,10 +889,10 @@ export function create(app) {
 			return true;
 		});
 	};
-	function update_miclash(...args) {
-		if (length(args) != 2) invalid();
-		let options = args[0], source = args[1];
+	function submit_miclash(options, source, pre_enqueue) {
 		exact(options, { version: true, channel: true });
+		if (pre_enqueue != null && type(pre_enqueue) != 'function')
+			invalid();
 		let selected_channel = configured_channel('miclash', options.channel);
 		let requested = options.version == null ? null : version(options.version);
 		return app.operations.submit('updates.miclash', source, {}, (ctx) => {
@@ -888,6 +903,8 @@ export function create(app) {
 			try {
 				ctx.stage('release', 10, 'release');
 				resolved = choose_miclash(app.runtime, selected_channel, requested);
+				if (resolved.ready !== true)
+					errors.fail('NOT_FOUND');
 				ctx.stage('verification', 45, 'verification');
 				candidate = prepare_installer(app.runtime, resolved);
 				let token = app.runtime.random.hex(16);
@@ -962,12 +979,20 @@ export function create(app) {
 				return false;
 			}
 			return true;
-		});
+		}, pre_enqueue);
+	};
+	function update_miclash(...args) {
+		if (length(args) != 2) invalid();
+		return submit_miclash(args[0], args[1], null);
+	};
+	function update_miclash_scheduled(...args) {
+		if (length(args) != 3 || type(args[2]) != 'function') invalid();
+		return submit_miclash(args[0], args[1], args[2]);
 	};
 	return {
 		release_info, update_mihomo,
 		rollback_mihomo,
-		update_miclash,
+		update_miclash, update_miclash_scheduled,
 		status: (...args) => {
 			if (length(args)) invalid();
 			return json(sprintf('%J', last));

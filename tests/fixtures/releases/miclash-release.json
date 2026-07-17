@@ -6,6 +6,26 @@
     {
       "name": "install-miclash.sh.sha256",
       "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v9.9.9/install-miclash.sh.sha256"
+    },
+    {
+      "name": "miclash-release-manifest.json",
+      "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v9.9.9/miclash-release-manifest.json"
+    },
+    {
+      "name": "luci-app-miclash_9.9.9_all.ipk",
+      "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v9.9.9/luci-app-miclash_9.9.9_all.ipk"
+    },
+    {
+      "name": "luci-app-miclash_9.9.9_all.ipk.sha256",
+      "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v9.9.9/luci-app-miclash_9.9.9_all.ipk.sha256"
+    },
+    {
+      "name": "luci-app-miclash-9.9.9.apk",
+      "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v9.9.9/luci-app-miclash-9.9.9.apk"
+    },
+    {
+      "name": "luci-app-miclash-9.9.9.apk.sha256",
+      "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v9.9.9/luci-app-miclash-9.9.9.apk.sha256"
     }
   ]
 }

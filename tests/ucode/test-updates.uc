@@ -58,7 +58,13 @@ function environment(options) {
 	if (options.partial_binary_write)
 		filesystem.throw_after_rename_once_to = '/opt/clash/bin/clash';
 	let clock = fakes.clock(1700000000000);
-	let process = fakes.process();
+	let manager = options.manager ?? 'opkg';
+	let process = fakes.process({
+		'/usr/bin/apk:--version': { code: manager == 'apk' ? 0 : 127 },
+		'/bin/apk:--version': { code: 127 },
+		'/bin/opkg:--version': { code: manager == 'opkg' ? 0 : 127 },
+		'/usr/bin/opkg:--version': { code: 127 }
+	});
 	if (options.stale_handoff) {
 		filesystem.on_lstat = (path, count) => {
 			if (count == 1 && match(path, /\/handoff-.*\.status$/)) {
@@ -214,7 +220,7 @@ function environment(options) {
 assert_equal(type(updates.create), 'function');
 let stable = environment();
 for (let method in [ 'release_info', 'update_mihomo', 'rollback_mihomo',
-	'update_miclash', 'status' ])
+	'update_miclash', 'update_miclash_scheduled', 'status' ])
 	assert_equal(type(stable.updater[method]), 'function', method + ' is exported');
 
 let info = stable.updater.release_info({ kind: 'mihomo' });
@@ -430,6 +436,47 @@ let app_update = environment();
 let app_info = app_update.updater.release_info({ kind: 'miclash' });
 assert_equal(app_info.version, 'v9.9.9');
 assert_equal(app_info.channel, 'release');
+assert_equal(app_info.ready, true);
+assert_equal(app_info.readiness, 'ready');
+let apk_info = environment({ manager: 'apk' }).updater.release_info({ kind: 'miclash' });
+assert_equal(apk_info.ready, true);
+assert_equal(apk_info.readiness, 'ready');
+
+let pending_release = fixture('miclash-release-incomplete.json');
+let pending = environment({ responses: { [MICLASH_LATEST]: pending_release } });
+let pending_info = pending.updater.release_info({ kind: 'miclash' });
+assert_equal(pending_info.ready, false);
+assert_equal(pending_info.readiness, 'assets_pending');
+let pending_op = pending.updater.update_miclash(
+	{ version: null, channel: 'release' }, 'luci');
+pending.clock.advance(0);
+assert_equal(pending.ops.get(pending_op.id).state, 'failure');
+assert_equal(pending.ops.get(pending_op.id).error.code, 'NOT_FOUND');
+for (let call in pending.process.calls)
+	assert_true(call.command != '/bin/busybox',
+		'incomplete release reached installer validation or execution');
+
+let duplicate_release = json(fixture('miclash-release.json'));
+push(duplicate_release.assets, duplicate_release.assets[0]);
+assert_throws(() => environment({ responses: {
+	[MICLASH_LATEST]: sprintf('%J', duplicate_release)
+} }).updater.release_info({ kind: 'miclash' }), 'INVALID_RESPONSE');
+let forged_release = json(fixture('miclash-release.json'));
+forged_release.assets[1].browser_download_url =
+	'https://github.com/ang3el7z/luci-app-miclash/releases/download/v0.0.1/' +
+	'miclash-release-manifest.json';
+assert_throws(() => environment({ responses: {
+	[MICLASH_LATEST]: sprintf('%J', forged_release)
+} }).updater.release_info({ kind: 'miclash' }), 'INVALID_RESPONSE');
+assert_throws(() => environment({ manager: 'unknown' }).updater.release_info(
+	{ kind: 'miclash' }), 'HEALTH_FAILED');
+
+let scheduled = environment(), queued_record = null;
+let scheduled_op = scheduled.updater.update_miclash_scheduled(
+	{ version: 'v9.9.9', channel: 'release' }, 'auto',
+	(record) => queued_record = record);
+assert_equal(queued_record.id, scheduled_op.id);
+assert_equal(queued_record.state, 'queued');
 let app_op = app_update.updater.update_miclash({ version: 'v9.9.9' }, 'luci');
 app_update.clock.advance(0);
 assert_equal(app_update.ops.get(app_op.id).state, 'success');
@@ -488,8 +535,6 @@ assert_equal(ambiguous_process.ops.get(ambiguous_op.id).state, 'failure');
 assert_equal(length(ambiguous_process.service_calls), 0);
 
 let manifest_release = json(fixture('miclash-release.json'));
-manifest_release.assets = [ { name: 'install-miclash.sh.sha256',
-	browser_download_url: MICLASH_CHECKSUM } ];
 let installer_body = '#!/bin/sh\nexit 0\n';
 let checksumless_release = json(fixture('miclash-release.json'));
 checksumless_release.assets = [];

@@ -5,6 +5,7 @@ import * as real_application from 'miclash.application';
 import * as real_reconcile_adapter from 'miclash.reconcile-adapter';
 import * as runtime_module from 'miclash.runtime';
 import * as startup_guard from 'miclash.startup-guard';
+import * as platform from 'miclash.platform';
 import * as fakes from './fakes.uc';
 
 assert_equal(daemon.parse_openwrt_version("DISTRIB_RELEASE='24.10.2'\n", ''), '24.10.2');
@@ -16,7 +17,7 @@ let manager_probe = fakes.process({
 	'/usr/bin/apk:--version': { code: 127 }, '/bin/apk:--version': { code: 1 },
 	'/bin/opkg:--version': { code: 0 }
 });
-assert_equal(daemon.detect_package_manager({ process: manager_probe }), 'opkg');
+assert_equal(platform.detect_package_manager({ process: manager_probe }), 'opkg');
 assert_equal(length(manager_probe.calls), 3, 'package manager detection accepted a failed probe');
 
 let order = [];

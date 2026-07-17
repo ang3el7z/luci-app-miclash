@@ -1,0 +1,11 @@
+{
+  "tag_name": "v9.9.9",
+  "draft": false,
+  "prerelease": false,
+  "assets": [
+    {
+      "name": "install-miclash.sh.sha256",
+      "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v9.9.9/install-miclash.sh.sha256"
+    }
+  ]
+}
