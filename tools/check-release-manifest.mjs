@@ -180,6 +180,13 @@ function runRepositoryContracts() {
 		'release assets must be generated from the tagged source checkout');
 	assert.match(release, /node tools\/check-release-manifest\.mjs/);
 	assert.match(release, /miclash-release-manifest\.json/);
+	for (const phase of [ 'Delete Existing Publication Manifest',
+		'Upload Non-Manifest Release Assets', 'Verify Published Non-Manifest Assets',
+		'Upload Publication Manifest Last' ])
+		assert.match(release, new RegExp(phase), `release workflow is missing ${phase}`);
+	assert.ok(release.indexOf('Verify Published Non-Manifest Assets') <
+		release.indexOf('Upload Publication Manifest Last'),
+		'publication manifest must be uploaded only after asset verification');
 	assert.match(release, /\.sha256/);
 	assert.deepEqual(sdkEntries(release, 'build:'), [
 		'24.10.7:ipk:x86/64', '25.12.5:apk:x86/64'

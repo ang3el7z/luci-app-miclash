@@ -199,6 +199,12 @@ export function create(dependencies) {
 		state.publication_retry_count = 0;
 	};
 
+	function local_for(current) {
+		try { return local_time.observe(current); }
+		catch (error) { return { valid: false, in_window: false, before_cutoff: false,
+			local_date: null, next_window: null }; }
+	};
+
 	function schedule_timer() {
 		if (!started || closed) return;
 		if (timer != null) { timer.cancel(); timer = null; }
@@ -212,12 +218,6 @@ export function create(dependencies) {
 		}
 		timer = runtime.clock.set_timeout(delay, () => { timer = null; api.tick(); });
 		if (timer == null || type(timer.cancel) != 'function') errors.fail('INTERNAL');
-	};
-
-	function local_for(current) {
-		try { return local_time.observe(current); }
-		catch (error) { return { valid: false, in_window: false, before_cutoff: false,
-			local_date: null, next_window: null }; }
 	};
 
 	function set_next_night(local, reset_target) {

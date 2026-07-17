@@ -187,7 +187,9 @@ const replies = {
 		},
 		memory: { current_rss_kb: 102400, baseline_rss_kb: 81920, phase: 'monitoring', cooldown_until: 1710000200000 },
 		last_repair: { component: 'firewall', action: 'reconcile', result: 'success', at: 1710000000 },
-		updates: { running: true, enabled: true, last_activation: 1710000100000 },
+		updates: { running: true, enabled: true, last_activation: 1710000100000,
+			automatic_miclash: { enabled: true, readiness: 'assets_pending',
+				publication_retry_count: 1, next_check: 1710000300000 } },
 		subscription: { configured: true, transport: 'https', insecure: false },
 		telegram: { enabled: true, configured: true }
 	}

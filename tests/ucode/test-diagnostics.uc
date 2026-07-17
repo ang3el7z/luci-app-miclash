@@ -60,7 +60,10 @@ let sources = {
 		header: 'Authorization: ' + secrets.authorization } } }),
 	memory: () => ({ phase: 'monitoring', diagnostic:
 		'rss sampled with ' + secrets.password }),
-	updates: () => ({ state: 'idle', url: secrets.subscription_url }),
+	updates: () => ({ state: 'idle', url: secrets.subscription_url,
+		automatic_miclash: { enabled: true, readiness: 'assets_pending',
+			publication_retry_count: 1, response_body: secrets.password,
+			package_url: secrets.subscription_url } }),
 	settings: () => ({
 		core: { subscription_url: secrets.subscription_url },
 		telegram: { enabled: true, token: secrets.telegram_token, user_id: '42' }
@@ -107,6 +110,9 @@ assert_true(type(summary.state.observed) == 'object');
 assert_true(type(summary.health.mihomo) == 'object');
 assert_equal(summary.memory.phase, 'monitoring');
 assert_equal(summary.updates.state, 'idle');
+assert_equal(summary.updates.automatic_miclash.enabled, true);
+assert_equal(summary.updates.automatic_miclash.readiness, 'assets_pending');
+assert_equal(summary.updates.automatic_miclash.publication_retry_count, 1);
 assert_equal(summary.last_repair.result, 'success');
 assert_no_secrets(summary, 'summary');
 

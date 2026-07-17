@@ -24,7 +24,8 @@ check(workflow.includes('Resolve Existing GitHub Release') &&
 	workflow.includes('/releases/tags/${TAG_NAME}') &&
 	workflow.includes('Create the GitHub Release for this tag manually'),
 	'Release workflow must resolve an existing manually-created release and fail clearly when it is missing.');
-check(workflow.includes('Upload Release Assets') &&
+check(workflow.includes('Upload Non-Manifest Release Assets') &&
+	workflow.includes('Upload Publication Manifest Last') &&
 	workflow.includes('/releases/assets/') &&
 	workflow.includes('upload_url') &&
 	workflow.includes('--data-binary') &&

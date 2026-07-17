@@ -46,6 +46,14 @@ let state_model = {
 	flush: () => { push(order, 'state.flush'); return true; }
 };
 let drained = 0;
+let automatic_update_status = {
+	running: true, enabled: true, local_time_valid: true,
+	in_maintenance_window: true, last_scheduled_local_date: '2026-07-17',
+	last_check: 1, next_check: 1800001, publication_retry_tag: 'v2.0.0',
+	publication_retry_count: 1, latest_version: 'v2.0.0', readiness: 'assets_pending',
+	pending_target: null, pending_operation_id: null, traffic_samples: 10,
+	traffic_quiet: true, traffic_deferral_count: 0, last_error_code: null
+};
 let application = {
 	status: state_model.snapshot, health: state_model.health,
 	operation_get: () => null, operation_list: () => [],
@@ -98,11 +106,21 @@ let factories = {
 		get_redacted: () => ({ configured: false }), set_url: () => ({ id: 'id' }),
 		probe: () => ({}), update: () => ({ id: 'id' }), replace: () => ({ id: 'id' })
 	}) },
-	updates: { create: () => ({
-		release_info: () => ({}), update_miclash: () => ({ id: 'id' }),
-		update_mihomo: () => ({ id: 'id' }), status: () => ({ state: 'idle' })
-	}) },
-	diagnostics: { create: () => ({ summary: () => ({ schema_version: 1 }),
+	updates: { create: () => {
+		push(order, 'updates.create');
+		return { release_info: () => ({}), update_miclash: () => ({ id: 'id' }),
+			update_mihomo: () => ({ id: 'id' }), status: () => ({ state: 'idle' }) };
+	} },
+	app_update_scheduler: { create: (dependencies) => {
+		assert_true(dependencies.operations === operation_manager);
+		return {
+			start: () => { push(order, 'app-update.start'); return true; },
+			close: () => { push(order, 'app-update.close'); return true; },
+			status: () => automatic_update_status
+		};
+	} },
+	diagnostics: { create: (dependencies) => ({ summary: () => ({ schema_version: 1,
+		updates: dependencies.sources.updates() }),
 		create_report: () => ({ id: 'rpt_' + sprintf('%032x', 1) }),
 		read_report: () => ({ content: '{}' }) }) },
 	route_test: { create: () => ({ run: () => ({ decision: 'unknown', steps: [] }) }) },
@@ -116,12 +134,18 @@ assert_equal(connect_count, 1);
 assert_true(index(order, 'recover') < index(order, 'connect'));
 assert_true(index(order, 'connect') < index(order, 'config'));
 assert_true(index(order, 'config') < index(order, 'publish'));
+assert_true(index(order, 'updates.create') < index(order, 'app-update.start'));
+let composed_diagnostics = process.app.diagnostics_summary();
+assert_equal(composed_diagnostics.updates.state, 'idle');
+assert_equal(composed_diagnostics.updates.automatic_miclash.readiness, 'assets_pending');
+assert_equal(composed_diagnostics.updates.automatic_miclash.publication_retry_count, 1);
 process.drain();
 assert_equal(drained, 1);
 assert_equal(process.close(), true);
 assert_equal(process.close(), false);
 assert_equal(disconnect_count, 1);
 assert_true(index(order, 'state.close') < index(order, 'state.flush'));
+assert_true(index(order, 'app-update.close') < index(order, 'state.close'));
 assert_true(index(order, 'state.flush') < index(order, 'disconnect'));
 
 function malformed_connection(candidate) {
@@ -152,6 +176,7 @@ let failed_state = {
 };
 let failed_disconnects = 0;
 let failed_transfer_attempts = 0;
+let failed_app_update_closes = 0;
 let failed_connection = {
 	call: () => null, publish: () => ({}),
 	disconnect: () => { failed_disconnects++; return true; }
@@ -209,6 +234,8 @@ let failed_factories = {
 		release_info: () => ({}), update_miclash: () => ({}), update_mihomo: () => ({}),
 		status: () => ({ state: 'idle' })
 	}) },
+	app_update_scheduler: { create: () => ({ start: () => true,
+		close: () => { failed_app_update_closes++; return true; }, status: () => ({}) }) },
 	diagnostics: factories.diagnostics, route_test: factories.route_test,
 	routing: factories.routing,
 	api: { create_transfers: () => { failed_transfer_attempts++; die('HEALTH_FAILED'); },
@@ -223,6 +250,7 @@ assert_equal(failed_state_lifecycle[0], 'close');
 assert_equal(failed_state_lifecycle[1], 'flush');
 assert_equal(failed_disconnects, 1);
 assert_equal(failed_transfer_attempts, 1);
+assert_equal(failed_app_update_closes, 1);
 
 // The management cutover uses the real application facade and real API
 // registration. Domain implementations remain injected so this test observes
@@ -426,6 +454,9 @@ let integrated_factories = {
 			return { id: 'mihomo-operation', kind: 'updates.mihomo' };
 		}
 	}) },
+	app_update_scheduler: { create: () => ({ start: () => true,
+		close: () => { push(integrated_closes, 'app-update'); return true; },
+		status: () => automatic_update_status }) },
 	backup: {
 		list: (app) => { backup_list_calls++; backup_app_seen = app; return [ { id: 'b-1700000000000-00000000000000000000000000000000' } ]; },
 		create: (app, options, source) => {
