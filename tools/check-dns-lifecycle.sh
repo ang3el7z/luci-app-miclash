@@ -64,6 +64,7 @@ export MICLASH_DNS_GATE_FAIL="$fixture/fail"
 export MICLASH_DNS_GATE_LOG="$fixture/lifecycle.log"
 export MICLASH_DNS_GATE_FIXTURE="$fixture"
 export MICLASH_DNS_GATE_TRACE=1
+dns_gate_run_count=0
 
 cat > "$fixture/uci.uc" <<'EOF'
 let fs = require('fs');
@@ -116,6 +117,8 @@ chmod 0700 /etc/init.d/dnsmasq
 module_dir="$(dirname -- "$UCODE_BIN")"
 export MICLASH_DNS_GATE_MODULE_DIR="$module_dir"
 run_control() {
+	dns_gate_run_count=$((dns_gate_run_count + 1))
+	printf 'DNS lifecycle call %s: %s\n' "$dns_gate_run_count" "$1" >&2
 	"$UCODE_BIN" -L "$module_dir/*.so" -L "$fixture" \
 		-L "$repo_root/luci-app-miclash/rootfs/usr/share" "$control" "$1"
 }
