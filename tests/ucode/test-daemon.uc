@@ -7,6 +7,18 @@ import * as runtime_module from 'miclash.runtime';
 import * as startup_guard from 'miclash.startup-guard';
 import * as fakes from './fakes.uc';
 
+assert_equal(daemon.parse_openwrt_version("DISTRIB_RELEASE='24.10.2'\n", ''), '24.10.2');
+assert_equal(daemon.parse_openwrt_version("DISTRIB_RELEASE='SNAPSHOT'\n",
+	'VERSION_ID="25.12"\n'), '25.12');
+assert_equal(daemon.parse_openwrt_version('', 'PRETTY_NAME="OpenWrt 26.01.1 development"\n'),
+	'26.01.1');
+let manager_probe = fakes.process({
+	'/usr/bin/apk:--version': { code: 127 }, '/bin/apk:--version': { code: 1 },
+	'/bin/opkg:--version': { code: 0 }
+});
+assert_equal(daemon.detect_package_manager({ process: manager_probe }), 'opkg');
+assert_equal(length(manager_probe.calls), 3, 'package manager detection accepted a failed probe');
+
 let order = [];
 let connect_count = 0, disconnect_count = 0;
 let published_methods = null;
@@ -929,7 +941,10 @@ production_fs.popen = (command, mode) => {
 	return { read: (amount) => { let chunk = substr(output, offset, amount);
 		offset += length(chunk); return chunk; }, close: () => 0 };
 };
-let production_process = fakes.process();
+let production_process = fakes.process({
+	'/usr/bin/apk:--version': { code: 127 }, '/bin/apk:--version': { code: 127 },
+	'/bin/opkg:--version': { code: 0 }
+});
 production_process.on_run = (request) => {
 	if (request.command == 'nft' && request.args?.[0] == '-f') {
 		let batch = production_fs.readfile(request.args[1]) ?? '';
@@ -976,6 +991,9 @@ assert_true(type(production_runtime.reconcile?.run) == 'function');
 assert_true(type(production_methods?.settings_get?.call) == 'function');
 assert_true(type(production_methods?.transfer_begin?.call) == 'function');
 let production_system = production_methods.system_info.call({ args: {} });
+assert_equal(production_system.app_version, '0.9.3');
+assert_equal(production_system.openwrt_version, '24.10.2');
+assert_equal(production_system.package_manager, 'opkg');
 assert_equal(production_system.mihomo.version, '1.20.0');
 assert_equal(production_system.hwid,
 	substr(production_runtime.digest.sha256('02:00:00:00:00:01|Router Without eth0'), 0, 14));

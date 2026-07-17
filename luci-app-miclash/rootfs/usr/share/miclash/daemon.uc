@@ -160,6 +160,44 @@ function release_value(source, name) {
 	return '';
 };
 
+function pretty_release_version(source) {
+	let found = match(release_value(source, 'PRETTY_NAME'),
+		/([0-9]+(\.[0-9]+)+([.-][0-9A-Za-z]+)?)/);
+	return found == null ? '' : substr(found[1], 0, 128);
+};
+
+export function parse_openwrt_version(openwrt_release, os_release) {
+	let primary = type(openwrt_release) == 'string' ? openwrt_release : '';
+	let fallback = type(os_release) == 'string' ? os_release : '';
+	let primary_distrib = release_value(primary, 'DISTRIB_RELEASE');
+	let fallback_distrib = release_value(fallback, 'DISTRIB_RELEASE');
+	if (length(primary_distrib) && primary_distrib != 'SNAPSHOT') return primary_distrib;
+	if (length(fallback_distrib) && fallback_distrib != 'SNAPSHOT') return fallback_distrib;
+	for (let source in [ primary, fallback ]) {
+		let version = release_value(source, 'VERSION_ID');
+		if (length(version)) return version;
+	}
+	for (let source in [ primary, fallback ]) {
+		let version = pretty_release_version(source);
+		if (length(version)) return version;
+	}
+	return primary_distrib || fallback_distrib;
+};
+
+export function detect_package_manager(runtime) {
+	for (let candidate in [ [ 'apk', '/usr/bin/apk' ], [ 'apk', '/bin/apk' ],
+	    [ 'opkg', '/bin/opkg' ], [ 'opkg', '/usr/bin/opkg' ] ]) {
+		let result = null;
+		try {
+			result = runtime.process?.run({ command: candidate[1], args: [ '--version' ],
+				timeout_ms: 5000 });
+		}
+		catch (error) { result = null; }
+		if (result?.code === 0) return candidate[0];
+	}
+	return '';
+};
+
 function mihomo_version(runtime, core) {
 	if (core?.type != 'file' || core.nlink != 1 || (core.uid != null && core.uid != 0) ||
 	    runtime.fs?.realpath('/opt/clash/bin/clash') != '/opt/clash/bin/clash')
@@ -192,6 +230,7 @@ function stable_mac(runtime) {
 
 function bounded_system_info(runtime) {
 	let release = bounded_file(runtime, '/etc/openwrt_release', 4096);
+	let os_release = bounded_file(runtime, '/etc/os-release', 4096);
 	let model = trim(bounded_file(runtime, '/tmp/sysinfo/model', 256));
 	let mac = stable_mac(runtime);
 	let identifier = runtime.digest.sha256(mac + '|' + model);
@@ -200,17 +239,11 @@ function bounded_system_info(runtime) {
 	let core = null;
 	try { core = runtime.fs?.lstat('/opt/clash/bin/clash'); }
 	catch (error) { core = null; }
-	let package_manager = '';
-	for (let candidate in [ [ 'apk', '/usr/bin/apk' ], [ 'apk', '/bin/apk' ],
-	    [ 'opkg', '/bin/opkg' ], [ 'opkg', '/usr/bin/opkg' ] ]) {
-		let stat = null;
-		try { stat = runtime.fs?.lstat(candidate[1]); } catch (error) {}
-		if (stat?.type == 'file') { package_manager = candidate[0]; break; }
-	}
+	let package_manager = detect_package_manager(runtime);
 	return {
 		app_version: substr(runtime.app_version ?? '', 0, 64),
 		mihomo: { installed: core?.type == 'file', version: mihomo_version(runtime, core) },
-		openwrt_version: release_value(release, 'DISTRIB_RELEASE'),
+		openwrt_version: parse_openwrt_version(release, os_release),
 		architecture: release_value(release, 'DISTRIB_ARCH'),
 		model: substr(model, 0, 128), hwid: substr(identifier, 0, 14), package_manager
 	};
@@ -634,7 +667,7 @@ export function compose(runtime, overrides) {
 		push(close_domains, devices_domain);
 
 		let backup_app = {
-			runtime, secure_fs: runtime.secure_fs, app_version: runtime.app_version ?? '0.9.2',
+			runtime, secure_fs: runtime.secure_fs, app_version: runtime.app_version ?? '0.9.3',
 			settings: modules.settings, operations: operation_manager,
 			config: configuration,
 			rulesets: runtime.rulesets,

@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=0.9.2
+PKG_VERSION:=0.9.3
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
@@ -105,6 +105,8 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json $(1)/usr/share/rpcd/acl.d/
 	$(INSTALL_DIR) $(1)/usr/share/miclash
 	$(INSTALL_DATA) $(MICLASH_PACKAGE_UCODE) $(1)/usr/share/miclash/
+	printf '%s\n' '$(PKG_VERSION)' > $(1)/usr/share/miclash/version
+	chmod 0644 $(1)/usr/share/miclash/version
 	$(INSTALL_DIR) $(1)/usr/share/miclash/firewall
 	$(INSTALL_DATA) $(MICLASH_PACKAGE_FIREWALL_UCODE) $(1)/usr/share/miclash/firewall/
 	$(INSTALL_DIR) $(1)/etc/miclash

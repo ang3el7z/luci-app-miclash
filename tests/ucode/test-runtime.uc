@@ -10,6 +10,7 @@ let rt = runtime.create({ process: fake_process, clock: fake_clock });
 
 assert_true(rt.fs != null);
 assert_equal(rt.clock.now(), 1000);
+assert_equal(rt.app_version, '0.9.3');
 let timer_fired = false;
 fake_clock.set_timeout(10, () => timer_fired = true);
 fake_clock.advance(9);

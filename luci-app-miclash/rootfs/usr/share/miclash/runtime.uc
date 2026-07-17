@@ -76,6 +76,16 @@ function process_adapter() {
 	};
 };
 
+function packaged_app_version(filesystem) {
+	let value = '';
+	try { value = trim(filesystem.readfile('/usr/share/miclash/version') ?? ''); }
+	catch (error) { value = ''; }
+	if (type(value) == 'string' && length(value) <= 64 &&
+	    match(value, /^[0-9]+(\.[0-9]+)+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$/))
+		return value;
+	return '0.9.3';
+};
+
 function fs_adapter() {
 	let fs = require('fs');
 	return {
@@ -662,7 +672,7 @@ export function create(overrides) {
 		guard_control: null,
 		mutation_lock_self: null,
 		core_available: false,
-		app_version: '0.9.2',
+		app_version: null,
 		logger: logger_adapter(),
 		events: null,
 		paths
@@ -673,6 +683,8 @@ export function create(overrides) {
 			fail('INVALID_ARGUMENT');
 		runtime[name] = adapter;
 	}
+	if (runtime.app_version == null)
+		runtime.app_version = packaged_app_version(runtime.fs);
 	if (runtime.process == null)
 		runtime.process = process_adapter();
 	if (runtime.http == null)
