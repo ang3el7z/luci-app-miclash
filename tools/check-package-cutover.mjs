@@ -10,6 +10,7 @@ const network = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/network
 const reconcile = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/reconcile-adapter.uc'), 'utf8');
 const dns = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/dns.uc'), 'utf8');
 const settings = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/settings.uc'), 'utf8');
+const packageRemove = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/package-remove'), 'utf8');
 const subscription = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/subscription.uc'), 'utf8');
 const miclashd = fs.readFileSync(path.join(pkg, 'rootfs/usr/sbin/miclashd'), 'utf8');
 const installer = fs.readFileSync(path.join(root, 'install-miclash.sh'), 'utf8');
@@ -57,6 +58,10 @@ requireMatch(makefile, /\/etc\/config\/miclash/, 'canonical UCI config must be a
 requireMatch(makefile, /chmod 0600 .*\/etc\/config\/miclash/, 'canonical config must be secret-safe');
 forbid(makefile, /migrate\.uc|legacy-firewall-cleanup\.uc|guard_latch_set|guard_verify_protected/,
 	'v0.9 transition lifecycle is still invoked by the package');
+forbid(makefile, /clash-rules|miclash-autoupdate|miclash-memory-guard|40-clash|99-clash-tun/,
+	'v2 package lifecycle still cleans up v0.9 backend state');
+forbid(packageRemove, /CRON_FILE|clash-rules update/,
+	'v2 package removal still quiesces a v0.9 cron backend');
 forbid(dns, /\.dns_backup|migrate_legacy/, 'v2 DNS lifecycle still converts v0.9 state');
 forbid(settings, /legacy_patch|migrate_legacy|INTERNET_ONLY_MICLASH/,
 	'v2 settings module still parses v0.9 settings');

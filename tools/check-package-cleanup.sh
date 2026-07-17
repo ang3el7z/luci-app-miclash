@@ -11,7 +11,7 @@ fi
 
 mount --make-rprivate /
 for path in /var/run/miclash /usr/share/miclash /etc/miclash /opt/clash \
-	/etc/init.d /etc/crontabs; do
+	/etc/init.d; do
 	mkdir -p "$path"
 	mount -t tmpfs -o mode=0755,size=2m miclash-package-cleanup "$path"
 done
@@ -95,7 +95,6 @@ reset_state() {
 	printf '%s\n' '{"version":1,"routes":[],"rules":[]}' \
 		> /var/run/miclash/routing-ownership.json
 	chmod 0600 /var/run/miclash/routing-ownership.json
-	printf '%s\n' '* * * * * /opt/clash/bin/clash-rules update' > /etc/crontabs/root
 }
 
 # A failed native Guard process is a hard precondition failure: no service or

@@ -237,17 +237,10 @@ define Package/$(PKG_NAME)/postrm
 	rm -rf /opt/clash/ui
 	rm -f /opt/clash/ruleset
 	rm -rf /tmp/clash
-	rm -rf /tmp/miclash-autoupdate
-	rm -rf /tmp/miclash-memory-guard
 	rm -rf /www/luci-static/resources/view/miclash
 	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
 	rm -f /opt/clash/.config.yaml.upgrade.bak
-	rm -f /etc/hotplug.d/iface/40-clash
-	rm -f /etc/hotplug.d/net/99-clash-tun
-	rm -f /opt/clash/bin/clash-rules
 	rm -f /etc/init.d/clash
-	rm -f /etc/init.d/miclash-autoupdate
-	rm -f /etc/init.d/miclash-memory-guard
 	rm -f /etc/apk/protected_paths.d/miclash.list
 	case "$$1" in
 		upgrade|update) ;;
@@ -333,19 +326,10 @@ define Package/$(PKG_NAME)/postrm
 				valid_dns_release_proof "$$RELEASE_DIR/dns-ownership.json" && \
 				[ ! -e /var/run/miclash/routing-ownership.json ] && [ ! -L /var/run/miclash/routing-ownership.json ] && \
 				[ ! -e /etc/miclash/dns-ownership.json ] && [ ! -L /etc/miclash/dns-ownership.json ] && \
-				[ ! -e /opt/clash/bin/clash-rules ] && [ ! -L /opt/clash/bin/clash-rules ] && \
-				[ ! -e /opt/clash/bin/miclash-update ] && [ ! -L /opt/clash/bin/miclash-update ] && \
-				[ ! -e /opt/clash/bin/miclash-service ] && [ ! -L /opt/clash/bin/miclash-service ] && \
-				[ ! -e /opt/clash/bin/miclash-autoupdate ] && [ ! -L /opt/clash/bin/miclash-autoupdate ] && \
-				[ ! -e /opt/clash/bin/miclash-memory-guard ] && [ ! -L /opt/clash/bin/miclash-memory-guard ] && \
 				[ ! -e /etc/init.d/clash ] && [ ! -L /etc/init.d/clash ] && \
 				[ ! -e /etc/init.d/miclashd ] && [ ! -L /etc/init.d/miclashd ] && \
 				[ ! -e /usr/sbin/miclashd ] && [ ! -L /usr/sbin/miclashd ] && \
-				[ ! -e /etc/init.d/miclash-autoupdate ] && [ ! -L /etc/init.d/miclash-autoupdate ] && \
-				[ ! -e /etc/init.d/miclash-memory-guard ] && [ ! -L /etc/init.d/miclash-memory-guard ] && \
 				[ ! -e /etc/init.d/miclash-guard ] && [ ! -L /etc/init.d/miclash-guard ] && \
-				[ ! -e /etc/hotplug.d/iface/40-clash ] && [ ! -L /etc/hotplug.d/iface/40-clash ] && \
-				[ ! -e /etc/hotplug.d/net/99-clash-tun ] && [ ! -L /etc/hotplug.d/net/99-clash-tun ] && \
 				[ ! -e /usr/share/miclash/routing.uc ] && [ ! -L /usr/share/miclash/routing.uc ] && \
 				[ ! -e /usr/share/miclash/routing-cleanup.uc ] && [ ! -L /usr/share/miclash/routing-cleanup.uc ] && \
 				[ ! -e /usr/share/miclash/dns.uc ] && [ ! -L /usr/share/miclash/dns.uc ] && \

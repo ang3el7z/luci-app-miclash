@@ -242,6 +242,12 @@ function runRepositoryContracts() {
 		assert.doesNotMatch(text, /releases\/latest|package="luci-app-miclash[-_]/,
 			`${path} must not construct a package from a possibly incomplete latest release`);
 	}
+	for (const [ path, expression ] of Object.entries({
+		'README.ru.md': /пакет завершит установку ошибкой|повторите конфигурацию пакета/i,
+		'README.zh-cn.md': /软件包安装会明确失败|重新执行 package configuration/i
+	}))
+		assert.doesNotMatch(readFileSync(path, 'utf8'), expression,
+			`${path} retains orphaned v0.9 transition recovery prose`);
 }
 
 function parseArguments(values) {

@@ -114,8 +114,6 @@ ubus call miclash health '{}'
 
 主要 UCI section 为 `core`、`interfaces`、`guard`、`memory`、`updates`、`telegram`、`notifications`、`backup` 与 `meta`。`/etc/config/miclash` 可能包含订阅 URL 和 Telegram token，应只允许 root 读取。
 
-如果无法验证，软件包安装会明确失败而不是伪装成功。Guard ON 时 safety latch 保持保护；修复报告的问题后重新执行 package configuration。
-
 ## 安全 update 与 recovery
 
 - 配置激活先 validation；失败时 rollback 部分 DNS/firewall/routing 修改。

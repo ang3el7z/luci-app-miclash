@@ -15,7 +15,6 @@ MANIFEST="/var/run/miclash/routing-ownership.json"
 DNS_MANIFEST="/etc/miclash/dns-ownership.json"
 RELEASE_SOURCE="/usr/share/miclash/package-release"
 RELEASE_DIR="/var/run/miclash/package-removal-release"
-CRON_FILE="/etc/crontabs/root"
 WAIT_ATTEMPTS=50
 MUTATION_LOCK_HELD=0
 
@@ -56,10 +55,6 @@ stop_disable() {
 }
 
 quiesce_update_triggers() {
-	if [ -f "$CRON_FILE" ]; then
-		sed -i '\|/opt/clash/bin/clash-rules update|d' "$CRON_FILE" || return 1
-		[ ! -x /etc/init.d/cron ] || /etc/init.d/cron restart >/dev/null 2>&1 || return 1
-	fi
 	stop_disable miclashd || return 1
 	return 0
 }

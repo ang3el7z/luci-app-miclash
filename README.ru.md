@@ -114,8 +114,6 @@ ubus call miclash health '{}'
 
 Основные секции UCI: `core`, `interfaces`, `guard`, `memory`, `updates`, `telegram`, `notifications`, `backup` и `meta`. Файл `/etc/config/miclash` должен быть доступен только root: в нём могут находиться URL подписок и Telegram token.
 
-Если проверка не прошла, пакет завершит установку ошибкой, а не покажет ложный успех. При Guard ON safety latch останется защищённым; исправьте указанную причину и повторите конфигурацию пакета.
-
 ## Безопасное обновление и recovery
 
 - Применение конфига сначала выполняет validation и откатывает частично изменённые DNS/firewall/routing.
