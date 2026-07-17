@@ -35,11 +35,12 @@ assert.deepEqual(readMethods.filter((name) => writeMethods.includes(name)), [],
 	'LuCI ACL read/write authorities must not overlap');
 assert.deepEqual([ ...new Set(readMethods.concat(writeMethods)) ].sort(), names.slice().sort(),
 	'LuCI ACL must cover every canonical method exactly by typed API authority');
-const declared = [ ...ui.matchAll(/\{ name: '([a-z0-9_]+)', params: \[([^\]]*)\], operation: (true|false) \}/g) ]
+const declared = [ ...ui.matchAll(/\{ name: '([a-z0-9_]+)', params: \[([^\]]*)\], operation: (true|false), access: '(read|write)' \}/g) ]
 	.map((match) => ({
 		name: match[1],
 		params: [ ...match[2].matchAll(/'([^']+)'/g) ].map((item) => item[1]),
-		operation: match[3] === 'true'
+		operation: match[3] === 'true',
+		access: match[4]
 	}));
 assert.deepEqual(declared, fixture.methods, 'api.js declarations must equal the canonical fixture');
 assert.equal((ui.match(/rpc\.declare\s*\(/g) || []).length, 1,
