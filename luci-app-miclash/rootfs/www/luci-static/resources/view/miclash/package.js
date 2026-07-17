@@ -12,7 +12,7 @@ async function detectPackageManager() {
 	for (let i = 0; i < checks.length; i++) {
 		try {
 			const probe = await fs.exec(checks[i].bin, ['--version']);
-			if (probe && typeof probe.code === 'number') return checks[i];
+			if (probe && probe.code === 0) return checks[i];
 		} catch (e) {}
 	}
 
@@ -22,11 +22,39 @@ async function detectPackageManager() {
 async function getOpenWrtReleaseVersion() {
 	try {
 		const release = await fs.read('/etc/openwrt_release');
-		const line = String(release || '').split('\n').find((item) => item.indexOf('DISTRIB_RELEASE=') === 0);
-		return line ? line.split('=')[1].replace(/["']/g, '').trim() : '';
+		const releaseVersion = parseOpenWrtReleaseVersion(release);
+		if (releaseVersion) return releaseVersion;
 	} catch (e) {
-		return '';
 	}
+
+	try {
+		const osRelease = await fs.read('/etc/os-release');
+		return parseOpenWrtReleaseVersion(osRelease);
+	} catch (e) {
+	}
+
+	return '';
+}
+
+function parseReleaseValue(raw, key) {
+	const prefix = key + '=';
+	const line = String(raw || '').split('\n').find((item) => item.indexOf(prefix) === 0);
+	return line ? line.slice(prefix.length).replace(/^['"]|['"]$/g, '').trim() : '';
+}
+
+function parseOpenWrtReleaseVersion(raw) {
+	const release = String(raw || '');
+	const distribRelease = parseReleaseValue(release, 'DISTRIB_RELEASE');
+	if (distribRelease && distribRelease !== 'SNAPSHOT') return distribRelease;
+
+	const versionId = parseReleaseValue(release, 'VERSION_ID');
+	if (versionId) return versionId;
+
+	const prettyName = parseReleaseValue(release, 'PRETTY_NAME');
+	const prettyVersion = prettyName.match(/\b(\d+(?:\.\d+)+(?:[-.][0-9A-Za-z]+)?)\b/);
+	if (prettyVersion) return prettyVersion[1];
+
+	return distribRelease || '';
 }
 
 async function execOrThrow(bin, args, fallbackMessage) {
@@ -79,5 +107,6 @@ async function ensureCurlAvailable() {
 return L.Class.extend({
 	detectPackageManager: detectPackageManager,
 	ensureCurlAvailable: ensureCurlAvailable,
-	getOpenWrtReleaseVersion: getOpenWrtReleaseVersion
+	getOpenWrtReleaseVersion: getOpenWrtReleaseVersion,
+	parseOpenWrtReleaseVersion: parseOpenWrtReleaseVersion
 });

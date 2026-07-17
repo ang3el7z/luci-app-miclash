@@ -256,6 +256,21 @@ const looksLikeUriSubscription = view_miclash_subscription.looksLikeUriSubscript
 const looksLikeBase64Blob = view_miclash_subscription.looksLikeBase64Blob;
 const looksLikeYamlConfig = view_miclash_subscription.looksLikeYamlConfig;
 
+async function getInstalledPackageVersion(packageName) {
+	const manager = await detectPackageManager();
+	if (!manager) return '';
+
+	const args = manager.type === 'apk'
+		? ['list', '-I', packageName]
+		: ['list-installed', packageName];
+	const result = await fs.exec(manager.bin, args);
+	if (!result || result.code !== 0) return '';
+
+	const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
+	const parsed = parsePackageVersion(raw, packageName);
+	return parsed ? normalizeAppVersion(parsed) : '';
+}
+
 async function getVersions() {
 	const info = { app: 'unknown', clash: 'unknown' };
 	const packageName = 'luci-app-miclash';
@@ -272,18 +287,9 @@ async function getVersions() {
 	} catch (e) {}
 
 	try {
-		const result = await fs.exec('/bin/opkg', ['list-installed', packageName]);
-		const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-		const parsed = parsePackageVersion(raw, packageName);
-		if (parsed) info.app = normalizeAppVersion(parsed);
-	} catch (_) {
-		try {
-			const result = await fs.exec('/usr/bin/apk', ['info', '-v', packageName]);
-			const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-			const parsed = parsePackageVersion(raw, packageName);
-			if (parsed) info.app = normalizeAppVersion(parsed);
-		} catch (_) {}
-	}
+		const parsed = await getInstalledPackageVersion(packageName);
+		if (parsed) info.app = parsed;
+	} catch (_) {}
 
 	if (info.app === 'unknown') {
 		try {

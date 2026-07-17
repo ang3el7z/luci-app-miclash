@@ -3,6 +3,7 @@
 'require network';
 'require view.miclash.store';
 'require view.miclash.release';
+'require view.miclash.package';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const SETTINGS_PATH = view_miclash_store.SETTINGS_PATH;
@@ -95,10 +96,8 @@ async function getHwidValues() {
 
 		let verOs = 'unknown';
 		try {
-			const verResult = await fs.exec('/bin/sh', ['-c',
-				'. /etc/openwrt_release && echo $DISTRIB_RELEASE'
-			]);
-			if (verResult.code === 0 && verResult.stdout) verOs = verResult.stdout.trim();
+			const detectedVersion = await view_miclash_package.getOpenWrtReleaseVersion();
+			if (detectedVersion) verOs = detectedVersion;
 		} catch (e) {}
 
 		let deviceModel = 'Router';
