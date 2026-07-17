@@ -64,6 +64,8 @@ assert.deepEqual(expandedBasenames('PACKAGE'),
 	'the package make expression must retain every approved ucode module and exclude held features');
 assert.match(makefile, /\$\(INSTALL_DATA\)\s+\$\(MICLASH_PACKAGE_UCODE\)\s+\$\(1\)\/usr\/share\/miclash\//,
 	'the package install recipe must consume the filtered ucode expansion');
+assert.match(makefile, /chmod 0700 \$\(1\)\/etc\/miclash/,
+	'the package must stage the privileged MiClash authority directory as root-only');
 
 assert.match(daemon, /^#!\/usr\/bin\/ucode\n/);
 assert.match(composition, /recover_interrupted\(\)/);

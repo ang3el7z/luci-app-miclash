@@ -24,6 +24,47 @@ assert_match(rt.fs.temp_paths()[0],
 	/^\/opt\/clash\/\.config\.yaml\.miclash\.[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/);
 assert_equal(rt.fs.calls.open[0].mode, 'wx');
 
+// Privileged authority directories are accepted only when canonical,
+// root-owned and not group/world writable. They are never silently chmodded.
+for (let mode in [ 0o0777, 0o0775, 0o0752 ]) {
+	let insecure = runtime({ '/etc/miclash/.keep': '' });
+	insecure.fs.set_mode('/etc/miclash', mode);
+	assert_throws(() => storage.atomic_write(insecure,
+		'/etc/miclash/state.json', '{}', 0o600), 'INVALID_ARGUMENT');
+	assert_equal(insecure.fs.exists('/etc/miclash/state.json'), false);
+	assert_equal(length(insecure.fs.calls.chmod), 0,
+		'insecure authority directory was silently repaired');
+}
+for (let owner in [ { uid: 1000, gid: 0 }, { uid: 0, gid: 1000 } ]) {
+	let foreign = runtime({ '/etc/miclash/.keep': '' });
+	foreign.fs.set_uid('/etc/miclash', owner.uid);
+	foreign.fs.set_gid('/etc/miclash', owner.gid);
+	assert_throws(() => storage.atomic_write(foreign,
+		'/etc/miclash/state.json', '{}', 0o600), 'INVALID_ARGUMENT');
+}
+for (let mode in [ 0o0700, 0o0755 ]) {
+	let secure = runtime({ '/etc/miclash/.keep': '' });
+	secure.fs.set_mode('/etc/miclash', mode);
+	assert_equal(storage.atomic_write(secure,
+		'/etc/miclash/state.json', '{}', 0o600), true);
+}
+let corrupt_authority = runtime({ '/etc/miclash': 'attacker' });
+assert_throws(() => storage.atomic_write(corrupt_authority,
+	'/etc/miclash/state.json', '{}', 0o600), 'INVALID_ARGUMENT');
+let linked_authority = runtime({ '/tmp/miclash/.keep': '' });
+linked_authority.fs.set_symlink('/etc/miclash', '/tmp/miclash');
+assert_throws(() => storage.atomic_write(linked_authority,
+	'/etc/miclash/state.json', '{}', 0o600), 'INVALID_ARGUMENT');
+
+let authority_race = runtime({ '/etc/miclash/.keep': '' });
+authority_race.fs.on_lstat = (path, count) => {
+	if (path == '/etc/miclash' && count == 2)
+		authority_race.fs.bump_inode(path);
+};
+assert_throws(() => storage.atomic_write(authority_race,
+	'/etc/miclash/state.json', '{}', 0o600), 'INVALID_ARGUMENT');
+assert_equal(authority_race.fs.exists('/etc/miclash/state.json'), false);
+
 let partial = runtime({ '/opt/clash/config.yaml': 'old' });
 partial.fs.write_results = [ 2, 1, 3 ];
 assert_equal(storage.atomic_write(partial, '/opt/clash/config.yaml', 'abcdef', 0o640), true);

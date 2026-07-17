@@ -1864,9 +1864,10 @@ finalize_guard_rules() {
 	load_all_settings_once
 	if guard_effective_enabled &&
 	   { [ "$controlled_off" != "true" ] || guard_canonical_enabled; }; then
-		# Enabled finalization refines and verifies the forced Guard without
-		# removing its independent emergency barrier during procd registration.
-		apply_guard_rules && guard_verify_protected || {
+		# Preserve an already exact Guard. If repair is required, apply_guard_rules
+		# establishes the independent emergency owner before its first mutation.
+		guard_verify_protected ||
+			{ apply_guard_rules && guard_verify_protected; } || {
 			msg "ERROR: Enabled client forwarding guard could not be proven"
 			guard_emergency_protect >/dev/null 2>&1 || true
 			return 1

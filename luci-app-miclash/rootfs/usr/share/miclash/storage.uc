@@ -44,6 +44,17 @@ function same_identity(left, right) {
 		left.nlink == right?.nlink && left.size == right?.size && left.type == right?.type;
 };
 
+function trusted_directory(stat) {
+	return stat?.type == 'directory' && stat.uid === 0 && stat.gid === 0 &&
+		type(stat.mode) == 'int' && (stat.mode & 0o022) == 0;
+};
+
+function same_directory_authority(left, right) {
+	return trusted_directory(left) && trusted_directory(right) &&
+		same_device(left, right) && left.inode != null && left.inode == right.inode &&
+		left.uid == right.uid && left.gid == right.gid && left.mode == right.mode;
+};
+
 function canonical_root(root) {
 	return root == '/var/run/miclash' ? '/tmp/run/miclash' : root;
 };
@@ -71,7 +82,7 @@ function secure_directory(runtime, path) {
 	let current = root;
 	let root_stat = runtime.fs.lstat(current);
 	let canonical = runtime.fs.realpath(current);
-	if (root_stat?.type != 'directory' || !trusted_root_path(root, canonical))
+	if (!trusted_directory(root_stat) || !trusted_root_path(root, canonical))
 		fail('INVALID_ARGUMENT');
 
 	let current_stat = root_stat;
@@ -80,7 +91,7 @@ function secure_directory(runtime, path) {
 		current += '/' + part;
 		canonical += '/' + part;
 		current_stat = runtime.fs.lstat(current);
-		if (current_stat?.type != 'directory' || runtime.fs.realpath(current) != canonical)
+		if (!trusted_directory(current_stat) || runtime.fs.realpath(current) != canonical)
 			fail('INVALID_ARGUMENT');
 	}
 
@@ -199,6 +210,11 @@ export function atomic_write(runtime, path, data, mode) {
 		if (!same_identity(temp_stat, verified_stat) || verified_stat.size != length(data) ||
 		    runtime.fs.realpath(owned) != canonical_member(directory, owned))
 			fail('INVALID_ARGUMENT');
+		let current_directory = secure_directory(runtime, path);
+		if (directory.canonical != current_directory.canonical ||
+		    !same_directory_authority(directory_stat, current_directory.stat) ||
+		    !same_device(verified_stat, current_directory.stat))
+			fail('INVALID_ARGUMENT');
 		if (runtime.fs.rename(owned, path) != true)
 			fail('INTERNAL');
 
@@ -235,7 +251,7 @@ export function atomic_replace(runtime, source, destination) {
 	let current_directory = secure_directory(runtime, destination);
 	if (!same_identity(source_stat, current_stat) ||
 	    runtime.fs.realpath(source) != canonical_member(current_directory, source) ||
-	    !same_identity(directory.stat, current_directory.stat) ||
+	    !same_directory_authority(directory.stat, current_directory.stat) ||
 	    directory.canonical != current_directory.canonical)
 		fail('INVALID_ARGUMENT');
 	if (runtime.fs.rename(source, destination) != true)

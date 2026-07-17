@@ -5,6 +5,7 @@ const RETRY_DELAYS = [ 1000, 5000, 10000, 60000 ];
 export function create(app) {
 	if (type(app?.clock?.set_timeout) != 'function' ||
 	    type(app?.clock?.set_fallback_timeout) != 'function' ||
+	    type(app?.on_ready) != 'function' ||
 	    type(app?.guard?.is_latched) != 'function' ||
 	    type(app?.guard?.latch_set) != 'function' ||
 	    type(app?.guard?.protect) != 'function' ||
@@ -12,7 +13,7 @@ export function create(app) {
 	    type(app?.reconcile?.recover_guard) != 'function')
 		fail('INVALID_ARGUMENT');
 
-	let closed = false, timer = null, generation = 0, failures = 0;
+	let closed = false, ready = false, timer = null, generation = 0, failures = 0;
 	let attempt;
 
 	function cancel_timer() {
@@ -56,12 +57,24 @@ export function create(app) {
 		return app.guard.protect() === true && app.guard.verify_protected() === true;
 	};
 
+	function notify_ready() {
+		if (closed) return false;
+		if (ready) return true;
+		ready = true;
+		cancel_timer();
+		let completed;
+		try { completed = app.on_ready(); }
+		catch (error) { fail('INTERNAL'); }
+		if (completed !== true) fail('INTERNAL');
+		return true;
+	};
+
 	attempt = () => {
 		if (closed) return false;
 		if (app.guard.is_latched() !== true) {
 			failures = 0;
 			cancel_timer();
-			return true;
+			return notify_ready();
 		}
 
 		let protected = false;
@@ -73,7 +86,6 @@ export function create(app) {
 				fail('HEALTH_FAILED');
 			failures = 0;
 			cancel_timer();
-			return true;
 		}
 		catch (error) {
 			// A failed Guard reconciliation may have reached latch release. Re-arm
@@ -85,6 +97,7 @@ export function create(app) {
 			failures++;
 			return schedule_retry();
 		}
+		return notify_ready();
 	};
 
 	return {

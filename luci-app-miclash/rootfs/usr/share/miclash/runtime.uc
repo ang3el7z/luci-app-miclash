@@ -578,13 +578,15 @@ function private_runtime_directories(filesystem) {
 		let stat = filesystem.lstat(path);
 		if (stat == null) {
 			if (filesystem.mkdir(path) !== true) fail('INTERNAL');
+			if (filesystem.chmod(path, 0o700) !== true) fail('INTERNAL');
 			stat = filesystem.lstat(path);
 		}
 		let canonical = filesystem.realpath(path);
-		if (stat?.type != 'directory' || stat.uid != 0 ||
+		if (stat?.type != 'directory' || stat.uid != 0 || stat.gid != 0 ||
+		    type(stat.mode) != 'int' || (stat.mode & 0o022) != 0 ||
 		    (path == '/var/run/miclash'
 			? index([ path, '/run/miclash', '/tmp/run/miclash' ], canonical) < 0
-			: canonical != path) || filesystem.chmod(path, 0o700) !== true)
+			: canonical != path))
 			fail('INTERNAL');
 	}
 	return true;

@@ -68,6 +68,7 @@ export function fs(initial) {
 	let directories = { '/': true };
 	let modes = {};
 	let owners = {};
+	let groups = {};
 	let devices = {};
 	let inodes = {};
 	let mtimes = {};
@@ -177,8 +178,10 @@ export function fs(initial) {
 			inode: inodes[resolved] ?? (inodes[resolved] = next_inode++),
 			nlink: links[path] ?? 1,
 			uid: owners[path] ?? owners[resolved] ?? 0,
-			mode: modes[path] ?? modes[resolved] ??
-				(exists(files, resolved) ? 0o600 : 0o755),
+			gid: groups[path] ?? groups[resolved] ?? 0,
+			mode: modes[path] ?? modes[resolved] ?? (exists(files, resolved) ? 0o600 :
+				(index([ '/etc/miclash', '/tmp/miclash', '/var/run/miclash' ], resolved) >= 0
+					? 0o700 : 0o755)),
 			mtime: mtimes[path] ?? mtimes[resolved] ?? 0,
 			dev: { major: 0, minor: device }
 		};
@@ -329,7 +332,7 @@ export function fs(initial) {
 			return null;
 		if (exists(directories, from)) {
 			if (exists(files, to) || exists(directories, to) || exists(symlinks, to)) return null;
-			let mappings = [ directories, files, modes, owners, devices, inodes, links, mtimes,
+			let mappings = [ directories, files, modes, owners, groups, devices, inodes, links, mtimes,
 				object_generations, directory_owners ];
 			for (let values in mappings) {
 				let moved = {};
@@ -403,6 +406,7 @@ export function fs(initial) {
 	fake.set_device = (path, device) => devices[path] = device;
 	fake.set_nlink = (path, count) => links[path] = count;
 	fake.set_uid = (path, uid) => owners[path] = uid;
+	fake.set_gid = (path, gid) => groups[path] = gid;
 	fake.set_mode = (path, mode) => modes[path] = mode;
 	fake.set_mtime = (path, mtime) => mtimes[path] = mtime;
 	fake.bump_inode = (path) => {

@@ -583,12 +583,17 @@ assert_equal(guard_actual, false);
 // physical protection and an armed latch. Guard-only reconciliation repairs
 // both persisted desired state and the live state model without Clash health.
 guard_latched = true; guard_actual = false;
+let integrated_ready = 0;
 let integrated_startup = startup_guard.create({
 	clock: integrated_runtime.clock,
 	guard: integrated_runtime.guard_control,
-	reconcile: integrated_runtime.reconcile
+	reconcile: integrated_runtime.reconcile,
+	on_ready: () => { integrated_ready++; return true; }
 });
 assert_true(integrated_startup.start());
+assert_equal(integrated_ready, 1);
+assert_true(integrated_startup.start());
+assert_equal(integrated_ready, 1, 'repeated startup armed observation twice');
 assert_equal(desired.guard.enabled, true);
 assert_equal(integrated.state.snapshot().desired.guard.enabled, true);
 assert_equal(guard_actual, true);

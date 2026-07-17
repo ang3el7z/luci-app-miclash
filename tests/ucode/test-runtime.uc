@@ -40,6 +40,20 @@ assert_true(extended.mutation_lock_self === lock_identity);
 assert_equal(extended.core_available, true);
 assert_equal(extended.app_version, '0.9.2');
 
+// Existing authority directories are trust boundaries. Runtime creation must
+// reject an attacker-writable directory instead of silently chmod() repairing
+// it after an untrusted process may already have populated it.
+let insecure_authority_fs = fakes.fs({ '/etc/miclash/sentinel': 'untrusted' });
+insecure_authority_fs.set_mode('/etc/miclash', 0o777);
+assert_throws(() => runtime.create({
+	fs: insecure_authority_fs,
+	digest: fakes.digest(insecure_authority_fs), random: fakes.entropy(),
+	clock: fakes.clock(0), process: fakes.process(), uci: fakes.uci({}),
+	ubus: { connect: () => null }, http: { request: () => null }
+}), 'INTERNAL');
+assert_equal(insecure_authority_fs.mode('/etc/miclash'), 0o777,
+	'runtime silently repaired an untrusted authority directory');
+
 let production = runtime.create();
 assert_true(type(production.clock.set_timeout) == 'function');
 assert_true(type(production.clock.set_fallback_timeout) == 'function');

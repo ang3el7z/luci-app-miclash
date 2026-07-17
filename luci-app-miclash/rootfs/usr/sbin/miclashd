@@ -10,35 +10,51 @@ if (uloop.init() !== true)
 
 let environment = runtime.create();
 let process = daemon.compose(environment);
+let shutting_down = false;
+let aborting = false;
 let startup = null;
+let observation_timer = null;
+
+function abort_startup() {
+	if (aborting)
+		die('INTERNAL');
+	aborting = true;
+	shutting_down = true;
+	try { startup?.close?.(); } catch (startup_error) {}
+	try { process.drain(); } catch (drain_error) {}
+	try { process.close(); } catch (close_error) {}
+	uloop.done();
+	die('INTERNAL');
+};
+
+function arm_observation() {
+	if (shutting_down)
+		return false;
+	if (observation_timer != null)
+		return true;
+	let candidate = uloop.timer(0, () => {
+		try { process.state.observe('config.yaml'); }
+		catch (error) {}
+		if (!shutting_down)
+			observation_timer.set(10000);
+	});
+	if (candidate == null)
+		abort_startup();
+	observation_timer = candidate;
+	return true;
+};
+
 try {
 	startup = startup_guard.create({
 		clock: environment.clock,
 		guard: environment.guard_control,
-		reconcile: environment.reconcile
+		reconcile: environment.reconcile,
+		on_ready: arm_observation
 	});
 	startup.start();
 }
 catch (error) {
-	try { startup?.close?.(); } catch (close_error) {}
-	try { process.close(); } catch (close_error) {}
-	uloop.done();
-	die('INTERNAL');
-}
-
-let shutting_down = false;
-let observation_timer = null;
-observation_timer = uloop.timer(0, () => {
-	try { process.state.observe('config.yaml'); }
-	catch (error) {}
-	if (!shutting_down)
-		observation_timer.set(10000);
-});
-if (observation_timer == null) {
-	try { startup.close(); } catch (startup_error) {}
-	try { process.close(); } catch (close_error) {}
-	uloop.done();
-	die('INTERNAL');
+	abort_startup();
 }
 
 function shutdown() {

@@ -132,6 +132,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/usr/share/miclash
 	$(INSTALL_DATA) $(MICLASH_PACKAGE_UCODE) $(1)/usr/share/miclash/
 	$(INSTALL_DIR) $(1)/etc/miclash
+	chmod 0700 $(1)/etc/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/mutation-lock.sh $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-remove $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-release $(1)/usr/share/miclash/

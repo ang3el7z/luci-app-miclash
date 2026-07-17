@@ -12,18 +12,22 @@ const init = fs.readFileSync('luci-app-miclash/rootfs/etc/init.d/miclashd', 'utf
 const create = daemon.indexOf('runtime.create()');
 const compose = daemon.indexOf('daemon.compose(environment)');
 const startup = daemon.indexOf('startup_guard.create');
-const start = daemon.indexOf('.start()');
+const start = daemon.indexOf('startup.start()');
+const arm = daemon.indexOf('function arm_observation()');
 const observation = daemon.indexOf('process.state.observe');
 check(daemon.includes("from 'miclash.startup-guard'"),
 	'miclashd must import the production startup Guard recovery module');
-check(create >= 0 && compose > create && startup > compose && start > startup && observation > start,
-	'startup Guard recovery must run immediately after compose and before observation');
+check(daemon.includes('on_ready: arm_observation'),
+	'miclashd must arm normal observation only through startup Guard readiness');
+check(create >= 0 && compose > create && arm > compose && observation > arm &&
+	startup > observation && start > startup,
+	'normal observation must be defined as a callback and startup recovery invoked after compose');
 check(daemon.includes('startup.close()'),
 	'miclashd shutdown must close the startup retry lifecycle');
-const observationFailure = daemon.slice(daemon.indexOf('if (observation_timer == null)'),
-	daemon.indexOf('function shutdown()'));
-check(observationFailure.indexOf('startup.close()') >= 0 &&
-	observationFailure.indexOf('startup.close()') < observationFailure.indexOf('process.close()'),
+const observationFailure = daemon.slice(daemon.indexOf('function abort_startup()'),
+	daemon.indexOf('function arm_observation()'));
+check(observationFailure.indexOf('startup?.close?.()') >= 0 &&
+	observationFailure.indexOf('startup?.close?.()') < observationFailure.indexOf('process.close()'),
 	'observation timer setup failure must close startup retries before daemon composition');
 check(/procd_set_param respawn\s+[0-9]+\s+[0-9]+\s+[0-9]+/.test(init),
 	'procd must respawn miclashd after an unrecoverable startup scheduler failure');

@@ -262,8 +262,7 @@ assert_guard
 
 # Execute the shipped init service entrypoints against stateful firewall, DNS,
 # procd and core shims. The shims reject any transition attempted without Guard.
-cp "$repo_root"/luci-app-miclash/rootfs/usr/share/miclash/*.uc /usr/share/miclash/
-cp "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh" /usr/share/miclash/
+cp -R "$repo_root/luci-app-miclash/rootfs/usr/share/miclash/." /usr/share/miclash/
 mkdir -p /opt/clash/bin
 cp "$repo_root/luci-app-miclash/rootfs/opt/clash/bin/clash-rules" "$fixture/clash-rules.actual"
 chmod 0700 "$fixture/clash-rules.actual"
@@ -292,6 +291,18 @@ if [ "${guard_runtime:-0}" = 1 ]; then
 			rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
 			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-post-delete-inventory" ] ||
 				: > "$MICLASH_DNS_GATE_FAIL-guard-inventory"
+			;;
+		latch-set)
+			: > /etc/miclash/guard-safety-latch
+			;;
+		latch-clear)
+			rm -f /etc/miclash/guard-safety-latch
+			;;
+		latch-status)
+			[ -e /etc/miclash/guard-safety-latch ]
+			;;
+		verify-bootstrap-on|verify-bootstrap-off)
+			[ ! -e "$MICLASH_DNS_GATE_FAIL-guard-bootstrap-verify" ]
 			;;
 		verify-nft)
 			cat >/dev/null
@@ -338,7 +349,23 @@ exec "$UCODE_BIN" -L "$MICLASH_DNS_GATE_MODULE_DIR/*.so" \
 	-L "$MICLASH_DNS_GATE_FIXTURE/*.uc" "$@" >> "$MICLASH_DNS_GATE_LOG.ucode" 2>&1
 EOF
 chmod 0700 "$fixture/ucode"
+cat > "$fixture/uci" <<'EOF'
+#!/bin/sh
+case "$*" in
+	'-q get miclash.guard.enabled')
+		value=$(sed -n 's/^INTERNET_ONLY_MICLASH=//p' /opt/clash/settings | tail -n 1)
+		case "$value" in
+			true|1) printf '%s\n' 1 ;;
+			false|0) printf '%s\n' 0 ;;
+			*) exit 1 ;;
+		esac
+		;;
+	*) exit 0 ;;
+esac
+EOF
+chmod 0700 "$fixture/uci"
 mkdir -p /usr/bin
+[ ! -L /usr/bin/ucode ] || rm -f /usr/bin/ucode
 [ -e /usr/bin/ucode ] || : > /usr/bin/ucode
 mount --bind "$fixture/ucode" /usr/bin/ucode
 cat > "$fixture/logger" <<'EOF'
@@ -474,6 +501,7 @@ rm -f "$MICLASH_DNS_GATE_EMERGENCY_STATE"
 : > "$MICLASH_DNS_GATE_NFT_LOG"
 : > "$MICLASH_DNS_GATE_FAIL-guard-protect"
 printf '%s\n' 'INTERNET_ONLY_MICLASH=false' > /opt/clash/settings
+rm -f /etc/miclash/guard-safety-latch
 if run_actual_rules guard_finalize; then
 	echo 'disabled finalization ignored emergency protection failure' >&2; exit 1
 fi
