@@ -23,7 +23,5 @@ try {
 	}
 }
 catch (error) {
-	let trace = getenv('MICLASH_DNS_GATE_TRACE') == '1' ? error?.stacktrace : null;
-	die('MiClash DNS reconciliation refused: ' + normalize(error).code + '\n' +
-		(trace == null ? '' : sprintf('%J\n', trace)));
+	die('MiClash DNS reconciliation refused: ' + normalize(error).code + '\n');
 }

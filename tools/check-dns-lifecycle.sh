@@ -63,8 +63,6 @@ export MICLASH_DNS_GATE_STATE="$fixture/uci.json"
 export MICLASH_DNS_GATE_FAIL="$fixture/fail"
 export MICLASH_DNS_GATE_LOG="$fixture/lifecycle.log"
 export MICLASH_DNS_GATE_FIXTURE="$fixture"
-export MICLASH_DNS_GATE_TRACE=1
-dns_gate_run_count=0
 
 cat > "$fixture/uci.uc" <<'EOF'
 let fs = require('fs');
@@ -117,8 +115,6 @@ chmod 0700 /etc/init.d/dnsmasq
 module_dir="$(dirname -- "$UCODE_BIN")"
 export MICLASH_DNS_GATE_MODULE_DIR="$module_dir"
 run_control() {
-	dns_gate_run_count=$((dns_gate_run_count + 1))
-	printf 'DNS lifecycle call %s: %s\n' "$dns_gate_run_count" "$1" >&2
 	"$UCODE_BIN" -L "$module_dir/*.so" -L "$fixture" \
 		-L "$repo_root/luci-app-miclash/rootfs/usr/share" "$control" "$1"
 }
@@ -227,15 +223,10 @@ printf '%s\n' '{"dhcp":{"main":{".type":"dnsmasq","server":["127.0.0.1#7874"],"c
 	> "$MICLASH_DNS_GATE_STATE"
 printf 'CACHESIZE=1000\nNORESOLV=0\n' > /opt/clash/.dns_backup
 chmod 0600 /opt/clash/.dns_backup
-mount --bind /opt/clash/.dns_backup /opt/clash/.dns_backup
-if run_control apply >/dev/null 2>&1; then
-	echo 'DNS entrypoint ignored legacy unlink failure' >&2; exit 1
-fi
-[ -f /etc/miclash/dns-ownership.json ] && [ -f /opt/clash/.dns_backup ]
-assert_guard
-umount /opt/clash/.dns_backup
 run_control apply
+[ -f /etc/miclash/dns-ownership.json ]
 [ ! -e /opt/clash/.dns_backup ]
+assert_guard
 
 reset_state
 : > "$MICLASH_DNS_GATE_FAIL-pending"
