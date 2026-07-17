@@ -139,8 +139,8 @@ jobs:
           sudo tools/check-package-removal.sh
           sudo tools/check-hard-reinstall-marker.sh
           sudo tools/check-mutation-lock.sh
-          tools/check-ready-release-selection.sh
-          tools/check-update-status-protocol.sh
+          sudo tools/check-ready-release-selection.sh
+          sudo tools/check-update-status-protocol.sh
 
   package-build:
     name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }}, ${{ matrix.arch }})
