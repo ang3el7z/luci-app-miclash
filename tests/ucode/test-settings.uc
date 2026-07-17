@@ -74,6 +74,7 @@ assert_equal(migrated.updates.auto_subscription, false);
 assert_equal(migrated.updates.interval_hours, 12);
 assert_equal(migrated.updates.miclash_release_channel, 'prerelease');
 assert_equal(migrated.updates.mihomo_release_channel, 'prerelease');
+assert_equal(migrated.updates.auto_major_miclash, true);
 assert_equal(migrated.notifications.auto_hide, false);
 assert_json_equal(migrated.telegram, { enabled: false, token: '', user_id: '' });
 assert_json_equal(migrated.backup, { enabled: false, retention: 5, include_secrets: false,
@@ -101,6 +102,7 @@ assert_equal(defaults.updates.auto_subscription, true);
 assert_equal(defaults.updates.interval_hours, 4);
 assert_equal(defaults.updates.miclash_release_channel, 'release');
 assert_equal(defaults.updates.mihomo_release_channel, 'release');
+assert_equal(defaults.updates.auto_major_miclash, true);
 assert_equal(defaults.notifications.auto_hide, true);
 assert_json_equal(defaults.notifications.channels, [ 'syslog', 'luci', 'telegram' ]);
 assert_json_equal(defaults.notifications.events, [ 'guard_outage', 'failure', 'recovery',
@@ -141,6 +143,10 @@ assert_equal(normalized.telegram.enabled, true);
 assert_equal(normalized_env.cursor.commit_calls, 1);
 assert_true(normalized_env.cursor.set_calls > 0);
 
+let auto_major_env = fake_runtime();
+assert_equal(settings.save(auto_major_env.rt,
+	{ updates: { auto_major_miclash: false } }).updates.auto_major_miclash, false);
+
 assert_throws(() => settings.save(fake_runtime().rt, { unknown: { enabled: true } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt, { core: { unknown: true } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt, { core: { proxy_mode: 'shell' } }), 'INVALID_ARGUMENT');
@@ -153,6 +159,8 @@ assert_throws(() => settings.save(fake_runtime().rt,
 	{ backup: { schedule_time: '25:00' } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ backup: { interval_hours: 169 } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.validate_patch(
+	{ updates: { auto_major_miclash: '1' } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ memory: { sample_interval_ms: 9999 } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,

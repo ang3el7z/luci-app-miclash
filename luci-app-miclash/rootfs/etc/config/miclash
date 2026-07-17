@@ -30,6 +30,7 @@ config updates 'updates'
 	option interval_hours '4'
 	option miclash_release_channel 'release'
 	option mihomo_release_channel 'release'
+	option auto_major_miclash '1'
 
 config telegram 'telegram'
 	option enabled '0'

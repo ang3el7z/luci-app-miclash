@@ -293,6 +293,7 @@ function buildInlineIcon(name, className) {
 	const icons = {
 		download: '<path d="M12 3v11"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
 		refresh: '<path d="M20 11a8 8 0 0 0-14.8-4"></path><path d="M5 3v4h4"></path><path d="M4 13a8 8 0 0 0 14.8 4"></path><path d="M19 21v-4h-4"></path>',
+		clock: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path>',
 		x: '<path d="M18 6 6 18"></path><path d="M6 6l12 12"></path>',
 		info: '<path d="M12 11v6"></path><circle cx="12" cy="7" r="1.2"></circle>'
 	};
@@ -302,7 +303,9 @@ function buildInlineIcon(name, className) {
 }
 
 function buildVersionActionIcon(state) {
-	return buildInlineIcon(state && state.iconName === 'refresh' ? 'refresh' : 'download', 'sbox-version-action-icon');
+	const iconName = state && (state.iconName === 'refresh' || state.iconName === 'clock')
+		? state.iconName : 'download';
+	return buildInlineIcon(iconName, 'sbox-version-action-icon');
 }
 
 function isValidUrl(url) {
@@ -493,6 +496,18 @@ function resolveAppActionState() {
 	}
 
 	if (hasUpdate) {
+		const localMajor = /^\d+\.\d+\.\d+$/.test(local) ? parseInt(local.split('.')[0], 10) : null;
+		const latestMajor = /^\d+\.\d+\.\d+$/.test(latest) ? parseInt(latest.split('.')[0], 10) : null;
+		const scheduledMajor = appState.settings?.autoMajorMiclash !== false &&
+			normalizeReleaseChannel(appState.settings?.miclashReleaseChannel) === 'release' &&
+			localMajor != null && latestMajor != null && latestMajor > localMajor;
+		if (scheduledMajor) {
+			return {
+				kind: 'update', scheduled: true, targetVersion: latest,
+				iconName: 'clock', className: 'cbi-button-positive',
+				title: _('Major update %s is scheduled for the night. Click to update now.').format(latest)
+			};
+		}
 		return {
 			kind: 'update',
 			iconName: 'download',
@@ -1337,7 +1352,7 @@ async function openDashboard() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, options) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, autoMajorMiclash, options) {
 	const opts = options || {};
 	try {
 		await view_miclash_settings_model.saveOperationalSettings(
@@ -1355,7 +1370,8 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			miclashReleaseChannel,
 			mihomoReleaseChannel,
 			autoUpdateConfig,
-			autoUpdateIntervalHours
+			autoUpdateIntervalHours,
+			autoMajorMiclash
 		);
 		const typed = await configApi.settings_get();
 		if (!!(typed.guard && typed.guard.enabled) !== !!internetOnlyMiclash) {
@@ -1406,6 +1422,7 @@ async function switchProxyModeFromHeader(targetMode) {
 		current.mihomoReleaseChannel || 'release',
 		current.autoUpdateConfig !== false,
 		current.autoUpdateIntervalHours || '4',
+		current.autoMajorMiclash !== false,
 		{ silent: true }
 	);
 
@@ -1932,6 +1949,10 @@ function buildReleaseChannelSectionHtml(settings) {
 						'<input type="radio" name="sbox-miclash-release-channel" value="prerelease"' + (normalizeReleaseChannel(s.miclashReleaseChannel) === 'prerelease' ? ' checked' : '') + ' />' +
 						'<span>' + safeText(_('Pre-release')) + '</span>' +
 					'</label>' +
+					'<label class="sbox-checkbox-row">' +
+						'<input type="checkbox" id="sbox-auto-major-miclash"' + (s.autoMajorMiclash !== false ? ' checked' : '') + ' />' +
+						'<span>' + safeText(_('Automatically install major MiClash updates at night')) + '</span>' +
+					'</label>' +
 				'</div>' +
 				'<div class="sbox-release-channel-column">' +
 					'<div class="sbox-release-channel-title">Mihomo</div>' +
@@ -2018,6 +2039,7 @@ function buildSettingsPaneHtml() {
 		enableMemoryGuard: false,
 		autoUpdateConfig: true,
 		autoUpdateIntervalHours: '4',
+		autoMajorMiclash: true,
 		miclashReleaseChannel: 'release',
 		mihomoReleaseChannel: 'release',
 		enableHwid: false,
@@ -2146,6 +2168,8 @@ function buildPageHtml() {
 	const kernelActionState = resolveKernelActionState();
 	const dashboardButtonState = resolveDashboardButtonState();
 	const versionApp = safeText(appState.versions.app || _('unknown'));
+	const appTarget = appActionState.scheduled && appActionState.targetVersion
+		? ' data-target-version="' + safeText(appActionState.targetVersion) + '"' : '';
 	const versionKernel = safeText(
 		appState.kernelStatus && appState.kernelStatus.installed
 			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
@@ -2156,7 +2180,7 @@ function buildPageHtml() {
 		'<div class="sbox-header">' +
 			'MiClash <span class="sbox-version-inline">' +
 				'<strong id="sbox-app-version">' + versionApp + '</strong>' +
-				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '">' + buildVersionActionIcon(appActionState) + '</button>' +
+				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '"' + appTarget + '>' + buildVersionActionIcon(appActionState) + '</button>' +
 			'</span>' +
 			'mihomo <span class="sbox-version-inline">' +
 				'<strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
@@ -2315,6 +2339,10 @@ function updateHeaderAndControlDom() {
 		appAction.innerHTML = buildVersionActionIcon(appActionState);
 		appAction.title = appActionState.title;
 		appAction.setAttribute('aria-label', appActionState.title);
+		if (appActionState.scheduled && appActionState.targetVersion)
+			appAction.setAttribute('data-target-version', appActionState.targetVersion);
+		else
+			appAction.removeAttribute('data-target-version');
 	}
 	if (kernelVersion) {
 		kernelVersion.textContent = appState.kernelStatus && appState.kernelStatus.installed
@@ -2409,6 +2437,8 @@ async function collectSettingsFormState() {
 	const autoUpdateIntervalEl = pane.querySelector('input[name="sbox-auto-update-interval"]:checked');
 	const autoUpdateConfig = autoUpdateConfigEl ? !!autoUpdateConfigEl.checked : true;
 	const autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalEl?.value || '4') || '4';
+	const autoMajorMiclashEl = pane.querySelector('#sbox-auto-major-miclash');
+	const autoMajorMiclash = autoMajorMiclashEl ? !!autoMajorMiclashEl.checked : true;
 	const enableHwid = !!pane.querySelector('#sbox-enable-hwid')?.checked;
 	const hwidUserAgent = String(pane.querySelector('#sbox-hwid-user-agent')?.value || 'MiClash').trim() || 'MiClash';
 	const hwidDeviceOS = String(pane.querySelector('#sbox-hwid-device-os')?.value || 'OpenWrt').trim() || 'OpenWrt';
@@ -2435,6 +2465,7 @@ async function collectSettingsFormState() {
 		useTmpfsRules,
 		autoUpdateConfig,
 		autoUpdateIntervalHours,
+		autoMajorMiclash,
 		selected,
 		enableHwid,
 		hwidUserAgent,
@@ -2510,6 +2541,7 @@ function bindSettingsPaneEvents() {
 				formState.mihomoReleaseChannel,
 				formState.autoUpdateConfig,
 				formState.autoUpdateIntervalHours,
+				formState.autoMajorMiclash,
 				{ silent: true }
 			);
 

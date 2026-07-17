@@ -262,6 +262,7 @@ function defaultOperationalSettings() {
 		autoUpdateConfig: true,
 		autoUpdateIntervalHours: '4',
 		autoUpdateIntervalStored: false,
+		autoMajorMiclash: true,
 		miclashReleaseChannel: 'release',
 		mihomoReleaseChannel: 'release',
 		detectedLan: '',
@@ -299,6 +300,7 @@ async function loadOperationalSettings() {
 		settings.autoUpdateConfig = updates.auto_subscription !== false;
 		settings.autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(updates.interval_hours);
 		settings.autoUpdateIntervalStored = true;
+		settings.autoMajorMiclash = updates.auto_major_miclash !== false;
 		settings.miclashReleaseChannel = view_miclash_release.normalizeReleaseChannel(updates.miclash_release_channel);
 		settings.mihomoReleaseChannel = view_miclash_release.normalizeReleaseChannel(updates.mihomo_release_channel);
 		settings.detectedLan = String(interfaces.detected_lan || '');
@@ -341,7 +343,7 @@ async function detectWanInterface() {
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, autoMajorMiclash) {
 	let detectedLan = '';
 	let detectedWan = '';
 	const cleanAutoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalHours);
@@ -379,7 +381,8 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			updates: { auto_subscription: autoUpdateConfig !== false,
 				interval_hours: parseInt(cleanAutoUpdateIntervalHours, 10),
 				miclash_release_channel: view_miclash_release.normalizeReleaseChannel(miclashReleaseChannel),
-				mihomo_release_channel: view_miclash_release.normalizeReleaseChannel(mihomoReleaseChannel) }
+				mihomo_release_channel: view_miclash_release.normalizeReleaseChannel(mihomoReleaseChannel),
+				auto_major_miclash: autoMajorMiclash !== false }
 		};
 		await waitOperation(api, await api.operational_settings_apply(
 			'config.yaml', updatedConfig, settings, 'luci'));

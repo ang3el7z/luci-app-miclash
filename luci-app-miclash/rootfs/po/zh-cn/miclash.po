@@ -2054,3 +2054,9 @@ msgstr "星期六"
 
 msgid "Sunday"
 msgstr "星期日"
+
+msgid "Automatically install major MiClash updates at night"
+msgstr "夜间自动安装 MiClash 主版本更新"
+
+msgid "Major update %s is scheduled for the night. Click to update now."
+msgstr "主版本更新 %s 已计划在夜间安装。点击可立即更新。"

@@ -51,7 +51,8 @@ const FIELDS = {
 		auto_subscription: 'bool',
 		interval_hours: 'interval',
 		miclash_release_channel: 'release_channel',
-		mihomo_release_channel: 'release_channel'
+		mihomo_release_channel: 'release_channel',
+		auto_major_miclash: 'bool'
 	},
 	telegram: {
 		enabled: 'bool',
@@ -110,7 +111,8 @@ function defaults() {
 			auto_subscription: true,
 			interval_hours: 4,
 			miclash_release_channel: 'release',
-			mihomo_release_channel: 'release'
+			mihomo_release_channel: 'release',
+			auto_major_miclash: true
 		},
 		telegram: { enabled: false, token: '', user_id: '' },
 		notifications: {
@@ -484,6 +486,7 @@ export function legacy_patch(text) {
 		[ 'release', 'prerelease' ], base.updates.miclash_release_channel);
 	patch.updates.mihomo_release_channel = legacy_enum(legacy.MIHOMO_RELEASE_CHANNEL,
 		[ 'release', 'prerelease' ], base.updates.mihomo_release_channel);
+	patch.updates.auto_major_miclash = base.updates.auto_major_miclash;
 	patch.notifications.auto_hide = legacy_boolean(legacy.AUTO_HIDE_NOTIFICATIONS,
 		base.notifications.auto_hide, true);
 

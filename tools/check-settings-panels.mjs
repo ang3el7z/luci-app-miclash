@@ -76,6 +76,12 @@ assert.doesNotMatch(config, /settings\.autoHideNotifications/,
 assert.match(config, /notificationAutoHide/,
 	'notification toasts do not consume typed notifications.auto_hide state');
 assert.match(api, /devices_timezones/, 'typed timezone allowlist method is missing');
+assert.match(config, /id="sbox-auto-major-miclash"/,
+	'automatic major MiClash checkbox is missing');
+assert.match(config, /autoMajorMiclash !== false \? ' checked' : ''/,
+	'automatic major checkbox is not default-on');
+assert.match(config, /autoMajorMiclashEl[\s\S]*autoMajorMiclash/,
+	'automatic major checkbox value is not collected for atomic save');
 
 const identity = (value) => String(value);
 const load = (source) => new Function('ui', 'E', '_', 'document', 'window', source)(

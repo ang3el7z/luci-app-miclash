@@ -43,7 +43,8 @@ const typedSettings = {
 		detected_lan: 'br-lan', detected_wan: 'wan', included: [ 'lan1' ], excluded: [] },
 	memory: { enabled: true }, notifications: { auto_hide: false },
 	updates: { auto_subscription: false, interval_hours: 12,
-		miclash_release_channel: 'prerelease', mihomo_release_channel: 'release' }
+		miclash_release_channel: 'prerelease', mihomo_release_channel: 'release',
+		auto_major_miclash: false }
 };
 const settingsModel = load('settings-model.js', {
 	L: { Class: { extend: (value) => value }, resolveDefault: async (value, fallback) => {
@@ -80,6 +81,7 @@ assert.equal(mappedSettings.tunStack, 'gvisor');
 assert.equal(mappedSettings.enableMemoryGuard, true);
 assert.equal(mappedSettings.autoUpdateIntervalHours, '12');
 assert.equal(mappedSettings.miclashReleaseChannel, 'prerelease');
+assert.equal(mappedSettings.autoMajorMiclash, false);
 assert.deepEqual((await settingsModel.getNetworkInterfaces()).map((item) => item.name),
 	[ 'wan', 'br-lan', 'wlan0' ]);
 assert.equal(await settingsModel.detectLanBridge(), 'br-lan');
@@ -88,13 +90,20 @@ assert.ok(settingsCalls.some((call) => call.method === 'settings_get'));
 assert.equal(await settingsModel.saveOperationalSettings(
 	'explicit', 'tun', 'system', true, false, true, true,
 	[ 'br-lan', 'lan1' ], false, 'MiClash', 'OpenWrt',
-	'release', 'release', true, '12'
+	'release', 'release', true, '12', false
 ), true);
 assert.deepEqual(settingsCalls
 	.filter((call) => call.method === 'operational_settings_apply')
 	.map((call) => call.method),
 [ 'operational_settings_apply' ]);
 assert.deepEqual(settingsCalls.find((call) => call.method === 'operational_settings_apply').settings.interfaces.included, [ 'lan1' ]);
+assert.deepEqual(settingsCalls.find((call) => call.method === 'operational_settings_apply').settings.updates, {
+	auto_subscription: true,
+	interval_hours: 12,
+	miclash_release_channel: 'release',
+	mihomo_release_channel: 'release',
+	auto_major_miclash: false
+});
 
 const rulesetCalls = [];
 const rulesets = load('rulesets-model.js', {

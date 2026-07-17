@@ -2107,3 +2107,9 @@ msgstr "Суббота"
 
 msgid "Sunday"
 msgstr "Воскресенье"
+
+msgid "Automatically install major MiClash updates at night"
+msgstr "Автоматически устанавливать мажорные обновления MiClash ночью"
+
+msgid "Major update %s is scheduled for the night. Click to update now."
+msgstr "Мажорное обновление %s запланировано на ночь. Нажмите, чтобы обновить сейчас."

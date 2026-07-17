@@ -56,4 +56,34 @@ assert.match(actionSource, /appState\.releaseMeta\?\.appVersion/);
 assert.doesNotMatch(actionSource, /update_release|update_miclash/,
 	'toolbar comparison must consume normalized release state only');
 
+if (!String.prototype.format) Object.defineProperty(String.prototype, 'format', {
+	configurable: true,
+	value(...values) { let index = 0; return this.replace(/%s/g, () => String(values[index++])); }
+});
+function evaluatedAction(local, latest, autoMajorMiclash, channel = 'release') {
+	const state = { versions: { app: local }, releaseMeta: { appVersion: latest },
+		settings: { autoMajorMiclash, miclashReleaseChannel: channel } };
+	return Function('appState', 'normalizeAppVersion', 'compareNumericVersions',
+		'normalizeReleaseChannel', '_', `${actionSource}; return resolveAppActionState();`)(
+		state, (value) => String(value || '').replace(/^v/, ''),
+		(left, right) => {
+			const a = String(left).split('.').map(Number), b = String(right).split('.').map(Number);
+			for (let i = 0; i < Math.max(a.length, b.length); i++) {
+				if ((a[i] || 0) < (b[i] || 0)) return -1;
+				if ((a[i] || 0) > (b[i] || 0)) return 1;
+			}
+			return 0;
+		}, (value) => value === 'prerelease' ? 'prerelease' : 'release', (value) => value);
+}
+assert.deepEqual(evaluatedAction('1.0.0', '2.0.0', true), {
+	kind: 'update', scheduled: true, targetVersion: '2.0.0', iconName: 'clock',
+	className: 'cbi-button-positive',
+	title: 'Major update 2.0.0 is scheduled for the night. Click to update now.'
+});
+assert.equal(evaluatedAction('1.0.0', '2.0.0', false).scheduled, undefined);
+assert.equal(evaluatedAction('1.0.0', '1.1.0', true).scheduled, undefined);
+assert.equal(evaluatedAction('1.0.0', '2.0.0', true, 'prerelease').scheduled, undefined);
+assert.match(configSource, /data-target-version/,
+	'scheduled-night indicator must expose its target version');
+
 console.log('release readiness UI contract passed');
