@@ -19,64 +19,25 @@ MiClash 是在 OpenWrt 上管理 Mihomo 的 LuCI 应用。配置、订阅、路�
 
 启用 Guard 后系统采用 fail-closed。早期启动的 Guard safety latch 会在 `miclashd` 或 Mihomo 就绪前保护选定流量。daemon 崩溃、内核缺失、升级失败或修复失败时，受保护流量不能悄悄直连。只有明确关闭 Guard 才能解除 latch，device policy 也不能覆盖该约束。
 
-## 自动安装
+## 终端安装
 
-Bootstrap 会把 tag 中的安装器下载到私有临时目录，并在执行前校验已发布的 checksum（即使已安装的 `curl` 损坏，`wget` 仍可工作）：
+维护中的安装器会自动检测 `apk` 或 `opkg`，检查最新 20 个稳定 release，并选择 manifest、软件包及 checksum 均已发布的第一个版本。如果 CI 仍在构建最新 tag，终端安装会提示并选择上一个已就绪的稳定 release。
 
-```sh
-set -eu
-umask 077
-work=$(mktemp -d /tmp/miclash-bootstrap.XXXXXX)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
-release=$(wget --no-proxy -qO- https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
-wget --no-proxy -qO "$work/install-miclash.sh" "https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/${release}/install-miclash.sh"
-wget --no-proxy -qO "$work/install-miclash.sh.sha256" "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/install-miclash.sh.sha256"
-(cd "$work" && sha256sum -c install-miclash.sh.sha256)
-ash "$work/install-miclash.sh"
-```
-
-安装器会验证 `curl` 能否启动，并在下载 release 前修复不匹配的 `zlib`/`libcurl4`。检测到现有安装时会提供 update、reinstall、removal 或 skip。
-
-## 手动安装
-
-### OpenWrt 25.12（APK）
+使用 `wget`（即使已安装的 `curl` 损坏也可工作）：
 
 ```sh
-set -eu
-apk update
-apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64
-curl --version >/dev/null 2>&1 || apk fix zlib libcurl4 curl
-curl --version >/dev/null 2>&1 || exit 1
-release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
-umask 077; work=$(mktemp -d /tmp/miclash-install.XXXXXX); trap 'rm -rf "$work"' EXIT HUP INT TERM
-package="luci-app-miclash-${release#v}.apk"
-curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}" -o "$work/$package"
-curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}.sha256" -o "$work/$package.sha256"
-(cd "$work" && sha256sum -c "$package.sha256")
-apk add "$work/$package" --allow-untrusted
+wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-### OpenWrt 24.10+（opkg）
+等效的 `curl` 命令：
 
 ```sh
-set -eu
-opkg update
-opkg install --force-reinstall zlib libcurl4 curl
-opkg install kmod-nft-tproxy kmod-tun coreutils-base64
-curl --version >/dev/null 2>&1 || exit 1
-release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
-umask 077; work=$(mktemp -d /tmp/miclash-install.XXXXXX); trap 'rm -rf "$work"' EXIT HUP INT TERM
-package="luci-app-miclash_${release#v}_all.ipk"
-curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}" -o "$work/$package"
-curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}.sha256" -o "$work/$package.sha256"
-(cd "$work" && sha256sum -c "$package.sha256")
-opkg install "$work/$package"
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-每个软件包旁都会发布 `.sha256`，同时发布 `miclash-release-manifest.json`。manifest 记录 tag、源 tag SHA、同步后 build SHA、OpenWrt SDK release/target、package type、大小与 SHA-256。
+安装器会验证 `curl`、修复不匹配的 `zlib`/`libcurl4`，根据已验证 tag 为检测到的软件包管理器构造精确文件名，并在安装前校验 `.sha256`。已有 MiClash 时可选择 update、reinstall、removal 或 skip。
+
+已安装插件内的 updater 刻意**不会回退**到旧版本：最新 tag 始终是权威目标，在 CI 完整发布 artifacts 前隐藏更新操作，之后再重试检查。
 
 ## 首次设置
 

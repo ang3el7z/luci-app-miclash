@@ -19,64 +19,25 @@ MiClash — LuCI-приложение для управления Mihomo на Op
 
 При включённом Guard система работает по принципу fail-closed. Ранний Guard safety latch защищает выбранный трафик ещё до готовности `miclashd` и Mihomo. Падение демона, отсутствие ядра, неудачное обновление или ремонт не должны незаметно выпустить защищённый трафик напрямую. Снять latch может только явное отключение Guard. Политики устройств не отменяют это правило.
 
-## Автоматическая установка
+## Установка из терминала
 
-Bootstrap скачивает установщик из тега во временный приватный каталог и проверяет опубликованную контрольную сумму до запуска (`wget` работает, даже если установленный `curl` сломан):
+Поддерживаемый установщик сам определяет `apk` или `opkg`, проверяет 20 новейших стабильных релизов и устанавливает первый релиз с полностью опубликованными manifest, пакетом и контрольными суммами. Если CI ещё собирает самый новый тег, терминальная установка сообщит об этом и выберет предыдущий готовый стабильный релиз.
 
-```sh
-set -eu
-umask 077
-work=$(mktemp -d /tmp/miclash-bootstrap.XXXXXX)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
-release=$(wget --no-proxy -qO- https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
-wget --no-proxy -qO "$work/install-miclash.sh" "https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/${release}/install-miclash.sh"
-wget --no-proxy -qO "$work/install-miclash.sh.sha256" "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/install-miclash.sh.sha256"
-(cd "$work" && sha256sum -c install-miclash.sh.sha256)
-ash "$work/install-miclash.sh"
-```
-
-Установщик проверяет запуск `curl` и при необходимости восстанавливает несовместимые `zlib`/`libcurl4`. Для установленного MiClash он предложит update, reinstall, removal или skip.
-
-## Ручная установка
-
-### OpenWrt 25.12 (APK)
+Через `wget` (работает, даже если установленный `curl` сломан):
 
 ```sh
-set -eu
-apk update
-apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64
-curl --version >/dev/null 2>&1 || apk fix zlib libcurl4 curl
-curl --version >/dev/null 2>&1 || exit 1
-release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
-umask 077; work=$(mktemp -d /tmp/miclash-install.XXXXXX); trap 'rm -rf "$work"' EXIT HUP INT TERM
-package="luci-app-miclash-${release#v}.apk"
-curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}" -o "$work/$package"
-curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}.sha256" -o "$work/$package.sha256"
-(cd "$work" && sha256sum -c "$package.sha256")
-apk add "$work/$package" --allow-untrusted
+wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-### OpenWrt 24.10+ (opkg)
+Эквивалентная команда через `curl`:
 
 ```sh
-set -eu
-opkg update
-opkg install --force-reinstall zlib libcurl4 curl
-opkg install kmod-nft-tproxy kmod-tun coreutils-base64
-curl --version >/dev/null 2>&1 || exit 1
-release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-printf '%s\n' "$release" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
-umask 077; work=$(mktemp -d /tmp/miclash-install.XXXXXX); trap 'rm -rf "$work"' EXIT HUP INT TERM
-package="luci-app-miclash_${release#v}_all.ipk"
-curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}" -o "$work/$package"
-curl -fL "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/${package}.sha256" -o "$work/$package.sha256"
-(cd "$work" && sha256sum -c "$package.sha256")
-opkg install "$work/$package"
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-В релизе рядом с каждым пакетом публикуется `.sha256` и общий `miclash-release-manifest.json`. Манифест содержит tag, SHA исходного тега, SHA синхронизированной сборки, версию/target SDK OpenWrt, тип пакета, размер и SHA-256.
+Установщик проверит запуск `curl`, восстановит несовместимые `zlib`/`libcurl4`, построит точное имя пакета для найденного менеджера из проверенного тега и сверит `.sha256` до установки. Для уже установленного MiClash доступны update, reinstall, removal и skip.
+
+Обновление из установленного плагина специально **не откатывается** на старый релиз: новый тег остаётся авторитетным, действие обновления скрыто до публикации всех артефактов, после чего проверка CI повторяется.
 
 ## Первая настройка
 

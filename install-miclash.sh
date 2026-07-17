@@ -8,7 +8,7 @@
 #  - latest Mihomo core matching the router architecture
 # ================================================================
 
-MICLASH_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest"
+MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20"
 MICLASH_TAG_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/tags"
 MIHOMO_BASE="https://github.com/MetaCubeX/mihomo/releases"
 MIHOMO_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
@@ -20,6 +20,9 @@ MICLASH_IPK_SHA256_URL=""
 MICLASH_VER=""
 MICLASH_TAG_NAME=""
 MICLASH_TARGET_TAG=""
+MICLASH_TEST_FIXTURE_DIR=""
+MICLASH_CATALOG_FILE=""
+MICLASH_FETCHED_FILE=""
 MICLASH_INSTALLED_VER=""
 MICLASH_RELEASE_NORM=""
 MICLASH_INSTALLED_NORM=""
@@ -379,63 +382,189 @@ detect_arch() {
     info "Mihomo arch: ${B}${MIHOMO_ARCH}${N}"
 }
 
-fetch_miclash_release() {
-    log "Fetching latest MiClash release..."
+reset_miclash_candidate() {
+    MICLASH_TAG_NAME=""
+    MICLASH_VER=""
+    MICLASH_APK_URL=""
+    MICLASH_IPK_URL=""
+    MICLASH_APK_SHA256_URL=""
+    MICLASH_IPK_SHA256_URL=""
+}
 
-    if [ -n "$MICLASH_TARGET_TAG" ]; then
-        MICLASH_RELEASE_API="${MICLASH_TAG_API}/${MICLASH_TARGET_TAG}"
+json_string_values() {
+    json_file="$1"
+    json_key="$2"
+    grep -o "\"$json_key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$json_file" 2>/dev/null |
+        sed 's/^[^:]*:[[:space:]]*"\([^"]*\)"$/\1/'
+}
+
+json_boolean_values() {
+    json_file="$1"
+    json_key="$2"
+    grep -o "\"$json_key\"[[:space:]]*:[[:space:]]*\(true\|false\)" "$json_file" 2>/dev/null |
+        sed 's/^[^:]*:[[:space:]]*//'
+}
+
+exact_value_count() {
+    expected_value="$1"
+    shift
+    count="$($@ | grep -Fxc "$expected_value" 2>/dev/null || true)"
+    case "$count" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$count"
+}
+
+validate_miclash_release_file() {
+    release_file="$1"
+    requested_manager="$2"
+    expected_tag="$3"
+    reset_miclash_candidate
+
+    [ -f "$release_file" ] && [ -s "$release_file" ] || return 1
+    case "$requested_manager" in apk|opkg) ;; *) return 1 ;; esac
+    printf '%s\n' "$expected_tag" |
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+
+    tag_count="$(exact_value_count "$expected_tag" json_string_values "$release_file" tag_name)" || return 1
+    [ "$tag_count" = 1 ] || return 1
+    draft_count="$(exact_value_count false json_boolean_values "$release_file" draft)" || return 1
+    [ "$draft_count" = 1 ] || return 1
+
+    clean_tag="${expected_tag#v}"
+    if printf '%s\n' "$clean_tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        prerelease_expected=false
     else
-        MICLASH_RELEASE_API="$MICLASH_API"
+        prerelease_expected=true
+    fi
+    prerelease_count="$(exact_value_count "$prerelease_expected" \
+        json_boolean_values "$release_file" prerelease)" || return 1
+    [ "$prerelease_count" = 1 ] || return 1
+
+    if [ "$requested_manager" = apk ]; then
+        package_name="luci-app-miclash-${clean_tag}.apk"
+    else
+        package_name="luci-app-miclash_${clean_tag}_all.ipk"
+    fi
+    checksum_name="${package_name}.sha256"
+    installer_checksum_name="install-miclash.sh.sha256"
+    manifest_name="miclash-release-manifest.json"
+    release_prefix="https://github.com/ang3el7z/luci-app-miclash/releases/download/${expected_tag}/"
+    pending=0
+
+    for asset_name in "$package_name" "$checksum_name" \
+        "$installer_checksum_name" "$manifest_name"; do
+        asset_url="${release_prefix}${asset_name}"
+        name_count="$(exact_value_count "$asset_name" \
+            json_string_values "$release_file" name)" || return 1
+        url_count="$(exact_value_count "$asset_url" \
+            json_string_values "$release_file" browser_download_url)" || return 1
+        if [ "$name_count" -gt 1 ] || [ "$url_count" -gt 1 ]; then
+            return 1
+        elif [ "$name_count" = 0 ] && [ "$url_count" = 0 ]; then
+            pending=1
+        elif [ "$name_count" != 1 ] || [ "$url_count" != 1 ]; then
+            return 1
+        fi
+    done
+
+    [ "$pending" = 0 ] || return 2
+    MICLASH_TAG_NAME="$expected_tag"
+    MICLASH_VER="$clean_tag"
+    if [ "$requested_manager" = apk ]; then
+        MICLASH_APK_URL="${release_prefix}${package_name}"
+        MICLASH_APK_SHA256_URL="${release_prefix}${checksum_name}"
+    else
+        MICLASH_IPK_URL="${release_prefix}${package_name}"
+        MICLASH_IPK_SHA256_URL="${release_prefix}${checksum_name}"
+    fi
+    return 0
+}
+
+fixture_release_file() {
+    fixture_dir="$1"
+    fixture_tag="$2"
+    case "$fixture_tag" in
+        v3.0.0) fixture_name=terminal-release-incomplete.json ;;
+        v2.0.0) fixture_name=terminal-release-ready-opkg.json ;;
+        v1.9.0) fixture_name=terminal-release-ready-apk.json ;;
+        *) fixture_name="terminal-release-${fixture_tag#v}.json" ;;
+    esac
+    printf '%s/%s' "$fixture_dir" "$fixture_name"
+}
+
+fetch_miclash_catalog() {
+    if [ -n "$MICLASH_TEST_FIXTURE_DIR" ]; then
+        MICLASH_CATALOG_FILE="$MICLASH_TEST_FIXTURE_DIR/terminal-releases.json"
+        [ -f "$MICLASH_CATALOG_FILE" ] || return 1
+        return 0
+    fi
+    MICLASH_CATALOG_FILE="$WORK_DIR/miclash-releases.json"
+    TEMP_FILES="$TEMP_FILES $MICLASH_CATALOG_FILE"
+    download_artifact "$MICLASH_RELEASES_API" "$MICLASH_CATALOG_FILE" \
+        "MiClash release catalog"
+}
+
+fetch_miclash_exact_release() {
+    exact_tag="$1"
+    if [ -n "$MICLASH_TEST_FIXTURE_DIR" ]; then
+        MICLASH_FETCHED_FILE="$(fixture_release_file "$MICLASH_TEST_FIXTURE_DIR" "$exact_tag")"
+        [ -f "$MICLASH_FETCHED_FILE" ] || return 1
+        return 0
+    fi
+    MICLASH_FETCHED_FILE="$WORK_DIR/miclash-release-${exact_tag#v}.json"
+    TEMP_FILES="$TEMP_FILES $MICLASH_FETCHED_FILE"
+    download_artifact "${MICLASH_TAG_API}/${exact_tag}" "$MICLASH_FETCHED_FILE" \
+        "MiClash $exact_tag release metadata"
+}
+
+stable_catalog_tags_newest_first() {
+    json_string_values "$MICLASH_CATALOG_FILE" tag_name |
+        grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+        awk '!seen[$0]++'
+}
+
+select_terminal_release() {
+    if [ -n "$MICLASH_TARGET_TAG" ]; then
+        printf '%s\n' "$MICLASH_TARGET_TAG" |
+            grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' \
+            || die "Invalid requested MiClash tag"
+        fetch_miclash_exact_release "$MICLASH_TARGET_TAG" ||
+            die "Requested MiClash release was not found: $MICLASH_TARGET_TAG"
+        if ! validate_miclash_release_file "$MICLASH_FETCHED_FILE" \
+            "$PKG_MGR" "$MICLASH_TARGET_TAG"; then
+            die "Requested MiClash release is not ready: $MICLASH_TARGET_TAG"
+        fi
+        return 0
     fi
 
-    release_file="$WORK_DIR/miclash-release.json"
-    TEMP_FILES="$TEMP_FILES $release_file"
-    download_artifact "$MICLASH_RELEASE_API" "$release_file" "MiClash release metadata"
-    RELEASE_JSON=$(cat "$release_file" 2>/dev/null) || die "Failed to read MiClash release data"
-    [ -n "$RELEASE_JSON" ] || die "MiClash release API returned empty response"
+    fetch_miclash_catalog || die "Failed to fetch MiClash release catalog"
+    first_tag=""
+    inspected=0
+    for tag in $(stable_catalog_tags_newest_first); do
+        [ "$inspected" -lt 20 ] || break
+        inspected=$((inspected + 1))
+        [ -n "$first_tag" ] || first_tag="$tag"
+        fetch_miclash_exact_release "$tag" || die "Invalid MiClash release catalog entry: $tag"
+        if validate_miclash_release_file "$MICLASH_FETCHED_FILE" "$PKG_MGR" "$tag"; then
+            if [ "$tag" != "$first_tag" ] && [ -z "$MICLASH_TEST_FIXTURE_DIR" ]; then
+                warn "Newest release $first_tag is incomplete; installing ready release $tag"
+            fi
+            return 0
+        else
+            validation_result=$?
+            [ "$validation_result" = 2 ] || die "Invalid MiClash release metadata: $tag"
+        fi
+    done
+    die "No ready stable MiClash release found in the newest 20 releases"
+}
 
-    MICLASH_TAG_NAME=$(printf '%s' "$RELEASE_JSON" \
-        | grep '"tag_name"' | head -1 \
-        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    [ -n "$MICLASH_TAG_NAME" ] || die "Failed to parse MiClash version"
-    printf '%s\n' "$MICLASH_TAG_NAME" |
-        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' \
-        || die "Invalid MiClash release tag"
-    MICLASH_VER=$(normalize_version "$MICLASH_TAG_NAME")
-    [ -n "$MICLASH_VER" ] || die "Failed to normalize MiClash version"
-
-    MICLASH_APK_URL=$(printf '%s' "$RELEASE_JSON" \
-        | grep '"browser_download_url"' \
-        | grep 'luci-app-miclash-.*\.apk"' | head -1 \
-        | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-
-    MICLASH_IPK_URL=$(printf '%s' "$RELEASE_JSON" \
-        | grep '"browser_download_url"' \
-        | grep 'luci-app-miclash_.*\.ipk"' | head -1 \
-        | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-
-    release_prefix="https://github.com/ang3el7z/luci-app-miclash/releases/download/${MICLASH_TAG_NAME}/"
-    if [ -n "$MICLASH_APK_URL" ]; then
-        case "$MICLASH_APK_URL" in "$release_prefix"luci-app-miclash-*.apk) ;; *) die "Invalid MiClash .apk asset URL" ;; esac
-        MICLASH_APK_SHA256_URL="${MICLASH_APK_URL}.sha256"
-        printf '%s' "$RELEASE_JSON" | grep -Fq "\"$MICLASH_APK_SHA256_URL\"" \
-            || die "No published checksum for MiClash .apk"
-    fi
-    if [ -n "$MICLASH_IPK_URL" ]; then
-        case "$MICLASH_IPK_URL" in "$release_prefix"luci-app-miclash_*.ipk) ;; *) die "Invalid MiClash .ipk asset URL" ;; esac
-        MICLASH_IPK_SHA256_URL="${MICLASH_IPK_URL}.sha256"
-        printf '%s' "$RELEASE_JSON" | grep -Fq "\"$MICLASH_IPK_SHA256_URL\"" \
-            || die "No published checksum for MiClash .ipk"
-    fi
-
-    info "Latest MiClash: ${B}${MICLASH_TAG_NAME}${N}"
+fetch_miclash_release() {
+    log "Selecting a ready MiClash release..."
+    select_terminal_release
     MICLASH_RELEASE_NORM=$(normalize_version "$MICLASH_VER")
-
-    if [ "$PKG_MGR" = "apk" ]; then
-        [ -n "$MICLASH_APK_URL" ] || die "No MiClash .apk asset found in latest release"
+    info "Selected MiClash: ${B}${MICLASH_TAG_NAME}${N}"
+    if [ "$PKG_MGR" = apk ]; then
         info "Package asset: ${B}${MICLASH_APK_URL##*/}${N}"
     else
-        [ -n "$MICLASH_IPK_URL" ] || die "No MiClash .ipk asset found in latest release"
         info "Package asset: ${B}${MICLASH_IPK_URL##*/}${N}"
     fi
 }
@@ -672,6 +801,37 @@ run_installer_security_test() {
     return 0
 }
 
+run_ready_release_selection_test() {
+    PKG_MGR=""
+    MICLASH_TEST_FIXTURE_DIR=""
+    MICLASH_TARGET_TAG=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --manager)
+                [ $# -gt 1 ] || return 64
+                PKG_MGR="$2"
+                shift 2
+                ;;
+            --fixture-dir)
+                [ $# -gt 1 ] || return 64
+                MICLASH_TEST_FIXTURE_DIR="$2"
+                shift 2
+                ;;
+            --target-tag)
+                [ $# -gt 1 ] || return 64
+                MICLASH_TARGET_TAG="$2"
+                shift 2
+                ;;
+            *) return 64 ;;
+        esac
+    done
+    case "$PKG_MGR" in apk|opkg) ;; *) return 64 ;; esac
+    [ -n "$MICLASH_TEST_FIXTURE_DIR" ] &&
+        [ -d "$MICLASH_TEST_FIXTURE_DIR" ] || return 65
+    select_terminal_release
+    printf '%s\n' "$MICLASH_TAG_NAME"
+}
+
 install_mihomo() {
     log "Fetching latest Mihomo release..."
     mihomo_release_file="$WORK_DIR/mihomo-release.json"
@@ -778,6 +938,9 @@ if [ "${1:-}" = "status-protocol-test" ]; then
 elif [ "${1:-}" = "installer-security-test" ]; then
     shift
     run_installer_security_test "$@"
+elif [ "${1:-}" = "ready-release-selection-test" ]; then
+    shift
+    run_ready_release_selection_test "$@"
 elif [ "${1:-}" = "app" ]; then
     shift
     run_app_mode "$@"

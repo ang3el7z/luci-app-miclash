@@ -204,7 +204,8 @@ function runRepositoryContracts() {
 	for (const gate of [ 'check-native-cutover.sh', 'check-dns-lifecycle.sh',
 		'check-guard-runtime.sh', 'check-routing-netns.sh', 'check-mutation-lock.sh',
 		'check-package-cleanup.sh', 'check-package-release.sh', 'check-package-removal.sh',
-		'check-hard-reinstall-marker.sh', 'check-update-status-protocol.sh' ])
+		'check-hard-reinstall-marker.sh', 'check-ready-release-selection.sh',
+		'check-update-status-protocol.sh' ])
 		assert.match(checks, new RegExp(gate.replace('.', '\\.')));
 
 	const docs = [ 'README.md', 'README.ru.md', 'README.zh-cn.md' ];
@@ -227,27 +228,10 @@ function runRepositoryContracts() {
 			`${path} has inconsistent Telegram command documentation`);
 		assert.doesNotMatch(text, /-o \/tmp\/luci-app-miclash|apk add \/tmp\/luci-app-miclash|opkg install \/tmp\/luci-app-miclash/,
 			`${path} documents a predictable world-writable package path`);
-		assert.ok((text.match(/sha256sum -c/g) || []).length >= 3,
-			`${path} must verify the installer plus both manual package formats`);
-		assert.match(text, /mktemp -d \/tmp\/miclash-bootstrap\.XXXXXX/,
-			`${path} bootstrap must use a private random workspace`);
-		assert.ok(text.includes('package="luci-app-miclash-${release#v}.apk"'),
-			`${path} APK filename must match the workflow-normalized release asset`);
-		assert.ok(text.includes('package="luci-app-miclash_${release#v}_all.ipk"'),
-			`${path} IPK filename must match the workflow-normalized release asset`);
-		const shellBlocks = [ ...text.matchAll(/```sh\r?\n([\s\S]*?)```/g) ]
-			.map((match) => match[1]);
-		for (const manager of [ 'apk', 'opkg' ]) {
-			const matching = shellBlocks.filter((block) => block.includes(manager + ' update'));
-			assert.equal(matching.length, 1, `${path} must have one ${manager} manual block`);
-			const block = matching[0];
-			assert.match(block, /^set -eu\r?\n/,
-				`${path} ${manager} manual block must be fail-closed`);
-			const packageExecution = manager === 'apk' ? 'apk add "$work/' : 'opkg install "$work/';
-			assert.ok(block.indexOf('sha256sum -c') >= 0 &&
-				block.indexOf('sha256sum -c') < block.indexOf(packageExecution),
-				`${path} ${manager} must verify checksum before package execution`);
-		}
+		assert.ok(text.includes('main/install-miclash.sh | ash'),
+			`${path} must delegate ready-release selection to the maintained installer`);
+		assert.doesNotMatch(text, /releases\/latest|package="luci-app-miclash[-_]/,
+			`${path} must not construct a package from a possibly incomplete latest release`);
 	}
 }
 
