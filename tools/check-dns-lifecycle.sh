@@ -43,7 +43,7 @@ grep -Fq 'normalize(error).code' "$cleanup"
 grep -Fq '/usr/share/miclash/dns-cleanup.uc' "$remove"
 grep -Fq 'protect_dns_proof' "$remove"
 grep -Fq '[ ! -e /etc/miclash/dns-ownership.json ]' "$makefile"
-grep -Fq '[ ! -e /opt/clash/.dns_backup ]' "$makefile"
+! grep -Fq '.dns_backup' "$makefile"
 
 [ -n "${UCODE_BIN:-}" ] && [ -x "$UCODE_BIN" ] || {
 	echo 'DNS lifecycle gate requires UCODE_BIN' >&2
@@ -125,7 +125,7 @@ run_package_cleanup() {
 reset_state() {
 	rm -rf /var/run/miclash/mutation.lock /var/run/miclash/mutation.lock.takeover \
 		/var/run/miclash/package-removal
-	rm -f /etc/miclash/dns-ownership.json /opt/clash/.dns_backup "$fixture"/fail-*
+	rm -f /etc/miclash/dns-ownership.json "$fixture"/fail-*
 	printf '%s\n' '{"dhcp":{"main":{".type":"dnsmasq","server":["1.1.1.1"],"cachesize":"1000"}}}' \
 		> "$MICLASH_DNS_GATE_STATE"
 	: > /var/run/miclash/guard-active

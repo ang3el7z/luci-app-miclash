@@ -68,10 +68,8 @@ check(settingsModel.includes('api.operational_settings_apply(') &&
 	!settingsModel.includes('api.config_save_draft(') &&
 	!settingsModel.includes("'require fs'"),
 	'Operational settings and generated config must use one typed transaction.');
-check(makefile.includes('/usr/libexec/miclash/migrate.uc prepare') &&
-	makefile.includes('/usr/libexec/miclash/migrate.uc verify') &&
-	!makefile.includes('.settings.upgrade.bak'),
-	'Package upgrades must use the journaled canonical migration.');
+check(!makefile.includes('migrate.uc') && !makefile.includes('legacy-firewall-cleanup.uc'),
+	'Package upgrades must not invoke the retired v0.9 transition.');
 
 if (failed) process.exit(1);
 console.log('settings restart feedback check passed');

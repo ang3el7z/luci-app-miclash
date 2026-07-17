@@ -13,7 +13,6 @@ LOCK_HELPER="/usr/share/miclash/mutation-lock.sh"
 BARRIER="/var/run/miclash/package-removal"
 MANIFEST="/var/run/miclash/routing-ownership.json"
 DNS_MANIFEST="/etc/miclash/dns-ownership.json"
-DNS_LEGACY="/opt/clash/.dns_backup"
 RELEASE_SOURCE="/usr/share/miclash/package-release"
 RELEASE_DIR="/var/run/miclash/package-removal-release"
 CRON_FILE="/etc/crontabs/root"
@@ -93,7 +92,6 @@ run_dns_cleanup() {
 	command -v ucode >/dev/null 2>&1 || return 1
 	[ -f /usr/share/miclash/dns-cleanup.uc ] || return 1
 	ucode -L '/usr/share/*.uc' /usr/share/miclash/dns-cleanup.uc >/dev/null 2>&1 || return 1
-	[ ! -e "$DNS_LEGACY" ] && [ ! -L "$DNS_LEGACY" ] || return 1
 	[ -f "$DNS_MANIFEST" ] || [ -f "$RELEASE_DIR/dns-ownership.json" ]
 }
 
@@ -158,8 +156,7 @@ protect_dns_proof() {
 	grep -Eq '"state"[[:space:]]*:[[:space:]]*"clean"' "$RELEASE_DIR/dns-ownership.json" || return 1
 	grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' "$RELEASE_DIR/dns-ownership.json" || return 1
 	grep -Eq '"clean"[[:space:]]*:[[:space:]]*\{' "$RELEASE_DIR/dns-ownership.json" || return 1
-	[ ! -e "$DNS_MANIFEST" ] && [ ! -L "$DNS_MANIFEST" ] && \
-		[ ! -e "$DNS_LEGACY" ] && [ ! -L "$DNS_LEGACY" ]
+	[ ! -e "$DNS_MANIFEST" ] && [ ! -L "$DNS_MANIFEST" ]
 }
 
 commit_release_state() {

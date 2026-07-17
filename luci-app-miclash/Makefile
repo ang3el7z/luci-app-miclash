@@ -118,7 +118,6 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/validate-config.uc $(1)/usr/libexec/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/decompress-gzip $(1)/usr/libexec/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/mihomo-https.uc $(1)/usr/libexec/miclash/
-	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/migrate.uc $(1)/usr/libexec/miclash/
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) ./rootfs/usr/sbin/miclashd $(1)/usr/sbin/
 
@@ -150,19 +149,6 @@ ROOT="$${IPKG_INSTROOT:-}"
 mkdir -p "$$ROOT/opt/clash" 2>/dev/null || true
 mkdir -p "$$ROOT/etc/miclash" 2>/dev/null || exit 1
 chmod 0700 "$$ROOT/etc/miclash" 2>/dev/null || exit 1
-[ ! -f "$$ROOT/etc/config/miclash" ] || {
-	umask 077
-	printf '1\n' > "$$ROOT/etc/miclash/canonical-preexisting"
-} || exit 1
-# On an upgrade the installed early owner understands the legacy Guard setting.
-# Establish it before replacing any backend files; failure is deliberately fatal.
-if [ -z "$$ROOT" ] && [ -f /opt/clash/settings ] && \
-   grep -q '^INTERNET_ONLY_MICLASH=true$$' /opt/clash/settings 2>/dev/null; then
-	[ -x /opt/clash/bin/clash-rules ] || exit 1
-	/opt/clash/bin/clash-rules guard_latch_set || exit 1
-	/opt/clash/bin/clash-rules guard_start || exit 1
-	/opt/clash/bin/clash-rules guard_verify_protected || exit 1
-fi
 [ -f "$$ROOT/opt/clash/config.yaml" ] && cp -p "$$ROOT/opt/clash/config.yaml" \
 	"$$ROOT/opt/clash/.config.yaml.upgrade.bak"
 exit 0
@@ -181,19 +167,9 @@ fi
 [ -n "$$IPKG_INSTROOT" ] || {
 	/etc/init.d/rpcd reload
 	/etc/init.d/miclash-guard enable 2>/dev/null || true
-	/usr/bin/ucode -L '/usr/share/*.uc' /usr/libexec/miclash/migrate.uc prepare || exit 1
-	/usr/bin/ucode -L '/usr/share/*.uc' /usr/libexec/miclash/migrate.uc apply || exit 1
 	/etc/init.d/miclash-guard start || exit 1
-	/usr/bin/ucode -L '/usr/share/*.uc' \
-		/usr/share/miclash/legacy-firewall-cleanup.uc || exit 1
 	/etc/init.d/miclashd enable || exit 1
 	/etc/init.d/miclashd start || exit 1
-	/usr/bin/ucode -L '/usr/share/*.uc' /usr/libexec/miclash/migrate.uc verify || exit 1
-	/usr/bin/ucode -L '/usr/share/*.uc' /usr/libexec/miclash/migrate.uc cleanup || exit 1
-	if [ -f /etc/crontabs/root ]; then
-		sed -i '\|/opt/clash/bin/clash-rules update|d' /etc/crontabs/root || exit 1
-		/etc/init.d/cron restart >/dev/null 2>&1 || true
-	fi
 	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
 	rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*
 
@@ -357,7 +333,6 @@ define Package/$(PKG_NAME)/postrm
 				valid_dns_release_proof "$$RELEASE_DIR/dns-ownership.json" && \
 				[ ! -e /var/run/miclash/routing-ownership.json ] && [ ! -L /var/run/miclash/routing-ownership.json ] && \
 				[ ! -e /etc/miclash/dns-ownership.json ] && [ ! -L /etc/miclash/dns-ownership.json ] && \
-				[ ! -e /opt/clash/.dns_backup ] && [ ! -L /opt/clash/.dns_backup ] && \
 				[ ! -e /opt/clash/bin/clash-rules ] && [ ! -L /opt/clash/bin/clash-rules ] && \
 				[ ! -e /opt/clash/bin/miclash-update ] && [ ! -L /opt/clash/bin/miclash-update ] && \
 				[ ! -e /opt/clash/bin/miclash-service ] && [ ! -L /opt/clash/bin/miclash-service ] && \

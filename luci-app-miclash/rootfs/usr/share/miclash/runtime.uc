@@ -565,8 +565,8 @@ function readiness_observers(runtime) {
 			let nft_state = nft.observe(runtime);
 			if (nft_state?.installed === true)
 				return { ready: true, state: 'ready' };
-			let legacy = iptables.observe(runtime);
-			let ready = legacy?.valid === true && legacy.installed === true;
+			let iptables_state = iptables.observe(runtime);
+			let ready = iptables_state?.valid === true && iptables_state.installed === true;
 			return { ready, state: ready ? 'ready' : 'failed' };
 		}),
 		dataplane: safe((proxy_mode) => {

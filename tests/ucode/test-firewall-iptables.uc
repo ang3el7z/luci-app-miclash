@@ -129,10 +129,6 @@ function runtime_with(options) {
 	let cleanup_mutated = false;
 	let guard_wrong = !!options?.guard_before_anchor_is_wrong;
 	let task_hook_count = options?.no_anchors ? 0 : 1;
-	let legacy_hooks = {
-		iptables: { MICLASH_PREROUTING: !!options?.legacy, MICLASH_OUTPUT: !!options?.legacy },
-		ip6tables: { MICLASH_PREROUTING: !!options?.ip6_legacy, MICLASH_OUTPUT: !!options?.ip6_legacy }
-	};
 	let states = options?.states ?? {
 		iptables: { MCL_AN_PR: 'aaaaaaaaaaaa', MCL_AN_OU: 'aaaaaaaaaaaa',
 			MCL_AN_TI: 'aaaaaaaaaaaa', MCL_AN_TF: 'aaaaaaaaaaaa' },
@@ -203,12 +199,6 @@ function runtime_with(options) {
 			push(lines, '-A PREROUTING --goto MCL_PR_bbbbbbbbbbbb');
 		if (options?.orphan_foreign_edge && table == 'mangle' && base == 'iptables')
 			push(lines, '-A PREROUTING -j MCL_PR_' + options.orphan_generation);
-		if (table == 'mangle') {
-			if (legacy_hooks[base].MICLASH_PREROUTING) push(lines, '-A PREROUTING -j MICLASH_PREROUTING');
-			if (legacy_hooks[base].MICLASH_OUTPUT) push(lines, '-A OUTPUT -j MICLASH_OUTPUT');
-			if (base == 'ip6tables' && options?.ip6_legacy_duplicate)
-				push(lines, '-A PREROUTING -j MICLASH_PREROUTING', '-A PREROUTING -j MICLASH_PREROUTING');
-		}
 		if (base == 'ip6tables' && table == 'filter' && options?.duplicate_permanent_hook)
 			push(lines, '-A FORWARD -j MCL_AN_TF');
 		if (base == 'iptables' && table == 'mangle' && options?.parameterized_canonical_edge)
@@ -217,8 +207,6 @@ function runtime_with(options) {
 			push(lines, '-A MCL_AN_PR -j MCL_PR_bbbbbbbbbbbb');
 		if (base == 'ip6tables' && table == 'mangle' && options?.cross_family_partial)
 			push(lines, ':MCL_PR_bbbbbbbbbbbb - [0:0]');
-		if (base == 'iptables' && table == 'mangle' && options?.legacy_verdict)
-			push(lines, '-A PREROUTING ' + options.legacy_verdict + ' MICLASH_PREROUTING');
 		if (base == 'iptables' && table == 'mangle' && options?.foreign_anchor_verdict)
 			push(lines, ':FOREIGN - [0:0]', '-A FOREIGN ' + options.foreign_anchor_verdict + ' MCL_AN_PR');
 		if (base == 'iptables' && table == 'mangle' && cleanup_mutated && options?.post_cleanup_edge)
@@ -252,10 +240,6 @@ function runtime_with(options) {
 		}
 		if (reply == null && request.command == 'ipset' && request.args[0] == 'list' && request.args[1] == '-name')
 			return { code: 0, stdout: options?.remaining_generation ? 'MCL_L4_' + options.remaining_generation + '\n' : '', stderr: null };
-		if (request.args[2] == '-C' && (request.args[length(request.args) - 1] == 'MICLASH_PREROUTING' ||
-		    request.args[length(request.args) - 1] == 'MICLASH_OUTPUT') &&
-		    !legacy_hooks[request.command][request.args[length(request.args) - 1]])
-			return { code: 1, stdout: null, stderr: null };
 		if (options?.no_anchors && (request.args[2] == '-C' || request.args[2] == '-L') &&
 		    index([ 'MCL_AN_PR', 'MCL_AN_OU', 'MCL_AN_TI', 'MCL_AN_TF' ], request.args[length(request.args) - 1]) >= 0)
 			return { code: 1, stdout: null, stderr: null };
@@ -284,8 +268,6 @@ function runtime_with(options) {
 			if (request.args[2] == '-F') states[request.command][request.args[3]] = '';
 			else states[request.command][request.args[3]] = substr(request.args[length(request.args) - 1], -12);
 		}
-		if (code == 0 && request.args[2] == '-D' && legacy_hooks[request.command]?.[request.args[length(request.args) - 1]])
-			legacy_hooks[request.command][request.args[length(request.args) - 1]] = false;
 		if (code == 0 && request.args[3] == 'FORWARD' &&
 		    request.args[length(request.args) - 1] == 'MCL_AN_TF') {
 			if (request.args[2] == '-A') { task_hook_count++; guard_wrong = false; }
@@ -402,28 +384,6 @@ let narrowed = apply(runtime_with({ states: dual_state }), dual_to_single);
 assert_equal(narrowed.repair_needed, false, 'dual-stack A to IPv4-only B reconciles removed IPv6 anchors');
 assert_true(index(encoded(dual_to_single.stages.switch), 'ip6tables') >= 0,
 	'removed IPv6 family receives explicit anchor detach operations');
-
-let migration = compile({ ...scenarios[0], generation: 'bbbbbbbbbbbb' });
-let migrated_runtime = runtime_with({ states: {
-	iptables: { MCL_AN_PR: '', MCL_AN_OU: '', MCL_AN_TI: '', MCL_AN_TF: '' },
-	ip6tables: { MCL_AN_PR: '', MCL_AN_OU: '', MCL_AN_TI: '', MCL_AN_TF: '' }
-}, legacy: true });
-assert_equal(observe(migrated_runtime).legacy, true,
-	'migration fixture begins with an active legacy built-in hook');
-assert_equal(apply(migrated_runtime, migration).repair_needed, false,
-	'legacy hooks migrate only after generation B is prepared and permanent anchors are live');
-let migration_calls = encoded(migrated_runtime.process.calls);
-assert_true(index(migration_calls, 'MCL_PR_bbbbbbbbbbbb') <
-	index(migration_calls, 'MICLASH_PREROUTING'),
-	'B permanent anchor activation precedes legacy-hook removal');
-let failed_migration = runtime_with({ states: {
-	iptables: { MCL_AN_PR: '', MCL_AN_OU: '', MCL_AN_TI: '', MCL_AN_TF: '' },
-	ip6tables: { MCL_AN_PR: '', MCL_AN_OU: '', MCL_AN_TI: '', MCL_AN_TF: '' }
-}, legacy: true, fail_when: (r) => r.args[2] == '-D' && index(r.args, 'MICLASH_PREROUTING') >= 0 });
-assert_equal(apply(failed_migration, migration).repair_needed, true,
-	'legacy removal failure returns repair-needed with the old path retained');
-assert_true(index(encoded(failed_migration.process.calls), '-X') < 0,
-	'legacy migration failure never retires the previous working path');
 
 let success = runtime_with();
 let active = apply(success, staged);
@@ -567,25 +527,6 @@ partial_replies['iptables-save:-t mangle'].stdout = replace(
 	partial_replies['iptables-save:-t mangle'].stdout, 'MCL_OU_cab123cab123', 'MCL_OU_def456def456');
 assert_equal(observe(runtime_with({ replies: partial_replies })).generation, null,
 	'observe rejects mixed generations across PREROUTING and OUTPUT');
-let legacy_replies = exact_replies('cab123cab123');
-legacy_replies['iptables-save:-t mangle'].stdout = replace(
-	legacy_replies['iptables-save:-t mangle'].stdout, 'COMMIT\n',
-	'-A PREROUTING -j MICLASH_PREROUTING\nCOMMIT\n');
-assert_equal(observe(runtime_with({ replies: legacy_replies })).legacy, true,
-	'observe identifies active legacy topology for ordered migration');
-for (let spelling in [ '-g', '--goto', '--jump', '-d 192.0.2.1 -j' ]) {
-	let malformed_legacy = runtime_with({ no_anchors: true, inventory: [], legacy_verdict: spelling });
-	let malformed_observed = observe(malformed_legacy);
-	assert_equal(malformed_observed.legacy, true, 'observe detects noncanonical legacy verdict ' + spelling);
-	assert_equal(malformed_observed.valid, false, 'observe rejects noncanonical legacy verdict ' + spelling);
-	let migration_runtime = runtime_with({ states: {
-		iptables: { MCL_AN_PR: '', MCL_AN_OU: '', MCL_AN_TI: '', MCL_AN_TF: '' },
-		ip6tables: { MCL_AN_PR: '', MCL_AN_OU: '', MCL_AN_TI: '', MCL_AN_TF: '' }
-	}, legacy_verdict: spelling });
-	let migration_succeeded = false;
-	try { migration_succeeded = apply(migration_runtime, migration).repair_needed === false; } catch (error) {}
-	assert_equal(migration_succeeded, false, 'migration cannot succeed with surviving legacy verdict ' + spelling);
-}
 let duplicate_hook = exact_replies('cab123cab123');
 duplicate_hook['iptables-save:-t mangle'].stdout = replace(
 	duplicate_hook['iptables-save:-t mangle'].stdout, '-A OUTPUT -j MCL_AN_OU\n',
@@ -609,11 +550,6 @@ let clean_state = cleanup(clean, { preserve_guard: true, generations: [ 'aaaaaaa
 assert_equal(clean_state.guard_preserved, true, 'cleanup explicitly preserves Guard');
 assert_true(index(encoded(clean.process.calls), 'MICLASH_GUARD_FORWARD') < 0,
 	'cleanup never invokes Guard chains');
-let legacy_cleanup = runtime_with({ no_anchors: true, legacy: true, inventory: [] });
-assert_equal(cleanup(legacy_cleanup, { preserve_guard: true, generations: [] }).clean, true,
-	'cleanup removes exact owned legacy hooks before proving absence');
-assert_true(index(encoded(legacy_cleanup.process.calls), 'MICLASH_PREROUTING') >= 0,
-	'legacy cleanup explicitly detaches the owned PREROUTING hook');
 let orphan_cleanup = runtime_with({ no_anchors: true, inventory: [], orphan_generation: 'cccccccccccc' });
 assert_equal(cleanup(orphan_cleanup, { preserve_guard: true, generations: [] }).clean, true,
 	'cleanup discovers and removes complete unlisted owned generations');
@@ -644,26 +580,16 @@ function assert_cleanup_preflight_failure(options, message) {
 		assert_true(request.args[2] != '-D' && request.args[2] != '-F' && request.args[2] != '-X' &&
 			request.args[0] != 'destroy', message + ': zero mutations before full preflight');
 };
-assert_cleanup_preflight_failure({ legacy: true, ip6_legacy_duplicate: true },
-	'valid IPv4 plus duplicate IPv6 legacy');
 assert_cleanup_preflight_failure({ duplicate_permanent_hook: true }, 'duplicate permanent hook');
 assert_cleanup_preflight_failure({ parameterized_canonical_edge: true }, 'parameterized canonical-source edge');
 assert_cleanup_preflight_failure({ duplicate_canonical_edge: true }, 'duplicate canonical incoming edge');
 assert_cleanup_preflight_failure({ cross_family_partial: true }, 'cross-family partial generation inventory');
-for (let spelling in [ '-g', '--goto' ]) {
-	let legacy_goto = runtime_with({ no_anchors: true, inventory: [], legacy_verdict: spelling });
-	assert_throws(() => cleanup(legacy_goto, { preserve_guard: true, generations: [] }), 'INTERNAL');
-	for (let request in legacy_goto.process.calls)
-		assert_true(request.args[2] != '-D' && request.args[2] != '-F' && request.args[2] != '-X' &&
-			request.args[0] != 'destroy', 'legacy ' + spelling + ' fails before cleanup mutation');
-}
 for (let spelling in [ '-j', '-g', '--goto' ])
 	assert_cleanup_preflight_failure({ foreign_anchor_verdict: spelling },
 		'foreign-chain ' + spelling + ' edge to permanent anchor');
-for (let edge in [ '-A PREROUTING -g MICLASH_PREROUTING',
-	'-A PREROUTING --goto MICLASH_PREROUTING', '-A FOREIGN -j MCL_AN_PR',
+for (let edge in [ '-A FOREIGN -j MCL_AN_PR',
 	'-A FOREIGN -g MCL_AN_PR', '-A FOREIGN --goto MCL_AN_PR' ]) {
-	let recapture = runtime_with({ no_anchors: true, inventory: [], legacy: true, post_cleanup_edge: edge });
+	let recapture = runtime_with({ no_anchors: true, inventory: [], post_cleanup_edge: edge });
 	assert_throws(() => cleanup(recapture, { preserve_guard: true, generations: [] }), 'INTERNAL');
 	let mutated = false;
 	for (let request in recapture.process.calls)

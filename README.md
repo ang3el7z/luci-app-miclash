@@ -114,12 +114,6 @@ ubus call miclash health '{}'
 
 The main UCI sections are `core`, `interfaces`, `guard`, `memory`, `updates`, `telegram`, `notifications`, `backup` and `meta`. Keep `/etc/config/miclash` readable only by root because it may contain subscription URLs and the Telegram token.
 
-## One-time v0.9.2 migration
-
-The first upgrade from v0.9.2 performs a journaled, idempotent migration. It preserves configuration profiles, UCI-compatible settings, rulesets, subscriptions, the installed Mihomo core, Guard desired state and DNS restoration data. Legacy cron/hotplug/backend scripts are removed only after `miclashd` registers, reconciliation succeeds and the migration verifies.
-
-If migration cannot verify, package installation fails instead of pretending success. With Guard ON, the safety latch remains protected; retry the package configuration after fixing the reported error.
-
 ## Safe update and recovery
 
 - Config activation validates first and rolls back partial DNS/firewall/routing changes on failure.

@@ -8,8 +8,8 @@ const runtime = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/runtime
 const clash = fs.readFileSync(path.join(pkg, 'rootfs/etc/init.d/clash'), 'utf8');
 const network = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/network.uc'), 'utf8');
 const reconcile = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/reconcile-adapter.uc'), 'utf8');
-const legacyNetwork = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/legacy-network.uc'), 'utf8');
-const migrate = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/migrate.uc'), 'utf8');
+const dns = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/dns.uc'), 'utf8');
+const settings = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/settings.uc'), 'utf8');
 const subscription = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/subscription.uc'), 'utf8');
 const miclashd = fs.readFileSync(path.join(pkg, 'rootfs/usr/sbin/miclashd'), 'utf8');
 const installer = fs.readFileSync(path.join(root, 'install-miclash.sh'), 'utf8');
@@ -35,8 +35,18 @@ for (const dependency of [ 'ucode', 'ucode-mod-fs', 'ucode-mod-ubus', 'ucode-mod
 	requireMatch(makefile, new RegExp('\\+' + dependency.replaceAll('-', '\\-') + '(?:\\s|$)'), `missing dependency ${dependency}`);
 for (const asset of [
 	'rootfs/etc/init.d/miclashd', 'rootfs/usr/sbin/miclashd', 'rootfs/etc/config/miclash',
-	'rootfs/usr/libexec/miclash/migrate.uc', 'rootfs/usr/libexec/miclash/decompress-gzip'
+	'rootfs/usr/libexec/miclash/decompress-gzip'
 ]) requireMatch(makefile, new RegExp(asset.replaceAll('/', '\\/').replaceAll('.', '\\.')), `not installed: ${asset}`);
+
+for (const retiredAsset of [
+	'rootfs/usr/libexec/miclash/migrate.uc',
+	'rootfs/usr/share/miclash/migrate.uc',
+	'rootfs/usr/share/miclash/legacy-network.uc',
+	'rootfs/usr/share/miclash/legacy-firewall-cleanup.uc'
+]) {
+	if (fs.existsSync(path.join(pkg, retiredAsset)))
+		throw new Error(`v0.9 transition asset is still shipped: ${retiredAsset}`);
+}
 
 for (const legacy of [
 	'miclash-autoupdate', 'miclash-memory-guard', '40-clash', '99-clash-tun',
@@ -45,13 +55,12 @@ for (const legacy of [
 
 requireMatch(makefile, /\/etc\/config\/miclash/, 'canonical UCI config must be a conffile');
 requireMatch(makefile, /chmod 0600 .*\/etc\/config\/miclash/, 'canonical config must be secret-safe');
-for (const phase of [ 'prepare', 'apply', 'verify', 'cleanup' ])
-	requireMatch(makefile, new RegExp(`migrate\\.uc ${phase}`), `missing migration phase ${phase}`);
+forbid(makefile, /migrate\.uc|legacy-firewall-cleanup\.uc|guard_latch_set|guard_verify_protected/,
+	'v0.9 transition lifecycle is still invoked by the package');
+forbid(dns, /\.dns_backup|migrate_legacy/, 'v2 DNS lifecycle still converts v0.9 state');
+forbid(settings, /legacy_patch|migrate_legacy|INTERNET_ONLY_MICLASH/,
+	'v2 settings module still parses v0.9 settings');
 requireMatch(makefile, /miclash-guard start[\s\S]*miclashd start/, 'Guard must start before miclashd');
-requireMatch(makefile, /miclash-guard start[\s\S]*legacy-firewall-cleanup\.uc[\s\S]*miclashd start/,
-	'legacy firewall ownership must be retired under native Guard before daemon start');
-requireMatch(makefile, /guard_latch_set[\s\S]*guard_start[\s\S]*guard_verify_protected[\s\S]*migrate\.uc prepare/,
-	'legacy Guard ON must be latched and physically verified before cutover');
 
 forbid(runtime, /\/opt\/clash\/bin\/clash-rules/, 'runtime Guard must not call legacy clash-rules');
 forbid(clash, /clash-rules|dnsmasq|iptables|nft|ip rule|ip route|cron/, 'clash init must only supervise Mihomo');
@@ -63,15 +72,6 @@ requireMatch(reconcile, /app\.network\.apply\(desired\)[\s\S]*app\.service\.rest
 	'native network state must be verified before Mihomo restart');
 requireMatch(reconcile, /app\.network\.apply\(desired\)[\s\S]*app\.guard\.disable\(\)/,
 	'canonical OFF may release handoff Guard only after native network apply');
-for (const legacyOwner of [ 'clash', 'miclash_guard', 'CLASH_PROCESS', 'CLASH_LOCAL',
-	'CLASH_OUTPUT_REDIRECT', 'routing-ownership.json', '.dns_backup', 'miclash.include',
-	'40-clash', '99-clash-tun' ])
-	requireMatch(legacyNetwork, new RegExp(legacyOwner.replaceAll('.', '\\.')), `legacy handoff misses ${legacyOwner}`);
-forbid(legacyNetwork, /guard_control\.disable/, 'legacy teardown must retain temporary Guard until native handoff');
-requireMatch(migrate, /with_lock[\s\S]*CANONICAL_MARKER[\s\S]*same\(settings\.load\(runtime\), expected\)/,
-	'migration commit must recheck marker and canonical bytes under the writer lease');
-requireMatch(migrate, /daemon_ready\(runtime\)[\s\S]*call\('miclash', 'health', \{\}\)/,
-	'migration must require the typed daemon health endpoint');
 const daemonReadiness = fs.readFileSync(path.join(pkg,
 	'rootfs/usr/share/miclash/daemon-readiness.uc'), 'utf8');
 const initialReadyClear = miclashd.indexOf('readiness.clear();');

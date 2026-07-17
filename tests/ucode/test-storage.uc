@@ -236,7 +236,6 @@ assert_equal(json_rt.fs.mode('/etc/miclash/state.json'), 0o600);
 
 assert_equal(storage.sha256('abc'),
 	'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
-assert_match(storage.sha256('tests/fixtures/settings/legacy-full', true), /^[0-9a-f]{64}$/);
 
 assert_equal(storage.safe_name('backup-1.json'), 'backup-1.json');
 for (let unsafe in [ '', '.', '..', '../state', 'a/b', 'a\\b', '.hidden' ])

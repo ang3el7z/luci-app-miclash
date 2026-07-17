@@ -3,11 +3,9 @@ import { write_json } from 'miclash.storage';
 import { assert_held, with_lock } from 'miclash.mutation_lock';
 
 const MANIFEST_PATH = '/etc/miclash/dns-ownership.json';
-const LEGACY_PATH = '/opt/clash/.dns_backup';
 const PACKAGE_BARRIER = '/var/run/miclash/package-removal';
 const TARGET = '127.0.0.1#7874';
 const MAX_MANIFEST = 16384;
-const MAX_LEGACY = 128;
 
 function exact_fields(value, allowed) {
 	if (type(value) != 'object' || type(value) == 'array') return false;
@@ -417,56 +415,9 @@ function secure_unlink_manifest(runtime) {
 		fail('INTERNAL');
 };
 
-function parse_legacy(source) {
-	let matched = match(source, /^CACHESIZE=([^\n]*)\nNORESOLV=([^\n]*)\n$/);
-	if (!matched || (length(matched[1]) && !match(matched[1], /^(0|[1-9][0-9]{0,9})$/)) ||
-	    !match(matched[2], /^(|0|1)$/)) return null;
-	if (length(matched[1]) && int(matched[1]) > 2147483647) return null;
-	return {
-		cachesize: { present: length(matched[1]) > 0, value: length(matched[1]) ? matched[1] : null },
-		noresolv: { present: length(matched[2]) > 0, value: length(matched[2]) ? matched[2] : null }
-	};
-};
-
-function migrate_legacy(runtime) {
-	let captured = secure_read(runtime, LEGACY_PATH, MAX_LEGACY, [ '/opt', '/opt/clash' ]);
-	if (captured.status == 'absent') return false;
-	if (captured.status != 'read') fail('CORRUPT_STATE');
-	let legacy = parse_legacy(captured.source);
-	if (legacy == null) fail('CORRUPT_STATE');
-	if (!legacy.cachesize.present && !legacy.noresolv.present) fail('CORRUPT_STATE');
-	let observed = raw_observe(runtime);
-	if (length(observed.conflicts) || observed.current == null ||
-	    count(observed.current.server.value, TARGET) != 1 ||
-	    !observed.current.cachesize.present || observed.current.cachesize.value != '0' ||
-	    !observed.current.noresolv.present || observed.current.noresolv.value != '1')
-		fail('CORRUPT_STATE');
-	let loaded = load_manifest(runtime);
-	if (loaded.status == 'invalid') fail('CORRUPT_STATE');
-	if (loaded.status == 'absent') {
-		let servers = without_owned_target(observed.current.server.value);
-		let original = { server: { present: length(servers) > 0, value: servers },
-			cachesize: legacy.cachesize, noresolv: legacy.noresolv };
-		persist(runtime, observed.section, original, false, 'active', null, null);
-	}
-	else if (loaded.document.section != observed.section || loaded.document.state != 'active' ||
-	         loaded.document.transition != null || loaded.document.target_preexisting ||
-	         !same(loaded.document.original.cachesize, legacy.cachesize) ||
-	         !same(loaded.document.original.noresolv, legacy.noresolv))
-		fail('CORRUPT_STATE');
-	let verified = load_manifest(runtime);
-	if (!verified.trusted || verified.document.state != 'active' ||
-	    !owned_target_unambiguous(verified.document, observed.current))
-		fail('CORRUPT_STATE');
-	if (runtime.fs.unlink(LEGACY_PATH) != true || runtime.fs.lstat(LEGACY_PATH) != null)
-		fail('INTERNAL');
-	return true;
-};
-
 function recover_locked(runtime, intent) {
 	let package_mode = runtime.package_removal_cleanup === true;
 	assert_mutation_allowed(runtime, package_mode);
-	migrate_legacy(runtime);
 	let loaded = load_manifest(runtime);
 	if (loaded.status == 'absent') {
 		if (intent == 'clean') {
@@ -499,7 +450,6 @@ export function recover(runtime, intent) {
 function cleanup_locked(runtime) {
 	let package_mode = runtime.package_removal_cleanup === true;
 	assert_mutation_allowed(runtime, package_mode);
-	migrate_legacy(runtime);
 	let loaded = load_manifest(runtime);
 	if (loaded.status == 'absent') {
 		prove_manifest_absent_clean(runtime);
@@ -534,4 +484,4 @@ export function cleanup(runtime) {
 		() => cleanup_locked(runtime));
 };
 
-export const paths = { manifest: MANIFEST_PATH, legacy: LEGACY_PATH };
+export const paths = { manifest: MANIFEST_PATH };

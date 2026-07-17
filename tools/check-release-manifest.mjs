@@ -222,13 +222,15 @@ function runRepositoryContracts() {
 		'/guard_off', '/backup' ];
 	const required = [ 'OpenWrt 24.10+', '25.12', 'miclashd', 'ubus', 'UCI', 'Guard', 'latch',
 		'Draft', 'Active', 'diagnostic', 'route test', 'notification', 'Telegram', '/status',
-		'/reboot', 'history', 'rollback', 'backup', 'restore', 'device polic', 'v0.9.2',
+		'/reboot', 'history', 'rollback', 'backup', 'restore', 'device polic',
 		'update', 'recovery', 'removal' ];
 	for (const path of docs) {
 		const text = readFileSync(path, 'utf8');
 		assert.doesNotMatch(text, /23\.05/, `${path} still documents unsupported OpenWrt 23.05`);
 		for (const token of required)
 			assert.ok(text.toLowerCase().includes(token.toLowerCase()), `${path} is missing ${token}`);
+		assert.doesNotMatch(text, /v0\.9\.2|migration/i,
+			`${path} must not describe the retired in-package transition`);
 		const commandBlocks = [ ...text.matchAll(/```text\r?\n([\s\S]*?)```/g) ];
 		assert.equal(commandBlocks.length, 1, `${path} must contain one Telegram command block`);
 		assert.deepEqual(commandBlocks[0][1].trim().split(/\r?\n/), commands,

@@ -226,74 +226,6 @@ let ambiguous = runtime({ uci: { dhcp: {
 assert_true(length(observe(ambiguous).conflicts) > 0,
 	'MiClash-shaped active UCI without authority is ambiguous');
 
-let legacy = runtime({ uci: { dhcp: {
-	main: { '.type': 'dnsmasq', server: [ TARGET ], cachesize: '0', noresolv: '1' }
-} } });
-legacy.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=1000\nNORESOLV=\n');
-legacy.fs.mkdir('/opt'); legacy.fs.mkdir('/opt/clash');
-legacy.fs.set_mode('/opt/clash/.dns_backup', 0o600);
-assert_equal(recover(legacy, 'active').state, 'active', 'exact legacy state migrates one way');
-assert_true(legacy.fs.lstat('/opt/clash/.dns_backup') == null && legacy.fs.lstat(MANIFEST)?.type == 'file',
-	'legacy input is removed only after new authority exists');
-
-let malformed_legacy = runtime({ uci: { dhcp: {
-	main: { '.type': 'dnsmasq', server: [ TARGET ], cachesize: '0', noresolv: '1' }
-} } });
-malformed_legacy.fs.mkdir('/opt'); malformed_legacy.fs.mkdir('/opt/clash');
-malformed_legacy.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=-1\nNORESOLV=yes\n');
-assert_throws(() => recover(malformed_legacy, 'active'), 'CORRUPT_STATE',
-	'malformed legacy authority is refused');
-
-let disagreeing_authorities = runtime();
-apply(disagreeing_authorities, desired(observe(disagreeing_authorities)));
-disagreeing_authorities.fs.mkdir('/opt'); disagreeing_authorities.fs.mkdir('/opt/clash');
-disagreeing_authorities.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=200\nNORESOLV=\n');
-assert_throws(() => recover(disagreeing_authorities, 'active'), 'CORRUPT_STATE',
-	'legacy input may not be removed when it disagrees with trusted JSON authority');
-assert_true(disagreeing_authorities.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
-	'disagreeing legacy input remains for explicit recovery');
-
-function legacy_fixture() {
-	let value = runtime({ uci: { dhcp: {
-		main: { '.type': 'dnsmasq', server: [ TARGET ], cachesize: '0', noresolv: '1' }
-	} } });
-	value.fs.mkdir('/opt'); value.fs.mkdir('/opt/clash');
-	value.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=1000\nNORESOLV=0\n');
-	return value;
-};
-let linked_legacy = legacy_fixture();
-linked_legacy.fs.set_nlink('/opt/clash/.dns_backup', 2);
-assert_throws(() => recover(linked_legacy, 'active'), 'CORRUPT_STATE',
-	'hard-linked legacy input is refused');
-let permissive_legacy = legacy_fixture();
-permissive_legacy.fs.set_mode('/opt/clash/.dns_backup', 0o644);
-assert_throws(() => recover(permissive_legacy, 'active'), 'CORRUPT_STATE',
-	'legacy input with non-private mode is refused');
-let foreign_legacy = legacy_fixture();
-foreign_legacy.fs.set_uid('/opt/clash/.dns_backup', 1000);
-assert_throws(() => recover(foreign_legacy, 'active'), 'CORRUPT_STATE',
-	'non-root legacy input is refused');
-let oversized_legacy = legacy_fixture();
-let oversized_number = '';
-for (let i = 0; i < 140; i++) oversized_number += '1';
-oversized_legacy.fs.writefile('/opt/clash/.dns_backup',
-	'CACHESIZE=' + oversized_number + '\nNORESOLV=0\n');
-assert_throws(() => recover(oversized_legacy, 'active'), 'CORRUPT_STATE',
-	'oversized legacy input is refused');
-let inconsistent_legacy = legacy_fixture();
-inconsistent_legacy.uci_fake.values.dhcp.main.cachesize = '100';
-assert_throws(() => recover(inconsistent_legacy, 'active'), 'CORRUPT_STATE',
-	'legacy migration requires exact active UCI state');
-let retry_legacy_unlink = legacy_fixture();
-retry_legacy_unlink.fs.fail_unlink_once = true;
-assert_throws(() => recover(retry_legacy_unlink, 'active'), 'INTERNAL',
-	'legacy unlink failure is retryable');
-assert_true(retry_legacy_unlink.fs.lstat(MANIFEST)?.type == 'file' &&
-	retry_legacy_unlink.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
-	'failed legacy unlink retains both authorities');
-assert_equal(recover(retry_legacy_unlink, 'active').state, 'active',
-	'legacy unlink retry accepts agreeing authorities');
-
 let running_failure = runtime({ process: {
 	'/etc/init.d/dnsmasq:running': { code: 1 }
 } });
@@ -333,42 +265,6 @@ push(foreign_server.uci_fake.values.dhcp.main.server, '9.9.9.9');
 assert_true(cleanup(foreign_server).clean, 'cleanup accepts an appended foreign non-target server');
 assert_equal(encoded(foreign_server.uci_fake.cursor().get_all('dhcp', 'main').server),
 	encoded([ '1.1.1.1', '9.9.9.9' ]), 'cleanup preserves foreign non-target servers');
-
-let ambiguous_legacy = runtime({ uci: { dhcp: {
-	main: { '.type': 'dnsmasq', server: [ TARGET ], cachesize: '0', noresolv: '1' }
-} } });
-ambiguous_legacy.fs.mkdir('/opt'); ambiguous_legacy.fs.mkdir('/opt/clash');
-ambiguous_legacy.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=\nNORESOLV=\n');
-assert_throws(() => recover(ambiguous_legacy, 'active'), 'CORRUPT_STATE',
-	'blank legacy scalars cannot prove whether the target preexisted');
-assert_true(ambiguous_legacy.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
-	'ambiguous legacy input is retained');
-
-let duplicate_legacy = runtime({ uci: { dhcp: {
-	main: { '.type': 'dnsmasq', server: [ TARGET, TARGET ], cachesize: '0', noresolv: '1' }
-} } });
-duplicate_legacy.fs.mkdir('/opt'); duplicate_legacy.fs.mkdir('/opt/clash');
-duplicate_legacy.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=1000\nNORESOLV=\n');
-assert_throws(() => recover(duplicate_legacy, 'active'), 'CORRUPT_STATE',
-	'legacy migration requires exactly one active target');
-assert_true(duplicate_legacy.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
-	'duplicate-target legacy evidence is retained');
-
-for (let contradiction in [
-	{ preexisting: false, original: snapshot([ TARGET, '1.1.1.1' ], '1000', null) },
-	{ preexisting: true, original: snapshot([ '1.1.1.1' ], '1000', null) }
-]) {
-	let legacy = runtime({ uci: { dhcp: {
-		main: { '.type': 'dnsmasq', server: [ TARGET, '1.1.1.1' ], cachesize: '0', noresolv: '1' }
-	} } });
-	legacy.fs.mkdir('/opt'); legacy.fs.mkdir('/opt/clash');
-	legacy.fs.writefile('/opt/clash/.dns_backup', 'CACHESIZE=1000\nNORESOLV=\n');
-	seed(legacy, document(contradiction.original, contradiction.preexisting, 'active'));
-	assert_throws(() => recover(legacy, 'active'), 'CORRUPT_STATE',
-		'legacy coexistence rejects contradictory target ownership semantics');
-	assert_true(legacy.fs.lstat('/opt/clash/.dns_backup')?.type == 'file',
-		'contradictory coexistence preserves legacy evidence');
-}
 
 let cursor_race = runtime();
 cursor_race.uci_fake.on_cursor = (calls) => {

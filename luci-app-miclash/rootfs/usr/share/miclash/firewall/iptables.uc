@@ -341,12 +341,6 @@ function staged(desired, model, id) {
 		}
 		if (desired.previous_generation != null && desired.previous_generation != id)
 			for (let item in inventory_commands(desired.previous_generation, family, 'retire')) push(stages.retire, item);
-		if (desired.previous_generation == null) {
-			for (let legacy in [ [ 'PREROUTING', 'MICLASH_PREROUTING' ], [ 'OUTPUT', 'MICLASH_OUTPUT' ] ])
-				add(stages.switch, executable, [ '-t', 'mangle', '-C', legacy[0], '-j', legacy[1] ], {
-					on_success: [ '-t', 'mangle', '-D', legacy[0], '-j', legacy[1] ], tolerate_failure: true
-				});
-		}
 	}
 	return { stages, rollback };
 };
@@ -651,7 +645,7 @@ function verify_generation(runtime, compiled, active) {
 };
 
 export function observe(runtime) {
-	let found = null, families = [], valid = true, legacy = false;
+	let found = null, families = [], valid = true;
 	for (let item in [ [ 'iptables-save', 'ipv4' ], [ 'ip6tables-save', 'ipv6' ] ]) {
 		let mangle = runtime.process.run({ command: item[0], args: [ '-t', 'mangle' ] });
 		let filter = runtime.process.run({ command: item[0], args: [ '-t', 'filter' ] });
@@ -678,17 +672,11 @@ export function observe(runtime) {
 			if (exact_owned_edge_count(hook[0], hook[1], hook[2],
 			    '-A ' + hook[1] + ' -j ' + hook[2]) != (absent ? 0 : 1)) { valid = false; id = null; }
 		if (!guard_order_valid(filter_output)) { valid = false; id = null; }
-		for (let hook in [ [ 'PREROUTING', 'MICLASH_PREROUTING' ], [ 'OUTPUT', 'MICLASH_OUTPUT' ] ]) {
-			let line = '-A ' + hook[0] + ' -j ' + hook[1], exact = count_line(mangle_output, line);
-			let edges = exact_owned_edge_count(mangle_output, hook[0], hook[1], line);
-			if (edges == null || edges != exact || exact > 1) { valid = false; id = null; legacy = true; }
-			else if (exact == 1) legacy = true;
-		}
 		if (id == null || id == '' || id == '-') continue;
 		if (found != null && found != id) return { installed: false, generation: null, families: [], source: 'ambiguous' };
 		found = id; push(families, item[1]);
 	}
-	return { valid, legacy, installed: valid && found != null, generation: valid ? found : null,
+	return { valid, installed: valid && found != null, generation: valid ? found : null,
 		families: valid ? families : [], source: 'save-anchors' };
 };
 
@@ -801,7 +789,7 @@ export function apply(runtime, compiled) {
 			error: 'INTERNAL', stage: 'verify-active' };
 	let active = null;
 	try { active = observe(runtime); } catch (error) {}
-	if (active == null || !active.valid || active.legacy || active.generation != compiled.generation ||
+	if (active == null || !active.valid || active.generation != compiled.generation ||
 	    !same_families(active.families, compiled.desired.ip_families))
 		return { installed: true, generation: compiled.generation, repair_needed: true,
 			error: 'INTERNAL', stage: 'verify-active' };
@@ -898,13 +886,7 @@ function chain_count(text, chain) {
 function cleanup_plan(runtime) {
 	let discovery = discover_generations(runtime), commands = [];
 	for (let executable in [ 'iptables', 'ip6tables' ]) {
-		let save = executable + '-save', mangle = discovery.documents[save + ':mangle'];
-		for (let legacy in [ [ 'PREROUTING', 'MICLASH_PREROUTING' ], [ 'OUTPUT', 'MICLASH_OUTPUT' ] ]) {
-			let line = '-A ' + legacy[0] + ' -j ' + legacy[1], exact = count_line(mangle, line);
-			if (exact_owned_edge_count(mangle, legacy[0], legacy[1], line) != exact || exact > 1) fail('INTERNAL');
-			if (exact == 1) push(commands, request(executable,
-				[ '-t', 'mangle', '-D', legacy[0], '-j', legacy[1] ]));
-		}
+		let save = executable + '-save';
 		for (let item in [ [ 'mangle', 'PREROUTING', CHAINS.prerouting ],
 			[ 'mangle', 'OUTPUT', CHAINS.output ], [ 'filter', 'INPUT', CHAINS.tun_input ],
 			[ 'filter', 'FORWARD', CHAINS.tun_forward ] ]) {

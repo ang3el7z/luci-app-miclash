@@ -114,10 +114,6 @@ ubus call miclash health '{}'
 
 主要 UCI section 为 `core`、`interfaces`、`guard`、`memory`、`updates`、`telegram`、`notifications`、`backup` 与 `meta`。`/etc/config/miclash` 可能包含订阅 URL 和 Telegram token，应只允许 root 读取。
 
-## 从 v0.9.2 一次性迁移
-
-首次从 v0.9.2 升级时会执行带 journal、可重复运行的 migration。配置 profile、可转换的 UCI 设置、rulesets、订阅、Mihomo 内核、Guard 目标状态与 DNS restore 数据都会保留。只有 `miclashd` 注册、reconcile 成功并完成 migration 验证后，旧 cron/hotplug/backend 脚本才会删除。
-
 如果无法验证，软件包安装会明确失败而不是伪装成功。Guard ON 时 safety latch 保持保护；修复报告的问题后重新执行 package configuration。
 
 ## 安全 update 与 recovery

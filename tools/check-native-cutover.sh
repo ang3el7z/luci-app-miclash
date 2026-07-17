@@ -13,8 +13,6 @@ UCODE_BIN="$UCODE_BIN" "$repo_root/tools/run-ucode-tests.sh" \
 	"$repo_root/tests/ucode/test-guard-runtime.uc" \
 	"$repo_root/tests/ucode/test-routing.uc" \
 	"$repo_root/tests/ucode/test-dns.uc" \
-	"$repo_root/tests/ucode/test-migrate.uc" \
-	"$repo_root/tests/ucode/test-legacy-network.uc" \
 	"$repo_root/tests/ucode/test-config.uc" \
 	"$repo_root/tests/ucode/test-http-subscription.uc"
 
