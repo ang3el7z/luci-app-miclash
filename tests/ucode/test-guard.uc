@@ -347,13 +347,13 @@ assert_true(index(bootstrap, "[ '-f', BATCH_PATH ]") >= 0 &&
 assert_true(index(bootstrap, '-j list tables') >= 0 &&
 	index(guard_source, 'verify_nft_table') >= 0,
 	'bootstrap verification must use structural nft JSON parsing');
-let clash_rules = fs.readfile('luci-app-miclash/rootfs/opt/clash/bin/clash-rules');
 assert_true(index(bootstrap, "'/opt/clash/settings'") < 0 &&
 	index(bootstrap, 'INTERNET_ONLY_MICLASH') < 0,
 	'Guard bootstrap must not retain a second legacy source of truth');
-assert_true(match(clash_rules, /uci[^\n]*miclash\.guard\.enabled/) != null &&
-	index(clash_rules, 'guard_verify_on') >= 0 && index(clash_rules, 'guard_verify_off') >= 0,
-	'real clash-rules must consume canonical UCI and expose applied-state verification');
+let runtime_source = fs.readfile('luci-app-miclash/rootfs/usr/share/miclash/runtime.uc');
+assert_true(index(runtime_source, 'guard-runtime.uc') >= 0 &&
+	index(runtime_source, '/opt/clash/bin/clash-rules') < 0,
+	'production Guard must use the native ucode owner only');
 assert_true(index(makefile, '/etc/init.d/miclash-guard start || exit 1') >= 0,
 	'package installation must fail closed when an enabled bootstrap cannot be installed');
 assert_true(index(bootstrap, "ARGV[0] != 'disable'") >= 0 &&
@@ -362,5 +362,5 @@ assert_true(index(bootstrap, "ARGV[0] != 'disable'") >= 0 &&
 	'bootstrap commands must derive effective UCI-or-latch intent at execution time');
 assert_true(index(init, 'guard-bootstrap.uc remove') >= 0,
 	'Guard owner removal must use its distinct bootstrap removal command');
-assert_true(!match(makefile, /INSTALL_BIN[^\n]*rootfs\/etc\/init\.d\/miclashd/),
-	'Task 2 must not ship the unfinished main daemon');
+assert_true(match(makefile, /INSTALL_BIN[^\n]*rootfs\/etc\/init\.d\/miclashd/) != null,
+	'final cutover must ship the reviewed main daemon');

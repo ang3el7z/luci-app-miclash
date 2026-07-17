@@ -181,6 +181,7 @@ export function create(app) {
 	if (type(app?.runtime) != 'object' || type(app?.operations?.submit) != 'function' ||
 	    type(app?.config?.validate_in_operation) != 'function' ||
 	    type(app?.config?.apply_in_operation) != 'function' ||
+	    type(app?.config?.apply_transaction_in_operation) != 'function' ||
 	    type(app?.settings?.get) != 'function' || type(app?.settings?.validate) != 'function' ||
 	    type(app?.settings?.set) != 'function' || type(adapter?.download) != 'function')
 		invalid();
@@ -268,19 +269,25 @@ export function create(app) {
 			insecure: found.insecure
 		};
 	};
-	function update(options, source, pre_enqueue) {
+	function update(options, source, pre_enqueue, replace_url) {
 		exact(options, { profile: true, url: true });
 		if (pre_enqueue != null && type(pre_enqueue) != 'function')
 			invalid();
-		let value = current(), profile = schema.profile_name(options.profile);
-		let url = profile_url(profile, options.url, value);
-		let insecure = match(url, /^http:\/\//) != null;
+		let profile = schema.profile_name(options.profile);
+		let supplied_url = options.url == null ? null : schema.url(options.url);
+		let context_url = profile_url(profile, supplied_url, current());
+		let insecure = match(context_url, /^http:\/\//) != null;
 		return app.operations.submit('subscription.update', source,
 			{ profile, insecure }, (ctx) => {
+				// Queue admission is not a settings snapshot. Read canonical state in
+				// the worker so earlier serialized mutations are never rolled back.
+				let value = current();
+				let url = profile_url(profile, supplied_url, value);
 				ctx.stage('attempt', 10, 'Subscription attempt started');
 				let candidate = fetch({ url });
 				ctx.stage('download', 35, 'Subscription downloaded');
-				ctx.result({ interval_hours: candidate.interval_hours });
+				ctx.result({ interval_hours: candidate.interval_hours,
+					insecure: candidate.insecure === true });
 				let content = transform(candidate.content, value.core.proxy_mode,
 					value.core.tun_stack);
 				ctx.stage('validation', 55, 'Validating subscription');
@@ -290,11 +297,39 @@ export function create(app) {
 					return false;
 				}
 				ctx.stage('activation', 75, 'Activating subscription');
-				let applied = app.config.apply_in_operation(ctx, profile, content, source, {
+				let metadata = {
 					attempt_result: 'success', download_result: 'success',
 					validation_result: 'success', activation_result: 'pending',
 					reload_result: 'pending', interval_hours: candidate.interval_hours
-				});
+				};
+				let applied;
+				if (replace_url === true) {
+					let key = URL_OPTIONS[profile], rollback_state = null;
+					applied = app.config.apply_transaction_in_operation(ctx, profile, content, source,
+						metadata, {
+							prepare: () => {
+								ctx.stage('settings-prepare', 79, 'Durably preparing replacement URL');
+								let before = current(), previous_url = before.core[key];
+								let next_patch = app.settings.validate({ core: { [key]: url } });
+								let rollback_patch = app.settings.validate({ core: { [key]: previous_url } });
+								rollback_state = { previous_url, url, rollback_patch };
+								let saved = app.settings.set(next_patch);
+								if (saved?.core?.[key] != url) errors.fail('INTERNAL');
+								return rollback_state;
+							},
+							commit: (prepared) => {
+								let saved = app.settings.get();
+								return prepared?.url == url && saved?.core?.[key] == url;
+							},
+							rollback: (prepared) => {
+								let state = prepared ?? rollback_state;
+								if (state == null) return true;
+								let restored = app.settings.set(state.rollback_patch);
+								return restored?.core?.[key] == state.previous_url;
+							}
+						});
+				}
+				else applied = app.config.apply_in_operation(ctx, profile, content, source, metadata);
 				if (applied?.ok !== true) {
 					let failure = applied?.error ?? errors.new('HEALTH_FAILED');
 					if (applied?.activated === true && applied?.reload_ok !== true &&
@@ -306,15 +341,20 @@ export function create(app) {
 				}
 				if (applied?.activated !== true || applied?.reload_ok !== true)
 					errors.fail('INTERNAL');
-				ctx.stage('reload', 95, 'Subscription active');
+				ctx.stage('complete', 99, 'Subscription active');
 				return true;
 			}, pre_enqueue);
 	};
-	api.update = (options, source) => update(options, source, null);
+	api.update = (options, source) => update(options, source, null, false);
+	api.replace = (options, source) => {
+		exact(options, { profile: true, url: true });
+		schema.url(options.url);
+		return update(options, source, null, true);
+	};
 	// Internal scheduler entrypoint: the durability hook is owned by the
 	// operation manager and runs after queued journal persistence, before run.
 	api.update_scheduled = (options, source, pre_enqueue) =>
-		update(options, source, pre_enqueue);
+		update(options, source, pre_enqueue, false);
 	api.set_url = (options, source) => {
 		exact(options, { profile: true, url: true, interval_hours: true });
 		let profile = schema.profile_name(options.profile);

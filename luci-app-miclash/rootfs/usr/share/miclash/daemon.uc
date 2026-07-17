@@ -16,6 +16,7 @@ import * as notify from 'miclash.notify';
 import * as telegram from 'miclash.telegram';
 import * as mutation_lock from 'miclash.mutation_lock';
 import * as reconcile_adapter from 'miclash.reconcile-adapter';
+import * as network from 'miclash.network';
 import * as subscription from 'miclash.subscription';
 import * as updates from 'miclash.updates';
 import * as http from 'miclash.http';
@@ -288,8 +289,7 @@ function ruleset_write(runtime, manager, arguments, whitelist) {
 			storage.atomic_write(runtime, ruleset_path(name), content, 0o600);
 			if (whitelist) {
 				ctx.stage('apply', 70, 'apply');
-				if (runtime.process.run({ command: '/opt/clash/bin/clash-rules',
-					args: [ 'update-ip-whitelist' ] })?.code != 0)
+				if (runtime.reconcile?.run?.('ruleset-whitelist') == null)
 					errors.fail('HEALTH_FAILED');
 			}
 			ctx.stage('complete', 100, 'complete'); return { name };
@@ -317,7 +317,7 @@ export function compose(runtime, overrides) {
 	let modules = {
 		operations, settings, storage, history, diff, service, config, state, application,
 		api, memory, backup, devices, notify, telegram, mutation_lock,
-		reconcile_adapter, subscription, updates, http,
+		reconcile_adapter, network, subscription, updates, http,
 		...(overrides ?? {})
 	};
 	let operation_manager = modules.operations.create(runtime);
@@ -369,6 +369,7 @@ export function compose(runtime, overrides) {
 			runtime.reconcile = modules.reconcile_adapter.create({
 				operations: operation_manager, service: service_adapter,
 				settings: reconcile_settings, guard: runtime.guard_control,
+				network: modules.network.create(runtime),
 				clock: runtime.clock, events: runtime.events
 			});
 		let notification_settings = clone(desired.notifications);
@@ -845,10 +846,16 @@ export function compose(runtime, overrides) {
 				}
 			});
 		};
+		let lifecycle_service = {
+			...service_adapter,
+			start: () => runtime.reconcile.start('service-start'),
+			stop: () => runtime.reconcile.stop('service-stop'),
+			restart_service: () => runtime.reconcile.restart('service-restart')
+		};
 		let app = modules.application.create({
 			operations: operation_manager,
 			settings: settings_domain,
-			service: service_adapter,
+			service: lifecycle_service,
 			config: configuration,
 			history: history_store,
 			state: state_model,
@@ -922,7 +929,6 @@ export function compose(runtime, overrides) {
 			return updates_domain.rollback_mihomo({ id: previous_id }, arguments.source);
 		};
 		if (type(desired.telegram) == 'object') {
-			let unavailable = () => errors.fail('HEALTH_FAILED');
 			let telegram_app = {
 				runtime, http: modules.http, operations: operation_manager,
 				logger: runtime.logger, audit: runtime.audit,
@@ -934,10 +940,10 @@ export function compose(runtime, overrides) {
 				logs_read: () => bounded_logs(runtime),
 				service_start: app.service_start, service_stop: app.service_stop,
 				service_restart: app.service_restart, service_reload: app.service_reload,
-				reboot: type(runtime.reboot) == 'function' ? runtime.reboot : unavailable,
-				subscription_update: (url, source) => subscription_domain.update({
-					profile: 'config.yaml', url
-				}, source),
+				reboot: runtime.reboot,
+				subscription_update: (url, source) => url == null
+					? subscription_domain.update({ profile: 'config.yaml', url: null }, source)
+					: subscription_domain.replace({ profile: 'config.yaml', url }, source),
 				update_miclash: (source) => updates_domain.update_miclash({
 					version: null, channel: null
 				}, source),

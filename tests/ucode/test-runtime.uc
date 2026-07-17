@@ -151,50 +151,11 @@ assert_equal(fake_result.code, 0);
 assert_equal(fake_result.stdout, null);
 assert_equal(fake_result.stderr, null);
 
-// Production Guard verification follows the typed requested state even when
-// the retained legacy settings file says the exact opposite.
-let guard_fs = fakes.fs({ '/opt/clash/settings': 'INTERNET_ONLY_MICLASH=false\n' });
-let guard_actual = false, guard_canonical = false;
-let guard_process_calls = [];
-let guard_process = { calls: guard_process_calls, run: (request) => {
-	push(guard_process_calls, request);
-	let action = request.args[0], code = 1;
-	if (action == 'guard_start') { guard_actual = true; code = 0; }
-	else if (action == 'guard_verify_protected') code = guard_actual ? 0 : 1;
-	else if (action == 'guard_disable') {
-		if (!guard_canonical) { guard_actual = false; code = 0; }
-	}
-	else if (action == 'guard_verify_on') code = guard_canonical && guard_actual ? 0 : 1;
-	else if (action == 'guard_verify_off') code = !guard_canonical && !guard_actual ? 0 : 1;
-	return runtime.process_result(code, null, null);
-} };
-let guard_clock = fakes.clock(1700000000000);
-let guard_runtime = runtime.create({
-	fs: guard_fs, digest: fakes.digest(guard_fs), random: fakes.entropy(),
-	clock: guard_clock, process: guard_process, uci: fakes.uci({}),
-	ubus: { connect: () => null }, http: { request: () => null }
-});
-assert_true(type(guard_runtime.guard_control.latch_set) == 'function' &&
-	type(guard_runtime.guard_control.latch_clear) == 'function' &&
-	type(guard_runtime.guard_control.is_latched) == 'function',
-	'production Guard adapter is missing the persistent safety latch');
-assert_equal(guard_runtime.guard_control.protect(), true,
-	'production Guard adapter did not establish exact protection before UCI ON');
-assert_equal(guard_runtime.guard_control.verify_protected(), true,
-	'production Guard adapter did not expose physical-only startup proof');
-guard_canonical = true;
-assert_equal(guard_runtime.guard_control.verify(true), true,
-	'legacy false overrode canonical Guard ON verification');
-guard_fs.writefile('/opt/clash/settings', 'INTERNET_ONLY_MICLASH=true\n');
-guard_clock.advance(1);
-guard_canonical = false;
-assert_equal(guard_runtime.guard_control.disable(), true,
-	'production Guard adapter did not atomically disable and verify real state');
-assert_equal(guard_runtime.guard_control.verify(false), true,
-	'legacy true overrode canonical Guard OFF verification');
-assert_equal(guard_actual, false);
-assert_equal(guard_process.calls[0].args[0], 'guard_start');
-assert_equal(guard_process.calls[1].args[0], 'guard_verify_protected');
+// Final production Guard control has no retained shell backend.
+let runtime_source = require('fs').readfile(
+	'luci-app-miclash/rootfs/usr/share/miclash/runtime.uc');
+assert_true(index(runtime_source, '/usr/share/miclash/guard-runtime.uc') >= 0);
+assert_true(index(runtime_source, '/opt/clash/bin/clash-rules') < 0);
 
 let fake_fs = fakes.fs({ '/etc/miclash/config': 'old' });
 assert_equal(fake_fs.readfile('/etc/miclash/config'), 'old');

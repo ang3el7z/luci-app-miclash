@@ -200,7 +200,7 @@ jobs:
           ./scripts/feeds install -a > /dev/null 2>&1
           ln -s "${{ github.workspace }}/luci-app-miclash" "package/$PACKAGE_NAME"
           make defconfig > /dev/null 2>&1
-          make -j"$(nproc)" package/${PACKAGE_NAME}/compile V=s
+          make -j"$(nproc)" "package/${PACKAGE_NAME}/compile" V=s
 
           case "${{ matrix.pkg_type }}" in
             ipk)
@@ -278,7 +278,8 @@ jobs:
           grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/ace/mode-text.js$' "$package_entries"
           grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/style.css$' "$package_entries"
           grep -Eq '(^|[.]/)usr/share/luci/menu.d/luci-app-miclash.json$' "$package_entries"
-          grep -Eq '(^|[.]/)opt/clash/bin/miclash-update$' "$package_entries"
+          grep -Eq '(^|[.]/)usr/sbin/miclashd$' "$package_entries"
+          grep -Eq '(^|[.]/)usr/libexec/miclash/migrate\.uc$' "$package_entries"
 
           cp -v -f "$src" "$dst"
           ls -lah "$dst"

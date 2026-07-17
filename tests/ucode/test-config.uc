@@ -106,6 +106,44 @@ assert_throws(() => internal_env.cfg.apply_in_operation(
 assert_throws(() => internal_env.cfg.save_draft_in_operation(
 	issued_ctx, 'config.yaml', 'expired-draft\n'), 'INVALID_ARGUMENT');
 
+// Subscription replacement prepares its durable URL before touching Active,
+// then treats Active bytes, health, and URL finalization as one rollback unit.
+let transaction_url = 'old-url', transaction_calls = [];
+let transaction_env = environment();
+let transaction_record = transaction_env.ops.submit('subscription.update', 'telegram', {}, (ctx) => {
+	let result = transaction_env.cfg.apply_transaction_in_operation(ctx, 'config.yaml',
+		fixture('valid.yaml'), 'telegram', {}, {
+			prepare: () => { push(transaction_calls, 'prepare'); transaction_url = 'new-url'; return 'old-url'; },
+			commit: () => { push(transaction_calls, 'commit'); return transaction_url == 'new-url'; },
+			rollback: (old) => { push(transaction_calls, 'rollback'); transaction_url = old; return true; }
+		});
+	if (!result.ok) { ctx.complete(result.error); return false; }
+	ctx.result({ interval_hours: null });
+	return true;
+});
+let transaction_done = finish(transaction_env, transaction_record);
+assert_equal(transaction_done.state, 'success', sprintf('transaction failed: %J', transaction_done));
+assert_equal(transaction_url, 'new-url');
+assert_equal(transaction_env.fs.readfile('/opt/clash/config.yaml'), fixture('valid.yaml'));
+assert_equal(sprintf('%J', transaction_calls), sprintf('%J', [ 'prepare', 'commit' ]));
+
+transaction_url = 'old-url'; transaction_calls = [];
+let transaction_unhealthy = environment({ reload: () => false, health: () => false });
+let unhealthy_transaction = transaction_unhealthy.ops.submit('subscription.update', 'telegram', {}, (ctx) => {
+	let result = transaction_unhealthy.cfg.apply_transaction_in_operation(ctx, 'config.yaml',
+		fixture('valid.yaml'), 'telegram', {}, {
+			prepare: () => { push(transaction_calls, 'prepare'); transaction_url = 'new-url'; return 'old-url'; },
+			commit: () => { push(transaction_calls, 'commit'); return true; },
+			rollback: (old) => { push(transaction_calls, 'rollback'); transaction_url = old; return true; }
+		});
+	ctx.complete(result.error); return false;
+});
+assert_equal(finish(transaction_unhealthy, unhealthy_transaction).error.code, 'INTERNAL',
+	'failed health verification after restoring Active must not claim a completed rollback');
+assert_equal(transaction_url, 'old-url');
+assert_equal(transaction_unhealthy.fs.readfile('/opt/clash/config.yaml'), 'original-active\n');
+assert_equal(sprintf('%J', transaction_calls), sprintf('%J', [ 'prepare', 'rollback' ]));
+
 // Only the three on-disk profile names are accepted.
 for (let profile in [ 'config.yaml', 'config2.yaml', 'config3.yaml' ])
 	assert_equal(schema.profile_name(profile), profile);

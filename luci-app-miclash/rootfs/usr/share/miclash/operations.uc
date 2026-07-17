@@ -20,7 +20,8 @@ const LEGACY_RECORD_FIELDS = {
 };
 const ERROR_FIELDS = { code: true, message: true, detail: true };
 const TIMELINE_FIELDS = { stage: true, at: true };
-const RESULT_FIELDS = { interval_hours: true };
+const RESULT_FIELDS = { interval_hours: true, insecure: true };
+const LEGACY_RESULT_FIELDS = { interval_hours: true };
 const ERROR_CODES = {};
 for (let code in errors.CODES)
 	ERROR_CODES[code] = true;
@@ -111,10 +112,12 @@ function valid_disk_record(record, filename) {
 		if (type(record.timeline) != 'array' || length(record.timeline) < 1 ||
 		    length(record.timeline) > 32 || record.result != null &&
 		    (record.kind != 'subscription.update' ||
-		     !exact_fields(record.result, RESULT_FIELDS, 1) ||
+		     (!exact_fields(record.result, RESULT_FIELDS, 2) &&
+		      !exact_fields(record.result, LEGACY_RESULT_FIELDS, 1)) ||
 		     (record.result.interval_hours != null &&
 		      (type(record.result.interval_hours) != 'int' ||
-		       record.result.interval_hours < 1 || record.result.interval_hours > 8760))))
+		       record.result.interval_hours < 1 || record.result.interval_hours > 8760)) ||
+		     (record.result.insecure != null && type(record.result.insecure) != 'bool')))
 			return false;
 		let previous = record.created_at;
 		for (let index, item in record.timeline) {
@@ -409,13 +412,16 @@ export function create(runtime) {
 				let current = records[entry.id];
 				if (entry.finished || current.state != 'running' ||
 				    current.kind != 'subscription.update' || current.result != null ||
-				    !exact_fields(value, RESULT_FIELDS, 1) ||
+				    (!exact_fields(value, RESULT_FIELDS, 2) &&
+				     !exact_fields(value, LEGACY_RESULT_FIELDS, 1)) ||
 				    (value.interval_hours != null &&
 				     (type(value.interval_hours) != 'int' ||
-				      value.interval_hours < 1 || value.interval_hours > 8760)))
+				      value.interval_hours < 1 || value.interval_hours > 8760)) ||
+				    (value.insecure != null && type(value.insecure) != 'bool'))
 					invalid();
 				let staged = clone(current);
 				staged.result = { interval_hours: value.interval_hours };
+				if (value.insecure != null) staged.result.insecure = value.insecure;
 				staged.updated_at = runtime.clock.now();
 				persist(staged);
 				return clone(staged.result);

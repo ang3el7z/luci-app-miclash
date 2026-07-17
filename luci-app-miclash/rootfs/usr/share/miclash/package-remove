@@ -16,7 +16,6 @@ DNS_MANIFEST="/etc/miclash/dns-ownership.json"
 DNS_LEGACY="/opt/clash/.dns_backup"
 RELEASE_SOURCE="/usr/share/miclash/package-release"
 RELEASE_DIR="/var/run/miclash/package-removal-release"
-CLASH_RULES="/opt/clash/bin/clash-rules"
 CRON_FILE="/etc/crontabs/root"
 WAIT_ATTEMPTS=50
 MUTATION_LOCK_HELD=0
@@ -63,15 +62,14 @@ quiesce_update_triggers() {
 		[ ! -x /etc/init.d/cron ] || /etc/init.d/cron restart >/dev/null 2>&1 || return 1
 	fi
 	stop_disable miclashd || return 1
-	stop_disable miclash-autoupdate || return 1
-	stop_disable miclash-memory-guard || return 1
 	return 0
 }
 
 delete_clash_and_wait() {
 	[ -x /etc/init.d/clash ] || return 1
 	command -v ubus >/dev/null 2>&1 || return 1
-	/etc/init.d/clash delete >/dev/null 2>&1 || return 1
+	/etc/init.d/clash stop >/dev/null 2>&1 || return 1
+	/etc/init.d/clash disable >/dev/null 2>&1 || return 1
 	i=0
 	while [ "$i" -lt "$WAIT_ATTEMPTS" ]; do
 		state="$(ubus call service list '{"name":"clash"}' 2>/dev/null)" || return 1
@@ -100,13 +98,16 @@ run_dns_cleanup() {
 }
 
 run_preserve_cleanup() {
-	[ -x /etc/init.d/clash ] || return 1
-	/etc/init.d/clash package_cleanup >/dev/null 2>&1
+	[ -f /usr/share/miclash/firewall-cleanup.uc ] || return 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/firewall-cleanup.uc >/dev/null 2>&1
 }
 
 establish_package_guard() {
-	[ -x "$CLASH_RULES" ] || return 1
-	"$CLASH_RULES" package_guard_start >/dev/null 2>&1
+	[ -f /usr/share/miclash/guard-runtime.uc ] || return 1
+	MICLASH_MUTATION_LOCK_PACKAGE=1 /usr/bin/ucode -L '/usr/share/*.uc' \
+		/usr/share/miclash/guard-runtime.uc protect >/dev/null 2>&1 || return 1
+	MICLASH_MUTATION_LOCK_PACKAGE=1 /usr/bin/ucode -L '/usr/share/*.uc' \
+		/usr/share/miclash/guard-runtime.uc verify-protected >/dev/null 2>&1
 }
 
 prepare_completion_marker() {

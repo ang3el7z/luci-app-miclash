@@ -46,9 +46,11 @@ jobs:
 
       - name: Check test runner shell syntax
         run: >-
-          sh -n tools/run-ucode-tests.sh tools/check-dns-lifecycle.sh tools/check-routing-netns.sh
-          tools/check-mutation-lock.sh tools/check-package-cleanup.sh
-          tools/check-package-removal.sh tools/check-package-release.sh
+          sh -n tools/run-ucode-tests.sh tools/check-routing-netns.sh
+          tools/check-package-release.sh tools/check-native-cutover.sh
+          tools/check-mutation-lock.sh tools/check-dns-lifecycle.sh
+          tools/check-guard-runtime.sh tools/check-package-cleanup.sh
+          tools/check-package-removal.sh
 
   ucode-tests:
     name: Host ucode tests
@@ -107,10 +109,6 @@ jobs:
         shell: bash
         run: UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/run-ucode-tests.sh
 
-      - name: Run Guard runtime transaction and exact-proof gate
-        shell: bash
-        run: UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/check-guard-runtime.sh
-
       - name: Run isolated routing lifecycle and producer deadline gates
         shell: bash
         run: |
@@ -119,29 +117,17 @@ jobs:
             LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
             tools/check-routing-netns.sh
 
-      - name: Run transactional DNS lifecycle gate
+      - name: Run native backend lifecycle gates
         shell: bash
         run: |
-          sudo env \
-            UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
-            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
-            tools/check-dns-lifecycle.sh
-
-      - name: Run package removal process and failure-preservation gate
-        shell: bash
-        run: sudo tools/check-package-removal.sh
-
-      - name: Run shared mutation lock process gate
-        shell: bash
-        run: sudo tools/check-mutation-lock.sh
-
-      - name: Run production package cleanup failure/retry gate
-        shell: bash
-        run: sudo tools/check-package-cleanup.sh
-
-      - name: Run retryable package release gate
-        shell: bash
-        run: sudo tools/check-package-release.sh
+          env UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/check-native-cutover.sh
+          sudo env UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" tools/check-dns-lifecycle.sh
+          sudo env UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" tools/check-guard-runtime.sh
+          sudo tools/check-package-cleanup.sh
+          sudo tools/check-package-removal.sh
+          sudo tools/check-mutation-lock.sh
 
   package-build:
     name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }})

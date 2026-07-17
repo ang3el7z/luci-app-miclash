@@ -27,9 +27,11 @@ function abort_startup() {
 	die('INTERNAL');
 };
 
-function arm_observation() {
+function start_normal_lifecycle() {
 	if (shutting_down)
 		return false;
+	if (environment.reconcile.startup('daemon-startup') !== true)
+		abort_startup();
 	if (observation_timer != null)
 		return true;
 	let candidate = uloop.timer(0, () => {
@@ -49,7 +51,7 @@ try {
 		clock: environment.clock,
 		guard: environment.guard_control,
 		reconcile: environment.reconcile,
-		on_ready: arm_observation
+		on_ready: start_normal_lifecycle
 	});
 	startup.start();
 }

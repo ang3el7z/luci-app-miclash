@@ -144,11 +144,7 @@ for (let family in [ 'ipv4', 'ipv6' ]) {
 		'duplicate base-chain jump is rejected');
 }
 
-let source = require('fs').readfile('luci-app-miclash/rootfs/opt/clash/bin/clash-rules');
 let entrypoint = require('fs').readfile('luci-app-miclash/rootfs/usr/share/miclash/guard-runtime.uc');
-assert_true(index(source ?? '', 'guard-runtime.uc protect') >= 0 &&
-	index(source ?? '', 'guard-runtime.uc release') >= 0,
-	'runtime Guard rebuilds use the emergency bootstrap entrypoint');
 assert_true(index(entrypoint ?? '', 'mutation_lock_token') >= 0 &&
 	index(entrypoint ?? '', 'assert_held') >= 0,
 	'bootstrap entrypoint joins and asserts the inherited canonical mutation lease');

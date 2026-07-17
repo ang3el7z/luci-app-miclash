@@ -349,6 +349,78 @@ export function create(runtime, operations, history) {
 		operation_context(ctx);
 		return activation(ctx, profile, content, source, extra, options);
 	};
+	api.apply_transaction_in_operation = (ctx, profile, content, source, extra, transaction) => {
+		operation_context(ctx);
+		profile = schema.profile_name(profile);
+		if (type(transaction) != 'object' || length(keys(transaction)) != 3 ||
+		    type(transaction.prepare) != 'function' || type(transaction.commit) != 'function' ||
+		    type(transaction.rollback) != 'function') errors.fail('INVALID_ARGUMENT');
+		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
+			ctx.stage('transaction-snapshot', 76, 'Capturing active configuration');
+			let previous = read_active_state(profile);
+			let snapshot = history.snapshot_bytes(profile, source, previous.content, {
+				validation_result: 'success', activation_result: 'pending',
+				operation_id: ctx.id, ...(extra ?? {})
+			});
+			let prepared;
+			ctx.stage('transaction-prepare', 78, 'Preparing coupled durable state');
+			try { prepared = transaction.prepare(); }
+			catch (error) {
+				let failed = false;
+				try { if (transaction.rollback(prepared) !== true) failed = true; }
+				catch (rollback_error) { failed = true; }
+				history.mark_activation(profile, snapshot.revision, 'failed');
+				return { ok: false, activated: false, reload_ok: false,
+					error: errors.new(failed ? 'INTERNAL' : errors.normalize(error).code) };
+			}
+			let activated = false;
+			function rollback(code) {
+				let failed = false;
+				if (activated) {
+					try {
+						storage.atomic_write(runtime, active_path(profile), previous.content, 0o600);
+						record_active(profile, previous.hash, ctx.id);
+					}
+					catch (error) { failed = true; }
+				}
+				try { if (transaction.rollback(prepared) !== true) failed = true; }
+				catch (error) { failed = true; }
+				if (activated && !failed && !healthy(runtime.service, profile, candidate))
+					failed = true;
+				return errors.new(failed ? 'INTERNAL' : code, failed ? 'INTERNAL' : code, { profile });
+			};
+			try {
+				ctx.stage('transaction-activate', 82, 'Activating coupled configuration');
+				assert_active_state(profile, previous);
+				storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
+				record_active(profile, candidate_hash, ctx.id);
+				activated = true;
+			}
+			catch (error) {
+				let failure = rollback(errors.normalize(error).code);
+				history.mark_activation(profile, snapshot.revision, 'failed');
+				return { ok: false, activated, reload_ok: false, error: failure };
+			}
+			if (!healthy(runtime.service, profile, previous.content)) {
+				let failure = rollback('HEALTH_FAILED');
+				history.mark_activation(profile, snapshot.revision, 'health_failed');
+				return { ok: false, activated: true, reload_ok: false, error: failure };
+			}
+			try {
+				ctx.stage('transaction-finalize', 90, 'Finalizing coupled durable state');
+				if (transaction.commit(prepared) !== true) errors.fail('INTERNAL');
+				ctx.stage('transaction-finalized', 91, 'Coupled durable state finalized');
+			}
+			catch (error) {
+				let failure = rollback(errors.normalize(error).code);
+				history.mark_activation(profile, snapshot.revision, 'failed');
+				return { ok: false, activated: true, reload_ok: false, error: failure };
+			}
+			history.mark_activation(profile, snapshot.revision, 'success');
+			ctx.stage('transaction-committed', 92, 'Coupled transaction committed');
+			return { ok: true, activated: true, reload_ok: true };
+		});
+	};
 	api.validate = (profile, content, source) => submit(
 		'config.validate', source, profile, (ctx) => complete_result(ctx,
 			api.validate_in_operation(ctx, profile, content)));

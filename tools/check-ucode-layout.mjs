@@ -34,11 +34,9 @@ function makeAssignment(name) {
 }
 
 const packageModules = makeAssignment('MICLASH_PACKAGE_UCODE');
-const unshippedModules = makeAssignment('MICLASH_UNSHIPPED_UCODE');
 const expanded = spawnSync('make', [ '--no-print-directory', '-f', '-', 'all' ], {
 	cwd: 'luci-app-miclash',
-	input: `${unshippedModules}\n${packageModules}\n` +
-		'$(info UNSHIPPED=$(MICLASH_UNSHIPPED_UCODE))\n' +
+	input: `${packageModules}\n` +
 		'$(info PACKAGE=$(MICLASH_PACKAGE_UCODE))\nall: ;\n',
 	encoding: 'utf8'
 });
@@ -49,19 +47,10 @@ function expandedBasenames(label) {
 	return line.slice(label.length + 1).trim().split(/\s+/).filter(Boolean)
 		.map((path) => basename(path)).sort();
 }
-const experimental = [
-	'backup.uc', 'devices.uc', 'diagnostics.uc', 'diff.uc', 'health.uc', 'http.uc',
-	'memory.uc', 'notify.uc', 'reconcile.uc', 'route-test.uc', 'schedule.uc',
-	'reconcile-adapter.uc',
-	'scheduler.uc', 'subscription.uc', 'telegram.uc', 'updates.uc'
-].sort();
-assert.deepEqual(expandedBasenames('UNSHIPPED'), experimental,
-	'the explicit unshipped list must contain every Plan 2/3 module held for final cutover');
 const allModules = readdirSync('luci-app-miclash/rootfs/usr/share/miclash')
 	.filter((name) => name.endsWith('.uc')).sort();
-assert.deepEqual(expandedBasenames('PACKAGE'),
-	allModules.filter((name) => !experimental.includes(name)),
-	'the package make expression must retain every approved ucode module and exclude held features');
+assert.deepEqual(expandedBasenames('PACKAGE'), allModules,
+	'the final package must ship every reviewed production ucode module');
 assert.match(makefile, /\$\(INSTALL_DATA\)\s+\$\(MICLASH_PACKAGE_UCODE\)\s+\$\(1\)\/usr\/share\/miclash\//,
 	'the package install recipe must consume the filtered ucode expansion');
 assert.match(makefile, /chmod 0700 \$\(1\)\/etc\/miclash/,
@@ -93,8 +82,8 @@ assert.match(init,
 	/procd_set_param command \/usr\/bin\/ucode -L '\/usr\/share\/\*\.uc' \/usr\/sbin\/miclashd/);
 assert.match(init, /procd_set_param stdout 1/);
 assert.match(init, /procd_set_param stderr 1/);
-assert.doesNotMatch(makefile, /miclashd/,
-	'miclashd must remain unshipped until the final cutover');
+assert.match(makefile, /rootfs\/usr\/sbin\/miclashd/,
+	'miclashd must be installed at final cutover');
 assert.doesNotMatch(api, /\.submit\(|\.stage\(|wait_ready|settings\.set/,
 	'api.uc must remain transport-only');
 

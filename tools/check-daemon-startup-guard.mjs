@@ -13,19 +13,22 @@ const create = daemon.indexOf('runtime.create()');
 const compose = daemon.indexOf('daemon.compose(environment)');
 const startup = daemon.indexOf('startup_guard.create');
 const start = daemon.indexOf('startup.start()');
-const arm = daemon.indexOf('function arm_observation()');
+const arm = daemon.indexOf('function start_normal_lifecycle()');
 const observation = daemon.indexOf('process.state.observe');
 check(daemon.includes("from 'miclash.startup-guard'"),
 	'miclashd must import the production startup Guard recovery module');
-check(daemon.includes('on_ready: arm_observation'),
+check(daemon.includes('on_ready: start_normal_lifecycle'),
 	'miclashd must arm normal observation only through startup Guard readiness');
+check(daemon.indexOf("environment.reconcile.startup('daemon-startup')") > arm &&
+	daemon.indexOf("environment.reconcile.startup('daemon-startup')") < observation,
+	'native firewall, routing and DNS reconciliation must gate normal observation');
 check(create >= 0 && compose > create && arm > compose && observation > arm &&
 	startup > observation && start > startup,
 	'normal observation must be defined as a callback and startup recovery invoked after compose');
 check(daemon.includes('startup.close()'),
 	'miclashd shutdown must close the startup retry lifecycle');
 const observationFailure = daemon.slice(daemon.indexOf('function abort_startup()'),
-	daemon.indexOf('function arm_observation()'));
+	daemon.indexOf('function start_normal_lifecycle()'));
 check(observationFailure.indexOf('startup?.close?.()') >= 0 &&
 	observationFailure.indexOf('startup?.close?.()') < observationFailure.indexOf('process.close()'),
 	'observation timer setup failure must close startup retries before daemon composition');

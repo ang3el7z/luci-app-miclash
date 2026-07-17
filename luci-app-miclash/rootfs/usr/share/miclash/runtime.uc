@@ -7,6 +7,7 @@ import * as routing from 'miclash.routing';
 import * as nft from 'miclash.firewall.nft';
 import * as iptables from 'miclash.firewall.iptables';
 import * as guard_latch from 'miclash.guard-latch';
+import { with_lock } from 'miclash.mutation_lock';
 
 const PROCESS_FIELDS = {
 	command: true,
@@ -502,9 +503,8 @@ function readiness_observers(runtime) {
 	return {
 		guard: safe((enabled) => {
 			if (type(enabled) != 'bool') return { ready: false, state: 'failed' };
-			let result = runtime.process.run({ command: '/opt/clash/bin/clash-rules',
-				args: [ enabled ? 'guard_verify_on' : 'guard_verify_off' ] });
-			let ready = result?.code === 0, observed_at = runtime.clock.now();
+			let ready = runtime.guard_control?.verify(enabled) === true;
+			let observed_at = runtime.clock.now();
 			return { ready, state: ready ? 'ready' : 'failed', enabled,
 				observed_at, generation: observed_at };
 		}),
@@ -546,16 +546,25 @@ function readiness_observers(runtime) {
 
 function guard_control_adapter(runtime) {
 	function action(name) {
-		return runtime.process.run({ command: '/opt/clash/bin/clash-rules',
-			args: [ name ], timeout_ms: 15000 }).code === 0;
+		return with_lock(runtime, { barrier: 'normal', wait_ms: 0 }, () => {
+			let lease = runtime.mutation_lock_lease;
+			return runtime.process.run({
+				command: '/usr/bin/ucode',
+				args: [ '-L', '/usr/share/*.uc', '/usr/share/miclash/guard-runtime.uc', name ],
+				env: { MICLASH_MUTATION_LOCK_TOKEN: lease.token },
+				timeout_ms: 15000
+			}).code === 0;
+		});
 	};
 	return {
-		protect: () => action('guard_start') && action('guard_verify_protected'),
-		verify_protected: () => action('guard_verify_protected'),
-		disable: () => action('guard_disable') && action('guard_verify_off'),
-		verify: (enabled) => runtime.observers.guard(enabled)?.ready === true,
-		latch_set: () => action('guard_latch_set'),
-		latch_clear: () => action('guard_latch_clear'),
+		protect: () => action('protect') && action('release') &&
+			action('verify-bootstrap-on'),
+		verify_protected: () => action('verify-protected'),
+		disable: () => action('disable') && action('latch-clear') &&
+			action('verify-bootstrap-off'),
+		verify: (enabled) => action(enabled ? 'verify-bootstrap-on' : 'verify-bootstrap-off'),
+		latch_set: () => action('latch-set'),
+		latch_clear: () => action('latch-clear'),
 		is_latched: () => guard_latch.is_set(runtime)
 	};
 };

@@ -317,10 +317,22 @@ function subscription_environment(responses, initial_settings) {
 			subscription_url_config2_yaml: '', subscription_url_config3_yaml: ''
 		}, updates: { interval_hours: 4 }
 	};
+	let settings_failures = 0, settings_fail_after_commit = false;
 	let settings = {
 		get: () => value,
 		validate: (patch) => patch,
-		set: (patch) => { push(calls.settings, patch); return value; }
+		set: (patch) => {
+			push(calls.settings, patch);
+			if (settings_failures > 0 && !settings_fail_after_commit) {
+				settings_failures--; errors.fail('INTERNAL');
+			}
+			value = { ...value,
+				core: { ...value.core, ...(patch.core ?? {}) },
+				updates: { ...value.updates, ...(patch.updates ?? {}) }
+			};
+			if (settings_failures > 0) { settings_failures--; errors.fail('INTERNAL'); }
+			return value;
+		}
 	};
 	let config = { validation_result: { ok: true }, activation_result: {
 		ok: true, activated: true, reload_ok: true
@@ -331,11 +343,32 @@ function subscription_environment(responses, initial_settings) {
 		};
 	config.apply_in_operation = (ctx, profile, content, source, extra) => {
 			push(calls.apply, { id: ctx.id, profile, content, source, extra });
+		return config.activation_result;
+	};
+	config.apply_transaction_in_operation = (ctx, profile, content, source, extra, transaction) => {
+	let prepared;
+	try { prepared = transaction.prepare(); }
+	catch (error) {
+		try { transaction.rollback(prepared); } catch (rollback_error) {}
+		return { ok: false, activated: false, reload_ok: false,
+			error: errors.new(error?.code ?? error?.message ?? 'INTERNAL') };
+	}
+		push(calls.apply, { id: ctx.id, profile, content, source, extra, transactional: true });
+		if (config.activation_result?.ok !== true) {
+			transaction.rollback(prepared);
 			return config.activation_result;
-		};
+		}
+		if (transaction.commit(prepared) !== true) {
+			transaction.rollback(prepared);
+			return { ok: false, activated: true, reload_ok: false, error: errors.new('INTERNAL') };
+		}
+		return config.activation_result;
+	};
 	let client = subscription.create({ runtime, operations: ops, config, settings,
 		http: http_adapter });
-	return { filesystem, clock, runtime, ops, calls, config, settings, client };
+	return { filesystem, clock, runtime, ops, calls, config, settings, client,
+		fail_settings: () => { settings_failures++; settings_fail_after_commit = false; },
+		fail_settings_after: () => { settings_failures++; settings_fail_after_commit = true; } };
 };
 
 function finish_subscription(env, record) {
@@ -368,6 +401,110 @@ assert_equal(length(direct_sub.calls.apply), 1);
 assert_equal(direct_sub.calls.validate[0].id, direct_sub.calls.apply[0].id);
 assert_match(direct_sub.calls.apply[0].content, /^mode: rule\n# Proxy Mode: TPROXY\nredir-port: 7892\ntproxy-port: 7894\n/);
 assert_equal(direct_sub.calls.apply[0].extra.download_result, 'success');
+
+let replacement_url = 'https://subscriptions.example.test/replacement.yaml';
+let replacement = subscription_environment({
+	[replacement_url]: { body: yaml }
+});
+let replacement_op = replacement.client.replace({
+	profile: 'config.yaml', url: replacement_url
+}, 'telegram');
+let replacement_done = finish_subscription(replacement, replacement_op);
+assert_equal(replacement_done.state, 'success', sprintf('replacement failed: %J', replacement_done));
+assert_equal(length(replacement.calls.settings), 1,
+	'successful Telegram replacement persists one canonical URL patch');
+assert_equal(replacement.calls.settings[0].core.subscription_url_config_yaml,
+	replacement_url);
+assert_equal(replacement.settings.get().core.subscription_url_config_yaml, replacement_url);
+
+let settings_failure = subscription_environment({ [replacement_url]: { body: yaml } });
+settings_failure.fail_settings();
+let settings_failure_op = settings_failure.client.replace({
+	profile: 'config.yaml', url: replacement_url
+}, 'telegram');
+let settings_failure_record = finish_subscription(settings_failure, settings_failure_op);
+assert_equal(settings_failure_record.error.code, 'INTERNAL');
+assert_equal(length(settings_failure.calls.apply), 0,
+	'config activated before durable replacement URL prepare succeeded');
+assert_equal(settings_failure.settings.get().core.subscription_url_config_yaml, '');
+
+let partial_settings_failure = subscription_environment({ [replacement_url]: { body: yaml } });
+partial_settings_failure.fail_settings_after();
+let partial_failure_op = partial_settings_failure.client.replace({
+	profile: 'config.yaml', url: replacement_url
+}, 'telegram');
+assert_equal(finish_subscription(partial_settings_failure, partial_failure_op).error.code, 'INTERNAL');
+assert_equal(length(partial_settings_failure.calls.apply), 0,
+	'partially committed URL prepare proceeded into activation');
+assert_equal(partial_settings_failure.settings.get().core.subscription_url_config_yaml, '',
+	'partially committed URL prepare was not rolled back');
+assert_equal(length(partial_settings_failure.calls.settings), 2);
+
+let replacement_health = subscription_environment({ [replacement_url]: { body: yaml } });
+replacement_health.config.activation_result = { ok: false, activated: true, reload_ok: false,
+	error: errors.new('HEALTH_FAILED') };
+let replacement_health_op = replacement_health.client.replace({
+	profile: 'config.yaml', url: replacement_url
+}, 'telegram');
+assert_equal(finish_subscription(replacement_health, replacement_health_op).error.code,
+	'HEALTH_FAILED');
+assert_equal(replacement_health.settings.get().core.subscription_url_config_yaml, '',
+	'failed activation did not roll back replacement URL');
+assert_equal(length(replacement_health.calls.settings), 2,
+	'failed activation did not run durable URL rollback');
+
+// Queue admission is not a rollback snapshot. An earlier serialized settings
+// mutation may complete before this worker starts; a failed activation must
+// restore that newer canonical value, never the stale admission-time value.
+let queued_previous_url = 'https://subscriptions.example.test/newer-canonical.yaml';
+let queued_replacement = subscription_environment({ [replacement_url]: { body: yaml } });
+queued_replacement.config.activation_result = { ok: false, activated: true, reload_ok: false,
+	error: errors.new('HEALTH_FAILED') };
+let queued_replacement_op = queued_replacement.client.replace({
+	profile: 'config.yaml', url: replacement_url
+}, 'telegram');
+queued_replacement.settings.set({ core: {
+	subscription_url_config_yaml: queued_previous_url
+} });
+assert_equal(finish_subscription(queued_replacement, queued_replacement_op).error.code,
+	'HEALTH_FAILED');
+assert_equal(queued_replacement.settings.get().core.subscription_url_config_yaml,
+	queued_previous_url, 'failed queued replacement restored a stale admission-time URL');
+
+// Admission metadata may be stale for a dynamically resolved saved URL. The
+// immutable worker result records the actual transport that was downloaded.
+let admission_https = 'https://subscriptions.example.test/admission.yaml';
+let worker_http = 'http://subscriptions.example.test/worker.yaml';
+let dynamic_settings = {
+	core: {
+		proxy_mode: 'tproxy', tun_stack: 'system', hwid_enabled: false,
+		hwid_user_agent: 'MiClash', hwid_device_os: 'OpenWrt', subscription_url: '',
+		subscription_url_config_yaml: admission_https,
+		subscription_url_config2_yaml: '', subscription_url_config3_yaml: ''
+	}, updates: { interval_hours: 4 }
+};
+let dynamic_transport = subscription_environment({
+	[admission_https]: { body: yaml }, [worker_http]: { body: yaml }
+}, dynamic_settings);
+let dynamic_op = dynamic_transport.client.update({
+	profile: 'config.yaml', url: null
+}, 'auto');
+dynamic_transport.settings.set({ core: { subscription_url_config_yaml: worker_http } });
+let dynamic_done = finish_subscription(dynamic_transport, dynamic_op);
+assert_equal(dynamic_done.state, 'success');
+assert_equal(dynamic_transport.calls.http[0].url, worker_http);
+assert_equal(dynamic_done.result.insecure, true,
+	'worker result did not record the actual insecure transport');
+let failed_replacement = subscription_environment({
+	[replacement_url]: 'DOWNLOAD_FAILED'
+});
+let failed_replacement_op = failed_replacement.client.replace({
+	profile: 'config.yaml', url: replacement_url
+}, 'telegram');
+assert_equal(finish_subscription(failed_replacement, failed_replacement_op).error.code,
+	'DOWNLOAD_FAILED');
+assert_equal(length(failed_replacement.calls.settings), 0,
+	'failed replacement must not overwrite the saved URL');
 assert_equal(direct_sub.calls.apply[0].extra.validation_result, 'success');
 assert_equal(direct_sub.ops.get(updated.id).result.interval_hours, 12);
 assert_true(index(sprintf('%J', direct_sub.ops.get(updated.id)),

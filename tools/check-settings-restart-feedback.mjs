@@ -68,10 +68,10 @@ check(settingsModel.includes('api.operational_settings_apply(') &&
 	!settingsModel.includes('api.config_save_draft(') &&
 	!settingsModel.includes("'require fs'"),
 	'Operational settings and generated config must use one typed transaction.');
-check(makefile.includes('/opt/clash/settings') &&
-	makefile.includes('.settings.upgrade.bak') &&
-	makefile.includes('/opt/clash/bin/clash-rules guard_refresh'),
-	'Package upgrade scripts must preserve /opt/clash/settings and apply restored guard state.');
+check(makefile.includes('/usr/libexec/miclash/migrate.uc prepare') &&
+	makefile.includes('/usr/libexec/miclash/migrate.uc verify') &&
+	!makefile.includes('.settings.upgrade.bak'),
+	'Package upgrades must use the journaled canonical migration.');
 
 if (failed) process.exit(1);
 console.log('settings restart feedback check passed');

@@ -80,7 +80,7 @@ let factories = {
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
 	subscription: { create: () => ({
 		get_redacted: () => ({ configured: false }), set_url: () => ({ id: 'id' }),
-		probe: () => ({}), update: () => ({ id: 'id' })
+		probe: () => ({}), update: () => ({ id: 'id' }), replace: () => ({ id: 'id' })
 	}) },
 	updates: { create: () => ({
 		release_info: () => ({}), update_miclash: () => ({ id: 'id' }),
@@ -179,7 +179,7 @@ let failed_factories = {
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
 	subscription: { create: () => ({
 		get_redacted: () => ({ configured: false }), set_url: () => ({}),
-		probe: () => ({}), update: () => ({})
+		probe: () => ({}), update: () => ({}), replace: () => ({})
 	}) },
 	updates: { create: () => ({
 		release_info: () => ({}), update_miclash: () => ({}), update_mihomo: () => ({})
@@ -299,7 +299,7 @@ let guard_protect_failures = 0;
 let integrated_factories = {
 	operations: { create: () => integrated_operations },
 	service: { create: () => ({
-		start: () => true, stop: () => true, reload: () => true,
+		observe: () => ({ state: 'running' }), start: () => true, stop: () => true, reload: () => true,
 		restart_service: () => true, wait_ready: () => ({ ok: guard_actual == desired.guard.enabled,
 			components: [
 				{ component: 'guard', ready: guard_actual == desired.guard.enabled,
@@ -370,10 +370,16 @@ let integrated_factories = {
 			send_event: () => true
 		};
 	} },
-	subscription: { create: () => ({ update: (options, source) => {
-		push(telegram_backend_calls, { method: 'subscription', options, source });
-		return { id: 'subscription-operation', kind: 'subscription.update' };
-	} }) },
+	subscription: { create: () => ({
+		update: (options, source) => {
+			push(telegram_backend_calls, { method: 'subscription', options, source });
+			return { id: 'subscription-operation', kind: 'subscription.update' };
+		},
+		replace: (options, source) => {
+			push(telegram_backend_calls, { method: 'subscription', options, source });
+			return { id: 'subscription-operation', kind: 'subscription.update' };
+		}
+	}) },
 	updates: { create: () => ({
 		update_miclash: (options, source) => {
 			push(telegram_backend_calls, { method: 'miclash', options, source });
@@ -413,6 +419,7 @@ let integrated_factories = {
 	},
 	mutation_lock: { with_lock: (runtime, options, worker) => worker({}) },
 	reconcile_adapter: real_reconcile_adapter,
+	network: { create: () => ({ apply: () => true, cleanup: () => true }) },
 	api: {
 		create_transfers: (dependencies) => {
 			fake_transfers = {
@@ -838,6 +845,15 @@ let production_fs = fakes.fs({
 				mask: '0xffffffff', table: 100 } ]
 		}, transition: null
 	}),
+	'/etc/miclash/dns-ownership.json': sprintf('%J\n', {
+		version: 1, owner: 'miclash', section: 'dnsmasq',
+		original: {
+			server: { present: true, value: [ '127.0.0.1#7874' ] },
+			cachesize: { present: true, value: '0' },
+			noresolv: { present: true, value: '1' }
+		},
+		target_preexisting: true, state: 'active', transition: null, clean: null
+	}),
 	'/var/run/miclash/.keep': '', '/tmp/miclash/.keep': '',
 	'/etc/miclash/.keep': '', '/opt/clash/.keep': '',
 	'/opt/clash/config.yaml': 'external-controller: 127.0.0.1:9090\n',
@@ -853,26 +869,48 @@ let production_fs = fakes.fs({
 production_fs.set_mode('/opt/clash', 0o700);
 production_fs.set_mode('/opt/clash/config.yaml', 0o600);
 production_fs.set_mode('/opt/clash/bin/clash', 0o755);
+let production_nft_generation = 'aaaaaaaaaaaa';
+let production_routes = { v4_100: true, v6_100: false, v4_rule: true, v6_rule: false };
 production_fs.popen = (command, mode) => {
 	let output = '[]\n';
 	if (index(command, 'ip -j -4 rule show') >= 0)
-		output = '[{"priority":1000,"src":"all","fwmark":"0x1","fwmask":"0xffffffff","table":100,"protocol":242}]\n';
+		output = production_routes.v4_rule ? '[{"priority":1000,"src":"all","fwmark":"0x1","fwmask":"0xffffffff","table":100,"protocol":242}]\n' : '[]\n';
+	else if (index(command, 'ip -j -6 rule show') >= 0)
+		output = production_routes.v6_rule ? '[{"priority":1000,"src":"all","fwmark":"0x1","fwmask":"0xffffffff","table":100,"protocol":242}]\n' : '[]\n';
 	else if (index(command, 'ip -j -4 route show table 100') >= 0)
-		output = '[{"type":"local","dst":"default","dev":"lo","table":100,"protocol":242,"scope":"host"}]\n';
+		output = production_routes.v4_100 ? '[{"type":"local","dst":"default","dev":"lo","table":100,"protocol":242,"scope":"host"}]\n' : '[]\n';
+	else if (index(command, 'ip -j -6 route show table 100') >= 0)
+		output = production_routes.v6_100 ? '[{"type":"local","dst":"default","dev":"lo","table":100,"protocol":242,"scope":"host"}]\n' : '[]\n';
 	else if (index(command, 'nft -j list table inet miclash') >= 0)
-		output = '{"nftables":[{"chain":{"family":"inet","table":"miclash","name":"prerouting","type":"filter","hook":"prerouting","prio":-150,"policy":"accept"}},{"rule":{"family":"inet","table":"miclash","chain":"prerouting","expr":[{"jump":{"target":"prerouting_g_aaaaaaaaaaaa"}}]}}]}';
+		output = '{"nftables":[{"chain":{"family":"inet","table":"miclash","name":"prerouting","type":"filter","hook":"prerouting","prio":-150,"policy":"accept"}},{"rule":{"family":"inet","table":"miclash","chain":"prerouting","expr":[{"jump":{"target":"prerouting_g_' + production_nft_generation + '"}}]}}]}';
 	else if (index(command, '/opt/clash/bin/clash -v') >= 0)
 		die('system_info must not execute Mihomo through a shell');
 	let offset = 0;
 	return { read: (amount) => { let chunk = substr(output, offset, amount);
 		offset += length(chunk); return chunk; }, close: () => 0 };
 };
+let production_process = fakes.process();
+production_process.on_run = (request) => {
+	if (request.command == 'nft' && request.args?.[0] == '-f') {
+		let batch = production_fs.readfile(request.args[1]) ?? '';
+		let found = match(batch, /prerouting_g_([0-9a-f]{12})/);
+		if (found != null) production_nft_generation = found[1];
+	}
+	if (request.command == 'ip' && request.args?.[1] == 'route' && request.args?.[2] == 'replace') {
+		if (request.args[0] == '-4') production_routes.v4_100 = true;
+		if (request.args[0] == '-6') production_routes.v6_100 = true;
+	}
+	if (request.command == 'ip' && request.args?.[1] == 'rule' && request.args?.[2] == 'add') {
+		if (request.args[0] == '-4') production_routes.v4_rule = true;
+		if (request.args[0] == '-6') production_routes.v6_rule = true;
+	}
+};
 let production_runtime = runtime_module.create({
 	fs: production_fs,
 	digest: fakes.digest(production_fs),
 	random: fakes.entropy(),
 	clock: production_clock,
-	process: fakes.process(),
+	process: production_process,
 	uci: fakes.uci({ miclash: {
 		core: { '.type': 'core' }, interfaces: { '.type': 'interfaces' },
 		guard: { '.type': 'guard' }, memory: { '.type': 'memory' },
@@ -910,7 +948,8 @@ assert_equal(production_daemon.app.operation_get(lifecycle_failed.id).state, 'fa
 production_http_healthy = true;
 let lifecycle_recovered = production_runtime.reconcile.run('scheduled');
 production_clock.advance(0);
-assert_equal(production_daemon.app.operation_get(lifecycle_recovered.id).state, 'success');
+assert_equal(production_daemon.app.operation_get(lifecycle_recovered.id).state, 'success',
+	sprintf('production reconcile recovery failed: %J', production_daemon.app.operation_get(lifecycle_recovered.id)));
 let lifecycle_head = production_methods.notifications_list.call({ args: {
 	generation: null, cursor: 0, limit: 20
 } });

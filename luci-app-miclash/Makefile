@@ -10,7 +10,8 @@ PKG_MAINTAINER:=ang3el7z
 
 LUCI_TITLE:=LuCI Support for MiClash
 LUCI_DEPENDS:=+luci-base +zlib +libcurl +curl +coreutils-base64 +kmod-tun \
-	+nftables +coreutils-timeout +ucode-mod-fs +ucode-mod-math +ucode-mod-digest +ucode-mod-socket
+	+nftables +coreutils-timeout +ucode +ucode-mod-fs +ucode-mod-math \
+	+ucode-mod-digest +ucode-mod-socket +ucode-mod-ubus +ucode-mod-uci +ucode-mod-uloop
 LUCI_PKGARCH:=all
 
 PKG_CONFIG_DEPENDS:= \
@@ -19,24 +20,8 @@ PKG_CONFIG_DEPENDS:= \
 
 PKG_BUILD_DEPENDS:=luci-base/host
 
-MICLASH_UNSHIPPED_UCODE:= \
-	./rootfs/usr/share/miclash/health.uc \
-	./rootfs/usr/share/miclash/reconcile.uc \
-	./rootfs/usr/share/miclash/reconcile-adapter.uc \
-	./rootfs/usr/share/miclash/memory.uc \
-	./rootfs/usr/share/miclash/http.uc \
-	./rootfs/usr/share/miclash/subscription.uc \
-	./rootfs/usr/share/miclash/scheduler.uc \
-	./rootfs/usr/share/miclash/updates.uc \
-	./rootfs/usr/share/miclash/diff.uc \
-	./rootfs/usr/share/miclash/diagnostics.uc \
-	./rootfs/usr/share/miclash/route-test.uc \
-	./rootfs/usr/share/miclash/notify.uc \
-	./rootfs/usr/share/miclash/backup.uc \
-	./rootfs/usr/share/miclash/devices.uc \
-	./rootfs/usr/share/miclash/schedule.uc \
-	./rootfs/usr/share/miclash/telegram.uc
-MICLASH_PACKAGE_UCODE:=$(filter-out $(MICLASH_UNSHIPPED_UCODE),$(wildcard ./rootfs/usr/share/miclash/*.uc))
+MICLASH_PACKAGE_UCODE:=$(wildcard ./rootfs/usr/share/miclash/*.uc)
+MICLASH_PACKAGE_FIREWALL_UCODE:=$(wildcard ./rootfs/usr/share/miclash/firewall/*.uc)
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -91,32 +76,21 @@ endef
 
 define Package/$(PKG_NAME)/conffiles
 /opt/clash/config.yaml
-/opt/clash/settings
+/etc/config/miclash
 endef
 
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./rootfs/etc/init.d/clash $(1)/etc/init.d/
 	$(INSTALL_BIN) ./rootfs/etc/init.d/miclash-guard $(1)/etc/init.d/
-	$(INSTALL_BIN) ./rootfs/etc/init.d/miclash-autoupdate $(1)/etc/init.d/
-	$(INSTALL_BIN) ./rootfs/etc/init.d/miclash-memory-guard $(1)/etc/init.d/
-
-	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
-	$(INSTALL_BIN) ./rootfs/etc/hotplug.d/iface/40-clash $(1)/etc/hotplug.d/iface/
-	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
-	$(INSTALL_BIN) ./rootfs/etc/hotplug.d/net/99-clash-tun $(1)/etc/hotplug.d/net/
+	$(INSTALL_BIN) ./rootfs/etc/init.d/miclashd $(1)/etc/init.d/
+	$(INSTALL_DIR) $(1)/etc/config
+	$(INSTALL_CONF) ./rootfs/etc/config/miclash $(1)/etc/config/
+	chmod 0600 $(1)/etc/config/miclash
 	$(INSTALL_DIR) $(1)/etc/iproute2/rt_protos.d
 	$(INSTALL_DATA) ./rootfs/etc/iproute2/rt_protos.d/miclash.conf $(1)/etc/iproute2/rt_protos.d/
 	$(INSTALL_DIR) $(1)/etc/iproute2/rt_tables.d
 	$(INSTALL_DATA) ./rootfs/etc/iproute2/rt_tables.d/miclash.conf $(1)/etc/iproute2/rt_tables.d/
-
-	$(INSTALL_DIR) $(1)/opt/clash/bin
-	$(INSTALL_BIN) ./rootfs/opt/clash/bin/clash-rules $(1)/opt/clash/bin/
-	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-subscription $(1)/opt/clash/bin/
-	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-update $(1)/opt/clash/bin/
-	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-service $(1)/opt/clash/bin/
-	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-autoupdate $(1)/opt/clash/bin/
-	$(INSTALL_BIN) ./rootfs/opt/clash/bin/miclash-memory-guard $(1)/opt/clash/bin/
 
 	$(INSTALL_DIR) $(1)/opt/clash
 	$(INSTALL_DATA) ./rootfs/opt/clash/config.yaml $(1)/opt/clash/
@@ -131,6 +105,8 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/usr/share/rpcd/acl.d/luci-app-miclash.json $(1)/usr/share/rpcd/acl.d/
 	$(INSTALL_DIR) $(1)/usr/share/miclash
 	$(INSTALL_DATA) $(MICLASH_PACKAGE_UCODE) $(1)/usr/share/miclash/
+	$(INSTALL_DIR) $(1)/usr/share/miclash/firewall
+	$(INSTALL_DATA) $(MICLASH_PACKAGE_FIREWALL_UCODE) $(1)/usr/share/miclash/firewall/
 	$(INSTALL_DIR) $(1)/etc/miclash
 	chmod 0700 $(1)/etc/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/mutation-lock.sh $(1)/usr/share/miclash/
@@ -139,6 +115,9 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/usr/libexec/miclash
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/validate-config.uc $(1)/usr/libexec/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/mihomo-https.uc $(1)/usr/libexec/miclash/
+	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/migrate.uc $(1)/usr/libexec/miclash/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) ./rootfs/usr/sbin/miclashd $(1)/usr/sbin/
 
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/miclash
 	$(CP) ./rootfs/www/luci-static/resources/view/miclash/* $(1)/www/luci-static/resources/view/miclash/
@@ -164,30 +143,54 @@ endef
 
 define Package/$(PKG_NAME)/preinst
 #!/bin/sh
-mkdir -p /opt/clash 2>/dev/null || true
-[ -f /opt/clash/config.yaml ] && cp -p /opt/clash/config.yaml /opt/clash/.config.yaml.upgrade.bak
-[ -f /opt/clash/settings ] && cp -p /opt/clash/settings /opt/clash/.settings.upgrade.bak
+ROOT="$${IPKG_INSTROOT:-}"
+mkdir -p "$$ROOT/opt/clash" 2>/dev/null || true
+mkdir -p "$$ROOT/etc/miclash" 2>/dev/null || exit 1
+chmod 0700 "$$ROOT/etc/miclash" 2>/dev/null || exit 1
+[ ! -f "$$ROOT/etc/config/miclash" ] || {
+	umask 077
+	printf '1\n' > "$$ROOT/etc/miclash/canonical-preexisting"
+} || exit 1
+# On an upgrade the installed early owner understands the legacy Guard setting.
+# Establish it before replacing any backend files; failure is deliberately fatal.
+if [ -z "$$ROOT" ] && [ -f /opt/clash/settings ] && \
+   grep -q '^INTERNET_ONLY_MICLASH=true$$' /opt/clash/settings 2>/dev/null; then
+	[ -x /opt/clash/bin/clash-rules ] || exit 1
+	/opt/clash/bin/clash-rules guard_latch_set || exit 1
+	/opt/clash/bin/clash-rules guard_start || exit 1
+	/opt/clash/bin/clash-rules guard_verify_protected || exit 1
+fi
+[ -f "$$ROOT/opt/clash/config.yaml" ] && cp -p "$$ROOT/opt/clash/config.yaml" \
+	"$$ROOT/opt/clash/.config.yaml.upgrade.bak"
 exit 0
 endef
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
-SETTINGS_RESTORED=0
-if [ -f /opt/clash/.config.yaml.upgrade.bak ]; then
-	mv /opt/clash/.config.yaml.upgrade.bak /opt/clash/config.yaml
+ROOT="$${IPKG_INSTROOT:-}"
+if [ -f "$$ROOT/opt/clash/.config.yaml.upgrade.bak" ]; then
+	mv "$$ROOT/opt/clash/.config.yaml.upgrade.bak" "$$ROOT/opt/clash/config.yaml"
 	FIRST_INSTALL=0
 else
 	FIRST_INSTALL=1
 fi
-if [ -f /opt/clash/.settings.upgrade.bak ]; then
-	mv /opt/clash/.settings.upgrade.bak /opt/clash/settings
-	chmod 0644 /opt/clash/settings 2>/dev/null || true
-	SETTINGS_RESTORED=1
-fi
+[ ! -f "$$ROOT/etc/config/miclash" ] || chmod 0600 "$$ROOT/etc/config/miclash" || exit 1
 [ -n "$$IPKG_INSTROOT" ] || {
 	/etc/init.d/rpcd reload
 	/etc/init.d/miclash-guard enable 2>/dev/null || true
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/libexec/miclash/migrate.uc prepare || exit 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/libexec/miclash/migrate.uc apply || exit 1
 	/etc/init.d/miclash-guard start || exit 1
+	/usr/bin/ucode -L '/usr/share/*.uc' \
+		/usr/share/miclash/legacy-firewall-cleanup.uc || exit 1
+	/etc/init.d/miclashd enable || exit 1
+	/etc/init.d/miclashd start || exit 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/libexec/miclash/migrate.uc verify || exit 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/libexec/miclash/migrate.uc cleanup || exit 1
+	if [ -f /etc/crontabs/root ]; then
+		sed -i '\|/opt/clash/bin/clash-rules update|d' /etc/crontabs/root || exit 1
+		/etc/init.d/cron restart >/dev/null 2>&1 || true
+	fi
 	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
 	rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*
 
@@ -199,20 +202,6 @@ fi
 		/etc/init.d/clash disable 2>/dev/null || true
 	fi
 
-	if [ "$$SETTINGS_RESTORED" = "1" ] && [ -x /opt/clash/bin/clash-rules ]; then
-		CLASH_RULES_QUIET=1 /opt/clash/bin/clash-rules guard_refresh >/dev/null 2>&1 || true
-	fi
-	[ -x /opt/clash/bin/miclash-memory-guard ] && /opt/clash/bin/miclash-memory-guard sync >/dev/null 2>&1 || true
-
-	# Ensure periodic clash-rules update cron job exists
-	CRON_FILE="/etc/crontabs/root"
-	CRON_LINE="*/30 * * * * /opt/clash/bin/clash-rules update >/dev/null 2>&1"
-
-	[ -f "$$CRON_FILE" ] || touch "$$CRON_FILE"
-	if ! grep -Fq "/opt/clash/bin/clash-rules update" "$$CRON_FILE" 2>/dev/null; then
-		echo "$$CRON_LINE" >> "$$CRON_FILE"
-		/etc/init.d/cron restart >/dev/null 2>&1 || true
-	fi
 }
 exit 0
 endef
@@ -266,7 +255,6 @@ define Package/$(PKG_NAME)/postrm
 	rm -rf /www/luci-static/resources/view/miclash
 	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
 	rm -f /opt/clash/.config.yaml.upgrade.bak
-	rm -f /opt/clash/.settings.upgrade.bak
 	rm -f /etc/hotplug.d/iface/40-clash
 	rm -f /etc/hotplug.d/net/99-clash-tun
 	rm -f /opt/clash/bin/clash-rules
@@ -365,6 +353,8 @@ define Package/$(PKG_NAME)/postrm
 				[ ! -e /opt/clash/bin/miclash-autoupdate ] && [ ! -L /opt/clash/bin/miclash-autoupdate ] && \
 				[ ! -e /opt/clash/bin/miclash-memory-guard ] && [ ! -L /opt/clash/bin/miclash-memory-guard ] && \
 				[ ! -e /etc/init.d/clash ] && [ ! -L /etc/init.d/clash ] && \
+				[ ! -e /etc/init.d/miclashd ] && [ ! -L /etc/init.d/miclashd ] && \
+				[ ! -e /usr/sbin/miclashd ] && [ ! -L /usr/sbin/miclashd ] && \
 				[ ! -e /etc/init.d/miclash-autoupdate ] && [ ! -L /etc/init.d/miclash-autoupdate ] && \
 				[ ! -e /etc/init.d/miclash-memory-guard ] && [ ! -L /etc/init.d/miclash-memory-guard ] && \
 				[ ! -e /etc/init.d/miclash-guard ] && [ ! -L /etc/init.d/miclash-guard ] && \

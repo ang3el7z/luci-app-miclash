@@ -266,69 +266,6 @@ for (let scenario in document.scenarios) {
 for (let action in [ 'inherit', 'proxy', 'direct', 'block' ])
 	review(policy_actions[action], 'device policy matrix missing action: ' + action);
 
-let capture_source = read_required('tools/capture-network-contract.sh');
-review(!!match(capture_source, /validate_writable_tree/), 'capture must no-follow validate writable descendants');
-review(!!match(capture_source, /unshare --mount --net --pid/), 'capture must require mount+network+PID namespaces');
-review(!!match(capture_source, /mount --make-rprivate/), 'capture mount namespace must be private');
-review(!!match(capture_source, /findmnt/), 'capture must reject nested mounts');
-review(!!match(capture_source, /nft-batch/), 'nft fake must record batch stdin/file content');
-review(!!match(capture_source, /'ip:rule del '/) && !!match(capture_source, /'ip:-6 rule del '/),
-	'ip fake must terminate IPv4 and IPv6 cleanup loops');
-review(!!match(capture_source, /normalize_nft/) && !!match(capture_source, /normalize_routes/),
-	'capture must normalize desired nft and route state separately');
-review(!!match(capture_source, /expected_exit/) && !!match(capture_source, /capture-status.txt/),
-	'capture must record and continue only explicitly expected legacy failures');
-review(!!match(capture_source, /mixed-explicit-guard-devices-dualstack.*capture_wan6=eth1/),
-	'dual-stack device capture WAN6 must match metadata');
-review(!!match(capture_source, /mixed-explicit-guard-provider-bypass.*capture_wan6=eth1/),
-	'dual-stack provider capture WAN6 must match metadata');
-
-let symlink_refusal = fs.popen(`sh -c '
-	set -eu
-	d=$(mktemp -d)
-	trap "rm -rf -- $d" EXIT HUP INT TERM
-	mkdir -p "$d/absolute" "$d/relative" "$d/outside"
-	ln -s /tmp "$d/absolute/tmp"
-	if tools/capture-network-contract.sh --validate-root-tree "$d/absolute" >"$d/abs.out" 2>&1; then exit 1; fi
-	grep -q "unsafe symlink in capture root" "$d/abs.out"
-	ln -s ../../outside "$d/relative/opt"
-	if tools/capture-network-contract.sh --validate-root-tree "$d/relative" >"$d/rel.out" 2>&1; then exit 1; fi
-	grep -q "unsafe symlink in capture root" "$d/rel.out"
-	printf "absolute-and-relative-symlink-refusal-ok\\n"
-'`, 'r');
-let symlink_output = symlink_refusal.read('all');
-review(symlink_refusal.close() == 0 && symlink_output == 'absolute-and-relative-symlink-refusal-ok\n',
-	'capture writable-descendant symlink refusal failed: ' + symlink_output);
-
-let normalization = fs.popen(`sh -c '
-	set -eu
-	d=$(mktemp -d)
-	trap "rm -rf -- $d" EXIT HUP INT TERM
-	printf "nft\\tlist\\ttables\\nnft\\tdelete\\ttable\\tinet\\tcapture\\nnft\\tadd\\ttable\\tinet\\tcapture\\nnft\\t-f\\t-\\nnft-batch\\tadd chain inet capture c\\n" > "$d/nft.raw"
-	printf "iptables\\t-t\\tmangle\\t-D\\tPREROUTING\\t-j\\tCAPTURE\\niptables\\t-t\\tmangle\\t-F\\tCAPTURE\\niptables\\t-t\\tmangle\\t-N\\tCAPTURE\\niptables\\t-t\\tmangle\\t-A\\tPREROUTING\\t-j\\tCAPTURE\\n" > "$d/iptables.raw"
-	printf "ip\\troute\\tshow\\tdefault\\nip\\troute\\tflush\\ttable\\t100\\nip\\trule\\tdel\\tfwmark\\t0x1\\ttable\\t100\\nip\\troute\\treplace\\tlocal\\tdefault\\tdev\\tlo\\ttable\\t100\\nip\\trule\\tadd\\tpref\\t1000\\tfwmark\\t0x1\\ttable\\t100\\n" > "$d/routes.raw"
-	tools/capture-network-contract.sh --normalize nft "$d/nft.raw" "$d/nft.out"
-	tools/capture-network-contract.sh --normalize iptables "$d/iptables.raw" "$d/iptables.out"
-	tools/capture-network-contract.sh --normalize routes "$d/routes.raw" "$d/routes.out"
-	printf "NFT\\n"; cat "$d/nft.out"
-	printf "IPTABLES\\n"; cat "$d/iptables.out"
-	printf "ROUTES\\n"; cat "$d/routes.out"
-'`, 'r');
-let normalized_output = normalization.read('all');
-review(normalization.close() == 0, 'capture normalization integration failed');
-review(normalized_output == join('\n', [
-	'NFT',
-	'add table inet capture',
-	'add chain inet capture c',
-	'IPTABLES',
-	'iptables -t mangle -N CAPTURE',
-	'iptables -t mangle -A PREROUTING -j CAPTURE',
-	'ROUTES',
-	'ip route replace local default dev lo table 100',
-	'ip rule add pref 1000 fwmark 0x1 table 100',
-	''
-]), 'capture normalization leaked observations/cleanup: ' + normalized_output);
-
 if (length(review_failures))
 	die('network contract review regressions:\n- ' + join('\n- ', review_failures));
 

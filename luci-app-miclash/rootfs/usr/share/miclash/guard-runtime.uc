@@ -103,9 +103,10 @@ function main() {
 	if (length(ARGV) < 1 || length(ARGV) > 2 ||
 	    (ARGV[0] != 'protect' && ARGV[0] != 'release' && ARGV[0] != 'disable' &&
 	     ARGV[0] != 'latch-set' && ARGV[0] != 'latch-clear' && ARGV[0] != 'latch-status' &&
+	     ARGV[0] != 'verify-protected' &&
 	     ARGV[0] != 'verify-bootstrap-on' && ARGV[0] != 'verify-bootstrap-off' && ARGV[0] != 'verify-nft' &&
 	     ARGV[0] != 'verify-iptables4' && ARGV[0] != 'verify-iptables6'))
-		die('usage: guard-runtime.uc {protect|release|disable|latch-set|latch-clear|latch-status|verify-bootstrap-on|verify-bootstrap-off|verify-nft|verify-iptables4|verify-iptables6} [interfaces]\n');
+		die('usage: guard-runtime.uc {protect|release|disable|latch-set|latch-clear|latch-status|verify-protected|verify-bootstrap-on|verify-bootstrap-off|verify-nft|verify-iptables4|verify-iptables6} [interfaces]\n');
 	let runtime = runtime_module.create();
 	runtime.mutation_lock_token = getenv('MICLASH_MUTATION_LOCK_TOKEN');
 	if (runtime.mutation_lock_token == null || !length(runtime.mutation_lock_token)) die('BUSY\n');
@@ -119,6 +120,7 @@ function main() {
 		else if (ARGV[0] == 'latch-clear') ok = guard_latch.clear(runtime);
 		else if (ARGV[0] == 'latch-status') ok = guard_latch.is_set(runtime);
 		else if (ARGV[0] == 'protect' || ARGV[0] == 'release' || ARGV[0] == 'disable' ||
+		    ARGV[0] == 'verify-protected' ||
 		    ARGV[0] == 'verify-bootstrap-on' || ARGV[0] == 'verify-bootstrap-off') {
 			let nft = nft_binary(runtime);
 			if (nft == null) fail('INTERNAL');
@@ -130,7 +132,12 @@ function main() {
 			}
 			else {
 				let present = inventory(nft);
-				if (present != null && ARGV[0] == 'verify-bootstrap-off') ok = !length(present);
+				if (present != null && ARGV[0] == 'verify-protected') {
+					ok = length(present) > 0;
+					for (let table in present)
+						if (!verified(nft, table)) ok = false;
+				}
+				else if (present != null && ARGV[0] == 'verify-bootstrap-off') ok = !length(present);
 				else if (present != null) {
 					ok = length(present) == 1 && present[0] == PRIMARY && verified(nft, PRIMARY);
 				}

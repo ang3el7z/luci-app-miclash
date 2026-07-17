@@ -439,7 +439,7 @@ function parse_legacy(text) {
 	return values;
 };
 
-export function migrate_legacy(runtime, text) {
+export function legacy_patch(text) {
 	let legacy = parse_legacy(text);
 	let base = defaults();
 	let patch = defaults();
@@ -487,5 +487,9 @@ export function migrate_legacy(runtime, text) {
 	patch.notifications.auto_hide = legacy_boolean(legacy.AUTO_HIDE_NOTIFICATIONS,
 		base.notifications.auto_hide, true);
 
-	return save(runtime, patch);
+	return validate_patch(patch);
+};
+
+export function migrate_legacy(runtime, text) {
+	return save(runtime, legacy_patch(text));
 };
