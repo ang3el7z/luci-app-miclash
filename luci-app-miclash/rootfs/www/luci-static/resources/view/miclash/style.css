@@ -470,7 +470,7 @@
 	margin-left: 4px;
 }
 .sbox-log-level-info .sbox-log-level { color: var(--sbox-log-info); }
-.sbox-log-level-warn .sbox-log-level { color: var(--sbox-warn); }
+.sbox-log-level-warn .sbox-log-level { color: var(--sbox-code-number); }
 .sbox-log-level-error .sbox-log-level { color: var(--sbox-code-key); }
 .sbox-log-level-crit .sbox-log-level,
 .sbox-log-level-critical .sbox-log-level,
