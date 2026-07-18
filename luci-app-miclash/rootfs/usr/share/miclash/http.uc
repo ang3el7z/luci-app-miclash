@@ -9,6 +9,9 @@ const OPTION_FIELDS = {
 	max_redirects: true, max_bytes: true, managed: true, allow_insecure_http: true,
 	accept_statuses: true
 };
+const GITHUB_PROXY = 'https://gh-proxy.com/';
+const RETRYABLE_CURL_CODES = { '5': true, '6': true, '7': true, '28': true,
+	'35': true, '52': true, '55': true, '56': true };
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
 
@@ -296,12 +299,19 @@ function clean_options(runtime, options) {
 		accepted_statuses };
 };
 
-export function request(runtime, options) {
-	let clean = clean_options(runtime, options);
+function github_proxy_url(url) {
+	if (match(url,
+	    /^https:\/\/(github\.com|api\.github\.com|raw\.githubusercontent\.com)\//))
+		return GITHUB_PROXY + url;
+	return null;
+};
+
+function request_attempt(runtime, clean, logical_url) {
 	let authority = ensure_root(runtime);
 	let output = null, header = null, config = null;
 	let result = null;
 	let failure = null;
+	let curl_code = null;
 	try {
 		verify_authority(runtime, authority);
 		output = candidate(runtime, 'body');
@@ -327,15 +337,22 @@ export function request(runtime, options) {
 		verify_candidate(runtime, config);
 		if (!adapter_reply(reply))
 			errors.fail('INTERNAL');
-		if (reply.code != 0)
-			errors.fail('DOWNLOAD_FAILED');
-		let parsed = parse_headers(read_bounded(runtime, header, HEADER_LIMIT),
-			clean.url, clean.redirects, clean.accepted_statuses);
-		let body = read_bounded(runtime, output, clean.maximum);
-		result = { status: parsed.status, headers: parsed.headers, body,
-			url: clean.url, insecure: clean.insecure };
+		if (reply.code != 0) {
+			failure = 'DOWNLOAD_FAILED';
+			curl_code = reply.code;
+		}
+		else {
+			let parsed = parse_headers(read_bounded(runtime, header, HEADER_LIMIT),
+				clean.url, clean.redirects, clean.accepted_statuses);
+			let body = read_bounded(runtime, output, clean.maximum);
+			result = { status: parsed.status, headers: parsed.headers, body,
+				url: logical_url, insecure: clean.insecure };
+		}
 	}
-	catch (error) { failure = errors.normalize(error).code; }
+	catch (error) {
+		failure = errors.normalize(error).code;
+		curl_code = null;
+	}
 	for (let owned in [ config, header, output ]) {
 		if (owned == null)
 			continue;
@@ -348,9 +365,27 @@ export function request(runtime, options) {
 		}
 		catch (error) { failure = 'INTERNAL'; }
 	}
-	if (failure != null)
-		errors.fail(failure);
-	return result;
+	if (failure == 'INTERNAL')
+		curl_code = null;
+	return { result, failure, curl_code };
+};
+
+export function request(runtime, options) {
+	let clean = clean_options(runtime, options);
+	let direct = request_attempt(runtime, clean, clean.url);
+	if (direct.failure == null)
+		return direct.result;
+	let proxy_url = options.managed === true && RETRYABLE_CURL_CODES[direct.curl_code] === true
+		? github_proxy_url(clean.url) : null;
+	if (proxy_url != null) {
+		try { runtime.logger?.warn('Direct GitHub download failed; trying gh-proxy.com'); }
+		catch (error) {}
+		let proxied = request_attempt(runtime, { ...clean, url: proxy_url }, clean.url);
+		if (proxied.failure == null)
+			return proxied.result;
+		errors.fail(proxied.failure);
+	}
+	errors.fail(direct.failure);
 };
 
 export function download(runtime, options) {

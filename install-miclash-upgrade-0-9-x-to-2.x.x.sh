@@ -266,9 +266,43 @@ ensure_stat_runtime
 WORK="$(mktemp -d /tmp/miclash-v09-clean.XXXXXX)" || die 'cannot create temporary directory'
 chmod 0700 "$WORK" || die 'cannot protect temporary directory'
 
-download() {
+github_proxy_url() {
+	case "$1" in
+		https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*)
+			printf 'https://gh-proxy.com/%s\n' "$1"
+			;;
+		*) return 1 ;;
+	esac
+}
+
+retryable_curl_code() {
+	case "$1" in
+		5|6|7|28|35|52|55|56) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+download_once() {
+	rm -f "$2"
 	curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
 		--connect-timeout 10 --max-time 120 --retry 2 --output "$2" "$1"
+}
+
+download() {
+	url="$1"
+	target="$2"
+	if download_once "$url" "$target"; then
+		return 0
+	else
+		curl_code=$?
+	fi
+	proxy_url=''
+	if retryable_curl_code "$curl_code" && proxy_url="$(github_proxy_url "$url")"; then
+		say 'Direct GitHub download failed; trying gh-proxy.com'
+		download_once "$proxy_url" "$target"
+		return $?
+	fi
+	return "$curl_code"
 }
 
 release_ready() {

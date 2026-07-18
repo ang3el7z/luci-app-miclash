@@ -267,6 +267,58 @@ timeout.runtime.process.run = (request) => ({ code: 28, stdout: null, stderr: nu
 assert_throws(() => http.request(timeout.runtime, {
 	url: 'https://subscriptions.example.test/config.yaml'
 }), 'DOWNLOAD_FAILED');
+
+// Managed GitHub transport failures retry once through the fixed proxy while
+// preserving the official URL as the response authority. Arbitrary downloads,
+// non-GitHub managed endpoints, and non-transport curl failures never retry.
+function fallback_environment(first_code) {
+	let environment = http_environment(), configs = [];
+	environment.process.run = (request) => {
+		push(environment.process.calls, request);
+		let paths = curl_config_paths(environment.filesystem, request.args);
+		push(configs, environment.filesystem.readfile(paths.config_path));
+		if (length(configs) == 1)
+			return { code: first_code, stdout: null, stderr: null };
+		environment.filesystem.writefile(paths.header_path, 'HTTP/1.1 200 OK\r\n\r\n');
+		environment.filesystem.writefile(paths.output_path, 'proxied-body');
+		return { code: 0, stdout: null, stderr: null };
+	};
+	return { ...environment, configs };
+};
+
+let github_timeout = fallback_environment(28);
+let github_url = 'https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.0.2/luci-app-miclash-2.0.2.apk';
+let github_result = http.request(github_timeout.runtime, {
+	url: github_url, managed: true, max_bytes: 1024
+});
+assert_equal(length(github_timeout.process.calls), 2,
+	'managed GitHub timeout uses one proxy fallback');
+assert_true(index(github_timeout.configs[1],
+	'url = "https://gh-proxy.com/' + github_url + '"') >= 0,
+	'fallback curl config uses the fixed proxy transport URL');
+assert_equal(github_result.url, github_url,
+	'fallback response keeps the official GitHub authority');
+assert_equal(github_result.body, 'proxied-body');
+
+let unmanaged_github = fallback_environment(28);
+assert_throws(() => http.request(unmanaged_github.runtime, { url: github_url }),
+	'DOWNLOAD_FAILED');
+assert_equal(length(unmanaged_github.process.calls), 1,
+	'unmanaged GitHub request never uses the update fallback');
+
+let foreign_managed = fallback_environment(28);
+assert_throws(() => http.request(foreign_managed.runtime, {
+	url: 'https://downloads.example.test/package.apk', managed: true
+}), 'DOWNLOAD_FAILED');
+assert_equal(length(foreign_managed.process.calls), 1,
+	'non-GitHub managed request is not rewritten');
+
+let github_http_error = fallback_environment(22);
+assert_throws(() => http.request(github_http_error.runtime, {
+	url: github_url, managed: true
+}), 'DOWNLOAD_FAILED');
+assert_equal(length(github_http_error.process.calls), 1,
+	'non-transport curl failure does not use the proxy');
 assert_throws(() => http.request(http_environment({ body: '0123456789' }).runtime, {
 	url: 'https://subscriptions.example.test/config.yaml', max_bytes: 5
 }), 'RESPONSE_TOO_LARGE');

@@ -318,6 +318,42 @@ ensure_curl() {
     PKG_UPDATED=1
 }
 
+github_proxy_url() {
+    case "$1" in
+        https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*)
+            printf 'https://gh-proxy.com/%s\n' "$1"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+retryable_curl_code() {
+    case "$1" in
+        5|6|7|28|35|52|55|56) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+download_artifact_attempts() {
+    attempt_url="$1"
+    target="$2"
+    error_file="$3"
+    curl_code=1
+    for family in "" "" "-4"; do
+        if curl $family -L -fsS \
+            --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+            --max-time "$CURL_MAX_TIME" \
+            "$attempt_url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
+            return 0
+        else
+            curl_code=$?
+        fi
+        rm -f "$target"
+        sleep 1
+    done
+    return "$curl_code"
+}
+
 download_artifact() {
     url="$1"
     target="$2"
@@ -327,17 +363,21 @@ download_artifact() {
 
     write_status running download "Downloading $label"
     rm -f "$target" "$error_file"
-    for family in "" "" "-4"; do
-        if curl $family -L -fsS \
-            --connect-timeout "$CURL_CONNECT_TIMEOUT" \
-            --max-time "$CURL_MAX_TIME" \
-            "$url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
+    if download_artifact_attempts "$url" "$target" "$error_file"; then
+        rm -f "$error_file"
+        return 0
+    else
+        curl_code=$?
+    fi
+
+    proxy_url=''
+    if retryable_curl_code "$curl_code" && proxy_url="$(github_proxy_url "$url")"; then
+        warn "Direct GitHub download failed; trying gh-proxy.com"
+        if download_artifact_attempts "$proxy_url" "$target" "$error_file"; then
             rm -f "$error_file"
             return 0
         fi
-        rm -f "$target"
-        sleep 1
-    done
+    fi
 
     detail=$(tail -n 3 "$error_file" 2>/dev/null | tr '\r\n' '  ')
     rm -f "$error_file"

@@ -28,6 +28,123 @@ for package_installer in "$installer" "$transition_installer"; do
     [ "$(installed_miclash_version opkg)" = 0.9.2-r1 ]
 done
 
+function_body() {
+    sed -n "/^$2() {$/,/^}$/p" "$1"
+}
+
+require_function() {
+    body="$(function_body "$1" "$2")"
+    [ -n "$body" ] || {
+        echo "$2() is missing from $1" >&2
+        return 1
+    }
+    printf '%s\n' "$body"
+}
+
+test_installer_download_fallback() (
+    eval "$(require_function "$installer" github_proxy_url)"
+    eval "$(require_function "$installer" retryable_curl_code)"
+    eval "$(require_function "$installer" download_artifact_attempts)"
+    eval "$(require_function "$installer" download_artifact)"
+    WORK_DIR="$(mktemp -d)"
+    trap 'rm -rf "$WORK_DIR"' EXIT
+    CURL_CONNECT_TIMEOUT=1
+    CURL_MAX_TIME=2
+    calls=0
+    proxy_calls=0
+    curl_result=28
+    validate_work_dir() { return 0; }
+    write_status() { :; }
+    warn() { :; }
+    sleep() { :; }
+    die() { return 1; }
+    curl() {
+        calls=$((calls + 1))
+        output=''
+        previous=''
+        for argument in "$@"; do
+            [ "$previous" != -o ] || output="$argument"
+            previous="$argument"
+        done
+        case "$*" in
+            *https://gh-proxy.com/https://github.com/*)
+                proxy_calls=$((proxy_calls + 1))
+                printf 'package' >"$output"
+                return 0
+                ;;
+        esac
+        return "$curl_result"
+    }
+    target="$WORK_DIR/package.apk"
+    download_artifact \
+        'https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.0.2/package.apk' \
+        "$target" 'MiClash .apk'
+    [ "$(cat "$target")" = package ]
+    [ "$calls" -eq 4 ]
+    [ "$proxy_calls" -eq 1 ]
+
+    calls=0
+    proxy_calls=0
+    curl_result=22
+    if download_artifact \
+        'https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.0.2/missing.apk' \
+        "$target" 'missing package' >/dev/null 2>&1; then
+        exit 1
+    fi
+    [ "$calls" -eq 3 ]
+    [ "$proxy_calls" -eq 0 ]
+)
+
+test_transition_download_fallback() (
+    eval "$(require_function "$transition_installer" github_proxy_url)"
+    eval "$(require_function "$transition_installer" retryable_curl_code)"
+    eval "$(require_function "$transition_installer" download_once)"
+    eval "$(require_function "$transition_installer" download)"
+    calls=0
+    proxy_calls=0
+    curl_result=28
+    say() { :; }
+    curl() {
+        calls=$((calls + 1))
+        output=''
+        previous=''
+        for argument in "$@"; do
+            [ "$previous" != --output ] || output="$argument"
+            previous="$argument"
+        done
+        case "$*" in
+            *https://gh-proxy.com/https://github.com/*)
+                proxy_calls=$((proxy_calls + 1))
+                printf 'installer' >"$output"
+                return 0
+                ;;
+        esac
+        return "$curl_result"
+    }
+    target="$(mktemp)"
+    trap 'rm -f "$target"' EXIT
+    download \
+        'https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.0.2/install-miclash.sh' \
+        "$target"
+    [ "$(cat "$target")" = installer ]
+    [ "$calls" -eq 2 ]
+    [ "$proxy_calls" -eq 1 ]
+
+    calls=0
+    proxy_calls=0
+    curl_result=22
+    if download \
+        'https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.0.2/missing' \
+        "$target"; then
+        exit 1
+    fi
+    [ "$calls" -eq 1 ]
+    [ "$proxy_calls" -eq 0 ]
+)
+
+test_installer_download_fallback
+test_transition_download_fallback
+
 run_installer() {
     if command -v ash >/dev/null 2>&1; then
         ash "$installer" "$@"
