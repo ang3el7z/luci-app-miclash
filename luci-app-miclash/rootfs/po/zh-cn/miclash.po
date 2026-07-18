@@ -2087,3 +2087,24 @@ msgstr "无法应用 Mihomo 设置。"
 
 msgid "Settings saved and applied."
 msgstr "设置已保存并应用。"
+
+msgid "Action"
+msgstr "操作"
+
+msgid "Change policy"
+msgstr "更改策略"
+
+msgid "Device"
+msgstr "设备"
+
+msgid "IP"
+msgstr "IP"
+
+msgid "Offline"
+msgstr "离线"
+
+msgid "Online"
+msgstr "在线"
+
+msgid "State"
+msgstr "状态"

@@ -907,7 +907,7 @@
 }
 .sbox-device-table {
 	width: 100%;
-	min-width: 780px;
+	min-width: 720px;
 	margin: 0;
 	border-collapse: separate;
 	border-spacing: 0;
@@ -937,12 +937,14 @@
 .sbox-device-table th:nth-child(2),
 .sbox-device-table td:nth-child(2),
 .sbox-device-table th:nth-child(4),
-.sbox-device-table td:nth-child(4) {
+.sbox-device-table td:nth-child(4),
+.sbox-device-table th:nth-child(5),
+.sbox-device-table td:nth-child(5) {
 	white-space: nowrap;
 }
 .sbox-device-table th:nth-child(3),
 .sbox-device-table td:nth-child(3) {
-	min-width: 240px;
+	min-width: 210px;
 	overflow-wrap: anywhere;
 }
 .sbox-device-table th:last-child,
@@ -952,6 +954,28 @@
 .sbox-device-empty td {
 	padding: 28px 12px;
 	text-align: center;
+}
+.sbox-device-online,
+.sbox-device-offline {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 700;
+}
+.sbox-device-online::before,
+.sbox-device-offline::before {
+	content: "";
+	width: 6px;
+	height: 6px;
+	flex: 0 0 6px;
+	border-radius: 50%;
+	background: currentColor;
+}
+.sbox-device-online {
+	color: var(--sbox-success);
+}
+.sbox-device-offline {
+	color: var(--sbox-muted);
 }
 
 .sbox-management-warning {

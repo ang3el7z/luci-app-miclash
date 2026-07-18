@@ -28,6 +28,7 @@ function runtime(options) {
 		random: fakes.entropy(), uci, uci_fake: uci,
 		mutation_lock_self: { boot: BOOT, pid: 8123, start: 222 },
 		observers: options?.observers, core_available: options?.core_available ?? true,
+		external_interfaces: options?.external_interfaces ?? (() => []),
 		timezones: options?.timezones ?? { list: () => [ 'UTC', 'Etc/UTC', 'Europe/Berlin' ], resolve: (name) => name == 'Europe/Berlin' ? {
 			name: 'Europe/Berlin', from: 1700000000, until: 1735000000, initial_offset: 3600,
 			transitions: [ { at: 1711846800, offset: 7200 }, { at: 1729990800, offset: 3600 } ]
@@ -113,6 +114,33 @@ assert_true(!ephemeral.identity.persistent_policy_eligible, 'IP-only identity ca
 let duplicate_host = filter(found, (item) => item.hostname == 'kitchen');
 assert_equal(length(duplicate_host), 2, 'duplicate hostname never merges MACs');
 assert_true(length(duplicate_host[0].conflicts) > 0, 'duplicate hostname conflict is explicit');
+
+let client_only = devices.discover(runtime({
+	external_interfaces: () => [ 'wan' ],
+	observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: (family) => ({ observed_at: 1710000000,
+			data: family == 'ipv4' ? enc([
+				{ dst: '192.168.1.20', dev: 'br-lan', lladdr: 'ac:bb:cc:dd:ee:20', state: [ 'REACHABLE' ] },
+				{ dst: '192.0.2.20', dev: 'wan', lladdr: 'ac:bb:cc:dd:ee:21', state: [ 'REACHABLE' ] }
+			]) : '[]' })
+	}
+}));
+assert_equal(length(client_only), 1, 'external-only neighbors never become policy devices');
+assert_equal(client_only[0].mac, 'ac:bb:cc:dd:ee:20', 'local client neighbor remains discoverable');
+
+let current_only = runtime({ observers: {
+	dhcp_leases: () => ({ observed_at: 1710000000,
+		data: '1710003600 ac:bb:cc:dd:ee:30 192.168.1.30 current *\n' }),
+	neighbors: () => ({ observed_at: 1710000000, data: '[]' })
+} });
+assert_equal(length(devices.discover(current_only)), 1, 'current DHCP client is listed');
+current_only.clock.advance(1000);
+current_only.observers.dhcp_leases = () => ({ observed_at: 1710000001, data: '' });
+current_only.observers.neighbors = () => ({ observed_at: 1710000001, data: '[]' });
+assert_equal(length(devices.discover(current_only)), 0,
+	'unassigned devices disappear when absent from current discovery sources');
+
 function interface_discovery(order) {
 	let entries = map(order, (iface) => ({ dst: '192.168.1.42', dev: iface,
 		lladdr: 'ac:bb:cc:dd:ee:42', state: [ 'REACHABLE' ] }));
@@ -292,15 +320,16 @@ assert_equal(enc(hostname_conflict.evidence), enc([ 'alpha', 'beta', 'gamma' ]))
 assert_equal(hostname_conflict.total, 3);
 assert_true(!hostname_conflict.truncated);
 
-// Stable MAC retains bounded history when its IP changes; expiry and rollback are deterministic.
+// Stable MAC replaces stale address evidence when its current IP changes.
 observed.observers.dhcp_leases = () => ({ observed_at: 1710000100,
 	data: '1710003700 ac:bb:cc:dd:ee:10 192.168.1.77 kitchen *\n' });
 observed.observers.neighbors = () => ({ observed_at: 1710000100, data: '[]' });
 observed.clock.advance(100000);
 let changed = devices.discover(observed);
 let changed_kitchen = filter(changed, (item) => item.mac == 'ac:bb:cc:dd:ee:10')[0];
-assert_equal(length(changed_kitchen.addresses), 3, 'address history retained under stable MAC');
-assert_true(changed_kitchen.addresses[2].current, 'changed address is current');
+assert_equal(length(changed_kitchen.addresses), 1, 'only current address evidence is retained');
+assert_equal(changed_kitchen.addresses[0].address, '192.168.1.77', 'current address replaces stale history');
+assert_true(changed_kitchen.addresses[0].current, 'changed address is current');
 observed.clock.advance(8 * 86400 * 1000);
 observed.observers.dhcp_leases = () => ({ observed_at: 1710691300, data: '' });
 observed.observers.neighbors = () => ({ observed_at: 1710691300, data: '[]' });

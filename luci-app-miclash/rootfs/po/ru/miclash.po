@@ -2134,3 +2134,24 @@ msgstr "Не удалось применить настройки Mihomo."
 
 msgid "Settings saved and applied."
 msgstr "Настройки сохранены и применены."
+
+msgid "Action"
+msgstr "Действие"
+
+msgid "Change policy"
+msgstr "Изменить политику"
+
+msgid "Device"
+msgstr "Устройство"
+
+msgid "IP"
+msgstr "IP"
+
+msgid "Offline"
+msgstr "Не в сети"
+
+msgid "Online"
+msgstr "В сети"
+
+msgid "State"
+msgstr "Состояние"

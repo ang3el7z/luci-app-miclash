@@ -303,6 +303,11 @@ function bounded_network_interfaces(runtime, settings_domain) {
 	return { interfaces, detected_lan: lan, detected_wan: wan };
 };
 
+export function device_external_interfaces(snapshot) {
+	let wan = snapshot?.detected_wan;
+	return type(wan) == 'string' && length(wan) ? [ wan ] : [];
+};
+
 const RULESET_ROOT = '/opt/clash/lst';
 const WHITELIST_RULESET = 'fakeip-whitelist-ipcidr.txt';
 
@@ -675,7 +680,9 @@ export function compose(runtime, overrides) {
 		push(close_domains, memory_domain);
 
 		let timezone_adapter = utc_timezones(runtime.timezones);
-		let device_app = { ...runtime, timezones: timezone_adapter, device_cache: {} };
+		let device_app = { ...runtime, timezones: timezone_adapter, device_cache: {},
+			external_interfaces: () => device_external_interfaces(
+				bounded_network_interfaces(runtime, settings_domain)) };
 		let devices_closed = false;
 		let devices_domain = {
 			list: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.discover(device_app); },

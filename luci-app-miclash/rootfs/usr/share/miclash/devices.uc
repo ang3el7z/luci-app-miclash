@@ -74,6 +74,17 @@ function interface_name(value, code) {
 	    !match(value, /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/)) invalid(code);
 	return value;
 };
+function external_interfaces(app) {
+	let values = app.external_interfaces();
+	if (type(values) != 'array' || length(values) > 128) invalid('INVALID_RESPONSE');
+	let output = [];
+	for (let value in values) {
+		value = interface_name(value, 'INVALID_RESPONSE');
+		if (has(output, value)) invalid('INVALID_RESPONSE');
+		push(output, value);
+	}
+	return sort(output);
+};
 function mac(value, code) {
 	if (type(value) != 'string' || length(value) != 17 ||
 	    !match(value, /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/))
@@ -306,7 +317,7 @@ function parse_dhcp(cache, observed, now) {
 			expiry == 0 || expiry >= now, observed_mac_value.reason);
 	}
 };
-function parse_neighbors(cache, observed, family) {
+function parse_neighbors(cache, observed, family, external) {
 	let values;
 	try { values = json(observed.data); } catch (error) { invalid('INVALID_RESPONSE'); }
 	if (type(values) != 'array') invalid('INVALID_RESPONSE');
@@ -321,6 +332,7 @@ function parse_neighbors(cache, observed, family) {
 		for (let state in value.state)
 			if (type(state) != 'string' || !match(state, /^[A-Z_]{2,16}$/)) invalid('INVALID_RESPONSE');
 		let observed_mac_value = observed_mac(value.lladdr);
+		if (has(external, iface)) continue;
 		add_observation(cache, observed_mac_value.mac, parsed.address, null, 'neighbor', iface,
 			observed.observed_at, !has(value.state, 'FAILED') && !has(value.state, 'INCOMPLETE'),
 			observed_mac_value.reason);
@@ -403,12 +415,13 @@ function validate_cache_state(value, now) {
 
 export function discover(app) {
 	if (type(app?.clock?.now) != 'function' || type(app?.observers?.dhcp_leases) != 'function' ||
-	    type(app?.observers?.neighbors) != 'function') invalid();
+	    type(app?.observers?.neighbors) != 'function' ||
+	    type(app?.external_interfaces) != 'function') invalid();
 	let now_ms = app.clock.now();
 	if (type(now_ms) != 'int' || now_ms < 0) invalid('CORRUPT_STATE');
 	let now = int(now_ms / 1000), original = app.device_cache;
 	if (now > MAX_TIMESTAMP) invalid('CORRUPT_STATE');
-	let cache = validate_cache_state(original, now);
+	let cache = validate_cache_state(original, now), external = external_interfaces(app);
 	if (cache.last_now != null && now < cache.last_now) invalid('CORRUPT_STATE');
 	cache.last_now = now; cache.ephemeral_sequence = 0;
 	for (let key, item in cache.devices) {
@@ -417,14 +430,14 @@ export function discover(app) {
 		for (let item_address in item.addresses) item_address.current = false;
 	}
 	parse_dhcp(cache, response(app.observers.dhcp_leases(), now), now);
-	parse_neighbors(cache, response(app.observers.neighbors('ipv4'), now), 'ipv4');
-	parse_neighbors(cache, response(app.observers.neighbors('ipv6'), now), 'ipv6');
+	parse_neighbors(cache, response(app.observers.neighbors('ipv4'), now), 'ipv4', external);
+	parse_neighbors(cache, response(app.observers.neighbors('ipv6'), now), 'ipv6', external);
 	for (let key, item in cache.devices) {
 		let retained = [];
 		for (let item_address in item.addresses)
-			if (now - item_address.last_seen <= HISTORY_SECONDS) push(retained, item_address);
+			if (item_address.current) push(retained, item_address);
 		item.addresses = retained;
-		if (!length(retained) || now - item.last_seen > HISTORY_SECONDS) delete cache.devices[key];
+		if (!length(retained)) delete cache.devices[key];
 	}
 	conflict_pass(cache.devices);
 	cache.devices = validate_device_map(cache.devices, now);

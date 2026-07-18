@@ -18,14 +18,61 @@ function normalizedMac(value) {
 	return mac;
 }
 function currentAddresses(device) {
-	return (Array.isArray(device?.addresses) ? device.addresses : []).filter((item) => item?.current === true)
-		.map((item) => text(item.address)).slice(0, 8);
+	const addresses = (Array.isArray(device?.addresses) ? device.addresses : [])
+		.filter((item) => item?.current === true).map((item) => text(item.address));
+	return Array.from(new Set(addresses)).slice(0, 8);
 }
-function when(value) {
-	const n = Number(value);
-	if (!Number.isFinite(n) || n <= 0) return '-';
-	try { return new Date(n < 100000000000 ? n * 1000 : n).toLocaleString(); }
-	catch (error) { return '-'; }
+function deviceMac(value) {
+	const mac = String(value || '').trim().toUpperCase();
+	return MAC.test(mac) ? mac : '';
+}
+function deviceOnline(device) {
+	return (Array.isArray(device?.addresses) ? device.addresses : [])
+		.some((item) => item?.current === true && item?.source === 'neighbor');
+}
+function explicitPolicy(policy) {
+	return !!policy && [ 'proxy', 'direct', 'block' ].includes(policy.action);
+}
+function mergeDevice(current, incoming, mac) {
+	const addresses = [], seen = new Set();
+	for (const item of [ ...(current?.addresses || []), ...(incoming?.addresses || []) ]) {
+		const key = [ item?.family, item?.address, item?.source, ...(item?.interfaces || []) ].join('|');
+		if (!seen.has(key)) { seen.add(key); addresses.push(item); }
+	}
+	return {
+		...(current || {}), ...(incoming || {}), mac,
+		hostname: current?.hostname || incoming?.hostname || null,
+		last_seen: Math.max(Number(current?.last_seen) || 0, Number(incoming?.last_seen) || 0),
+		addresses
+	};
+}
+function deviceRows(discovered, savedPolicies) {
+	const devices = new Map(), policies = new Map();
+	for (const device of Array.isArray(discovered) ? discovered : []) {
+		const mac = deviceMac(device?.mac);
+		if (mac) devices.set(mac, mergeDevice(devices.get(mac), device, mac));
+	}
+	for (const policy of Array.isArray(savedPolicies) ? savedPolicies : []) {
+		if (policy?.scope !== 'device') continue;
+		const mac = deviceMac(policy?.mac);
+		if (mac && !policies.has(mac)) policies.set(mac, policy);
+	}
+	for (const [ mac, policy ] of policies)
+		if (explicitPolicy(policy) && !devices.has(mac))
+			devices.set(mac, { mac, hostname: null, last_seen: 0, addresses: [] });
+	const rows = [];
+	for (const [ mac, device ] of devices) {
+		const policy = policies.get(mac) || null;
+		rows.push({ mac, device, policy, explicit: explicitPolicy(policy), online: deviceOnline(device) });
+	}
+	return rows.sort((left, right) => {
+		if (left.explicit !== right.explicit) return left.explicit ? -1 : 1;
+		if (left.online !== right.online) return left.online ? -1 : 1;
+		const leftName = String(left.device?.hostname || '').toLocaleLowerCase();
+		const rightName = String(right.device?.hostname || '').toLocaleLowerCase();
+		if (leftName !== rightName) return leftName < rightName ? -1 : 1;
+		return left.mac.localeCompare(right.mac);
+	});
 }
 function operationError(record) {
 	const error = new Error(record?.error?.message || _('Operation failed.'));
@@ -74,10 +121,6 @@ function create(options) {
 			if (!finished && typeof cancel === 'function') cancels.add(cancel);
 		});
 	}
-	function policyFor(mac) {
-		const key = String(mac || '').toLowerCase();
-		return policies.find((item) => item?.scope === 'device' && String(item.mac || '').toLowerCase() === key) || null;
-	}
 	const actionLabels = {
 		inherit: () => _('Inherit'), proxy: () => _('Proxy'),
 		direct: () => _('Direct'), block: () => _('Block')
@@ -86,35 +129,37 @@ function create(options) {
 		() => _('Monday'), () => _('Tuesday'), () => _('Wednesday'),
 		() => _('Thursday'), () => _('Friday'), () => _('Saturday'), () => _('Sunday')
 	];
-	function table() {
-		const rows = devices.slice(0, 512).map((device) => {
-			const mac = device.mac && MAC.test(device.mac) ? device.mac.toUpperCase() : '';
-			const policy = mac ? policyFor(mac) : null;
+	function table(models) {
+		const rows = models.slice(0, 512).map((row) => {
+			const { device, mac, policy, explicit, online } = row;
 			const edit = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral',
-				'data-device-mac': mac, 'disabled': mac ? null : 'disabled' }, policy ? _('Edit') : _('Set policy'));
+				'data-device-mac': mac }, explicit ? _('Change policy') : _('Set policy'));
 			edit.addEventListener('click', () => openEditor(mac, device, policy));
 			return E('tr', {}, [
-				E('td', {}, text(device.hostname, _('Unknown device'))), E('td', {}, text(mac)),
-				E('td', {}, currentAddresses(device).join(', ') || '-'), E('td', {}, when(device.last_seen)),
+				E('td', {}, text(device.hostname, _('Unknown device'))),
+				E('td', {}, E('span', { 'class': online ? 'sbox-device-online' : 'sbox-device-offline' },
+					online ? _('Online') : _('Offline'))),
+				E('td', {}, currentAddresses(device).join(', ') || '-'), E('td', {}, text(mac)),
 				E('td', {}, (actionLabels[policy?.action || 'inherit'] || actionLabels.inherit)()), E('td', {}, edit)
 			]);
 		});
 		if (!rows.length) rows.push(E('tr', { 'class': 'sbox-device-empty' }, [ E('td', { 'colspan': '6', 'class': 'sbox-muted' }, _('No devices discovered.')) ]));
 		return E('div', { 'class': 'sbox-management-table-wrap', 'tabindex': '0', 'role': 'region',
 			'aria-label': _('Device policies') }, [ E('table', { 'class': 'table sbox-device-table' }, [
-			E('thead', {}, E('tr', {}, [ _('Hostname'), _('MAC'), _('Current IP'), _('Last seen'), _('Policy'), _('Actions') ]
+			E('thead', {}, E('tr', {}, [ _('Device'), _('State'), _('IP'), _('MAC'), _('Policy'), _('Action') ]
 				.map((name) => E('th', {}, name)))), E('tbody', {}, rows)
 		]) ]);
 	}
 	function paint() {
 		if (!host || destroyed) return;
+		const rows = deviceRows(devices, policies);
 		host.replaceChildren(
 			E('div', { 'class': 'sbox-device-heading' }, [
 				E('span', { 'class': 'sbox-device-count', 'aria-live': 'polite' },
-					String(devices.length))
+					String(rows.length))
 			]),
 			E('p', { 'class': 'sbox-muted' }, _('Guard has highest precedence. A direct policy never disables or bypasses Guard protection.')),
-			table());
+			table(rows));
 	}
 	function optionSelect(policy) {
 		return E('select', { 'id': 'sbox-device-policy-action', 'class': 'cbi-input-select' }, ACTIONS.map((name) => {
@@ -233,4 +278,4 @@ function create(options) {
 	return { mount, refresh, destroy, openEditor, policyFromEditor };
 }
 
-return baseclass.extend({ create, normalizedMac, currentAddresses });
+return baseclass.extend({ create, normalizedMac, currentAddresses, deviceRows });
