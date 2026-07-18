@@ -225,32 +225,46 @@ function create(options) {
 		const serviceRunning = status.observed?.service?.running ?? status.state?.observed?.service?.running ?? status.running;
 		const guardEnabled = summary.state?.desired?.guard?.enabled ?? status.desired?.guard?.enabled ??
 			status.state?.desired?.guard?.enabled;
-		const componentRows = COMPONENTS.map(([ name, label ]) => {
+		const componentRows = COMPONENTS.filter(([ name ]) => name !== 'guard').map(([ name, label ]) => {
 			let componentState = health[name]?.state;
 			if (name === 'mihomo' && !componentState && typeof serviceRunning === 'boolean')
 				componentState = serviceRunning ? 'running' : 'stopped';
 			return E('div', { 'class': 'sbox-diagnostics-row' }, [
 				E('span', { 'class': 'sbox-diagnostics-label' }, label()),
-				name === 'guard' ? enabledNode(label(), guardEnabled) : statusNode(label(), componentState)
+				statusNode(label(), componentState)
 			]);
 		});
 		const cooldown = memory.cooldown_until ? dateValue(memory.cooldown_until) : _('Inactive');
-		return E('div', { 'class': 'sbox-diagnostics-content' }, [
-			E('div', { 'class': 'sbox-diagnostics-components', 'aria-label': _('Component status') }, componentRows),
-			E('div', { 'class': 'sbox-diagnostics-facts' }, [
-				valueRow(_('RSS'), memoryBytes(memory, 'rss_bytes', 'current_rss_kb') !== '-'
-					? memoryBytes(memory, 'rss_bytes', 'current_rss_kb') : memoryBytes(memory, 'rss_bytes', 'rss_kb')),
-				valueRow(_('Baseline'), memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb')),
-				valueRow(_('Pressure'), memory.pressure || memory.phase || '-'),
-				valueRow(_('Cooldown'), cooldown),
-				valueRow(_('Last repair'), repairValue(summary.last_repair)),
-				valueRow(_('Subscription activation'), subscriptionValue(summary)),
-				valueRow(_('Telegram'), telegramValue(summary))
+		return E('div', { 'class': 'sbox-diagnostics-card-grid' }, [
+			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health' }, [
+				E('h4', {}, _('Component status')),
+				E('div', { 'class': 'sbox-diagnostics-components', 'aria-label': _('Component status') }, componentRows),
+				E('div', { 'class': 'sbox-diagnostics-facts' }, [
+					valueRow(_('Subscription activation'), subscriptionValue(summary)),
+					valueRow(_('Telegram'), telegramValue(summary))
+				]),
+				E('div', { 'class': 'sbox-diagnostics-actions', 'aria-label': _('Diagnostic actions') }, [
+					actionLink(_('Details'), 'details'),
+					actionLink(_('Download diagnostic report'), 'download-report'),
+					actionLink(_('Route test'), 'route-test')
+				])
 			]),
-			E('div', { 'class': 'sbox-diagnostics-actions', 'aria-label': _('Diagnostic actions') }, [
-				actionLink(_('Details'), 'details'),
-				actionLink(_('Download diagnostic report'), 'download-report'),
-				actionLink(_('Route test'), 'route-test')
+			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
+				E('h4', {}, _('Guard') + ' / ' + _('Memory Guard')),
+				E('div', { 'class': 'sbox-diagnostics-components' }, [
+					E('div', { 'class': 'sbox-diagnostics-row' }, [
+						E('span', { 'class': 'sbox-diagnostics-label' }, _('Guard')),
+						enabledNode(_('Guard'), guardEnabled)
+					])
+				]),
+				E('div', { 'class': 'sbox-diagnostics-facts' }, [
+					valueRow(_('RSS'), memoryBytes(memory, 'rss_bytes', 'current_rss_kb') !== '-'
+						? memoryBytes(memory, 'rss_bytes', 'current_rss_kb') : memoryBytes(memory, 'rss_bytes', 'rss_kb')),
+					valueRow(_('Baseline'), memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb')),
+					valueRow(_('Pressure'), memory.pressure || memory.phase || '-'),
+					valueRow(_('Cooldown'), cooldown),
+					valueRow(_('Last repair'), repairValue(summary.last_repair))
+				])
 			])
 		]);
 	}
@@ -303,7 +317,7 @@ function create(options) {
 	function openDetails() {
 		const health = componentGraph(current);
 		const records = COMPONENTS.map(([ name, label ]) => ({ label: label(), value: health[name] || {} }));
-		const body = E('div', { 'class': 'sbox-diagnostics-modal' }, [
+		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-modal-responsive' }, [
 			E('h4', {}, _('Component evidence')),
 			E('ul', { 'class': 'sbox-diagnostics-evidence' }, records.map(detailsEvidence)),
 			E('h4', {}, _('Last self-heal')),
@@ -395,7 +409,7 @@ function create(options) {
 			catch (error) { if (!destroyed) routeError(result, error); }
 			finally { if (!destroyed) run.disabled = false; }
 		});
-		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-route-modal' }, [
+		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-route-modal sbox-modal-responsive' }, [
 			E('div', { 'class': 'sbox-route-form' }, [
 				E('label', { 'for': 'sbox-route-target' }, _('Domain or IP address')),
 				target,

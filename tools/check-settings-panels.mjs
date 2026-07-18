@@ -53,11 +53,14 @@ for (const token of [ 'view.miclash.settings-panels', 'view.miclash.devices-pane
 	'sbox-management-panels', 'id="sbox-settings-save"' ])
 	assert.match(config, new RegExp(token), `settings integration missing ${token}`);
 assert.doesNotMatch(config, /view\.miclash\.backup-panel|sbox-management-backup/);
-assert.match(css, /sbox-settings-grid/);
-assert.match(css, /grid-template-columns:\s*repeat\(6,/,
-	'settings cards do not share the adaptive six-column grid');
-assert.match(css, /@media[\s\S]*max-width:[\s\S]*sbox-settings-grid/,
-	'settings cards lack a responsive layout');
+assert.match(css, /\.sbox-settings-zone\s*\{/,
+	'settings page lacks semantic content zones');
+assert.match(css, /\.sbox-overview-grid[\s\S]*grid-template-columns:\s*repeat\(12,/,
+	'settings overview does not use the balanced twelve-column grid');
+assert.match(css, /@media\s*\(max-width:\s*1050px\)[\s\S]*\.sbox-overview-routing/,
+	'settings overview lacks its intermediate responsive layout');
+assert.match(css, /@media\s*\(max-width:\s*760px\)[\s\S]*\.sbox-settings-pair-grid[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+	'settings cards lack the compact single-column layout');
 
 const identity = (value) => String(value);
 const baseclass = { extend: (value) => value };

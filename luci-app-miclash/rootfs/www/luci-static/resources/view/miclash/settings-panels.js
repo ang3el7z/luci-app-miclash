@@ -154,7 +154,7 @@ function create(options) {
 			E('input', { 'type': 'number', 'class': 'cbi-input-text', 'min': bounds[0], 'max': bounds[1],
 				'step': '1', 'value': settings[name] })
 		));
-		return E('section', { 'class': 'cbi-section sbox-settings-block sbox-management-card', 'data-panel': 'memory' }, [
+		return E('section', { 'class': 'sbox-integration-pane sbox-memory-pane', 'data-panel': 'memory' }, [
 			E('h4', {}, _('Memory Guard')),
 			check('sbox-management-memory-enabled', _('Monitor abnormal Mihomo memory usage'), desired.enabled === true),
 			facts,
@@ -171,7 +171,7 @@ function create(options) {
 		const desired = state.desired.telegram || {}, settings = state.telegramSettings || {}, status = state.telegram || {};
 		const userId = exactTelegramId(settings.user_id) ? settings.user_id : '';
 		const tokenState = settings.token === MASK || status.configured === true ? _('Configured; leave blank to keep') : _('Not configured');
-		return E('section', { 'class': 'cbi-section sbox-settings-block sbox-management-card', 'data-panel': 'telegram' }, [
+		return E('section', { 'class': 'sbox-integration-pane sbox-telegram-pane', 'data-panel': 'telegram' }, [
 			E('h4', {}, _('Telegram')),
 			check('sbox-telegram-enabled', _('Enable Telegram control'), desired.enabled === true),
 			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
@@ -183,6 +183,12 @@ function create(options) {
 			E('p', { 'class': 'sbox-muted' }, _('Only this exact user ID is accepted in a private chat.')),
 			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Send test'), 'telegram-test') ])
 		]);
+	}
+
+	function protectionIntegrationSection() {
+		return E('article', {
+			'class': 'sbox-settings-card sbox-integration-card sbox-protection-integration-card sbox-management-card sbox-management-wide'
+		}, [ memorySection(), telegramSection() ]);
 	}
 
 	function notificationSection() {
@@ -198,19 +204,27 @@ function create(options) {
 		const select = E('select', { 'id': 'sbox-notification-test-channel', 'class': 'cbi-input-select',
 			'aria-label': _('Channels') },
 			KNOWN_CHANNELS.map((name) => E('option', { 'value': name }, name)));
-		return E('section', { 'class': 'cbi-section sbox-settings-block sbox-management-card sbox-management-wide',
+		return E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-notifications-card sbox-management-card sbox-management-wide',
 			'data-panel': 'notifications' }, [
 			E('h4', {}, _('Notifications')),
 			check('sbox-notification-auto-hide', _('Auto-hide notifications'), desired.auto_hide !== false),
-			E('h5', {}, _('Channels')), E('div', { 'class': 'sbox-management-switches' }, channelNodes),
-			E('h5', {}, _('Events')), E('div', { 'class': 'sbox-management-switches' }, eventNodes),
-			E('div', { 'class': 'sbox-management-actions' }, [ select, action(_('Send test'), 'notification-test') ])
+			E('div', { 'class': 'sbox-notification-layout' }, [
+				E('div', { 'class': 'sbox-notification-group sbox-notification-channels' }, [
+					E('h5', {}, _('Channels')),
+					E('div', { 'class': 'sbox-management-switches' }, channelNodes),
+					E('div', { 'class': 'sbox-management-actions' }, [ select, action(_('Send test'), 'notification-test') ])
+				]),
+				E('div', { 'class': 'sbox-notification-group sbox-notification-events' }, [
+					E('h5', {}, _('Events')),
+					E('div', { 'class': 'sbox-management-switches' }, eventNodes)
+				])
+			])
 		]);
 	}
 
 	function paint() {
 		if (!host || destroyed) return;
-		host.replaceChildren(memorySection(), telegramSection(), notificationSection());
+		host.replaceChildren(protectionIntegrationSection(), notificationSection());
 		bind();
 	}
 	function paintStatus() {

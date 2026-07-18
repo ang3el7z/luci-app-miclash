@@ -928,6 +928,7 @@ async function installKernelFromSettings() {
 
 function showModal(options) {
 	const opts = Object.assign({}, options || {}, { mountNode: pageRoot });
+	opts.modalClass = (opts.modalClass ? opts.modalClass + ' ' : '') + 'sbox-modal-responsive-shell';
 	return view_miclash_ui_shell.showModal(opts);
 }
 
@@ -1534,7 +1535,7 @@ async function openRulesetsModal() {
 	let currentRuleset = rulesetNames[0] || '';
 	const rulesetCache = Object.assign({}, data.contentMap || {});
 
-	const body = E('div', { 'class': 'sbox-rulesets-modal-body' });
+		const body = E('div', { 'class': 'sbox-rulesets-modal-body sbox-modal-responsive' });
 	body.innerHTML = '' +
 		'<div class="sbox-rulesets-layout">' +
 			'<aside class="cbi-section sbox-rulesets-sidebar">' +
@@ -1831,7 +1832,7 @@ function buildReleaseChannelSectionHtml(settings) {
 	const s = settings || {};
 
 	return '' +
-		'<section class="sbox-release-channel-section cbi-section sbox-settings-block">' +
+		'<article class="sbox-release-channel-section sbox-settings-card sbox-updates-card">' +
 			'<h4>' + safeText(_('Release channels')) + '</h4>' +
 			'<div class="sbox-release-channel-grid">' +
 				'<div class="sbox-release-channel-column">' +
@@ -1843,10 +1844,6 @@ function buildReleaseChannelSectionHtml(settings) {
 					'<label class="sbox-radio-row">' +
 						'<input type="radio" name="sbox-miclash-release-channel" value="prerelease"' + (normalizeReleaseChannel(s.miclashReleaseChannel) === 'prerelease' ? ' checked' : '') + ' />' +
 						'<span>' + safeText(_('Pre-release')) + '</span>' +
-					'</label>' +
-					'<label class="sbox-checkbox-row">' +
-						'<input type="checkbox" id="sbox-auto-major-miclash"' + (s.autoMajorMiclash !== false ? ' checked' : '') + ' />' +
-						'<span>' + safeText(_('Automatically install major MiClash updates at night')) + '</span>' +
 					'</label>' +
 				'</div>' +
 				'<div class="sbox-release-channel-column">' +
@@ -1861,7 +1858,13 @@ function buildReleaseChannelSectionHtml(settings) {
 					'</label>' +
 				'</div>' +
 			'</div>' +
-		'</section>';
+			'<div class="sbox-major-update-policy">' +
+				'<label class="sbox-checkbox-row">' +
+					'<input type="checkbox" id="sbox-auto-major-miclash"' + (s.autoMajorMiclash !== false ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Automatically install major MiClash updates at night')) + '</span>' +
+				'</label>' +
+			'</div>' +
+		'</article>';
 }
 
 function buildInterfaceListHtml() {
@@ -1918,7 +1921,7 @@ function buildInterfaceListHtml() {
 		return '<div class="sbox-muted">' + safeText(_('No interfaces detected.')) + '</div>';
 	}
 
-	return chunks.join('');
+	return '<div class="sbox-interface-groups">' + chunks.join('') + '</div>';
 }
 
 function buildSettingsPaneHtml() {
@@ -1946,107 +1949,113 @@ function buildSettingsPaneHtml() {
 	const showTunStack = currentProxyMode === 'tun' || currentProxyMode === 'mixed';
 
 	return '' +
-		'<div class="sbox-settings-overview">' +
-			'<div id="sbox-settings-status" class="cbi-section-descr sbox-settings-status">' +
-				'<div class="sbox-settings-summary-grid">' +
-					'<div class="sbox-settings-summary-current">' + buildSettingsSummary() + '</div>' +
+		'<div class="sbox-settings-page">' +
+			'<section class="sbox-settings-zone sbox-settings-zone-overview" aria-label="MiClash">' +
+				'<div class="sbox-overview-grid">' +
+					'<article id="sbox-settings-status" class="sbox-settings-card sbox-overview-card sbox-overview-routing">' +
+						'<h4>' + safeText(_('Routing')) + '</h4>' +
+						'<div class="sbox-settings-summary-current">' + buildSettingsSummary() + '</div>' +
+					'</article>' +
 					'<div id="sbox-diagnostics-summary" class="sbox-diagnostics-summary"></div>' +
 				'</div>' +
-			'</div>' +
-			buildReleaseChannelSectionHtml(s) +
-		'</div>' +
-		'<div class="sbox-settings-grid">' +
-			'<section class="cbi-section sbox-settings-block">' +
-				'<h4>' + safeText(_('Traffic Scope')) + '</h4>' +
-				'<label class="sbox-radio-row">' +
-					'<input type="radio" name="sbox-interface-mode" value="exclude"' + (s.mode !== 'explicit' ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Exclude mode: proxy all interfaces except selected ones')) + '</span>' +
-				'</label>' +
-					'<label class="sbox-radio-row">' +
-						'<input type="radio" name="sbox-interface-mode" value="explicit"' + (s.mode === 'explicit' ? ' checked' : '') + ' />' +
-						'<span>' + safeText(_('Explicit mode: proxy only selected interfaces')) + '</span>' +
-					'</label>' +
-				'</section>' +
+			'</section>' +
 
-				'<section class="cbi-section sbox-settings-block">' +
-					'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
-					'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' hidden') + '>' +
-					'<input type="checkbox" id="sbox-auto-lan"' + (s.autoDetectLan ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Auto detect LAN bridge')) + '</span>' +
-				'</label>' +
-				'<label class="sbox-checkbox-row" id="sbox-auto-wan-row"' + (s.mode !== 'explicit' ? '' : ' hidden') + '>' +
-					'<input type="checkbox" id="sbox-auto-wan"' + (s.autoDetectWan ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Auto detect WAN interface')) + '</span>' +
-				'</label>' +
-				'<div class="sbox-muted">' +
-					safeText(_('Detected LAN: %s').format(appState.detectedLan || '-')) + '<br/>' +
-					safeText(_('Detected WAN: %s').format(appState.detectedWan || '-')) +
+			'<section class="sbox-settings-zone sbox-settings-zone-routing" aria-labelledby="sbox-routing-title">' +
+				'<div class="sbox-zone-heading"><h3 id="sbox-routing-title">' + safeText(_('Routing')) + ' / ' + safeText(_('Interfaces')) + '</h3></div>' +
+				'<div class="sbox-settings-card sbox-routing-composite">' +
+					'<div class="sbox-routing-config-grid">' +
+						'<div class="sbox-settings-subgroup sbox-traffic-scope">' +
+							'<h4>' + safeText(_('Traffic Scope')) + '</h4>' +
+							'<label class="sbox-radio-row">' +
+								'<input type="radio" name="sbox-interface-mode" value="exclude"' + (s.mode !== 'explicit' ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Exclude mode: proxy all interfaces except selected ones')) + '</span>' +
+							'</label>' +
+							'<label class="sbox-radio-row">' +
+								'<input type="radio" name="sbox-interface-mode" value="explicit"' + (s.mode === 'explicit' ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Explicit mode: proxy only selected interfaces')) + '</span>' +
+							'</label>' +
+						'</div>' +
+						'<div class="sbox-settings-subgroup sbox-routing-detection">' +
+							'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
+							'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' hidden') + '>' +
+								'<input type="checkbox" id="sbox-auto-lan"' + (s.autoDetectLan ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Auto detect LAN bridge')) + '</span>' +
+							'</label>' +
+							'<label class="sbox-checkbox-row" id="sbox-auto-wan-row"' + (s.mode !== 'explicit' ? '' : ' hidden') + '>' +
+								'<input type="checkbox" id="sbox-auto-wan"' + (s.autoDetectWan ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Auto detect WAN interface')) + '</span>' +
+							'</label>' +
+							'<div class="sbox-detected-facts sbox-muted">' +
+								'<span>' + safeText(_('Detected LAN: %s').format(appState.detectedLan || '-')) + '</span>' +
+								'<span>' + safeText(_('Detected WAN: %s').format(appState.detectedWan || '-')) + '</span>' +
+							'</div>' +
+						'</div>' +
+					'</div>' +
+					'<div class="sbox-card-divider"></div>' +
+					'<div class="sbox-interface-section">' +
+						'<h4>' + safeText(_('Interfaces')) + '</h4>' +
+						'<div class="sbox-muted sbox-settings-help">' +
+							(s.mode === 'explicit' ? safeText(_('Choose interfaces that should go through proxy.')) : safeText(_('Choose interfaces that should bypass proxy.'))) +
+						'</div>' +
+						buildInterfaceListHtml() +
+					'</div>' +
 				'</div>' +
 			'</section>' +
 
-			'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
-				'<h4>' + safeText(_('Interfaces')) + '</h4>' +
-				'<div class="sbox-muted sbox-settings-help">' +
-					(s.mode === 'explicit'
-						? safeText(_('Choose interfaces that should go through proxy.'))
-						: safeText(_('Choose interfaces that should bypass proxy.'))
-					) +
-				'</div>' +
-				buildInterfaceListHtml() +
-				'</section>' +
-
-				'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
-					'<h4>' + safeText(_('Additional')) + '</h4>' +
-					'<div id="sbox-tun-stack-row" class="sbox-settings-field"' + (showTunStack ? '' : ' hidden') + '>' +
-						'<label for="sbox-tun-stack">' + safeText(_('Tun stack')) + '</label>' +
-						'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
-							'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
-							'<option value="gvisor"' + ((s.tunStack || 'system') === 'gvisor' ? ' selected' : '') + '>gvisor</option>' +
-							'<option value="mixed"' + ((s.tunStack || 'system') === 'mixed' ? ' selected' : '') + '>mixed</option>' +
-						'</select>' +
-					'</div>' +
-					'<label class="sbox-checkbox-row">' +
-						'<input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' />' +
-						'<span>' + safeText(_('Block QUIC (UDP/443)')) + '</span>' +
-					'</label>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Client devices only through MiClash (Protection)')) + '</span>' +
-				'</label>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Store rules/providers on tmpfs')) + '</span>' +
-				'</label>' +
-				'<label class="sbox-checkbox-row sbox-auto-update-row">' +
-					'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Auto-update config')) + '</span>' +
-					buildAutoUpdateIntervalChoicesHtml(s) +
-				'</label>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Inject HWID headers into proxy-providers')) + '</span>' +
-				'</label>' +
-				'<div class="sbox-form-grid">' +
-					'<div>' +
-						'<label for="sbox-hwid-user-agent">' + safeText(_('User-Agent')) + '</label>' +
-						'<input id="sbox-hwid-user-agent" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidUserAgent || 'MiClash') + '" />' +
-					'</div>' +
-					'<div>' +
-						'<label for="sbox-hwid-device-os">' + safeText(_('Device OS')) + '</label>' +
-						'<input id="sbox-hwid-device-os" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidDeviceOS || 'OpenWrt') + '" />' +
-					'</div>' +
+			'<section class="sbox-settings-zone sbox-settings-zone-updates" aria-labelledby="sbox-updates-title">' +
+				'<div class="sbox-zone-heading"><h3 id="sbox-updates-title">' + safeText(_('Release channels')) + ' / ' + safeText(_('Additional')) + '</h3></div>' +
+				'<div class="sbox-settings-pair-grid">' +
+					buildReleaseChannelSectionHtml(s) +
+					'<article class="sbox-settings-card sbox-runtime-card">' +
+						'<h4>' + safeText(_('Additional')) + '</h4>' +
+						'<div id="sbox-tun-stack-row" class="sbox-settings-field"' + (showTunStack ? '' : ' hidden') + '>' +
+							'<label for="sbox-tun-stack">' + safeText(_('Tun stack')) + '</label>' +
+							'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
+								'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
+								'<option value="gvisor"' + ((s.tunStack || 'system') === 'gvisor' ? ' selected' : '') + '>gvisor</option>' +
+								'<option value="mixed"' + ((s.tunStack || 'system') === 'mixed' ? ' selected' : '') + '>mixed</option>' +
+							'</select>' +
+						'</div>' +
+						'<div class="sbox-runtime-switches">' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' /><span>' + safeText(_('Block QUIC (UDP/443)')) + '</span></label>' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' /><span>' + safeText(_('Client devices only through MiClash (Protection)')) + '</span></label>' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' /><span>' + safeText(_('Store rules/providers on tmpfs')) + '</span></label>' +
+						'</div>' +
+						'<div class="sbox-runtime-config-update">' +
+							'<label class="sbox-checkbox-row sbox-auto-update-row">' +
+								'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Auto-update config')) + '</span>' +
+								buildAutoUpdateIntervalChoicesHtml(s) +
+							'</label>' +
+						'</div>' +
+						'<details class="sbox-management-expert sbox-hwid-details"' + (s.enableHwid ? ' open' : '') + '>' +
+							'<summary>HWID</summary>' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' /><span>' + safeText(_('Inject HWID headers into proxy-providers')) + '</span></label>' +
+							'<div class="sbox-form-grid sbox-hwid-fields">' +
+								'<div><label for="sbox-hwid-user-agent">' + safeText(_('User-Agent')) + '</label><input id="sbox-hwid-user-agent" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidUserAgent || 'MiClash') + '" /></div>' +
+								'<div><label for="sbox-hwid-device-os">' + safeText(_('Device OS')) + '</label><input id="sbox-hwid-device-os" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidDeviceOS || 'OpenWrt') + '" /></div>' +
+							'</div>' +
+						'</details>' +
+					'</article>' +
 				'</div>' +
 			'</section>' +
-			'</div>' +
-			'<div id="sbox-management-panels" class="sbox-management-grid">' +
-				'<section id="sbox-management-settings" class="sbox-management-module sbox-management-settings"></section>' +
-				'<section id="sbox-management-devices" class="cbi-section sbox-settings-block sbox-management-module sbox-management-wide"></section>' +
-			'</div>' +
+
+			'<section class="sbox-settings-zone sbox-settings-zone-integrations" aria-labelledby="sbox-integrations-title">' +
+				'<div class="sbox-zone-heading"><h3 id="sbox-integrations-title">' + safeText(_('Memory Guard')) + ' / Telegram / ' + safeText(_('Notifications')) + '</h3></div>' +
+				'<div id="sbox-management-panels" class="sbox-management-grid">' +
+					'<section id="sbox-management-settings" class="sbox-management-module sbox-management-settings"></section>' +
+				'</div>' +
+			'</section>' +
+
+			'<section class="sbox-settings-zone sbox-settings-zone-devices" aria-labelledby="sbox-devices-title">' +
+				'<div class="sbox-zone-heading"><h3 id="sbox-devices-title">' + safeText(_('Device policies')) + '</h3></div>' +
+				'<section id="sbox-management-devices" class="sbox-settings-card sbox-management-module sbox-management-wide"></section>' +
+			'</section>' +
 
 			'<div class="sbox-settings-save-wrap">' +
 				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply sbox-settings-save-btn">' + safeText(_('Save Settings')) + '</button>' +
 			'</div>' +
-		'';
+		'</div>';
 }
 
 function buildConfigOptionsHtml() {

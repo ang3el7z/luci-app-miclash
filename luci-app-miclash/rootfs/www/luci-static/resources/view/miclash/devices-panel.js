@@ -99,8 +99,9 @@ function create(options) {
 				E('td', {}, (actionLabels[policy?.action || 'inherit'] || actionLabels.inherit)()), E('td', {}, edit)
 			]);
 		});
-		if (!rows.length) rows.push(E('tr', {}, [ E('td', { 'colspan': '6', 'class': 'sbox-muted' }, _('No devices discovered.')) ]));
-		return E('div', { 'class': 'sbox-management-table-wrap' }, [ E('table', { 'class': 'table sbox-device-table' }, [
+		if (!rows.length) rows.push(E('tr', { 'class': 'sbox-device-empty' }, [ E('td', { 'colspan': '6', 'class': 'sbox-muted' }, _('No devices discovered.')) ]));
+		return E('div', { 'class': 'sbox-management-table-wrap', 'tabindex': '0', 'role': 'region',
+			'aria-label': _('Device policies') }, [ E('table', { 'class': 'table sbox-device-table' }, [
 			E('thead', {}, E('tr', {}, [ _('Hostname'), _('MAC'), _('Current IP'), _('Last seen'), _('Policy'), _('Actions') ]
 				.map((name) => E('th', {}, name)))), E('tbody', {}, rows)
 		]) ]);
@@ -108,7 +109,10 @@ function create(options) {
 	function paint() {
 		if (!host || destroyed) return;
 		host.replaceChildren(
-			E('h4', {}, _('Device policies')),
+			E('div', { 'class': 'sbox-device-heading' }, [
+				E('span', { 'class': 'sbox-device-count', 'aria-live': 'polite' },
+					String(devices.length))
+			]),
 			E('p', { 'class': 'sbox-muted' }, _('Guard has highest precedence. A direct policy never disables or bypasses Guard protection.')),
 			table());
 	}
@@ -130,10 +134,10 @@ function create(options) {
 		const selectedZone = timezones.includes(schedule?.timezone) ? schedule.timezone : 'UTC';
 		const scheduleEnabled = E('input', { 'id': 'sbox-device-schedule-enabled', 'type': 'checkbox',
 			'checked': schedule ? 'checked' : null });
-		const body = E('div', { 'class': 'sbox-device-policy-editor' }, [
-			E('p', {}, [ E('strong', {}, text(device?.hostname, _('Unknown device'))), ' · ', text(mac) ]),
-			E('label', { 'for': 'sbox-device-policy-action' }, _('Policy')), optionSelect(policy),
-			E('label', { 'class': 'sbox-checkbox-row', 'for': 'sbox-device-schedule-enabled' }, [ scheduleEnabled, _('Use schedule') ]),
+		const scheduleFields = E('div', {
+			'class': 'sbox-device-schedule-fields',
+			'hidden': schedule ? null : 'hidden'
+		}, [
 			dayChecks(schedule),
 			E('div', { 'class': 'sbox-management-form-grid' }, [
 				E('label', {}, [ _('Start'), E('input', { 'id': 'sbox-device-start', 'type': 'time',
@@ -144,14 +148,23 @@ function create(options) {
 					'class': 'cbi-input-select', 'value': selectedZone }, timezones.map((name) => E('option', {
 						'value': name, 'selected': name === selectedZone ? 'selected' : null
 					}, name))) ])
-			]),
+			])
+		]);
+		const body = E('div', { 'class': 'sbox-device-policy-editor sbox-modal-responsive' }, [
+			E('p', {}, [ E('strong', {}, text(device?.hostname, _('Unknown device'))), ' · ', text(mac) ]),
+			E('label', { 'for': 'sbox-device-policy-action' }, _('Policy')), optionSelect(policy),
+			E('label', { 'class': 'sbox-checkbox-row', 'for': 'sbox-device-schedule-enabled' }, [ scheduleEnabled, _('Use schedule') ]),
+			scheduleFields,
 			E('p', { 'class': 'sbox-muted' }, _('Guard precedence: fail-closed protection is evaluated before device direct/proxy policy.')),
 			E('div', { 'class': 'right sbox-management-actions' }, [
-				policy ? E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-negative', 'data-action': 'delete' }, _('Delete')) : null,
+				...(policy ? [ E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-negative', 'data-action': 'delete' }, _('Delete')) ] : []),
 				E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-apply', 'data-action': 'save' }, _('Save')),
 				E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral', 'data-action': 'close' }, _('Close'))
 			])
 		]);
+		const syncScheduleVisibility = () => { scheduleFields.hidden = !scheduleEnabled.checked; };
+		scheduleEnabled.addEventListener('change', syncScheduleVisibility);
+		syncScheduleVisibility();
 		body.querySelector('[data-action="close"]').addEventListener('click', () => { modalGeneration++; ui.hideModal(); });
 		body.querySelector('[data-action="save"]').addEventListener('click', () => mutate(async () => {
 			const wanted = policyFromEditor(body, mac, policy);
