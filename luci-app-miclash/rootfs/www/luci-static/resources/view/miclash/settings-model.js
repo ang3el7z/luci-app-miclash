@@ -343,10 +343,43 @@ async function detectWanInterface() {
 	}
 }
 
+function sameStringSet(left, right) {
+	const a = Array.from(new Set((left || []).map(String))).sort();
+	const b = Array.from(new Set((right || []).map(String))).sort();
+	return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function operationalSettingsChanged(current, next) {
+	current = current || {};
+	next = next || {};
+	const scalarPairs = [
+		[ current.mode || 'exclude', next.mode || 'exclude' ],
+		[ normalizeProxyMode(current.proxyMode), normalizeProxyMode(next.proxyMode) ],
+		[ current.tunStack || 'system', next.tunStack || 'system' ],
+		[ current.autoDetectLan !== false, next.autoDetectLan !== false ],
+		[ current.autoDetectWan !== false, next.autoDetectWan !== false ],
+		[ current.blockQuic !== false, next.blockQuic !== false ],
+		[ current.useTmpfsRules !== false, next.useTmpfsRules !== false ],
+		[ current.enableHwid === true, next.enableHwid === true ],
+		[ String(current.hwidUserAgent || 'MiClash'), String(next.hwidUserAgent || 'MiClash') ],
+		[ String(current.hwidDeviceOS || 'OpenWrt'), String(next.hwidDeviceOS || 'OpenWrt') ]
+	];
+	if (scalarPairs.some(([ before, after ]) => before !== after)) return true;
+
+	const currentMode = current.mode || 'exclude';
+	const selected = currentMode === 'explicit'
+		? (current.includedInterfaces || []).slice()
+		: (current.excludedInterfaces || []).slice();
+	if (currentMode === 'explicit' && current.autoDetectLan !== false && current.detectedLan)
+		selected.push(current.detectedLan);
+	if (currentMode !== 'explicit' && current.autoDetectWan !== false && current.detectedWan)
+		selected.push(current.detectedWan);
+	return !sameStringSet(selected, next.selected || []);
+}
+
 async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, autoMajorMiclash) {
 	let detectedLan = '';
 	let detectedWan = '';
-	const cleanAutoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalHours);
 
 	if (autoDetectLan) detectedLan = await detectLanBridge() || '';
 	if (autoDetectWan) detectedWan = await detectWanInterface() || '';
@@ -377,12 +410,7 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 				hwid_device_os: String(hwidDeviceOS || 'OpenWrt') },
 			interfaces: { mode, auto_detect_lan: !!autoDetectLan, auto_detect_wan: !!autoDetectWan,
 				detected_lan: detectedLan, detected_wan: detectedWan,
-				included: includedInterfaces, excluded: excludedInterfaces },
-			updates: { auto_subscription: autoUpdateConfig !== false,
-				interval_hours: parseInt(cleanAutoUpdateIntervalHours, 10),
-				miclash_release_channel: view_miclash_release.normalizeReleaseChannel(miclashReleaseChannel),
-				mihomo_release_channel: view_miclash_release.normalizeReleaseChannel(mihomoReleaseChannel),
-				auto_major_miclash: autoMajorMiclash !== false }
+				included: includedInterfaces, excluded: excludedInterfaces }
 		};
 		await waitOperation(api, await api.operational_settings_apply(
 			'config.yaml', updatedConfig, settings, 'luci'));
@@ -399,5 +427,6 @@ return L.Class.extend({
 	detectLanBridge: detectLanBridge,
 	detectWanInterface: detectWanInterface,
 	saveOperationalSettings: saveOperationalSettings,
+	operationalSettingsChanged: operationalSettingsChanged,
 	normalizeProxyMode: normalizeProxyMode
 });

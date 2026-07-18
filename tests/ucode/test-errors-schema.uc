@@ -89,8 +89,6 @@ assert_equal(schema.mac_address('02:00:5e:10:00:00'), '02:00:5e:10:00:00');
 assert_throws(() => schema.mac_address('not-a-mac'), 'INVALID_ARGUMENT');
 assert_equal(schema.operation_id('update-123'), 'update-123');
 assert_throws(() => schema.operation_id('../update'), 'INVALID_ARGUMENT');
-assert_equal(schema.archive_name('backup-1.tar.gz'), 'backup-1.tar.gz');
-assert_throws(() => schema.archive_name('../backup.tar.gz'), 'INVALID_ARGUMENT');
 assert_throws(() => schema.managed_update_url('http://example.com/update'), 'INVALID_ARGUMENT');
 assert_equal(schema.managed_update_url('https://example.com/update'), 'https://example.com/update');
 assert_equal(schema.url('http://example.com:8080/path?q=1#fragment'), 'http://example.com:8080/path?q=1#fragment');

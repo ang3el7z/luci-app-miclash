@@ -31,7 +31,7 @@ function fake_runtime(initial) {
 	let seeded = initial ?? { miclash: {} };
 	seeded.miclash ??= {};
 	for (let section in [ 'core', 'interfaces', 'guard', 'memory', 'updates', 'telegram',
-		'notifications', 'backup', 'meta' ]) seeded.miclash[section] ??= { '.type': section };
+		'notifications', 'meta' ]) seeded.miclash[section] ??= { '.type': section };
 	let cursor = fakes.uci(seeded), identity = { pid: next_pid++, start: 400 };
 	return { rt: runtime_for(cursor, lock_filesystem([ identity ]), identity), cursor };
 };
@@ -65,13 +65,8 @@ assert_equal(defaults.notifications.auto_hide, true);
 assert_json_equal(defaults.notifications.channels, [ 'syslog', 'luci', 'telegram' ]);
 assert_json_equal(defaults.notifications.events, [ 'guard_outage', 'failure', 'recovery',
 	'fail_closed', 'direct_fallback', 'memory_action', 'memory_outcome',
-	'subscription_outcome', 'update_outcome', 'backup_outcome', 'internet_restored' ]);
+	'subscription_outcome', 'update_outcome', 'internet_restored' ]);
 assert_equal(defaults.telegram.enabled, false);
-assert_equal(defaults.backup.enabled, false);
-assert_equal(defaults.backup.retention, 5);
-assert_equal(defaults.backup.include_secrets, false);
-assert_equal(defaults.backup.interval_hours, 24);
-assert_equal(defaults.backup.schedule_time, '03:00');
 assert_equal(defaults.meta.schema_version, 1);
 
 let normalized_env = fake_runtime();
@@ -80,15 +75,13 @@ assert_json_equal(settings.validate_patch({
 	updates: { interval_hours: '24' },
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
 	notifications: { channels: [ 'telegram', 'syslog', 'telegram' ],
-		events: [ 'failure', 'internet_restored' ] },
-	backup: { interval_hours: '48', schedule_time: '04:30' }
+		events: [ 'failure', 'internet_restored' ] }
 }), {
 	interfaces: { included: [ 'br-lan', 'wlan0' ] },
 	updates: { interval_hours: 24 },
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
 	notifications: { channels: [ 'telegram', 'syslog' ],
-		events: [ 'failure', 'internet_restored' ] },
-	backup: { interval_hours: 48, schedule_time: '04:30' }
+		events: [ 'failure', 'internet_restored' ] }
 });
 let normalized = settings.save(normalized_env.rt, {
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
@@ -113,10 +106,6 @@ assert_throws(() => settings.save(fake_runtime().rt,
 	{ telegram: { token: 'not-a-botfather-token' } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ telegram: { token: '0:abcdefgh' } }), 'INVALID_ARGUMENT');
-assert_throws(() => settings.save(fake_runtime().rt,
-	{ backup: { schedule_time: '25:00' } }), 'INVALID_ARGUMENT');
-assert_throws(() => settings.save(fake_runtime().rt,
-	{ backup: { interval_hours: 169 } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.validate_patch(
 	{ updates: { auto_major_miclash: '1' } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
@@ -163,7 +152,7 @@ assert_equal(failed_commit_env.cursor.commit_calls, 1);
 
 // Guard writes share the central normal mutation domain. A different runtime
 // cannot flip Guard while an owner holds the policy/settings lease, while the
-// same already-held lease remains non-deadlocking for backup restore.
+// same already-held lease remains non-deadlocking for settings updates.
 let shared_cursor = fakes.uci({ miclash: { guard: { '.type': 'guard', enabled: '0' } } });
 let owner_identity = { pid: 6101, start: 501 }, contender_identity = { pid: 6102, start: 502 };
 let shared_fs = lock_filesystem([ owner_identity, contender_identity ]);

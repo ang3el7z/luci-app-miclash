@@ -64,13 +64,6 @@ const FIELDS = {
 		channels: 'notification_channels',
 		events: 'notification_events'
 	},
-	backup: {
-		enabled: 'bool',
-		retention: 'retention',
-		include_secrets: 'bool',
-		interval_hours: 'backup_interval',
-		schedule_time: 'clock_time'
-	},
 	meta: { schema_version: 'schema_version' }
 };
 
@@ -120,10 +113,8 @@ function defaults() {
 			channels: [ 'syslog', 'luci', 'telegram' ],
 			events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 				'direct_fallback', 'memory_action', 'memory_outcome',
-				'subscription_outcome', 'update_outcome', 'backup_outcome', 'internet_restored' ]
+				'subscription_outcome', 'update_outcome', 'internet_restored' ]
 		},
-		backup: { enabled: false, retention: 5, include_secrets: false,
-			interval_hours: 24, schedule_time: '03:00' },
 		meta: { schema_version: 1 }
 	};
 };
@@ -247,14 +238,6 @@ function normalize(kind, value, fallback, strict) {
 			invalid();
 		return normalized;
 	}
-	if (kind == 'backup_interval')
-		return bounded_integer(value, 1, 168);
-	if (kind == 'retention') {
-		let normalized = positive_integer(value, null, 100);
-		if (normalized == null)
-			invalid();
-		return normalized;
-	}
 	let memory_bounds = {
 		memory_sample_interval_ms: [ 10000, 3600000 ],
 		memory_sustained_samples: [ 2, 60 ],
@@ -278,7 +261,7 @@ function normalize(kind, value, fallback, strict) {
 	if (kind == 'notification_events')
 		return unique_enum_list(value, [ 'guard_outage', 'failure', 'recovery',
 			'fail_closed', 'direct_fallback', 'memory_action', 'memory_outcome',
-			'subscription_outcome', 'update_outcome', 'backup_outcome', 'internet_restored' ], strict);
+			'subscription_outcome', 'update_outcome', 'internet_restored' ], strict);
 	if (kind == 'schema_version') {
 		let normalized = positive_integer(value, null, 1);
 		if (normalized != 1)
@@ -289,19 +272,13 @@ function normalize(kind, value, fallback, strict) {
 		return clean_string(value, 4096);
 	if (kind == 'string')
 		return clean_string(value, 4096);
-	if (kind == 'clock_time') {
-		value = clean_string(value, 5);
-		if (!match(value, /^([01][0-9]|2[0-3]):[0-5][0-9]$/)) invalid();
-		return value;
-	}
-
 	invalid();
 };
 
 function encoded(kind, value) {
 	if (kind == 'bool')
 		return value ? '1' : '0';
-	if (kind == 'interval' || kind == 'backup_interval' || kind == 'retention' || kind == 'schema_version')
+	if (kind == 'interval' || kind == 'schema_version')
 		return sprintf('%d', value);
 	if (substr(kind, 0, 7) == 'memory_')
 		return sprintf('%d', value);

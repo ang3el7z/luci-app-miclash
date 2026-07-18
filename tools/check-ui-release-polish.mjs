@@ -4,7 +4,6 @@ const config = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/v
 const css = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css', 'utf8');
 const ru = readFileSync('luci-app-miclash/rootfs/po/ru/miclash.po', 'utf8');
 const settingsPanels = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/settings-panels.js', 'utf8');
-const historyPanel = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/history-panel.js', 'utf8');
 const uiShell = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/ui-shell.js', 'utf8');
 const devicesPanel = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/devices-panel.js', 'utf8');
 
@@ -62,12 +61,11 @@ const checks = [
 	{
 		name: 'periodic panel repaints are not broad live regions',
 		pass: !/sbox-diagnostics-summary[^>]*aria-live/.test(config) &&
-			!/sbox-management-(?:settings|backup|devices)[^>]*aria-live/.test(config)
+			!/sbox-management-(?:settings|devices)[^>]*aria-live/.test(config)
 	},
 	{
-		name: 'history retains native button roles and device choices are localized',
-		pass: !historyPanel.includes("'role': 'listitem'") &&
-			devicesPanel.includes("inherit: () => _('Inherit')") &&
+		name: 'device choices are localized',
+		pass: devicesPanel.includes("inherit: () => _('Inherit')") &&
 			devicesPanel.includes("() => _('Monday')") &&
 			!devicesPanel.includes('}), String(day)')
 	},

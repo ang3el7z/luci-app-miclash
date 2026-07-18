@@ -985,8 +985,8 @@ msgstr "端口 %s 未在监听"
 msgid "Pre-release"
 msgstr "预发布"
 
-msgid "Proxy mode switched to %s. Service restarted."
-msgstr "代理模式已切换为 %s。服务已重启。"
+msgid "Proxy mode switched to %s."
+msgstr "代理模式已切换为 %s。"
 
 msgid "Proxy mode: %s"
 msgstr "代理模式：%s"
@@ -2060,3 +2060,30 @@ msgstr "夜间自动安装 MiClash 主版本更新"
 
 msgid "Major update %s is scheduled for the night. Click to update now."
 msgstr "主版本更新 %s 已计划在夜间安装。点击可立即更新。"
+
+msgid "Config #2"
+msgstr "配置 #2"
+
+msgid "Config #3"
+msgstr "配置 #3"
+
+msgid "Management settings are not ready."
+msgstr "管理设置尚未就绪。"
+
+msgid "Settings panel is not available."
+msgstr "设置面板不可用。"
+
+msgid "Save settings before sending a test."
+msgstr "发送测试前请先保存设置。"
+
+msgid "Settings are not ready."
+msgstr "设置尚未就绪。"
+
+msgid "Applying Mihomo settings..."
+msgstr "正在应用 Mihomo 设置..."
+
+msgid "Failed to apply Mihomo settings."
+msgstr "无法应用 Mihomo 设置。"
+
+msgid "Settings saved and applied."
+msgstr "设置已保存并应用。"

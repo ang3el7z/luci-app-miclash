@@ -143,22 +143,21 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 
 1. 终端安装脚本会自动安装 Mihomo。
 2. 添加订阅或编辑 YAML 配置。
-3. 验证 Draft；此操作不会更改当前路由。
-4. 应用 Draft，使其成为 Active。
+3. 验证 YAML；此操作不会更改当前路由。
+4. 应用它，使配置生效。
 5. 选择 TPROXY、TUN 或 MIXED，并设置所需接口。
 6. 检查受保护设备，然后启用 Guard。
 
-无效 Draft 不会被应用，之前的 Active 配置会继续运行。
+无效配置不会被应用，之前的活动配置会继续运行。
 
 ## 主要功能
 
-- **配置：** Draft/Active、验证、原子应用、历史（history）、diff、restore 和 recovery snapshot。
+- **配置：** 直接编辑 YAML、验证和原子应用。
 - **订阅与更新：** 三个 URL、手动或定时刷新，以及安全的 MiClash 和 Mihomo 更新。
 - **路由：** TPROXY、TUN、MIXED、接口包含/排除、自动 LAN/WAN、QUIC 和本地 rulesets。
 - **诊断：** Mihomo、DNS、firewall、routing 和 Guard 状态、脱敏报告以及 route test。
 - **自恢复：** 修复 drift，并按 `reload → 内核 restart → 服务 restart` 逐级恢复。
 - **通知（notification）：** 在 LuCI 或 Telegram 中显示故障、Internet 恢复、更新、Guard 和 Memory Guard 事件。
-- **Backup/restore：** 导入 preview、secrets 警告和 recovery snapshot。
 - **设备策略（device policies）：** 计划任务以及 inherit/proxy/direct/block；Guard 始终优先。
 
 ## Guard 与恢复
@@ -183,7 +182,7 @@ Bot 仅使用出站 HTTPS long polling，只接受一个 user ID 的 private cha
 /status /health /memory /diagnostics /logs /help
 /start /stop /restart /reload /reboot
 /subscription URL /update_subscription /update_miclash /update_mihomo
-/guard_on /guard_off /backup
+/guard_on /guard_off
 ```
 
 `/reboot` 在用户验证后立即重启路由器，不再二次确认。
@@ -210,7 +209,7 @@ apk del luci-app-miclash
 opkg remove luci-app-miclash
 ```
 
-删除时会先停止服务，并恢复 MiClash 管理的 DNS/firewall/routing 设置。`/opt/clash` 会保留；创建 backup 后可手动永久删除：
+删除时会先停止服务，并恢复 MiClash 管理的 DNS/firewall/routing 设置。`/opt/clash` 会保留；复制所需文件后可手动永久删除：
 
 ```sh
 rm -rf /opt/clash

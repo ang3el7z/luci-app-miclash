@@ -187,10 +187,3 @@ export function operation_id(value) {
 		invalid();
 	return value;
 };
-
-export function archive_name(value) {
-	validate({ type: 'string', min_length: 1, max_length: 128 }, value);
-	if (!match(value, /^[A-Za-z0-9][A-Za-z0-9._-]*$/) || match(value, /\.\./))
-		invalid();
-	return value;
-};

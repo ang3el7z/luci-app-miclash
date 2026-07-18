@@ -838,11 +838,11 @@ msgstr "Ядро установлено, но перезапустить слу�
 msgid "Main Config #1"
 msgstr "Основной конфиг #1"
 
-msgid "Backup Config #2"
-msgstr "Резервный конфиг #2"
+msgid "Config #2"
+msgstr "Конфиг #2"
 
-msgid "Backup Config #3"
-msgstr "Резервный конфиг #3"
+msgid "Config #3"
+msgstr "Конфиг #3"
 
 msgid "Set as Main"
 msgstr "Сделать главным"
@@ -1008,8 +1008,8 @@ msgstr "Списков правил пока нет."
 msgid "One IPv4/CIDR per line. Save applies firewall update without restarting Mihomo."
 msgstr "По одному IPv4/CIDR в строке. Сохранение обновляет файрвол без перезапуска Mihomo."
 
-msgid "Proxy mode switched to %s. Service restarted."
-msgstr "Режим прокси переключён на %s. Служба перезапущена."
+msgid "Proxy mode switched to %s."
+msgstr "Режим прокси переключён на %s."
 
 msgid "Remnawave blocked /mihomo path (HTTP 403). Disable \"Disable Subscription Access by Path\" in Remnawave response-rules settings."
 msgstr "Remnawave заблокировал путь /mihomo (HTTP 403). Отключите \"Disable Subscription Access by Path\" в настройках response-rules Remnawave."
@@ -2113,3 +2113,24 @@ msgstr "Автоматически устанавливать мажорные �
 
 msgid "Major update %s is scheduled for the night. Click to update now."
 msgstr "Мажорное обновление %s запланировано на ночь. Нажмите, чтобы обновить сейчас."
+
+msgid "Management settings are not ready."
+msgstr "Дополнительные настройки ещё не готовы."
+
+msgid "Settings panel is not available."
+msgstr "Панель настроек недоступна."
+
+msgid "Save settings before sending a test."
+msgstr "Сохраните настройки перед отправкой теста."
+
+msgid "Settings are not ready."
+msgstr "Настройки ещё не готовы."
+
+msgid "Applying Mihomo settings..."
+msgstr "Применение настроек Mihomo..."
+
+msgid "Failed to apply Mihomo settings."
+msgstr "Не удалось применить настройки Mihomo."
+
+msgid "Settings saved and applied."
+msgstr "Настройки сохранены и применены."

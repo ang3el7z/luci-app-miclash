@@ -10,13 +10,13 @@ const makefilePath = 'luci-app-miclash/Makefile';
 
 const expectedNames = 'status,health,operation_get,operation_list,' +
 	'service_start,service_stop,service_reload,service_restart,config_list,config_read,' +
-	'config_read_draft,config_save_draft,config_validate,config_apply,' +
+	'config_validate,config_apply,' +
 	'operational_settings_apply,config_swap,config_external_adopt,settings_get,settings_set,' +
-	'guard_transition,history_list,history_diff,history_open_draft,history_restore,' +
+	'guard_transition,' +
 	'subscription_get,subscription_set,subscription_update,update_release,update_miclash,' +
 	'update_mihomo,update_rollback_mihomo,memory_status,memory_reset_baseline,memory_settings,' +
-	'diagnostics_summary,diagnostics_create_report,diagnostics_route_test,backup_list,' +
-	'backup_create,backup_inspect,backup_restore,telegram_status,telegram_settings,telegram_test,' +
+	'diagnostics_summary,diagnostics_create_report,diagnostics_route_test,' +
+	'telegram_status,telegram_settings,telegram_test,' +
 	'devices_list,devices_timezones,devices_policy_list,devices_policy_set,devices_policy_delete,' +
 	'notifications_settings,notifications_test,notifications_list,logs_read,system_info,' +
 	'network_interfaces,ruleset_list,ruleset_read,ruleset_write,ruleset_delete,' +
@@ -24,14 +24,14 @@ const expectedNames = 'status,health,operation_get,operation_list,' +
 	'transfer_abort';
 const expectedRead = new Set([
 	'status', 'health', 'operation_get', 'operation_list', 'config_list', 'settings_get',
-	'history_list', 'subscription_get', 'update_release', 'memory_status', 'memory_settings',
-	'diagnostics_summary', 'backup_list', 'telegram_status', 'telegram_settings',
+	'subscription_get', 'update_release', 'memory_status', 'memory_settings',
+	'diagnostics_summary', 'telegram_status', 'telegram_settings',
 	'devices_list', 'devices_timezones', 'devices_policy_list', 'notifications_settings',
 	'notifications_list', 'logs_read', 'system_info', 'network_interfaces', 'ruleset_list',
 	'ruleset_read'
 ]);
 const secretBearing = new Set([
-	'config_read', 'config_read_draft', 'history_diff', 'backup_inspect',
+	'config_read',
 	'transfer_begin', 'transfer_write', 'transfer_read', 'transfer_finish', 'transfer_abort'
 ]);
 

@@ -15,7 +15,7 @@ const MAX_BACKOFF_MS = 60000;
 const SUCCESS_DELAY_MS = 10;
 const HELP = '/status /health /memory /diagnostics /logs /help /start /stop ' +
 	'/restart /reload /reboot /subscription URL /update_subscription ' +
-	'/update_miclash /update_mihomo /guard_on /guard_off /backup';
+	'/update_miclash /update_mihomo /guard_on /guard_off';
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
 function corrupt() { errors.fail('CORRUPT_STATE'); };
@@ -194,7 +194,7 @@ export function create(app) {
 	for (let method in [ 'status', 'health', 'memory_status', 'diagnostics_summary',
 		'logs_read', 'service_start', 'service_stop', 'service_restart', 'service_reload',
 		'reboot', 'subscription_update', 'update_miclash', 'update_mihomo',
-		'settings_set', 'guard_transition', 'backup_create' ])
+		'settings_set', 'guard_transition' ])
 		if (type(app[method]) != 'function')
 			invalid();
 
@@ -307,7 +307,7 @@ export function create(app) {
 			'/reload': 'reload', '/reboot': 'reboot',
 			'/update_subscription': 'update_subscription',
 			'/update_miclash': 'update_miclash', '/update_mihomo': 'update_mihomo',
-			'/guard_on': 'guard_on', '/guard_off': 'guard_off', '/backup': 'backup'
+			'/guard_on': 'guard_on', '/guard_off': 'guard_off'
 		};
 		if (simple[text] != null)
 			return { name: simple[text], argument: null };
@@ -359,8 +359,6 @@ export function create(app) {
 			return operation_message(app.guard_transition(true, 'telegram'));
 		if (command.name == 'guard_off')
 			return operation_message(app.guard_transition(false, 'telegram'));
-		if (command.name == 'backup')
-			return operation_message(app.backup_create('telegram'));
 		invalid();
 	};
 

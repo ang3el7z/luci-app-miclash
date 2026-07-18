@@ -13,10 +13,8 @@
 'require view.miclash.editor';
 'require view.miclash.api';
 'require view.miclash.diagnostics-panel';
-'require view.miclash.history-panel';
 'require view.miclash.settings-panels';
 'require view.miclash.devices-panel';
-'require view.miclash.backup-panel';
 'require view.miclash.notification-poller';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
@@ -45,14 +43,8 @@ let controlPollBusy = false;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
 let configApi = null;
-let draftController = null;
-let draftActions = null;
-let historyPanel = null;
-let editorChangeCleanup = null;
-let pageHideHandler = null;
 let visibilityChangeHandler = null;
 let subscriptionUpdateBusy = false;
-let configRuntimeGeneration = 0;
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
@@ -99,12 +91,12 @@ const managementOwner = (() => {
 	}
 	function replace() {
 		destroy();
-		const factories = [ view_miclash_settings_panels, view_miclash_devices_panel,
-			view_miclash_backup_panel ];
+		const factories = [ view_miclash_settings_panels, view_miclash_devices_panel ];
 		const created = [];
 		try {
 			for (const factory of factories) created.push(factory.create({
 				api: view_miclash_api.create(),
+				onSave: () => saveAllSettings(),
 				onError: (error) => { setOperationError(error); notify('error', error?.message || error); },
 				onNotificationSettings: (settings) => {
 					appState.notificationAutoHide = settings?.auto_hide !== false;
@@ -122,19 +114,22 @@ const managementOwner = (() => {
 	}
 	function mount(root) {
 		if (!panels || !root) return;
-		const hosts = [ '#sbox-management-settings', '#sbox-management-devices', '#sbox-management-backup' ];
+		const hosts = [ '#sbox-management-settings', '#sbox-management-devices' ];
 		for (let i = 0; i < panels.length; i++) {
 			const host = root.querySelector(hosts[i]); if (host) panels[i].mount(host);
 		}
 	}
-	return { replace, mount, destroy };
+	function collectPatch() {
+		if (!panels || typeof panels[0]?.collectPatch !== 'function')
+			throw new Error(_('Management settings are not ready.'));
+		return panels[0].collectPatch();
+	}
+	async function markSaved() {
+		if (panels && typeof panels[0]?.markSaved === 'function')
+			await panels[0].markSaved();
+	}
+	return { replace, mount, destroy, collectPatch, markSaved };
 })();
-const configDraftLifecycle = view_miclash_editor.createLifecycleOwner();
-const draftLoadCoordinator = view_miclash_editor.createDraftLoadCoordinator(() => ({
-	generation: configRuntimeGeneration, api: configApi, controller: draftController,
-	editor: editor, selectedProfile: appState.selectedConfigName
-}));
-
 view_miclash_utils.bumpRpcTimeout();
 
 const appState = {
@@ -345,6 +340,7 @@ const loadInterfacesByMode = view_miclash_settings_model.loadInterfacesByMode;
 const detectLanBridge = view_miclash_settings_model.detectLanBridge;
 const detectWanInterface = view_miclash_settings_model.detectWanInterface;
 const normalizeProxyMode = view_miclash_settings_model.normalizeProxyMode;
+const operationalSettingsChanged = view_miclash_settings_model.operationalSettingsChanged;
 const normalizeRulesetName = view_miclash_rulesets_model.normalizeName;
 const readRulesetsData = () => view_miclash_rulesets_model.readData(CONFIG_PATH);
 const createRulesetFile = view_miclash_rulesets_model.createFile;
@@ -1374,7 +1370,7 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			autoMajorMiclash
 		);
 		const typed = await configApi.settings_get();
-		if (!!(typed.guard && typed.guard.enabled) !== !!internetOnlyMiclash) {
+		if (!opts.skipGuard && !!(typed.guard && typed.guard.enabled) !== !!internetOnlyMiclash) {
 			setOperationStatus('running', _('Applying protection setting...'));
 			await awaitTypedOperation(
 				await configApi.guard_transition(!!internetOnlyMiclash, 'luci'),
@@ -1397,7 +1393,6 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 async function switchProxyModeFromHeader(targetMode) {
 	const nextMode = normalizeProxyMode(targetMode);
 	if (nextMode === appState.proxyMode) return;
-	const wasRunning = await getServiceStatus();
 
 	const current = await loadOperationalSettings();
 	const interfaces = (current.mode === 'explicit'
@@ -1428,14 +1423,6 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	if (!ok) throw new Error(_('Cannot save proxy mode.'));
 
-	if (wasRunning) {
-		if (!(await validateMainConfigBeforeStart())) return;
-		setOperationStatus('running', _('Restarting Clash service...'));
-		await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
-	} else {
-		await refreshCanonicalGuardState();
-	}
-
 	appState.settings = await loadOperationalSettings();
 	appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
 	appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
@@ -1452,9 +1439,7 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	updateHeaderAndControlDom();
 	if (appState.activeCfgTab === 'settings') renderSettingsPane();
-	const message = wasRunning
-		? _('Proxy mode switched to %s. Service restarted.').format(appState.proxyMode)
-		: _('Settings saved.');
+	const message = _('Proxy mode switched to %s.').format(appState.proxyMode);
 	setOperationSuccess(message);
 	notify('info', message);
 }
@@ -1506,106 +1491,13 @@ async function initializeConfigEditor(content) {
 	resizeConfigEditor();
 }
 
-function setDraftEditorContent(content) {
-	const value = String(content || '');
-	if (!editor) return;
-	editor.setValue(value, -1);
-	editor.clearSelection();
-	if (draftController) draftController.setContent(value);
-}
-
-function bindDraftEditorChanges() {
-	if (!editor || !draftController) return;
-	const changed = () => draftController.setContent(editor.getValue());
-	if (editor.session && typeof editor.session.on === 'function') {
-		editor.session.on('change', changed);
-		editorChangeCleanup = () => {
-			if (typeof editor?.session?.off === 'function') editor.session.off('change', changed);
-		};
-		return;
-	}
-	const textarea = editor.container?.querySelector?.('textarea');
-	if (textarea) {
-		textarea.addEventListener('input', changed);
-		editorChangeCleanup = () => textarea.removeEventListener('input', changed);
-	}
-}
-
-async function loadDraftProfile(profile, ownership) {
-	const selected = normalizeConfigProfileName(profile);
-	const result = await draftLoadCoordinator.load(selected, async (captured) => {
-		const replies = await Promise.all([
-			captured.api.config_read(selected), captured.api.configReadDraft(selected)
-		]);
-		return { active: replies[0], draft: replies[1] };
-	}, (captured, replies) => {
-		const loaded = captured.controller.load(selected, replies.active, replies.draft);
-		appState.selectedConfigName = selected;
-		appState.configContent = loaded.active;
-		captured.editor.setValue(loaded.draft, -1);
-		captured.editor.clearSelection();
-		if (!loaded.conflict) return loaded;
-		showModal({
-			title: _('Unsaved local Draft found'),
-			body: _('A browser crash copy differs from the router Draft. Choose the local copy to keep it, or keep the router Draft and discard the local crash copy.'),
-			buttons: [
-				{ label: _('Open local copy'), className: 'cbi-button cbi-button-apply',
-					onClick: async function(ctx) {
-						if (captured.generation !== configRuntimeGeneration ||
-							captured.controller !== draftController || captured.editor !== editor) return;
-						const value = captured.controller.useCrashCopy(loaded.crash);
-						captured.editor.setValue(value, -1); captured.editor.clearSelection();
-						ctx.closeModal();
-					} },
-				{ label: _('Keep router Draft'), className: 'cbi-button cbi-button-neutral',
-					onClick: async function(ctx) {
-						if (captured.generation !== configRuntimeGeneration ||
-							captured.controller !== draftController) return;
-						captured.controller.keepRouterCopy();
-						ctx.closeModal();
-					} }
-			]
-		});
-		return loaded;
-	}, ownership?.owns);
-	return result.stale ? null : result.value;
-}
-
-async function saveRouterDraft() {
-	if (!editor || !draftActions) return { changed: false };
-	return draftActions.save(editor.getValue());
-}
-
-async function validateDraft() {
-	if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
-	return draftActions.validate();
-}
-
-async function applyDraft() {
-	if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
-	return draftActions.apply();
-}
-
-function releaseConfigDraftRuntime() {
-	configRuntimeGeneration++;
+function releaseConfigRuntime() {
 	subscriptionUpdateBusy = false;
-	if (pageHideHandler) window.removeEventListener('pagehide', pageHideHandler);
-	pageHideHandler = null;
 	if (visibilityChangeHandler) document.removeEventListener('visibilitychange', visibilityChangeHandler);
 	visibilityChangeHandler = null;
-	if (editorChangeCleanup) editorChangeCleanup();
-	editorChangeCleanup = null;
-	if (historyPanel) historyPanel.destroy();
-	historyPanel = null;
-	if (draftController) draftController.destroy();
-	draftController = null; draftActions = null;
 	if (editor) { try { editor.destroy(); } catch (error) {} editor = null; }
 	if (configApi) configApi.destroy();
 	configApi = null;
-}
-
-function destroyConfigDraftRuntime() {
-	configDraftLifecycle.destroy();
 }
 
 function resizeConfigEditor() {
@@ -2145,7 +2037,6 @@ function buildSettingsPaneHtml() {
 			'</div>' +
 			'<div id="sbox-management-panels" class="sbox-management-grid">' +
 				'<section id="sbox-management-settings" class="sbox-management-module sbox-management-settings"></section>' +
-				'<section id="sbox-management-backup" class="cbi-section sbox-settings-block sbox-management-module"></section>' +
 				'<section id="sbox-management-devices" class="cbi-section sbox-settings-block sbox-management-module sbox-management-wide"></section>' +
 			'</div>' +
 
@@ -2238,10 +2129,8 @@ function buildPageHtml() {
 					'</div>' +
 					'<div id="miclash-editor" class="sbox-editor"></div>' +
 					'<div class="sbox-actions">' +
-						'<span class="sbox-draft-label">' + safeText(_('Draft')) + '</span>' +
 						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Validate')) + '</button>' +
 						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Apply')) + '</button>' +
-						'<button id="sbox-history" type="button" class="cbi-button cbi-button-neutral">' + safeText(_('History')) + '</button>' +
 						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear editor content')) + '</button>' +
 						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
 						'<span class="sbox-actions-spacer" aria-hidden="true"></span>' +
@@ -2475,6 +2364,108 @@ async function collectSettingsFormState() {
 	};
 }
 
+function updatesPatchFromForm(formState) {
+	return {
+		auto_subscription: formState.autoUpdateConfig !== false,
+		interval_hours: parseInt(formState.autoUpdateIntervalHours || '4', 10),
+		miclash_release_channel: normalizeReleaseChannel(formState.miclashReleaseChannel),
+		mihomo_release_channel: normalizeReleaseChannel(formState.mihomoReleaseChannel),
+		auto_major_miclash: formState.autoMajorMiclash !== false
+	};
+}
+
+async function saveAllSettings() {
+	const pane = pageRoot?.querySelector('#sbox-pane-settings');
+	const saveBtn = pane?.querySelector('#sbox-settings-save');
+	if (!pane || !saveBtn) throw new Error(_('Settings are not ready.'));
+
+	return withButtons(saveBtn, async () => {
+		const formState = await collectSettingsFormState();
+		if (!formState) return false;
+		const managementPatch = managementOwner.collectPatch();
+		const before = await configApi.settings_get();
+		const previousMiClashReleaseChannel = normalizeReleaseChannel(
+			before?.updates?.miclash_release_channel);
+		const previousMihomoReleaseChannel = normalizeReleaseChannel(
+			before?.updates?.mihomo_release_channel);
+		const runtimeChanged = operationalSettingsChanged(appState.settings, formState);
+		setOperationStatus('running', _('Saving settings...'));
+
+		await awaitTypedOperation(await configApi.settings_set({
+			...managementPatch,
+			updates: updatesPatchFromForm(formState)
+		}, 'luci'), _('Saving settings...'));
+
+		if (!!before?.guard?.enabled !== !!formState.internetOnlyMiclash) {
+			setOperationStatus('running', _('Applying protection setting...'));
+			await awaitTypedOperation(
+				await configApi.guard_transition(!!formState.internetOnlyMiclash, 'luci'),
+				_('Applying protection setting...')
+			);
+		}
+
+		if (runtimeChanged) {
+			setOperationStatus('running', _('Applying Mihomo settings...'));
+			const applied = await saveOperationalSettings(
+				formState.mode,
+				formState.proxyMode,
+				formState.tunStack,
+				formState.autoDetectLan,
+				formState.autoDetectWan,
+				formState.blockQuic,
+				formState.internetOnlyMiclash,
+				formState.useTmpfsRules,
+				formState.selected,
+				formState.enableHwid,
+				formState.hwidUserAgent,
+				formState.hwidDeviceOS,
+				formState.miclashReleaseChannel,
+				formState.mihomoReleaseChannel,
+				formState.autoUpdateConfig,
+				formState.autoUpdateIntervalHours,
+				formState.autoMajorMiclash,
+				{ silent: true, skipGuard: true }
+			);
+			if (!applied) throw new Error(_('Failed to apply Mihomo settings.'));
+		}
+
+		appState.settings = await loadOperationalSettings();
+		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode);
+		appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
+		appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
+		appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
+		appState.serviceRunning = await getServiceStatus();
+		const releaseChannelChanged =
+			normalizeReleaseChannel(appState.settings.miclashReleaseChannel) !== previousMiClashReleaseChannel ||
+			normalizeReleaseChannel(appState.settings.mihomoReleaseChannel) !== previousMihomoReleaseChannel;
+
+		if (runtimeChanged) {
+			const freshConfig = await L.resolveDefault(
+				readConfigFileByName(appState.selectedConfigName), '');
+			appState.configContent = freshConfig;
+			if (editor) {
+				editor.setValue(String(freshConfig || ''), -1);
+				editor.clearSelection();
+			}
+		}
+
+		await refreshHeaderAndControl();
+		if (releaseChannelChanged) await refreshReleaseMeta({ force: true });
+		await managementOwner.markSaved();
+		await logUiAction('info', runtimeChanged ?
+			'Settings saved and Mihomo settings applied' : 'Settings saved without Mihomo restart');
+		setOperationSuccess(runtimeChanged ? _('Settings saved and applied.') : _('Settings saved.'));
+		notify('info', runtimeChanged ? _('Settings saved and applied.') : _('Settings saved.'));
+		renderSettingsPane();
+		updateHeaderAndControlDom();
+		return true;
+	}).catch((error) => {
+		setOperationError(error);
+		notify('error', _('Failed to save settings: %s').format(error.message));
+		throw error;
+	});
+}
+
 function bindSettingsPaneEvents() {
 	const pane = pageRoot.querySelector('#sbox-pane-settings');
 	if (!pane) return;
@@ -2515,86 +2506,7 @@ function bindSettingsPaneEvents() {
 	}
 
 	const saveBtn = pane.querySelector('#sbox-settings-save');
-	if (saveBtn) {
-		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
-			const formState = await collectSettingsFormState();
-			if (!formState) return;
-			const previousMiClashReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.miclashReleaseChannel);
-			const previousMihomoReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.mihomoReleaseChannel);
-			const wasRunning = await getServiceStatus();
-			setOperationStatus('running', _('Saving settings...'));
-
-			const ok = await saveOperationalSettings(
-				formState.mode,
-				formState.proxyMode,
-				formState.tunStack,
-				formState.autoDetectLan,
-				formState.autoDetectWan,
-				formState.blockQuic,
-				formState.internetOnlyMiclash,
-				formState.useTmpfsRules,
-				formState.selected,
-				formState.enableHwid,
-				formState.hwidUserAgent,
-				formState.hwidDeviceOS,
-				formState.miclashReleaseChannel,
-				formState.mihomoReleaseChannel,
-				formState.autoUpdateConfig,
-				formState.autoUpdateIntervalHours,
-				formState.autoMajorMiclash,
-				{ silent: true }
-			);
-
-			if (!ok) return;
-			if (wasRunning) {
-				if (!(await validateMainConfigBeforeStart())) return;
-				try {
-					await withRestartButtonFeedback(async () => {
-						setOperationStatus('running', _('Restarting Clash service...'));
-						await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
-					});
-					await logUiAction('info', 'Settings saved and Clash service restarted');
-					notify('info', _('Settings saved and Clash service restarted.'));
-					setOperationSuccess(_('Settings saved and Clash service restarted.'));
-				} catch (e) {
-					setOperationError(e);
-					await logUiAction('err', 'Settings saved, but Clash service restart failed: ' + e.message);
-					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
-				}
-			} else {
-				await refreshCanonicalGuardState();
-				setOperationSuccess(_('Settings saved.'));
-				notify('info', _('Settings saved.'));
-			}
-
-			appState.settings = await loadOperationalSettings();
-			appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode);
-			appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
-			appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
-			appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
-			appState.serviceRunning = await getServiceStatus();
-			const releaseChannelChanged =
-				normalizeReleaseChannel(appState.settings.miclashReleaseChannel) !== previousMiClashReleaseChannel ||
-				normalizeReleaseChannel(appState.settings.mihomoReleaseChannel) !== previousMihomoReleaseChannel;
-
-			const freshConfig = await L.resolveDefault(readConfigFileByName(appState.selectedConfigName), '');
-			appState.configContent = freshConfig;
-			if (editor) {
-				editor.setValue(String(freshConfig || ''), -1);
-				editor.clearSelection();
-			}
-
-			await refreshHeaderAndControl();
-			if (releaseChannelChanged) {
-				await refreshReleaseMeta({ force: true });
-			}
-			renderSettingsPane();
-			updateHeaderAndControlDom();
-		}).catch((e) => {
-			setOperationError(e);
-			notify('error', _('Failed to save settings: %s').format(e.message));
-		}));
-	}
+	if (saveBtn) saveBtn.addEventListener('click', () => saveAllSettings().catch(() => {}));
 }
 
 async function refreshLogs() {
@@ -2801,25 +2713,17 @@ function bindControlAndHeaderEvents() {
 }
 
 async function switchConfigProfile(profileName) {
-	if (draftActions?.isBusy() || subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
+	if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 	const selected = normalizeConfigProfileName(profileName);
-	if (draftController && selected !== appState.selectedConfigName) await saveRouterDraft();
-	if (historyPanel && selected !== appState.selectedConfigName) historyPanel.invalidate(selected);
-	const url = await readSubscriptionUrl(selected);
-	let content = '';
-	if (configApi && draftController) {
-		const loaded = await loadDraftProfile(selected);
-		if (!loaded) return;
-		content = loaded.draft;
-	} else {
-		content = await readConfigFileByName(selected);
-	}
+	const [ content, url ] = await Promise.all([
+		readConfigFileByName(selected), readSubscriptionUrl(selected)
+	]);
 
 	appState.selectedConfigName = selected;
 	appState.configContent = String(content || '');
 	appState.subscriptionUrl = String(url || '');
 
-	if (editor && !(configApi && draftController)) {
+	if (editor) {
 		editor.setValue(appState.configContent, -1);
 		editor.clearSelection();
 	}
@@ -2925,9 +2829,9 @@ function bindConfigEvents() {
 			const savedSubscription = url ? null : await typedCall((api) => api.subscription_get(selectedProfile));
 			if (!url && !savedSubscription?.configured) throw new Error(_('Subscription URL is empty.'));
 			if (url && !isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
-			if (subscriptionUpdateBusy || draftActions?.isBusy()) throw new Error(_('An operation is already running.'));
+			if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 			subscriptionUpdateBusy = true;
-			return draftActions.runExternal(async ({ profile: selectedConfig }) => {
+			const selectedConfig = selectedProfile;
 			setOperationStatus('running', _('Saving subscription URL...'));
 			if (url) await saveSubscriptionUrl(url, selectedConfig);
 			appState.subscriptionUrl = url;
@@ -2951,7 +2855,10 @@ function bindConfigEvents() {
 
 			const freshConfig = await readConfigFileByName(selectedConfig);
 			appState.configContent = String(freshConfig || '');
-			notify('info', _('Active configuration changed; Draft preserved.'));
+			if (editor && selectedConfig === appState.selectedConfigName) {
+				editor.setValue(appState.configContent, -1);
+				editor.clearSelection();
+			}
 
 			let serviceReloaded = false;
 			if (selectedConfig === MAIN_CONFIG_NAME) {
@@ -2974,7 +2881,6 @@ function bindConfigEvents() {
 				setOperationSuccess(_('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
 				notify('info', _('%s downloaded and saved.').format(_(getConfigLabel(selectedConfig))));
 			}
-			});
 		}).catch((e) => {
 			setOperationError(e);
 			logUiAction('err', 'Failed to apply subscription: ' + e.message);
@@ -3007,8 +2913,13 @@ function bindConfigEvents() {
 	if (validateBtn) {
 		validateBtn.addEventListener('click', () => withButtons(validateBtn, async () => {
 			if (!editor) return;
+			if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
+			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
 			setOperationStatus('running', _('Validating YAML...'));
-			await validateDraft();
+			await awaitTypedOperation(
+				await configApi.config_validate(selectedConfig, editor.getValue(), 'luci'),
+				_('Validating YAML...')
+			);
 			setOperationSuccess(_('YAML validation passed.'));
 			notify('info', _('YAML validation passed.'));
 		}).catch((e) => {
@@ -3021,9 +2932,15 @@ function bindConfigEvents() {
 	if (saveBtn) {
 		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
 			if (!editor) return;
+			if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 			setOperationStatus('running', _('Applying configuration...'));
 			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
-			await applyDraft();
+			const content = editor.getValue();
+			await awaitTypedOperation(
+				await configApi.config_apply(selectedConfig, editor.getValue(), 'luci'),
+				_('Applying configuration...')
+			);
+			appState.configContent = content;
 			appState.serviceRunning = await getServiceStatus();
 			updateHeaderAndControlDom();
 			await logUiAction('info', 'Configuration applied: ' + selectedConfig);
@@ -3034,15 +2951,6 @@ function bindConfigEvents() {
 			logUiAction('err', 'Failed to apply configuration: ' + e.message);
 			notify('error', _('Failed to apply configuration: %s').format(e.message));
 		}));
-	}
-
-	const historyBtn = pageRoot.querySelector('#sbox-history');
-	if (historyBtn) {
-		historyBtn.addEventListener('click', () => withButtons(historyBtn, async () => {
-			if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
-			await saveRouterDraft();
-			await historyPanel.open(appState.selectedConfigName);
-		}).catch((error) => notify('error', _('Failed to open history: %s').format(error.message))));
 	}
 
 	const clearBtn = pageRoot.querySelector('#sbox-clear-editor');
@@ -3104,7 +3012,6 @@ function bindTabEvents() {
 			logs: '#sbox-pane-logs'
 		},
 		onChange: (name) => {
-			if (name !== 'config') saveRouterDraft().catch(() => {});
 			appState.activeCfgTab = name;
 			if (name === 'settings') {
 				stopLogPolling();
@@ -3144,7 +3051,7 @@ return view.extend({
 	render: async function(data) {
 		notificationOwner.destroy();
 		managementOwner.destroy();
-		destroyConfigDraftRuntime();
+		releaseConfigRuntime();
 		await ensureConfigProfilesReady(data[0] || '');
 		appState.configProfiles = CONFIG_PROFILES.slice();
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
@@ -3171,55 +3078,10 @@ return view.extend({
 		]);
 
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
-		configDraftLifecycle.replace({ destroy: releaseConfigDraftRuntime });
 		configApi = view_miclash_api.create();
-		draftController = view_miclash_editor.createDraftController({
-			profile: appState.selectedConfigName,
-			content: appState.configContent
-		});
-		draftActions = view_miclash_editor.createDraftActions({
-			api: configApi,
-			controller: draftController,
-			getProfile: () => appState.selectedConfigName,
-			getContent: () => editor ? editor.getValue() : draftController.getContent(),
-			onProgress: (update) => {
-				const labels = { save_draft: _('Saving Draft'), validate: _('Validating Draft'), apply: _('Applying Draft') };
-				setOperationStatus('running', '%s — %s (%d%%)'.format(
-					labels[update.phase] || update.phase, update.stage || '', update.percent));
-			},
-			onApplied: async (active) => {
-				appState.configContent = String(active?.content || '');
-			}
-		});
-		const panelDraftController = draftController;
-		const createdHistoryPanel = view_miclash_history_panel.create({
-			api: configApi,
-			profile: appState.selectedConfigName,
-			onDraft: async (content, record, token) => {
-				const owner = createdHistoryPanel;
-				if (historyPanel !== owner || !owner.owns(token) ||
-					panelDraftController !== draftController ||
-					token.profile !== appState.selectedConfigName ||
-					token.profile !== panelDraftController.getProfile()) return;
-				if (!panelDraftController.adoptRouterDraft(token.profile, content, record?.revision)) return;
-				setDraftEditorContent(content);
-			},
-			onRestored: async (record, token) => {
-				const owner = createdHistoryPanel;
-				if (historyPanel !== owner || !owner.owns(token) ||
-					token.profile !== appState.selectedConfigName ||
-					token.profile !== draftController?.getProfile()) return;
-				await loadDraftProfile(token.profile, {
-					owns: () => historyPanel === owner && owner.owns(token)
-				});
-			}
-		});
-		historyPanel = createdHistoryPanel;
 
 		try {
 			await initializeConfigEditor(appState.configContent);
-			bindDraftEditorChanges();
-			await loadDraftProfile(appState.selectedConfigName);
 		} catch (e) {
 			notify('error', _('Failed to initialize editor: %s').format(e.message));
 		}
@@ -3238,13 +3100,6 @@ return view.extend({
 		startUpdatePolling();
 		resumeMiClashServiceJobStatus().catch(() => {});
 		resumeMiClashUpdateJobStatus().catch(() => {});
-		pageHideHandler = () => {
-			if (draftController && editor) draftController.setContent(editor.getValue());
-			if (draftController) draftController.flushLocal();
-			saveRouterDraft().catch(() => {});
-		};
-		window.addEventListener('pagehide', pageHideHandler);
-
 		visibilityChangeHandler = () => {
 			if (document.hidden) {
 				stopLogPolling();
@@ -3265,6 +3120,6 @@ return view.extend({
 		diagnosticsOwner.destroy();
 		notificationOwner.destroy();
 		managementOwner.destroy();
-		destroyConfigDraftRuntime();
+		releaseConfigRuntime();
 	}
 });

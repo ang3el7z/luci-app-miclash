@@ -40,22 +40,17 @@ function healthy(service, profile, controller_config) {
 	}
 };
 
-export function create(runtime, operations, history) {
+export function create(runtime, operations) {
 	if (type(runtime?.fs) != 'object' || type(runtime?.process?.run) != 'function' ||
 	    type(runtime?.digest?.sha256) != 'function' ||
 	    type(runtime?.digest?.sha256_file) != 'function' ||
 	    type(runtime?.service?.reload) != 'function' ||
 	    type(runtime?.service?.health) != 'function' || type(operations?.submit) != 'function' ||
-	    type(operations?.is_context) != 'function' ||
-	    type(history?.snapshot) != 'function' || type(history?.snapshot_bytes) != 'function' ||
-	    type(history?.list) != 'function')
+	    type(operations?.is_context) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 
-	ensure_directory(runtime, '/opt/clash/history');
-	ensure_directory(runtime, '/opt/clash/history/drafts');
 	ensure_directory(runtime, runtime.paths.tmp + '/candidates');
 	let candidates = runtime.paths.tmp + '/candidates';
-	let restore_captures = {};
 	let stale_names = runtime.fs.lsdir(candidates);
 	if (type(stale_names) != 'array')
 		errors.fail('INTERNAL');
@@ -97,11 +92,8 @@ export function create(runtime, operations, history) {
 	function active_path(profile) {
 		return '/opt/clash/' + schema.profile_name(profile);
 	};
-	function draft_path(profile) {
-		return '/opt/clash/history/drafts/' + schema.profile_name(profile);
-	};
-	function revision_path(profile) {
-		return '/opt/clash/history/active-' + schema.profile_name(profile) + '.json';
+	function tracking_path(profile) {
+		return '/opt/clash/.miclash-active-' + schema.profile_name(profile) + '.json';
 	};
 	function read_active(profile) {
 		let path = active_path(profile);
@@ -131,7 +123,7 @@ export function create(runtime, operations, history) {
 			errors.fail('INTERNAL');
 	};
 	function record_active(profile, hash, operation_id) {
-		storage.write_json(runtime, revision_path(profile), {
+		storage.write_json(runtime, tracking_path(profile), {
 			profile,
 			hash,
 			operation_id,
@@ -221,47 +213,28 @@ export function create(runtime, operations, history) {
 			errors.fail(failure);
 		return outcome;
 	};
-	function activation(ctx, profile, content, source, extra, options) {
-		if (options != null &&
-		    (type(options) != 'object' ||
-		     length(keys(options)) != 1 || options.snapshot_before_validation !== true))
-			errors.fail('INVALID_ARGUMENT');
-		let prepared = null;
-		if (options?.snapshot_before_validation === true) {
-			let previous = read_active_state(profile);
-			let snapshot = history.snapshot_bytes(profile, source, previous.content, {
-				validation_result: 'success',
-				activation_result: 'pending',
-				operation_id: ctx.id,
-				...(extra ?? {})
-			});
-			assert_active_state(profile, previous);
-			prepared = { previous, snapshot };
-		}
+	function activation(ctx, profile, content) {
 		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
-			let previous = prepared?.previous ?? read_active_state(profile);
-			let snapshot = prepared?.snapshot ?? history.snapshot_bytes(
-				profile, source, previous.content, {
-					validation_result: 'success',
-					activation_result: 'pending',
-					operation_id: ctx.id,
-					...(extra ?? {})
-				});
+			let previous = read_active_state(profile);
 			assert_active_state(profile, previous);
 			storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
 			record_active(profile, candidate_hash, ctx.id);
 			if (!healthy(runtime.service, profile, previous.content)) {
-				history.mark_activation(profile, snapshot.revision, 'health_failed');
+				let rolled_back = false;
+				try {
+					storage.atomic_write(runtime, active_path(profile), previous.content, 0o600);
+					record_active(profile, previous.hash, ctx.id);
+					rolled_back = healthy(runtime.service, profile, candidate);
+				}
+				catch (rollback_error) { rolled_back = false; }
 				return {
 					ok: false,
 					activated: true,
 					reload_ok: false,
-					error: errors.new('HEALTH_FAILED', 'HEALTH_FAILED', {
-						profile, revision: snapshot.revision
-					})
+					error: errors.new(rolled_back ? 'HEALTH_FAILED' : 'INTERNAL',
+						rolled_back ? 'HEALTH_FAILED' : 'INTERNAL', { profile })
 				};
 			}
-			history.mark_activation(profile, snapshot.revision, 'success');
 			return { ok: true, activated: true, reload_ok: true };
 		});
 	};
@@ -285,71 +258,13 @@ export function create(runtime, operations, history) {
 	let api = {};
 	api.list_profiles = () => [ ...PROFILES ];
 	api.read_active = read_active;
-	api.read_draft = (profile) => {
-		let content = runtime.fs.readfile(draft_path(profile));
-		return type(content) == 'string' ? content : null;
-	};
-	api.save_draft = (profile, content, source) => submit(
-		'config.save_draft', source, profile, (ctx) => {
-			api.save_draft_in_operation(ctx, profile, content);
-		});
-	api.save_draft_in_operation = (ctx, profile, content) => {
-		operation_context(ctx);
-		if (type(content) != 'string')
-			errors.fail('INVALID_ARGUMENT');
-		storage.atomic_write(runtime, draft_path(profile), content, 0o600);
-		return true;
-	};
 	api.validate_in_operation = (ctx, profile, content) => {
 		operation_context(ctx);
 		return with_candidate(ctx, profile, content, () => ({ ok: true }));
 	};
-	api.capture_active_in_operation = (ctx, profile) => {
+	api.apply_in_operation = (ctx, profile, content) => {
 		operation_context(ctx);
-		profile = schema.profile_name(profile);
-		if (restore_captures[ctx.id] != null)
-			errors.fail('BUSY');
-		let capture = read_active_state(profile);
-		restore_captures[ctx.id] = { capture, profile, state: 'captured' };
-		return capture;
-	};
-	api.release_restore_capture_in_operation = (ctx, capture) => {
-		operation_context(ctx);
-		let slot = restore_captures[ctx.id];
-		if (type(capture) != 'object' || type(slot) != 'object' ||
-		    slot.capture !== capture)
-			errors.fail('INVALID_ARGUMENT');
-		delete restore_captures[ctx.id];
-		return true;
-	};
-	api.apply_restore_in_operation = (ctx, profile, content, capture, on_validated) => {
-		operation_context(ctx);
-		profile = schema.profile_name(profile);
-		let slot = restore_captures[ctx.id];
-		if (type(capture) != 'object' || type(slot) != 'object' ||
-		    slot.capture !== capture || slot.profile != profile ||
-		    slot.state != 'captured' || type(on_validated) != 'function')
-			errors.fail('INVALID_ARGUMENT');
-		slot.state = 'applying';
-		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
-			assert_active_state(profile, capture);
-			on_validated(candidate, candidate_hash);
-			assert_active_state(profile, capture);
-			storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
-			record_active(profile, candidate_hash, ctx.id);
-			if (!healthy(runtime.service, profile, capture.content))
-				return {
-					ok: false,
-					activated: true,
-					reload_ok: false,
-					error: errors.new('HEALTH_FAILED', 'HEALTH_FAILED', { profile })
-				};
-			return { ok: true, activated: true, reload_ok: true };
-		});
-	};
-	api.apply_in_operation = (ctx, profile, content, source, extra, options) => {
-		operation_context(ctx);
-		return activation(ctx, profile, content, source, extra, options);
+		return activation(ctx, profile, content);
 	};
 	api.apply_transaction_in_operation = (ctx, profile, content, source, extra, transaction) => {
 		operation_context(ctx);
@@ -358,12 +273,7 @@ export function create(runtime, operations, history) {
 		    type(transaction.prepare) != 'function' || type(transaction.commit) != 'function' ||
 		    type(transaction.rollback) != 'function') errors.fail('INVALID_ARGUMENT');
 		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
-			ctx.stage('transaction-snapshot', 76, 'Capturing active configuration');
 			let previous = read_active_state(profile);
-			let snapshot = history.snapshot_bytes(profile, source, previous.content, {
-				validation_result: 'success', activation_result: 'pending',
-				operation_id: ctx.id, ...(extra ?? {})
-			});
 			let prepared;
 			ctx.stage('transaction-prepare', 78, 'Preparing coupled durable state');
 			try { prepared = transaction.prepare(); }
@@ -371,7 +281,6 @@ export function create(runtime, operations, history) {
 				let failed = false;
 				try { if (transaction.rollback(prepared) !== true) failed = true; }
 				catch (rollback_error) { failed = true; }
-				history.mark_activation(profile, snapshot.revision, 'failed');
 				return { ok: false, activated: false, reload_ok: false,
 					error: errors.new(failed ? 'INTERNAL' : errors.normalize(error).code) };
 			}
@@ -400,12 +309,10 @@ export function create(runtime, operations, history) {
 			}
 			catch (error) {
 				let failure = rollback(errors.normalize(error).code);
-				history.mark_activation(profile, snapshot.revision, 'failed');
 				return { ok: false, activated, reload_ok: false, error: failure };
 			}
 			if (!healthy(runtime.service, profile, previous.content)) {
 				let failure = rollback('HEALTH_FAILED');
-				history.mark_activation(profile, snapshot.revision, 'health_failed');
 				return { ok: false, activated: true, reload_ok: false, error: failure };
 			}
 			try {
@@ -415,10 +322,8 @@ export function create(runtime, operations, history) {
 			}
 			catch (error) {
 				let failure = rollback(errors.normalize(error).code);
-				history.mark_activation(profile, snapshot.revision, 'failed');
 				return { ok: false, activated: true, reload_ok: false, error: failure };
 			}
-			history.mark_activation(profile, snapshot.revision, 'success');
 			ctx.stage('transaction-committed', 92, 'Coupled transaction committed');
 			return { ok: true, activated: true, reload_ok: true };
 		});
@@ -436,23 +341,17 @@ export function create(runtime, operations, history) {
 		    type(transaction.rollback) != 'function')
 			errors.fail('INVALID_ARGUMENT');
 		return submit('settings.apply', source, profile, (ctx) => {
-			api.save_draft_in_operation(ctx, profile, content);
 			return complete_result(ctx, with_candidate(ctx, profile, content,
 				(candidate, candidate_hash) => {
 					let previous = read_active_state(profile);
 					let prepared = transaction.prepare();
-					let snapshot = history.snapshot_bytes(profile, source, previous.content, {
-						validation_result: 'success', activation_result: 'pending',
-						operation_id: ctx.id
-					});
 					assert_active_state(profile, previous);
 					storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
 					record_active(profile, candidate_hash, ctx.id);
-					let committed = false, failure = null;
+					let failure = null;
 					try {
 						if (transaction.commit(prepared) !== true)
 							errors.fail('INTERNAL');
-						committed = true;
 					}
 					catch (error) { failure = errors.normalize(error).code; }
 					let rollback = () => {
@@ -472,7 +371,6 @@ export function create(runtime, operations, history) {
 					};
 					if (failure != null) {
 						let rolled_back = rollback();
-						history.mark_activation(profile, snapshot.revision, 'write_failed');
 						return { ok: false, activated: true, reload_ok: false,
 							error: errors.new(rolled_back ? failure : 'INTERNAL',
 								rolled_back ? failure : 'INTERNAL', { profile }) };
@@ -480,12 +378,10 @@ export function create(runtime, operations, history) {
 					if (!healthy(runtime.service, profile, previous.content)) {
 						let rolled_back = rollback();
 						if (rolled_back) healthy(runtime.service, profile, candidate);
-						history.mark_activation(profile, snapshot.revision, 'health_failed');
 						return { ok: false, activated: true, reload_ok: false,
 							error: errors.new(rolled_back ? 'HEALTH_FAILED' : 'INTERNAL',
 								rolled_back ? 'HEALTH_FAILED' : 'INTERNAL', { profile }) };
 					}
-					history.mark_activation(profile, snapshot.revision, 'success');
 					return { ok: true, activated: true, reload_ok: true };
 				}));
 		});
@@ -513,12 +409,6 @@ export function create(runtime, operations, history) {
 				return false;
 			let transaction_state = transaction != null ? transaction.prepare() : null;
 
-			let main_snapshot = history.snapshot_bytes('config.yaml', source,
-				main.content, { validation_result: 'success', activation_result: 'pending',
-					operation_id: ctx.id });
-			let selected_snapshot = history.snapshot_bytes(profile, source,
-				selected.content, { validation_result: 'success', activation_result: 'pending',
-					operation_id: ctx.id });
 			assert_active_state('config.yaml', main);
 			assert_active_state(profile, selected);
 
@@ -557,8 +447,6 @@ export function create(runtime, operations, history) {
 			}
 			if (write_failed) {
 				let rolled_back = rollback();
-				history.mark_activation('config.yaml', main_snapshot.revision, 'write_failed');
-				history.mark_activation(profile, selected_snapshot.revision, 'write_failed');
 				errors.fail('INTERNAL');
 			}
 
@@ -574,30 +462,21 @@ export function create(runtime, operations, history) {
 				let rolled_back = rollback();
 				if (rolled_back)
 					healthy(runtime.service, 'config.yaml', selected.content);
-				history.mark_activation('config.yaml', main_snapshot.revision, 'health_failed');
-				history.mark_activation(profile, selected_snapshot.revision, 'health_failed');
 				ctx.complete(errors.new(rolled_back ? 'HEALTH_FAILED' : 'INTERNAL',
 					rolled_back ? 'HEALTH_FAILED' : 'INTERNAL', {
 					profile: 'config.yaml', selected_profile: profile
 				}));
 				return false;
 			}
-			history.mark_activation('config.yaml', main_snapshot.revision, 'success');
-			history.mark_activation(profile, selected_snapshot.revision, 'success');
 			return true;
 		});
-	};
-	api.restore = (profile, revision, source) => {
-		revision = schema.operation_id(revision);
-		return submit('history.restore', source, profile, (ctx) => complete_result(ctx,
-			history.restore_in_operation(ctx, api, profile, revision)));
 	};
 	api.detect_external = (profile) => {
 		profile = schema.profile_name(profile);
 		let content = read_active(profile);
 		let hash = runtime.digest.sha256(content);
 		let tracked = null;
-		try { tracked = storage.read_json(runtime, revision_path(profile)); }
+		try { tracked = storage.read_json(runtime, tracking_path(profile)); }
 		catch (error) {
 			if ((error?.code ?? error?.message) != 'NOT_FOUND')
 				errors.fail(errors.normalize(error).code);
@@ -616,12 +495,6 @@ export function create(runtime, operations, history) {
 					if (candidate_hash != external.hash)
 						errors.fail('INTERNAL');
 					assert_active_state(profile, external);
-					let snapshot = history.snapshot_bytes(profile, 'external', candidate, {
-						validation_result: 'success',
-						activation_result: 'pending',
-						operation_id: ctx.id
-					});
-					assert_active_state(profile, external);
 					let converged = false;
 					try {
 						converged = type(runtime.reconcile?.external) == 'function'
@@ -629,18 +502,12 @@ export function create(runtime, operations, history) {
 							: healthy(runtime.service, profile, external.content);
 					}
 					catch (error) { converged = false; }
-					if (!converged) {
-						history.mark_activation(profile, snapshot.revision, 'health_failed');
-						errors.fail('HEALTH_FAILED');
-					}
+					if (!converged) errors.fail('HEALTH_FAILED');
 					assert_active_state(profile, external);
-					history.mark_activation(profile, snapshot.revision, 'adopted');
 					record_active(profile, external.hash, ctx.id);
 					return { ok: true };
 				}));
 		});
 
-	if (type(history?.bind_config) == 'function')
-		history.bind_config(operations, api);
 	return api;
 };

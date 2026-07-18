@@ -50,7 +50,6 @@ let factories = {
 			die('shared ubus unavailable');
 		return {};
 	} },
-	history: { create: () => ({}) },
 	config: { create: () => ({}) },
 	state: { create: () => state },
 	application: { create: () => application },

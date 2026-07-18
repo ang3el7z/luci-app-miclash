@@ -6,8 +6,8 @@ const CONFIG_DIR = '/opt/clash';
 const MAIN_CONFIG_NAME = 'config.yaml';
 const CONFIG_PROFILES = [
 	{ name: 'config.yaml', label: 'Main Config #1' },
-	{ name: 'config2.yaml', label: 'Backup Config #2' },
-	{ name: 'config3.yaml', label: 'Backup Config #3' }
+	{ name: 'config2.yaml', label: 'Config #2' },
+	{ name: 'config3.yaml', label: 'Config #3' }
 ];
 const SETTINGS_PATH = '/opt/clash/settings';
 
@@ -137,10 +137,8 @@ async function readConfigFileByName(name) {
 }
 async function writeConfigFileByName(name, content) {
 	const profile = normalizeConfigProfileName(name), normalized = String(content || '').trimEnd() + '\n';
-	return withApi(async (api) => {
-		await waitOperation(api, await api.config_save_draft(profile, normalized, 'luci'));
-		return waitOperation(api, await api.config_apply(profile, normalized, 'luci'));
-	});
+	return withApi(async (api) => waitOperation(api,
+		await api.config_apply(profile, normalized, 'luci')));
 }
 async function swapConfigProfiles(name) {
 	const profile = normalizeConfigProfileName(name);
@@ -156,7 +154,6 @@ async function ensureConfigProfilesReady(seedMainContent) {
 		const names = new Set((listed?.profiles || []).map((item) => typeof item === 'string' ? item : item?.profile));
 		for (const profile of CONFIG_PROFILES) if (!names.has(profile.name)) {
 			const seed = String(seedMainContent || '').trimEnd() + '\n';
-			await waitOperation(api, await api.config_save_draft(profile.name, seed, 'luci'));
 			await waitOperation(api, await api.config_apply(profile.name, seed, 'luci'));
 		}
 		return true;

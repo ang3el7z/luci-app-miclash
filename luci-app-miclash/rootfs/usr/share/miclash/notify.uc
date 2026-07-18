@@ -250,20 +250,6 @@ function producer_event(runtime, input) {
 			recovery_of: null, context: data
 		};
 	}
-	if (type_name == 'backup') {
-		if (type(data.success) != 'bool') invalid();
-		return {
-			type: 'backup_outcome', severity: data.success ? 'notice' : 'error',
-			component: 'backup', title: data.success ?
-				'Automatic backup completed' : 'Automatic backup failed',
-			message: data.success ? 'Backup was created and retention was pruned' :
-				'Backup or retention maintenance failed and will be retried',
-			dedupe_key: 'backup/outcome/' + sprintf('%d', now) + '/' +
-				(data.success ? 'success' : 'failure'),
-			occurred_at: now, recovery_of: null, context: data
-		};
-	}
-
 	if (type_name == 'operation') {
 		let id = key(data.id), kind = identifier(data.kind, 64);
 		if (data.state != 'success' && data.state != 'failure' &&
@@ -325,7 +311,6 @@ export function producer(runtime) {
 			return producer_event(runtime, { type: event.type, data: event });
 		},
 		operation: (record) => producer_event(runtime, { type: 'operation', data: record }),
-		backup: (success) => producer_event(runtime, { type: 'backup', data: { success } }),
 		internet: (data) => producer_event(runtime, { type: 'internet_restored', data })
 	};
 };

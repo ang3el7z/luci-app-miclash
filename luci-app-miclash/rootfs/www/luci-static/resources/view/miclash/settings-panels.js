@@ -9,7 +9,7 @@ const MAX_POLL_MS = 300000;
 const KNOWN_CHANNELS = [ 'syslog', 'luci', 'telegram' ];
 const KNOWN_EVENTS = [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 	'direct_fallback', 'memory_action', 'memory_outcome', 'subscription_outcome',
-	'update_outcome', 'backup_outcome', 'internet_restored' ];
+	'update_outcome', 'internet_restored' ];
 const MEMORY_FIELDS = {
 	sample_interval_ms: [ 10000, 3600000, 60000 ], sustained_samples: [ 2, 60, 5 ],
 	warmup_ms: [ 60000, 86400000, 900000 ], baseline_samples: [ 3, 60, 6 ],
@@ -33,7 +33,6 @@ const EVENT_LABELS = {
 	fail_closed: () => _('Fail-closed protection'), direct_fallback: () => _('Direct fallback'),
 	memory_action: () => _('Memory action'), memory_outcome: () => _('Memory outcome'),
 	subscription_outcome: () => _('Subscription result'), update_outcome: () => _('Update result'),
-	backup_outcome: () => _('Backup result'),
 	internet_restored: () => _('Internet restored')
 };
 
@@ -90,7 +89,7 @@ function create(options) {
 		typeof api.memoryResetBaseline !== 'function' || typeof api.telegram_status !== 'function' ||
 		typeof api.telegram_settings !== 'function' || typeof api.telegram_test !== 'function' ||
 		typeof api.notificationSettings !== 'function' || typeof api.testNotification !== 'function' ||
-		typeof api.settings_get !== 'function' || typeof api.settings_set !== 'function' ||
+		typeof api.settings_get !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
 		dirty = false, retryMs = POLL_MS;
@@ -209,8 +208,7 @@ function create(options) {
 
 	function paint() {
 		if (!host || destroyed) return;
-		host.replaceChildren(memorySection(), telegramSection(), notificationSection(),
-			E('div', { 'class': 'sbox-management-save-row' }, [ action(_('Save management settings'), 'save', true) ]));
+		host.replaceChildren(memorySection(), telegramSection(), notificationSection());
 		bind();
 	}
 	function paintStatus() {
@@ -262,13 +260,18 @@ function create(options) {
 			channels: checked('channel'), events: checked('event')
 		} };
 	}
-	async function saveFromDom() {
-		const patch = formPatch();
-		progress(_('Saving management settings…'));
-		await awaitOperation(await api.settings_set(patch, SOURCE), _('Saving management settings…'));
+	function collectPatch() {
+		if (!host || destroyed) throw new Error(_('Settings panel is not available.'));
+		return formPatch();
+	}
+	async function markSaved() {
 		dirty = false;
 		await refresh(true, true);
-		return patch;
+	}
+	async function saveBeforeTest() {
+		if (typeof options.onSave !== 'function')
+			throw new Error(_('Save settings before sending a test.'));
+		await options.onSave();
 	}
 	async function withBusy(button, callback) {
 		if (busy || destroyed) return;
@@ -282,24 +285,22 @@ function create(options) {
 			input.addEventListener('input', markDirty);
 			input.addEventListener('change', markDirty);
 		}
-		for (const details of host.querySelectorAll('details')) details.addEventListener('toggle', markDirty);
 		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () =>
 			withBusy(button, async () => {
 				const actionName = button.getAttribute('data-action');
-				if (actionName === 'save') await saveFromDom();
-				else if (actionName === 'memory-reset') {
+				if (actionName === 'memory-reset') {
 					await awaitOperation(await api.memoryResetBaseline(SOURCE), _('Resetting memory baseline…'));
 					await refresh(true);
 				}
 				else if (actionName === 'telegram-test') {
-					await saveFromDom();
+					await saveBeforeTest();
 					const reply = await api.telegram_test();
 					if (reply?.sent !== true) throw new Error(_('Telegram test message was not sent.'));
 				}
 				else if (actionName === 'notification-test') {
 					const channel = host.querySelector('#sbox-notification-test-channel')?.value;
 					if (!KNOWN_CHANNELS.includes(channel)) throw new Error(_('Invalid notification channel.'));
-					await saveFromDom();
+					await saveBeforeTest();
 					const reply = await api.testNotification(channel);
 					if (reply?.sent !== true) throw new Error(_('Notification test message was not sent.'));
 				}
@@ -331,7 +332,7 @@ function create(options) {
 		if (typeof api.destroy === 'function') api.destroy(); host = null;
 	}
 	doc.addEventListener('visibilitychange', visibilitychange);
-	return { mount, refresh, destroy, formPatch, exactTelegramId, exactTelegramToken };
+	return { mount, refresh, destroy, collectPatch, markSaved, exactTelegramId, exactTelegramToken };
 }
 
 return baseclass.extend({

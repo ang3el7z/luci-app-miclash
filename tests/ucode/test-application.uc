@@ -24,9 +24,7 @@ let settings_value = {
 	core: { proxy_mode: 'tproxy' },
 	memory: { enabled: false, sample_interval_ms: 60000 },
 	notifications: { channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: true },
-	telegram: { enabled: false, token: '', user_id: '' },
-	backup: { enabled: false, retention: 5, include_secrets: false,
-		interval_hours: 24, schedule_time: '03:00' }
+	telegram: { enabled: false, token: '', user_id: '' }
 };
 let validated = 0, saved = 0, fail_save = false;
 let desired = json(sprintf('%J', settings_value));
@@ -47,9 +45,6 @@ let settings = {
 let config = {
 	list_profiles: () => [ 'config.yaml' ],
 	read_active: (profile) => 'exact-active\n',
-	read_draft: (profile) => 'exact-draft\n',
-	save_draft: (profile, content, source) =>
-		operations.submit('config.save_draft', source, { profile }, () => null),
 	validate: (profile, content, source) =>
 		operations.submit('config.validate', source, { profile }, () => null),
 	apply: (profile, content, source) =>
@@ -61,17 +56,6 @@ let config = {
 		}),
 	swap: (profile, source) =>
 		operations.submit('config.swap', source, { profile }, () => null)
-};
-let history = {
-	list: (profile, limit) => [
-		{ revision: 'rev-1', profile }, { revision: 'rev-2', profile },
-		{ revision: 'rev-3', profile }, { revision: 'rev-4', profile }
-	],
-	diff: (profile, from_revision, to_revision) => ({ profile, from_revision, to_revision }),
-	open_draft: (profile, revision, source) =>
-		operations.submit('history.open_draft', source, { profile, revision }, () => null),
-	restore: (profile, revision, source) =>
-		operations.submit('history.restore', source, { profile, revision }, () => null)
 };
 let state = {
 	snapshot: () => ({ status: 'safe' }),
@@ -85,15 +69,6 @@ let memory = {
 	reset_baseline: () => push(management_calls, [ 'memory.reset' ]),
 	prepare: (value) => value,
 	configure: (value) => push(management_calls, [ 'memory.configure', value ])
-};
-let backup = {
-	list: () => [ { id: 'b-0000000000001-00000000000000000000000000000001' } ],
-	create: (options, source) => push(management_calls, [ 'backup.create', options, source ]),
-	inspect: (id, options) => ({ id: 'x-0000000000001-00000000000000000000000000000002',
-		source_id: id, options }),
-	restore: (id, source) => ({ id: 'backup-restore', inspection_id: id, source }),
-	prepare: (value) => json(sprintf('%J', value)),
-	configure: (value) => push(management_calls, [ 'backup.configure', value ])
 };
 let devices = {
 	list: () => [ { mac: 'aa:bb:cc:dd:ee:ff' } ],
@@ -118,7 +93,7 @@ let telegram = {
 	configure: (value) => push(management_calls, [ 'telegram.configure', value ])
 };
 let app = application.create({
-	operations, service, settings, config, history, state, memory, backup, devices,
+	operations, service, settings, config, state, memory, devices,
 	notifications, telegram, clock: { now: () => 1000 }
 });
 
@@ -128,19 +103,10 @@ assert_equal(app.operation_get('id').id, 'id');
 assert_equal(app.operation_list({})[0].id, 'listed');
 assert_equal(app.config_list()[0], 'config.yaml');
 assert_equal(app.config_read('config.yaml'), 'exact-active\n');
-assert_equal(app.config_read_draft('config.yaml'), 'exact-draft\n');
-let limited_history = app.history_list({ profile: 'config.yaml', limit: 2 });
-assert_equal(length(limited_history), 2);
-assert_equal(limited_history[0].revision, 'rev-4');
-assert_equal(limited_history[1].revision, 'rev-3');
-assert_equal(app.history_diff({ profile: 'config.yaml', from_revision: 'a', to_revision: 'b' }).to_revision, 'b');
 assert_equal(app.settings_get().core.proxy_mode, 'tproxy');
 assert_equal(app.memory_status().phase, 'monitoring');
 assert_equal(app.memory_settings().sample_interval_ms, 60000);
 assert_equal(app.notifications_list({ generation: null, cursor: 0, limit: 10 }).cursor, 0);
-assert_equal(app.backup_list()[0].id, 'b-0000000000001-00000000000000000000000000000001');
-assert_equal(app.backup_inspect({ backup_id: 'i-0000000000001-00000000000000000000000000000001',
-	options: {} }).source_id, 'i-0000000000001-00000000000000000000000000000001');
 assert_equal(app.devices_list()[0].mac, 'aa:bb:cc:dd:ee:ff');
 assert_equal(app.devices_policy_list()[0].revision, 1);
 assert_equal(app.devices_timezones()[1], 'Europe/Berlin');
@@ -151,9 +117,6 @@ assert_equal(app.notifications_test({ channel: 'telegram' }).sent, false);
 let memory_reset = app.memory_reset_baseline({ source: 'luci' });
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(memory_reset.id, submitted[length(submitted) - 1].record.id);
-let backup_create = app.backup_create({ options: { include_secrets: false }, source: 'luci' });
-submitted[length(submitted) - 1].worker({ stage: () => null });
-assert_equal(backup_create.id, submitted[length(submitted) - 1].record.id);
 let policy_set = app.devices_policy_set({ policy: { scope: 'device', action: 'block' }, source: 'luci' });
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(policy_set.id, submitted[length(submitted) - 1].record.id);
@@ -161,8 +124,6 @@ let policy_delete = app.devices_policy_delete({ policy_id: 'dp_1_000000000000000
 	expected_revision: 1, source: 'luci' });
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(policy_delete.id, submitted[length(submitted) - 1].record.id);
-assert_equal(app.backup_restore({ inspection_id: 'x-0000000000001-00000000000000000000000000000002',
-	source: 'luci' }).id, 'backup-restore');
 
 for (let action in [ 'start', 'stop', 'reload', 'restart' ]) {
 	let before = length(submitted);
@@ -179,11 +140,8 @@ app.config_validate('config.yaml', 'valid\n', 'luci');
 assert_equal(length(submitted), before_config + 1);
 app.config_apply('config.yaml', 'valid\n', 'luci');
 assert_equal(length(submitted), before_config + 2);
-app.config_save_draft('config.yaml', 'draft\n', 'luci');
 app.config_swap('config2.yaml', 'luci');
-app.history_open_draft({ profile: 'config.yaml', revision: 'rev-1', source: 'luci' });
-app.history_restore({ profile: 'config.yaml', revision: 'rev-1', source: 'luci' });
-assert_equal(length(submitted), before_config + 6);
+assert_equal(length(submitted), before_config + 3);
 
 let operational_record = app.operational_settings_apply('config.yaml', 'generated\n',
 	{ core: { proxy_mode: 'mixed' } }, 'luci');
@@ -199,7 +157,7 @@ assert_equal(saved, 1);
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(saved, 2);
 assert_equal(desired.core.proxy_mode, 'tun');
-assert_equal(length(management_calls), 4);
+assert_equal(length(management_calls), 3);
 assert_equal(setting_record.id, submitted[length(submitted) - 1].record.id);
 
 let memory_setting = app.settings_set({ memory: {
@@ -279,8 +237,8 @@ let atomic_state = {
 	}
 };
 let atomic_app = application.create({
-	operations, service, settings: atomic_settings, config, history, state: atomic_state,
-	memory: atomic_memory_domain, backup, devices, notifications: atomic_notification_domain,
+	operations, service, settings: atomic_settings, config, state: atomic_state,
+	memory: atomic_memory_domain, devices, notifications: atomic_notification_domain,
 	telegram: atomic_telegram_domain,
 	clock: { now: () => 1000 }
 });
@@ -340,16 +298,11 @@ app.set_draining(true);
 for (let mutation in [
 	() => app.service_start('config.yaml', 'luci'),
 	() => app.config_validate('config.yaml', 'valid\n', 'luci'),
-	() => app.config_save_draft('config.yaml', 'draft\n', 'luci'),
 	() => app.config_swap('config2.yaml', 'luci'),
-	() => app.history_open_draft({ profile: 'config.yaml', revision: 'rev-1', source: 'luci' }),
 	() => app.settings_set({}, 'luci'),
 	() => app.memory_reset_baseline({ source: 'luci' }),
-	() => app.backup_create({ options: {}, source: 'luci' }),
 	() => app.devices_policy_set({ policy: {}, source: 'luci' }),
 	() => app.devices_policy_delete({ policy_id: 'dp_1_0000000000000001', expected_revision: 1,
-		source: 'luci' }),
-	() => app.backup_restore({ inspection_id: 'x-0000000000001-00000000000000000000000000000002',
 		source: 'luci' })
 ]) assert_throws(mutation, 'BUSY');
 assert_equal(app.status().status, 'safe');

@@ -486,12 +486,19 @@
 .sbox-log-daemon-miclash .sbox-log-daemon {
 	color: var(--sbox-success);
 }
-.sbox-settings-grid {
+.sbox-settings-grid,
+.sbox-management-grid {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(220px, 1fr));
-	gap: 10px;
+	grid-template-columns: repeat(6, minmax(0, 1fr));
+	gap: 12px;
+	align-items: stretch;
+	grid-auto-flow: row dense;
 }
 .sbox-settings-block {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	grid-column: span 3;
 	background: var(--sbox-panel-soft);
 	border: 1px solid var(--sbox-border);
 	border-radius: 8px;
@@ -504,7 +511,7 @@
 	color: var(--sbox-text);
 }
 .sbox-settings-block-wide {
-	grid-column: 1 / -1;
+	grid-column: span 6;
 }
 .sbox-settings-help {
 	margin-bottom: 8px;
@@ -616,9 +623,6 @@
 }
 
 .sbox-management-grid {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 1rem;
 	margin-top: 1rem;
 }
 
@@ -631,9 +635,12 @@
 	display: contents;
 }
 
-.sbox-management-wide,
-.sbox-management-save-row {
-	grid-column: 1 / -1;
+.sbox-management-card {
+	grid-column: span 3;
+}
+
+.sbox-management-wide {
+	grid-column: span 6;
 }
 
 .sbox-management-facts {
@@ -672,7 +679,8 @@
 	flex-wrap: wrap;
 	align-items: center;
 	gap: .5rem;
-	margin-top: .75rem;
+	margin-top: auto;
+	padding-top: .75rem;
 }
 
 .sbox-management-switches,
@@ -693,12 +701,6 @@
 	background: rgba(217, 119, 6, .08);
 }
 
-.sbox-backup-manifest {
-	max-height: 45vh;
-	overflow: auto;
-	word-break: break-word;
-}
-
 .sbox-management-grid button:focus-visible,
 .sbox-management-grid input:focus-visible,
 .sbox-management-grid select:focus-visible,
@@ -708,15 +710,21 @@
 }
 
 @media (max-width: 760px) {
-	.sbox-management-grid,
-	.sbox-management-facts,
-	.sbox-management-form-grid {
+	.sbox-settings-grid,
+	.sbox-management-grid {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.sbox-management-wide,
-	.sbox-management-save-row {
-		grid-column: auto;
+	.sbox-settings-block,
+	.sbox-settings-block-wide,
+	.sbox-management-card,
+	.sbox-management-wide {
+		grid-column: 1 / -1;
+	}
+
+	.sbox-management-facts,
+	.sbox-management-form-grid {
+		grid-template-columns: minmax(0, 1fr);
 	}
 }
 .sbox-settings-summary-grid {
@@ -974,7 +982,6 @@
 @media (max-width: 980px) {
 	.sbox-config-toolbar,
 	.sbox-settings-overview,
-	.sbox-settings-grid,
 	.sbox-form-grid,
 	.sbox-rulesets-layout,
 	.sbox-settings-summary-grid,
@@ -999,81 +1006,5 @@
 	.sbox-ruleset-editor {
 		height: 42vh;
 		min-height: 280px;
-	}
-}
-.sbox-draft-label {
-	display: inline-flex;
-	align-items: center;
-	padding: .35rem .65rem;
-	border: 1px solid var(--sbox-border);
-	border-radius: 999px;
-	color: var(--sbox-muted);
-	font-weight: 700;
-}
-
-.sbox-history-layout {
-	display: grid;
-	grid-template-columns: minmax(15rem, 30%) minmax(0, 1fr);
-	gap: 1rem;
-	width: min(92vw, 72rem);
-	min-height: min(65vh, 44rem);
-}
-
-.sbox-history-sidebar {
-	min-width: 0;
-	max-height: 65vh;
-	overflow: auto;
-	border-right: 1px solid var(--sbox-border);
-	padding-right: .75rem;
-}
-
-.sbox-history-list { display: grid; gap: .5rem; }
-.sbox-history-item {
-	display: grid;
-	gap: .2rem;
-	width: 100%;
-	text-align: left;
-	padding: .65rem;
-	border: 1px solid var(--sbox-border);
-	border-radius: .4rem;
-	background: var(--sbox-panel-soft);
-	color: var(--sbox-text);
-	cursor: pointer;
-}
-.sbox-history-item:hover, .sbox-history-item:focus-visible { border-color: currentColor; }
-.sbox-history-source { color: var(--sbox-muted); font-weight: 700; }
-.sbox-history-detail { min-width: 0; }
-.sbox-history-metadata {
-	display: grid;
-	grid-template-columns: max-content minmax(0, 1fr);
-	gap: .25rem .75rem;
-}
-.sbox-history-metadata dt { color: var(--sbox-muted); }
-.sbox-history-metadata dd { margin: 0; overflow-wrap: anywhere; }
-.sbox-history-diff {
-	max-height: 48vh;
-	overflow: auto;
-	padding: .75rem;
-	border: 1px solid var(--sbox-border);
-	background: var(--sbox-log-bg);
-	color: var(--sbox-text);
-	white-space: pre;
-}
-.sbox-history-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
-.sbox-history-close {
-	grid-column: 1 / -1;
-	display: flex;
-	justify-content: flex-end;
-}
-.sbox-history-error { color: var(--sbox-danger, #b30000); }
-
-@media (max-width: 700px) {
-	.sbox-history-layout { grid-template-columns: 1fr; width: min(92vw, 42rem); }
-	.sbox-history-sidebar {
-		max-height: 14rem;
-		border-right: 0;
-		border-bottom: 1px solid var(--sbox-border);
-		padding-right: 0;
-		padding-bottom: .75rem;
 	}
 }

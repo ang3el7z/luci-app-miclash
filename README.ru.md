@@ -143,22 +143,21 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 
 1. Терминальный установщик устанавливает Mihomo автоматически.
 2. Добавьте подписку или отредактируйте YAML-профиль.
-3. Проверьте Draft — это не изменяет рабочую маршрутизацию.
-4. Примените Draft, чтобы сделать его Active.
+3. Проверьте YAML — это не изменяет рабочую маршрутизацию.
+4. Примените его, чтобы сделать конфигурацию активной.
 5. Выберите TPROXY, TUN или MIXED и нужные интерфейсы.
 6. Проверьте защищаемые устройства и только затем включите Guard.
 
-Невалидный Draft не применяется, а предыдущая Active-конфигурация продолжает работать.
+Невалидная конфигурация не применяется, а предыдущая активная конфигурация продолжает работать.
 
 ## Основные возможности
 
-- **Конфигурации:** Draft/Active, валидация, атомарное применение, история (history), diff, restore и recovery snapshot.
+- **Конфигурации:** прямое редактирование YAML, валидация и атомарное применение.
 - **Подписки и обновления:** три URL, ручное и плановое обновление, безопасное обновление MiClash и ядра Mihomo.
 - **Маршрутизация:** TPROXY, TUN, MIXED, включения/исключения интерфейсов, авто LAN/WAN, QUIC и локальные rulesets.
 - **Диагностика:** состояние Mihomo, DNS, firewall, routing и Guard, очищенный diagnostic report и route test.
 - **Самовосстановление:** исправление drift и ступени `reload → restart ядра → restart службы`.
 - **Уведомления (notification):** ошибки, восстановление Интернета, обновления, Guard и Memory Guard в LuCI или Telegram.
-- **Backup/restore:** preview перед импортом, предупреждение о secrets и recovery snapshot.
 - **Политики устройств (device policies):** расписания и действия inherit/proxy/direct/block; Guard всегда имеет приоритет.
 
 ## Guard и восстановление
@@ -183,7 +182,7 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 /status /health /memory /diagnostics /logs /help
 /start /stop /restart /reload /reboot
 /subscription URL /update_subscription /update_miclash /update_mihomo
-/guard_on /guard_off /backup
+/guard_on /guard_off
 ```
 
 `/reboot` перезагружает роутер сразу после проверки пользователя, без дополнительного подтверждения.
@@ -210,7 +209,7 @@ apk del luci-app-miclash
 opkg remove luci-app-miclash
 ```
 
-Удаление сначала останавливает службы и восстанавливает принадлежащие MiClash настройки DNS/firewall/routing. Каталог `/opt/clash` сохраняется; после создания backup его можно необратимо удалить вручную:
+Удаление сначала останавливает службы и восстанавливает принадлежащие MiClash настройки DNS/firewall/routing. Каталог `/opt/clash` сохраняется; после копирования нужных файлов его можно необратимо удалить вручную:
 
 ```sh
 rm -rf /opt/clash

@@ -36,12 +36,6 @@ export function create(dependencies) {
 	    type(dependencies?.config?.validate) != 'function' ||
 	    type(dependencies?.config?.apply) != 'function' ||
 	    type(dependencies?.config?.swap) != 'function' ||
-	    type(dependencies?.config?.read_draft) != 'function' ||
-	    type(dependencies?.config?.save_draft) != 'function' ||
-	    type(dependencies?.history?.list) != 'function' ||
-	    type(dependencies?.history?.diff) != 'function' ||
-	    type(dependencies?.history?.open_draft) != 'function' ||
-	    type(dependencies?.history?.restore) != 'function' ||
 	    type(dependencies?.state?.snapshot) != 'function' ||
 	    type(dependencies?.state?.health) != 'function' ||
 	    type(dependencies?.state?.set_desired) != 'function' ||
@@ -49,11 +43,6 @@ export function create(dependencies) {
 	    type(dependencies?.memory?.settings) != 'function' ||
 	    type(dependencies?.memory?.reset_baseline) != 'function' ||
 	    type(dependencies?.memory?.configure) != 'function' ||
-	    type(dependencies?.backup?.list) != 'function' ||
-	    type(dependencies?.backup?.create) != 'function' ||
-	    type(dependencies?.backup?.inspect) != 'function' ||
-	    type(dependencies?.backup?.restore) != 'function' ||
-	    type(dependencies?.backup?.configure) != 'function' ||
 	    type(dependencies?.devices?.list) != 'function' ||
 	    type(dependencies?.devices?.policy_list) != 'function' ||
 	    type(dependencies?.devices?.policy_set) != 'function' ||
@@ -121,11 +110,6 @@ export function create(dependencies) {
 		service_restart: (profile, source) => service_action('restart', profile, source),
 		config_list: () => dependencies.config.list_profiles(),
 		config_read: (profile) => dependencies.config.read_active(profile),
-		config_read_draft: (profile) => dependencies.config.read_draft(profile),
-		config_save_draft: (profile, content, source) => {
-			writable();
-			return dependencies.config.save_draft(profile, content, source);
-		},
 		config_validate: (profile, content, source) => {
 			writable();
 			return dependencies.config.validate(profile, content, source);
@@ -139,7 +123,7 @@ export function create(dependencies) {
 			if (type(dependencies.config.apply_operational) != 'function')
 				errors.fail('HEALTH_FAILED');
 			patch = dependencies.settings.validate(patch);
-			let allowed = { core: true, interfaces: true, updates: true };
+			let allowed = { core: true, interfaces: true };
 			for (let section in keys(patch))
 				if (allowed[section] !== true) errors.fail('INVALID_ARGUMENT');
 			return dependencies.config.apply_operational(profile, content, source, {
@@ -160,25 +144,6 @@ export function create(dependencies) {
 			writable();
 			return dependencies.config.swap(profile, source);
 		},
-		history_list: (arguments) => {
-			let records = dependencies.history.list(arguments.profile), output = [];
-			for (let index = length(records) - 1;
-			     index >= 0 && length(output) < arguments.limit; index--)
-				push(output, records[index]);
-			return output;
-		},
-		history_diff: (arguments) => dependencies.history.diff(arguments.profile,
-			arguments.from_revision, arguments.to_revision),
-		history_open_draft: (arguments) => {
-			writable();
-			return dependencies.history.open_draft(arguments.profile, arguments.revision,
-				arguments.source);
-		},
-		history_restore: (arguments) => {
-			writable();
-			return dependencies.history.restore(arguments.profile, arguments.revision,
-				arguments.source);
-		},
 		settings_get: () => dependencies.settings.get(),
 		guard_transition: (enabled, source) => {
 			writable();
@@ -194,27 +159,22 @@ export function create(dependencies) {
 				let memory_changed = !same(before.memory, wanted.memory);
 				let notifications_changed = !same(before.notifications, wanted.notifications);
 				let telegram_changed = !same(before.telegram, wanted.telegram);
-				let backup_changed = !same(before.backup, wanted.backup);
 				let prepare_memory = type(dependencies.memory.prepare) == 'function'
 					? dependencies.memory.prepare : clone;
 				let prepare_notifications = type(dependencies.notifications.prepare) == 'function'
 					? dependencies.notifications.prepare : clone;
 				let prepare_telegram = type(dependencies.telegram.prepare) == 'function'
 					? dependencies.telegram.prepare : clone;
-				let prepare_backup = type(dependencies.backup.prepare) == 'function'
-					? dependencies.backup.prepare : clone;
 				let next_memory = memory_changed ? prepare_memory(wanted.memory) : null;
 				let next_notifications = notifications_changed
 					? prepare_notifications(wanted.notifications) : null;
 				let next_telegram = telegram_changed ? prepare_telegram(wanted.telegram) : null;
-				let next_backup = backup_changed ? prepare_backup(wanted.backup) : null;
 				let prior_notifications = notifications_changed
 					? prepare_notifications(before.notifications) : null;
 				let prior_telegram = telegram_changed ? prepare_telegram(before.telegram) : null;
-				let prior_backup = backup_changed ? prepare_backup(before.backup) : null;
 				ctx.stage('settings', 20, '');
 				let persisted = false, notifications_attempted = false,
-					telegram_attempted = false, backup_attempted = false, failure = null;
+					telegram_attempted = false, failure = null;
 				try {
 					let saved = dependencies.settings.set(patch);
 					persisted = true;
@@ -227,10 +187,6 @@ export function create(dependencies) {
 					if (notifications_changed) {
 						notifications_attempted = true;
 						dependencies.notifications.configure(next_notifications);
-					}
-					if (backup_changed) {
-						backup_attempted = true;
-						dependencies.backup.configure(next_backup);
 					}
 					// This is deliberately the last fallible commit. The Guard validates
 					// and persists transactionally, so a failure preserves its baseline.
@@ -248,9 +204,6 @@ export function create(dependencies) {
 					if (notifications_attempted)
 						try { dependencies.notifications.configure(prior_notifications); }
 						catch (error) { rollback_failed = true; }
-					if (backup_attempted)
-						try { dependencies.backup.configure(prior_backup); }
-						catch (error) { rollback_failed = true; }
 					if (persisted)
 						try { dependencies.state.set_desired(before); }
 						catch (error) { rollback_failed = true; }
@@ -262,16 +215,6 @@ export function create(dependencies) {
 		memory_settings: () => dependencies.memory.settings(),
 		memory_reset_baseline: (arguments) => domain_action('memory.reset_baseline',
 			arguments.source, {}, () => dependencies.memory.reset_baseline()),
-		backup_list: () => dependencies.backup.list(),
-		backup_create: (arguments) => domain_action('backup.create', arguments.source,
-			{ options: arguments.options }, () => dependencies.backup.create(arguments.options,
-				arguments.source)),
-		backup_inspect: (arguments) => dependencies.backup.inspect(arguments.backup_id,
-			arguments.options),
-		backup_restore: (arguments) => {
-			writable();
-			return dependencies.backup.restore(arguments.inspection_id, arguments.source);
-		},
 		devices_list: () => dependencies.devices.list(),
 		devices_timezones: () => dependencies.devices.timezones(),
 		devices_policy_list: () => dependencies.devices.policy_list(),

@@ -164,6 +164,8 @@ else
 	FIRST_INSTALL=1
 fi
 [ ! -f "$$ROOT/etc/config/miclash" ] || chmod 0600 "$$ROOT/etc/config/miclash" || exit 1
+# Remove state owned exclusively by the retired Draft/History and Backup features.
+rm -rf "$$ROOT/opt/clash/history" "$$ROOT/etc/miclash/backups" || exit 1
 [ -n "$$IPKG_INSTROOT" ] || {
 	/etc/init.d/rpcd reload
 	/etc/init.d/miclash-guard enable 2>/dev/null || true

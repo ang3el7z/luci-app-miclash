@@ -191,13 +191,8 @@ await eventClient.service_start('config.yaml', 'luci');
 assert.deepEqual(producedEvents.map((event) => event.detail), [ {
 	object: 'miclash', method: 'service_start', operation_id: 'event_op_1', state: 'accepted'
 } ], 'successful mutation must emit one safe typed change event');
-replies.set('history_open_draft', { operation_id: 'event_history_1' });
-await eventClient.historyOpenDraft('config.yaml', 'revision-1', 'luci');
-assert.deepEqual(producedEvents.at(-1).detail, {
-	object: 'miclash', method: 'history_open_draft', operation_id: 'event_history_1', state: 'accepted'
-}, 'opening a history revision as Draft must emit an operation event');
 await eventClient.status();
-assert.equal(producedEvents.length, 2, 'read-only status must not emit a change event');
+assert.equal(producedEvents.length, 1, 'read-only status must not emit a change event');
 replies.set('operation_get', { operation: { id: 'event_op_1', state: 'success' } });
 const cancelTerminal = eventClient.watchOperation('event_op_1', () => {});
 await new Promise((resolve) => setImmediate(resolve));
@@ -230,10 +225,10 @@ replies.set('transfer_write', (id, seq, data) => {
 replies.set('transfer_finish', { completed: true });
 replies.set('transfer_abort', { aborted: true });
 const transferClient = moduleApi.create();
-await transferClient.uploadChunks('backup', { secrets: false }, new TextEncoder().encode('hello world'));
+await transferClient.uploadChunks('payload', { secrets: false }, new TextEncoder().encode('hello world'));
 assert.equal(uploaded.toString(), 'hello world');
 replies.set('transfer_begin', { transfer_id: 'a'.repeat(64), chunk_size: Number.NaN, expires_at: 1 });
-await assert.rejects(transferClient.uploadChunks('backup', {}, new Uint8Array([1])),
+await assert.rejects(transferClient.uploadChunks('payload', {}, new Uint8Array([1])),
 	(error) => error.code === 'INVALID_RESPONSE');
 
 const maximumTransfer = new Uint8Array(16 * 1024 * 1024);
@@ -241,7 +236,7 @@ let writesBeforeTinyUpload = calls.filter((call) => call.method === 'transfer_wr
 let abortsBeforeTinyUpload = calls.filter((call) => call.method === 'transfer_abort').length;
 replies.set('transfer_begin', { transfer_id: '9'.repeat(64), chunk_size: 1, expires_at: 1 });
 replies.set('transfer_write', { next_seq: -1, received: 0 });
-await assert.rejects(transferClient.uploadChunks('backup', {}, maximumTransfer),
+await assert.rejects(transferClient.uploadChunks('payload', {}, maximumTransfer),
 	(error) => error.code === 'INVALID_RESPONSE');
 assert.equal(calls.filter((call) => call.method === 'transfer_write').length,
 	writesBeforeTinyUpload, 'unsafe upload declaration started an unbounded RPC loop');
@@ -269,7 +264,7 @@ let abortsBeforeTinyDownload = calls.filter((call) => call.method === 'transfer_
 replies.set('transfer_begin', { transfer_id: '8'.repeat(64), chunk_size: 1,
 	size: 16 * 1024 * 1024, sha256: 'a'.repeat(64), expires_at: 1 });
 replies.set('transfer_read', { seq: 0, next_seq: 1, data: 'AA==', eof: true });
-await assert.rejects(transferClient.downloadChunks('backup',
+await assert.rejects(transferClient.downloadChunks('payload',
 	'b-0000000005000-' + '8'.repeat(32), {}), (error) => error.code === 'INVALID_RESPONSE');
 assert.equal(calls.filter((call) => call.method === 'transfer_read').length,
 	readsBeforeTinyDownload, 'unsafe download declaration started an unbounded RPC loop');
@@ -282,7 +277,7 @@ let releaseWrite;
 replies.set('transfer_begin', { transfer_id: 'd'.repeat(64), chunk_size: 4, expires_at: 1 });
 replies.set('transfer_write', () => new Promise((resolve) => { releaseWrite = resolve; }));
 const destroyTransferClient = moduleApi.create();
-const pendingUpload = destroyTransferClient.uploadChunks('backup', {}, new Uint8Array([1, 2, 3]));
+const pendingUpload = destroyTransferClient.uploadChunks('payload', {}, new Uint8Array([1, 2, 3]));
 while (!releaseWrite) await new Promise((resolve) => setImmediate(resolve));
 const abortsBeforeDestroy = calls.filter((call) => call.method === 'transfer_abort').length;
 destroyTransferClient.destroy();
@@ -295,7 +290,7 @@ await assert.rejects(pendingUpload, (error) => error.code === 'CANCELLED');
 let releaseBegin;
 replies.set('transfer_begin', () => new Promise((resolve) => { releaseBegin = resolve; }));
 const destroyBeginClient = moduleApi.create();
-const pendingBegin = destroyBeginClient.uploadChunks('backup', {}, new Uint8Array([9]));
+const pendingBegin = destroyBeginClient.uploadChunks('payload', {}, new Uint8Array([9]));
 while (!releaseBegin) await new Promise((resolve) => setImmediate(resolve));
 destroyBeginClient.destroy();
 const abortsBeforeBeginRelease = calls.filter((call) => call.method === 'transfer_abort').length;

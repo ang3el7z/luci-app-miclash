@@ -40,10 +40,5 @@ config telegram 'telegram'
 config notifications 'notifications'
 	option auto_hide '1'
 
-config backup 'backup'
-	option enabled '0'
-	option retention '5'
-	option include_secrets '0'
-
 config meta 'meta'
 	option schema_version '1'

@@ -353,55 +353,19 @@ export function create_transfers(dependencies) {
 			sha256: { type: 'string', required: true }, metadata: { type: 'object' }
 		});
 		let metadata = transfer_metadata(arguments.metadata), id = allocate_id();
-		if (arguments.direction == 'upload') {
-			let upload_count = 0, reserved = 0;
-			for (let record in values(records))
-				if (record.direction == 'upload') { upload_count++; reserved += record.size; }
-			if (arguments.kind != 'backup' || type(dependencies.uploads.backup) != 'function' ||
-				length(arguments.object_id ?? '') || arguments.size < 1 || arguments.size > TRANSFER_MAX ||
-				!match(arguments.sha256, /^[0-9a-f]{64}$/))
-				errors.fail('INVALID_ARGUMENT');
-			if (upload_count >= TRANSFER_UPLOAD_LIMIT || reserved + arguments.size > TRANSFER_MAX)
-				errors.fail('BUSY');
-			let path = TRANSFER_ROOT + '/' + id, handle = runtime.fs.open(path, 'wx', 0o600);
-			if (handle == null) errors.fail('INTERNAL');
-			let identity = runtime.fs.fstat(handle), path_identity = runtime.fs.lstat(path);
-			if (!same_file(identity, path_identity) || identity.size != 0 || identity.mode != 0o600 ||
-				(identity.uid != null && identity.uid != 0) || runtime.fs.realpath(path) != path) {
-				discard_created(path, handle, identity);
-				errors.fail('INTERNAL');
-			}
-			try { verify_root(); }
-			catch (error) {
-				discard_created(path, handle, identity);
-				errors.fail(errors.normalize(error).code);
-			}
-			let record = { id, direction: 'upload', kind: arguments.kind, metadata,
-				size: arguments.size, sha256: arguments.sha256, received: 0, next_seq: 0,
-				expires_at: runtime.clock.now() + TRANSFER_TTL, path, handle, identity };
-			records[id] = record;
-			try { schedule_expiry(); }
-			catch (error) {
-				dispose(record);
-				errors.fail(errors.normalize(error).code);
-			}
-			return { transfer_id: id, chunk_size: TRANSFER_CHUNK,
-				expires_at: records[id].expires_at };
-		}
+		if (arguments.direction == 'upload') errors.fail('INVALID_ARGUMENT');
 		if (arguments.direction != 'download' ||
-			(arguments.kind != 'report' && arguments.kind != 'backup') ||
+			arguments.kind != 'report' ||
 			type(dependencies.downloads[arguments.kind]) != 'function' ||
 			arguments.size != 0 || length(arguments.sha256) ||
 			type(arguments.object_id) != 'string')
 			errors.fail('INVALID_ARGUMENT');
-		if ((arguments.kind == 'report' && !match(arguments.object_id, /^rpt_[0-9a-f]{32}$/)) ||
-			(arguments.kind == 'backup' &&
-			 !match(arguments.object_id, /^b-[0-9]{13}-[0-9a-f]{32}$/)))
+		if (!match(arguments.object_id, /^rpt_[0-9a-f]{32}$/))
 			errors.fail('INVALID_ARGUMENT');
 		for (let active in values(records))
 			if (active.direction == 'download') errors.fail('BUSY');
 		let source = dependencies.downloads[arguments.kind](arguments.object_id, metadata);
-		let maximum = arguments.kind == 'report' ? REPORT_MAX : TRANSFER_MAX;
+		let maximum = REPORT_MAX;
 		if (type(source?.read) != 'function' || type(source?.finish) != 'function' ||
 			type(source?.size) != 'int' ||
 			source.size < 0 || source.size > maximum || type(source.sha256) != 'string' ||
@@ -541,7 +505,7 @@ export function method_table(app, transfers) {
 	for (let name in [
 		'status', 'health', 'operation_get', 'operation_list',
 		'service_start', 'service_stop', 'service_reload', 'service_restart',
-		'config_list', 'config_read', 'config_read_draft', 'config_save_draft',
+		'config_list', 'config_read',
 		'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
 		'settings_get', 'settings_set', 'guard_transition', 'set_draining'
 	]) if (type(app?.[name]) != 'function')
@@ -624,20 +588,6 @@ export function method_table(app, transfers) {
 				content: app.config_read(selected_profile)
 			};
 		}),
-		config_read_draft: method({ profile: '' }, (arguments) => {
-			exact(arguments, { profile: { type: 'string' } });
-			let selected_profile = profile(arguments);
-			return { profile: selected_profile,
-				content: app.config_read_draft(selected_profile) };
-		}),
-		config_save_draft: method(config_policy, (arguments) => {
-			exact(arguments, {
-				profile: { type: 'string' }, content: { type: 'string', required: true },
-				source: { type: 'string' }
-			});
-			return operation_reply(app.config_save_draft(profile(arguments),
-				content(arguments), source(arguments)));
-		}),
 		config_validate: method(config_policy, (arguments) => {
 			exact(arguments, {
 				profile: { type: 'string' }, content: { type: 'string', required: true },
@@ -689,34 +639,6 @@ export function method_table(app, transfers) {
 				enabled: { type: 'bool', required: true }, source: { type: 'string' }
 			});
 			return operation_reply(app.guard_transition(arguments.enabled, source(arguments)));
-		}),
-		history_list: method({ profile: '', limit: 0 }, (arguments) => {
-			exact(arguments, { profile: { type: 'string' }, limit: { type: 'int' } });
-			let limit = arguments.limit ?? 10;
-			if (limit < 1 || limit > 100) errors.fail('INVALID_ARGUMENT');
-			return { revisions: domain_read('history_list', {
-				profile: profile(arguments), limit
-			}) };
-		}),
-		history_diff: method({ profile: '', from_revision: '', to_revision: '' }, (arguments) => {
-			exact(arguments, { profile: { type: 'string' },
-				from_revision: { type: 'string', required: true },
-				to_revision: { type: 'string', required: true } });
-			return domain_read('history_diff', { profile: profile(arguments),
-				from_revision: safe_id(arguments.from_revision),
-				to_revision: safe_id(arguments.to_revision) });
-		}),
-		history_open_draft: method({ profile: '', revision: '', source: '' }, (arguments) => {
-			exact(arguments, { profile: { type: 'string' },
-				revision: { type: 'string', required: true }, source: { type: 'string' } });
-			return domain_operation('history_open_draft', { profile: profile(arguments),
-				revision: safe_id(arguments.revision), source: source(arguments) });
-		}),
-		history_restore: method({ profile: '', revision: '', source: '' }, (arguments) => {
-			exact(arguments, { profile: { type: 'string' },
-				revision: { type: 'string', required: true }, source: { type: 'string' } });
-			return domain_operation('history_restore', { profile: profile(arguments),
-				revision: safe_id(arguments.revision), source: source(arguments) });
 		}),
 		subscription_get: method({ profile: '' }, (arguments) => {
 			exact(arguments, { profile: { type: 'string' } });
@@ -787,28 +709,6 @@ export function method_table(app, transfers) {
 				interface: arguments.interface == null || !length(arguments.interface) ? null :
 					safe_text(arguments.interface, 128)
 			});
-		}),
-		backup_list: method(empty, (arguments) => {
-			exact(arguments, {});
-			return { backups: domain_read('backup_list', {}) };
-		}),
-		backup_create: method({ options: {}, source: '' }, (arguments) => {
-			exact(arguments, { options: { type: 'object', required: true },
-				source: { type: 'string' } });
-			return domain_operation('backup_create', {
-				options: transfer_metadata(arguments.options), source: source(arguments) });
-		}),
-		backup_inspect: method({ backup_id: '', options: {} }, (arguments) => {
-			exact(arguments, { backup_id: { type: 'string', required: true },
-				options: { type: 'object' } });
-			return domain_read('backup_inspect', { backup_id: safe_id(arguments.backup_id),
-				options: transfer_metadata(arguments.options) });
-		}),
-		backup_restore: method({ inspection_id: '', source: '' }, (arguments) => {
-			exact(arguments, { inspection_id: { type: 'string', required: true },
-				source: { type: 'string' } });
-			return domain_operation('backup_restore', {
-				inspection_id: safe_id(arguments.inspection_id), source: source(arguments) });
 		}),
 		telegram_status: method(empty, (arguments) => {
 			exact(arguments, {});

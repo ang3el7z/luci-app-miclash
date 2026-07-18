@@ -143,22 +143,21 @@ Open **LuCI → Services → MiClash**.
 
 1. Mihomo is installed automatically by the terminal installer.
 2. Add a subscription or edit a YAML profile.
-3. Validate the Draft without changing live routing.
-4. Apply the Draft to make it Active.
+3. Validate the YAML without changing live routing.
+4. Apply it to make the configuration active.
 5. Select TPROXY, TUN or MIXED and the required interfaces.
 6. Review protected devices, then enable Guard.
 
-An invalid Draft is not applied, and the previous Active configuration keeps running.
+An invalid configuration is not applied, and the previous active configuration keeps running.
 
 ## Main features
 
-- **Configuration:** Draft/Active, validation, atomic apply, history, diff, restore and recovery snapshots.
+- **Configuration:** direct YAML editing, validation and atomic apply.
 - **Subscriptions and updates:** three URLs, manual and scheduled refresh, safe MiClash and Mihomo updates.
 - **Routing:** TPROXY, TUN, MIXED, interface inclusion/exclusion, automatic LAN/WAN, QUIC and local rulesets.
 - **Diagnostics:** Mihomo, DNS, firewall, routing and Guard health, a redacted report and route test.
 - **Self-healing:** drift repair and staged `reload → core restart → service restart` recovery.
 - **Notifications:** failures, Internet recovery, updates, Guard and Memory Guard in LuCI or Telegram.
-- **Backup/restore:** import preview, secrets warning and a recovery snapshot.
 - **Device policies:** schedules and inherit/proxy/direct/block actions; Guard always takes priority.
 
 ## Guard and recovery
@@ -183,7 +182,7 @@ The bot uses outbound HTTPS long polling only, accepts private chat from exactly
 /status /health /memory /diagnostics /logs /help
 /start /stop /restart /reload /reboot
 /subscription URL /update_subscription /update_miclash /update_mihomo
-/guard_on /guard_off /backup
+/guard_on /guard_off
 ```
 
 `/reboot` reboots the router immediately after authorization, without another confirmation.
@@ -210,7 +209,7 @@ apk del luci-app-miclash
 opkg remove luci-app-miclash
 ```
 
-Removal stops the services and restores MiClash-owned DNS/firewall/routing settings first. `/opt/clash` is preserved; after creating a backup, it can be deleted irreversibly:
+Removal stops the services and restores MiClash-owned DNS/firewall/routing settings first. `/opt/clash` is preserved; after copying any files you need, it can be deleted irreversibly:
 
 ```sh
 rm -rf /opt/clash

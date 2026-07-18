@@ -82,6 +82,23 @@ assert.equal(mappedSettings.enableMemoryGuard, true);
 assert.equal(mappedSettings.autoUpdateIntervalHours, '12');
 assert.equal(mappedSettings.miclashReleaseChannel, 'prerelease');
 assert.equal(mappedSettings.autoMajorMiclash, false);
+const unchangedOperationalForm = {
+	...mappedSettings,
+	selected: [ 'lan1', 'br-lan' ]
+};
+assert.equal(settingsModel.operationalSettingsChanged(mappedSettings, {
+	...unchangedOperationalForm,
+	miclashReleaseChannel: 'release',
+	autoMajorMiclash: true
+}), false, 'update preferences alone must not apply or restart Mihomo');
+assert.equal(settingsModel.operationalSettingsChanged(mappedSettings, {
+	...unchangedOperationalForm,
+	blockQuic: true
+}), true, 'a runtime routing change must apply Mihomo settings');
+assert.equal(settingsModel.operationalSettingsChanged(mappedSettings, {
+	...unchangedOperationalForm,
+	selected: [ 'lan2', 'br-lan' ]
+}), true, 'an interface policy change must apply Mihomo settings');
 assert.deepEqual((await settingsModel.getNetworkInterfaces()).map((item) => item.name),
 	[ 'wan', 'br-lan', 'wlan0' ]);
 assert.equal(await settingsModel.detectLanBridge(), 'br-lan');
@@ -97,13 +114,8 @@ assert.deepEqual(settingsCalls
 	.map((call) => call.method),
 [ 'operational_settings_apply' ]);
 assert.deepEqual(settingsCalls.find((call) => call.method === 'operational_settings_apply').settings.interfaces.included, [ 'lan1' ]);
-assert.deepEqual(settingsCalls.find((call) => call.method === 'operational_settings_apply').settings.updates, {
-	auto_subscription: true,
-	interval_hours: 12,
-	miclash_release_channel: 'release',
-	mihomo_release_channel: 'release',
-	auto_major_miclash: false
-});
+assert.equal(settingsCalls.find((call) => call.method === 'operational_settings_apply').settings.updates, undefined,
+	'passive update preferences must not trigger a Mihomo operational apply');
 
 const rulesetCalls = [];
 const rulesets = load('rulesets-model.js', {

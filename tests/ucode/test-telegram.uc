@@ -127,8 +127,6 @@ function environment(changes) {
 			[ patch, source ], source, { patch }),
 		guard_transition: (enabled, source) => operation('guard_transition',
 			'guard.transition', [ enabled, source ], source, { enabled }),
-		backup_create: (source) => operation('backup_create', 'backup.create',
-			[ source ], source),
 		audit: (event) => push(audit, clone(event)),
 		logger: {
 			info: (message) => push(logs, message),
@@ -575,8 +573,7 @@ let minimal_app = {
 	operation_list: () => [], service_start: () => ({ id: 'op-1' }),
 	service_stop: () => ({ id: 'op-1' }), service_reload: () => ({ id: 'op-1' }),
 	service_restart: () => ({ id: 'op-1' }), config_list: () => [],
-	config_read: () => '', config_read_draft: () => '',
-	config_save_draft: () => ({ id: 'op-1' }), config_validate: () => ({ id: 'op-1' }),
+	config_read: () => '', config_validate: () => ({ id: 'op-1' }),
 	config_apply: () => ({ id: 'op-1' }),
 	operational_settings_apply: () => ({ id: 'op-1' }),
 	config_swap: () => ({ id: 'op-1' }), settings_get: () => ({}),

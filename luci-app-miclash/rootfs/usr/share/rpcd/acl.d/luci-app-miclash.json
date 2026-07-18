@@ -5,9 +5,9 @@
       "ubus": {
         "miclash": [
           "status", "health", "operation_get", "operation_list",
-          "config_list", "settings_get", "history_list", "subscription_get",
+          "config_list", "settings_get", "subscription_get",
           "update_release", "memory_status", "memory_settings",
-          "diagnostics_summary", "backup_list", "telegram_status", "telegram_settings",
+          "diagnostics_summary", "telegram_status", "telegram_settings",
           "devices_list", "devices_timezones", "devices_policy_list",
           "notifications_settings", "notifications_list", "logs_read", "system_info",
           "network_interfaces", "ruleset_list", "ruleset_read"
@@ -18,13 +18,12 @@
       "ubus": {
         "miclash": [
           "service_start", "service_stop", "service_reload",
-          "service_restart", "config_read", "config_read_draft", "config_save_draft",
+          "service_restart", "config_read",
           "config_validate", "config_apply", "operational_settings_apply", "config_swap",
-          "config_external_adopt", "settings_set", "guard_transition", "history_diff",
-          "history_open_draft", "history_restore", "subscription_set",
+          "config_external_adopt", "settings_set", "guard_transition", "subscription_set",
           "subscription_update", "update_miclash", "update_mihomo",
           "update_rollback_mihomo", "memory_reset_baseline", "diagnostics_create_report",
-          "diagnostics_route_test", "backup_create", "backup_inspect", "backup_restore",
+          "diagnostics_route_test",
           "telegram_test", "devices_policy_set", "devices_policy_delete",
           "notifications_test", "ruleset_write", "ruleset_delete",
           "ruleset_apply_whitelist", "transfer_begin", "transfer_write",

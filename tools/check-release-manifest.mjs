@@ -255,11 +255,10 @@ function runRepositoryContracts() {
 	const commands = [ '/status', '/health', '/memory', '/diagnostics', '/logs', '/help',
 		'/start', '/stop', '/restart', '/reload', '/reboot', '/subscription URL',
 		'/update_subscription', '/update_miclash', '/update_mihomo', '/guard_on',
-		'/guard_off', '/backup' ];
+		'/guard_off' ];
 	const required = [ 'OpenWrt 24.10+', '25.12', 'miclashd', 'ubus', 'UCI', 'Guard', 'latch',
-		'Draft', 'Active', 'diagnostic', 'route test', 'notification', 'Telegram', '/status',
-		'/reboot', 'history', 'rollback', 'backup', 'restore', 'device polic',
-		'update', 'recovery', 'removal' ];
+		'YAML', 'diagnostic', 'route test', 'notification', 'Telegram', '/status',
+		'/reboot', 'device polic', 'update' ];
 	for (const path of docs) {
 		const text = readFileSync(path, 'utf8');
 		assert.doesNotMatch(text, /23\.05/, `${path} still documents unsupported OpenWrt 23.05`);
