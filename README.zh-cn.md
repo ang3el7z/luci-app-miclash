@@ -20,12 +20,6 @@ MiClash 是用于管理 Mihomo 的 LuCI 应用，在同一界面中提供订阅�
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-或使用 `curl`：
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-```
-
 <details>
 <summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
@@ -39,6 +33,31 @@ wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3
 
 ```sh
 wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+
+或使用 `curl`：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+<details>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
+
+通过 `gh-proxy.com`：
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
 ```
 
 这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。

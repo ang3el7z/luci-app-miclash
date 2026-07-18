@@ -20,12 +20,6 @@ With `wget`:
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-Or with `curl`:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-```
-
 <details>
 <summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
 
@@ -39,6 +33,31 @@ Via jsDelivr:
 
 ```sh
 wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
+
+</details>
+
+Or with `curl`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+<details>
+<summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
+
+Via `gh-proxy.com`:
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+Via jsDelivr:
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
 ```
 
 These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.

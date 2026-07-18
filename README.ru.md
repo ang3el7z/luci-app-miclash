@@ -20,12 +20,6 @@ MiClash — LuCI-приложение для управления Mihomo: под
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-Или через `curl`:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-```
-
 <details>
 <summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
 
@@ -39,6 +33,31 @@ wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3
 
 ```sh
 wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
+
+</details>
+
+Или через `curl`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+<details>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
+
+Через `gh-proxy.com`:
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+Через jsDelivr:
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
 ```
 
 Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
