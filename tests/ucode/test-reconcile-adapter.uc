@@ -10,7 +10,7 @@ let service_restarts = 0, service_repairs = 0,
 let network_applies = 0, network_cleanups = 0, network_fails = false;
 let network_guard_protected = [];
 let network_cleanup_failures = 0;
-let proxy_mode = 'tproxy', wait_options = [];
+let proxy_mode = 'tproxy', wait_options = [], wait_deadlines = [];
 let sequence = 0;
 let reconciler = adapter.create({
 	operations: { submit: (kind, source, context, worker) => {
@@ -33,7 +33,7 @@ let reconciler = adapter.create({
 						enabled: guard_enabled, generation: 7 }
 				] : [] }
 		}; },
-		wait_ready: (deadline, profile, options) => { push(wait_options, options); return { ok: ready, components: ready ? [
+		wait_ready: (deadline, profile, options) => { push(wait_deadlines, deadline); push(wait_options, options); return { ok: ready, components: ready ? [
 			{ component: 'process', ready: true }, { component: 'api', ready: true },
 			{ component: 'dns', ready: true, observed_at: now },
 			{ component: 'forward', ready: true, observed_at: now },
@@ -104,6 +104,11 @@ assert_equal(events[3].data.failure_id, events[0].data.failure_id);
 // A healthy run without an active outage is not an Internet-restored event.
 assert_equal(reconciler.run('scheduled').state, 'success');
 assert_equal(length(events), 4);
+
+let restart_now = now;
+assert_equal(reconciler.restart('luci-restart'), true);
+assert_equal(wait_deadlines[length(wait_deadlines) - 1], restart_now + 30000,
+	'a healthy router restart was allowed only the legacy five-second readiness window');
 
 // Native network repair is a hard readiness prerequisite. A failure happens
 // before the service restart and, with Guard ON, preserves physical fail-close.

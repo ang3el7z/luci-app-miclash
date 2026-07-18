@@ -1,5 +1,8 @@
 import { fail } from 'miclash.errors';
 
+const RUNNING_READY_TIMEOUT_MS = 30000;
+const STOPPED_READY_TIMEOUT_MS = 5000;
+
 function reason(value) {
 	if (type(value) != 'string' || !match(value, /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/))
 		fail('INVALID_ARGUMENT');
@@ -105,7 +108,7 @@ export function create(app) {
 			protect_transition(desired);
 			app.network.apply(desired);
 			app.service.start('config.yaml');
-			let ready = app.service.wait_ready(app.clock.now() + 5000, 'config.yaml',
+			let ready = app.service.wait_ready(app.clock.now() + RUNNING_READY_TIMEOUT_MS, 'config.yaml',
 				health_options(desired));
 			if (ready?.ok !== true) fail('HEALTH_FAILED');
 			release_transition(desired);
@@ -158,7 +161,8 @@ export function create(app) {
 			else if (service_action != 'observe') app.service.restart_service('config.yaml');
 			stage?.('health', 75, 'Waiting for Mihomo and routing health');
 			if (ready == null)
-				ready = app.service.wait_ready(app.clock.now() + 5000, 'config.yaml', service_health);
+				ready = app.service.wait_ready(app.clock.now() + RUNNING_READY_TIMEOUT_MS,
+					'config.yaml', service_health);
 			if (ready?.ok !== true) fail('HEALTH_FAILED');
 		}
 		catch (error) {
@@ -184,7 +188,7 @@ export function create(app) {
 		protect_transition(desired);
 		try {
 			app.service.stop('config.yaml');
-			let stopped = app.service.wait_ready(app.clock.now() + 5000,
+			let stopped = app.service.wait_ready(app.clock.now() + STOPPED_READY_TIMEOUT_MS,
 				'config.yaml', { stopped: true });
 			if (stopped?.ok !== true) fail('HEALTH_FAILED');
 			app.network.cleanup(desired);

@@ -400,11 +400,20 @@ function uci_adapter() {
 };
 
 function logger_adapter() {
+	let priorities = { debug: 'debug', info: 'info', warn: 'warning', error: 'err' };
+	function emit(level, message) {
+		let value = type(message) == 'string' ? message : sprintf('%J', message);
+		value = trim(replace(value, /[\r\n]+/g, ' '));
+		if (!length(value)) return true;
+		if (length(value) > 2048) value = substr(value, 0, 2048);
+		return system([ '/usr/bin/logger', '-t', 'miclash', '-p',
+			'daemon.' + priorities[level], '--', value ]) === 0;
+	};
 	return {
-		debug: (message) => warn(message + '\n'),
-		info: (message) => warn(message + '\n'),
-		warn: (message) => warn(message + '\n'),
-		error: (message) => warn(message + '\n')
+		debug: (message) => emit('debug', message),
+		info: (message) => emit('info', message),
+		warn: (message) => emit('warn', message),
+		error: (message) => emit('error', message)
 	};
 };
 
@@ -501,7 +510,7 @@ function device_observers(filesystem, clock) {
 		},
 		neighbors: (family) => {
 			if (family != 'ipv4' && family != 'ipv6') fail('INVALID_ARGUMENT');
-			let data = capture('/usr/sbin/ip -j ' + (family == 'ipv4' ? '-4' : '-6') +
+			let data = capture('/sbin/ip -j ' + (family == 'ipv4' ? '-4' : '-6') +
 				' neigh show');
 			return observed(data ?? '[]');
 		}
@@ -510,6 +519,35 @@ function device_observers(filesystem, clock) {
 
 function readiness_observers(runtime) {
 	let routing_snapshot = null, routing_observed_at = null;
+	function listener_contract() {
+		let contract = { tproxy_port: 7894, dns_port: 7874, ipv6: true };
+		let content = runtime.fs.readfile('/opt/clash/config.yaml');
+		if (type(content) != 'string' || length(content) > 1048576)
+			return contract;
+		let in_dns = false;
+		for (let line in split(content, '\n')) {
+			let found = match(line, /^tproxy-port:[ \t]*(0|[1-9][0-9]{0,4})[ \t]*(#.*)?$/);
+			if (found != null) {
+				let port = int(found[1]);
+				if (port >= 1 && port <= 65535) contract.tproxy_port = port;
+			}
+			found = match(line, /^ipv6:[ \t]*(true|false)[ \t]*(#.*)?$/);
+			if (found != null) contract.ipv6 = found[1] == 'true';
+			if (match(line, /^dns:[ \t]*(#.*)?$/) != null) {
+				in_dns = true;
+				continue;
+			}
+			if (match(line, /^[^ \t#]/) != null) in_dns = false;
+			if (!in_dns) continue;
+			found = match(line, /^[ \t]+listen:[ \t]*[^#]*:([0-9]{1,5})["']?[ \t]*(#.*)?$/);
+			if (found != null) {
+				let port = int(found[1]);
+				if (port >= 1 && port <= 65535) contract.dns_port = port;
+			}
+		}
+		return contract;
+	};
+	function port_hex(port) { return sprintf('%04X', port); };
 	function routing_observation() {
 		let now = runtime.clock.now();
 		if (routing_snapshot == null || routing_observed_at != now) {
@@ -586,14 +624,18 @@ function readiness_observers(runtime) {
 		dataplane: safe((proxy_mode) => {
 			if (proxy_mode != 'tproxy' && proxy_mode != 'mixed' && proxy_mode != 'tun')
 				return { ready: false, state: 'failed' };
-			let dns_ready = socket_open('tcp', 'ipv4', '1EC2', { '0A': true }) &&
-				socket_open('udp', 'ipv4', '1EC2', { '07': true, '0A': true });
+			let contract = listener_contract();
+			let dns_port = port_hex(contract.dns_port),
+				tproxy_port = port_hex(contract.tproxy_port);
+			let dns_ready = socket_open('tcp', 'ipv4', dns_port, { '0A': true }) &&
+				socket_open('udp', 'ipv4', dns_port, { '07': true, '0A': true });
 			let tcp_ready = proxy_mode == 'tun' ||
-				(socket_open('tcp', 'ipv4', '1ED6', { '0A': true }) &&
-				 socket_open('tcp', 'ipv6', '1ED6', { '0A': true }));
+				(socket_open('tcp', 'ipv4', tproxy_port, { '0A': true }) &&
+				 (!contract.ipv6 || socket_open('tcp', 'ipv6', tproxy_port, { '0A': true })));
 			let udp_ready = proxy_mode != 'tproxy' ||
-				(socket_open('udp', 'ipv4', '1ED6', { '07': true, '0A': true }) &&
-				 socket_open('udp', 'ipv6', '1ED6', { '07': true, '0A': true }));
+				(socket_open('udp', 'ipv4', tproxy_port, { '07': true, '0A': true }) &&
+				 (!contract.ipv6 || socket_open('udp', 'ipv6', tproxy_port,
+					{ '07': true, '0A': true })));
 			let ready = dns_ready && tcp_ready && udp_ready;
 			return { ready, state: ready ? 'ready' : 'failed' };
 		})

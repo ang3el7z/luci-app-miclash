@@ -29,7 +29,7 @@ const logs = load('logs.js', {
 });
 assert.equal(await logs.readRaw(), 'a\nb\nc');
 assert.deepEqual(logCalls, [
-	{ generation: null, cursor: 0, limit: 200 },
+	{ generation: '', cursor: 0, limit: 200 },
 	{ generation: 'log_1', cursor: 2, limit: 200 }
 ]);
 

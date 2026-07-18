@@ -115,6 +115,21 @@ function runtime_with(replies) {
 		return { code: reply.code ?? 0, stdout: reply.stdout ?? null, stderr: reply.stderr ?? null };
 	};
 	let f = fs();
+	f.popen = (command, mode) => {
+		let plain = replace(command, / 2>\/dev\/null$/, '');
+		let separator = index(plain, ' ');
+		let key = separator < 0 ? plain + ':' :
+			substr(plain, 0, separator) + ':' + substr(plain, separator + 1);
+		let reply = p.replies[key] ?? { code: 1, stdout: '' }, read = false;
+		return {
+			read: () => {
+				if (read) return '';
+				read = true;
+				return reply.stdout ?? '';
+			},
+			close: () => reply.code ?? 0
+		};
+	};
 	return { fs: f, process: p, random: entropy(), paths: { tmp: '/tmp/miclash' } };
 };
 
@@ -125,16 +140,19 @@ let observation = observe(runtime_with({
 	'nft:list table inet miclash': { code: 1 }
 }));
 assert_equal(observation.generation, null, 'stale table comment cannot identify active generation');
-let anchor_observation = observe(runtime_with({
+let anchor_runtime = runtime_with({
 	'nft:-j list table inet miclash': { code: 0, stdout: sprintf('%J', { nftables: [
 		{ chain: { family: 'inet', table: 'miclash', name: 'prerouting', type: 'filter',
 			hook: 'prerouting', prio: -150, policy: 'accept' } },
 		{ rule: { family: 'inet', table: 'miclash', chain: 'prerouting',
 			expr: [ { jump: { target: 'prerouting_g_def456def456' } } ] } }
 	] }) }
-}));
+});
+let anchor_observation = observe(anchor_runtime);
 assert_equal(anchor_observation.generation, 'def456def456',
 	'structured anchor observation identifies switched generation without stale table comments');
+assert_equal(length(anchor_runtime.process.calls), 0,
+	'read-only nft observation never emits command output through the daemon process adapter');
 let unrelated = observe(runtime_with({
 	'nft:-j list table inet miclash': { code: 0, stdout: sprintf('%J', { nftables: [
 		{ chain: { family: 'inet', table: 'miclash', name: 'prerouting', type: 'filter',
@@ -190,7 +208,8 @@ read_error.fs.popen = () => ({ read: () => null, close: () => 0 });
 assert_throws(() => observe(read_error), 'INTERNAL', 'nft capture read error fails explicitly');
 let close_error = runtime_with({ 'nft:-j list table inet miclash': { code: 0 } });
 close_error.fs.popen = () => ({ read: () => '', close: () => 1 });
-assert_throws(() => observe(close_error), 'INTERNAL', 'nft capture close error fails explicitly');
+assert_equal(observe(close_error).generation, null,
+	'a missing nft table is a normal empty observation');
 let close_throw = runtime_with({ 'nft:-j list table inet miclash': { code: 0 } });
 close_throw.fs.popen = () => ({ read: () => '', close: () => die('close failed') });
 assert_throws(() => observe(close_throw), 'INTERNAL', 'nft capture close exception fails explicitly');

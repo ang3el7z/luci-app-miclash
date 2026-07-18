@@ -150,7 +150,7 @@ export function compile(desired) {
 	return { generation: id, model: { schema_version: 1, normalized: model }, batch: transactional(model, id, desired.previous_generation) };
 };
 
-function captured(runtime, command) {
+function captured(runtime, command, allow_failure) {
 	const MAX_CAPTURE = 262144;
 	let popen = runtime.fs?.popen ?? require('fs').popen;
 	if (type(popen) != 'function') return null;
@@ -167,7 +167,9 @@ function captured(runtime, command) {
 	}
 	let closed = null;
 	try { closed = pipe.close(); } catch (error) { capture_failed = true; }
-	if (capture_failed || (closed !== 0 && closed !== true)) fail('INTERNAL');
+	if (capture_failed) fail('INTERNAL');
+	if (closed !== 0 && closed !== true)
+		return allow_failure === true ? null : fail('INTERNAL');
 	return output;
 };
 
@@ -206,20 +208,16 @@ function text_anchor_generation(text) {
 };
 
 export function observe(runtime) {
-	let result = runtime.process.run({ command: 'nft', args: [ '-j', 'list', 'table', 'inet', 'miclash' ] });
-	if (result.code == 0 && result.stdout == null)
-		result.stdout = captured(runtime, 'nft -j list table inet miclash');
-	if (result.code == 0 && type(result.stdout) == 'string') {
+	let output = captured(runtime, 'nft -j list table inet miclash', true);
+	if (type(output) == 'string') {
 		try {
-			let document = json(result.stdout);
+			let document = json(output);
 			let id = json_anchor_generation(document);
 			if (id) return { installed: true, generation: id, source: 'json-anchor' };
 		} catch (error) {}
 	}
-	let fallback = runtime.process.run({ command: 'nft', args: [ 'list', 'table', 'inet', 'miclash' ] });
-	if (fallback.code == 0 && fallback.stdout == null)
-		fallback.stdout = captured(runtime, 'nft list table inet miclash');
-	let id = fallback.code == 0 ? text_anchor_generation(fallback.stdout) : null;
+	let fallback = captured(runtime, 'nft list table inet miclash', true);
+	let id = text_anchor_generation(fallback);
 	return { installed: id != null, generation: id, source: 'text' };
 };
 

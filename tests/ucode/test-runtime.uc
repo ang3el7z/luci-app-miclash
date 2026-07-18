@@ -10,7 +10,7 @@ let rt = runtime.create({ process: fake_process, clock: fake_clock });
 
 assert_true(rt.fs != null);
 assert_equal(rt.clock.now(), 1000);
-assert_equal(rt.app_version, '0.9.3');
+assert_equal(rt.app_version, '2.0.4');
 let timer_fired = false;
 fake_clock.set_timeout(10, () => timer_fired = true);
 fake_clock.advance(9);
@@ -111,6 +111,14 @@ let socket_runtime = runtime.create({
 });
 assert_equal(socket_runtime.observers.dataplane('tproxy').ready, false,
 	'IPv4-only TPROXY listeners were accepted for dual-stack native rules');
+socket_fs.files['/opt/clash/config.yaml'] =
+	'tproxy-port: 7894\nipv6: false\ndns:\n  listen: 127.0.0.1:7874\n';
+assert_equal(socket_runtime.observers.dataplane('tproxy').ready, true,
+	'IPv4-only Mihomo configuration incorrectly required IPv6 listeners');
+socket_fs.files['/opt/clash/config.yaml'] =
+	'tproxy-port: 7894\nipv6: true\ndns:\n  listen: 127.0.0.1:7874\n';
+assert_equal(socket_runtime.observers.dataplane('tproxy').ready, false,
+	'dual-stack Mihomo configuration accepted missing IPv6 listeners');
 socket_fs.files['/proc/net/tcp6'] = '  sl  local_address rem_address   st\n' +
 	'   0: 00000000000000000000000001000000:1ED6 00000000000000000000000000000000:0000 0A\n';
 socket_fs.files['/proc/net/udp6'] = '  sl  local_address rem_address   st\n' +

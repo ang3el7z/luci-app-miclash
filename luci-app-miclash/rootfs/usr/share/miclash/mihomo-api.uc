@@ -97,14 +97,19 @@ function parse_config(runtime, profile, config_content) {
 	}
 	if (!match(port_text, /^[0-9]+$/) || match(host, /[@\/\[\]]/))
 		fail('INVALID_ARGUMENT');
-	if (host != '127.0.0.1' && host != 'localhost' && host != '::1')
+	let request_host;
+	if (host == '127.0.0.1' || host == 'localhost' || host == '0.0.0.0')
+		request_host = '127.0.0.1';
+	else if (host == '::1' || host == '::')
+		request_host = '::1';
+	else
 		fail('INVALID_ARGUMENT');
 	let port = int(port_text);
 	if (port == null || port < 1 || port > 65535)
 		fail('INVALID_ARGUMENT');
 	return {
 		scheme: length(tls ?? '') ? 'https' : 'http',
-		host: host == 'localhost' ? '127.0.0.1' : host,
+		host: request_host,
 		port,
 		secret: values.secret ?? ''
 	};

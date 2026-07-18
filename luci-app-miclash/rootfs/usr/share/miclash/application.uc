@@ -1,5 +1,8 @@
 import * as errors from 'miclash.errors';
 
+const SERVICE_READY_TIMEOUT_MS = 30000;
+const SERVICE_STOP_TIMEOUT_MS = 5000;
+
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
 	catch (error) { errors.fail('INVALID_ARGUMENT'); }
@@ -82,7 +85,8 @@ export function create(dependencies) {
 					dependencies.service.restart_service(profile);
 
 				let ready = dependencies.service.wait_ready(
-					dependencies.clock.now() + 5000, profile,
+					dependencies.clock.now() + (action == 'stop'
+						? SERVICE_STOP_TIMEOUT_MS : SERVICE_READY_TIMEOUT_MS), profile,
 					action == 'stop' ? { stopped: true } : {});
 				if (ready?.ok !== true)
 					errors.fail('HEALTH_FAILED');

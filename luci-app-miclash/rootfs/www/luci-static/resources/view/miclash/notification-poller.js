@@ -11,7 +11,7 @@ function create(options) {
 	const api = options.api, doc = options.document || document, win = options.window || window;
 	if (!api || typeof api.notificationEvents !== 'function' ||
 		typeof options.onEvent !== 'function') throw new Error('Typed notification API is required');
-	let generation = null, cursor = 0, timer = null, running = false,
+	let generation = '', cursor = 0, timer = null, running = false,
 		busy = false, destroyed = false, retryMs = POLL_MS, lifecycle = 0;
 
 	function clearTimer() {
@@ -52,7 +52,7 @@ function create(options) {
 				schedule(0);
 				return true;
 			}
-			if (generation != null && reply.generation !== generation)
+			if (generation !== '' && reply.generation !== generation)
 				throw new Error('Notification generation changed without stale cursor');
 			let next = cursor;
 			for (const entry of reply.events) {

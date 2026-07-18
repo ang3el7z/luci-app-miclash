@@ -765,6 +765,7 @@ export function method_table(app, transfers) {
 				cursor: { type: 'int' }, limit: { type: 'int' }
 			});
 			let generation = arguments.generation;
+			if (generation == '') generation = null;
 			if (generation != null && !match(generation, /^ng_[0-9a-f]{32}$/))
 				errors.fail('INVALID_ARGUMENT');
 			let cursor = arguments.cursor ?? 0, limit = arguments.limit ?? 32;
@@ -776,6 +777,7 @@ export function method_table(app, transfers) {
 			exact(arguments, { generation: { type: 'string', nullable: true },
 				cursor: { type: 'int' }, limit: { type: 'int' } });
 			let generation = arguments.generation;
+			if (generation == '') generation = null;
 			if (generation != null && !match(generation, /^log_[0-9a-f]{16}$/))
 				errors.fail('INVALID_ARGUMENT');
 			let cursor = arguments.cursor ?? 0, limit = arguments.limit ?? 100;

@@ -837,6 +837,14 @@ run_clean_install_mode() {
     echo "MiClash package and fresh Mihomo core installed; services remain stopped"
 }
 
+schedule_backend_reload() {
+    [ -x /etc/init.d/miclashd ] || return 0
+    (
+        /bin/busybox sleep 3
+        /etc/init.d/miclashd restart
+    ) >/dev/null 2>&1 &
+}
+
 run_app_mode() {
     INSTALL_ACTION="update"
 
@@ -886,11 +894,12 @@ run_app_mode() {
     pkg_update
     install_deps
     install_miclash
-    write_status success done "MiClash package installed; services remain stopped" || {
+    write_status success done "MiClash package installed; backend reload scheduled" || {
         printf '%s\n' "MiClash package installed, but final status handoff failed" >&2
         exit 1
     }
-    echo "MiClash package installed; services remain stopped"
+    schedule_backend_reload || warn "Failed to schedule MiClash backend reload"
+    echo "MiClash package installed; backend reload scheduled"
 }
 
 run_status_protocol_test() {

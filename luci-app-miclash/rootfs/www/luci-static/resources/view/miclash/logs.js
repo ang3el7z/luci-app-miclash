@@ -9,16 +9,16 @@ const LOG_FILTER_RE = /\b(?:clash(?:-rules|-hotplug)?|miclash)(?:\[\d+\])?:/i;
 async function readRaw() {
 	const api = view_miclash_api.create();
 	const lines = [];
-	let generation = null, cursor = 0, restarts = 0;
+	let generation = '', cursor = 0, restarts = 0;
 	try {
 		for (let page = 0; page < 8 && lines.length < 1000; page++) {
 			const reply = await api.logs_read(generation, cursor, 200);
 			if (reply?.stale === true && restarts++ < 1) {
-				generation = null; cursor = 0; lines.length = 0; page = -1; continue;
+				generation = ''; cursor = 0; lines.length = 0; page = -1; continue;
 			}
 			if (!reply || reply.cursor !== cursor || !Array.isArray(reply.lines)) break;
-			if (generation != null && reply.generation !== generation) break;
-			if (generation == null && typeof reply.generation === 'string') generation = reply.generation;
+			if (generation !== '' && reply.generation !== generation) break;
+			if (generation === '' && typeof reply.generation === 'string') generation = reply.generation;
 			reply.lines.slice(0, 200).forEach((line) => lines.push(String(line || '')));
 			if (!reply.has_more) break;
 			if (!Number.isInteger(reply.next_cursor) || reply.next_cursor <= cursor) break;

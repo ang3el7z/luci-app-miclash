@@ -15,6 +15,7 @@ assert.equal(existsSync(root + 'backup-panel.js'), false, 'removed Backup panel 
 
 const settings = readFileSync(paths.settings, 'utf8');
 const devices = readFileSync(paths.devices, 'utf8');
+const notifications = readFileSync(paths.notifications, 'utf8');
 const config = readFileSync(paths.config, 'utf8');
 const css = readFileSync(paths.css, 'utf8');
 
@@ -67,5 +68,7 @@ assert.equal(module.exactTelegramId('9e18'), false);
 assert.equal(module.exactTelegramToken('123456:telegram-secret'), true);
 assert.equal(module.exactTelegramToken('not-a-token'), false);
 assert.equal(Object.keys(module.MEMORY_FIELDS).length, 14);
+assert.match(notifications, /let generation = ''/,
+	'notification polling must not send a JSON null through the string ubus signature');
 
 console.log('MiClash unified settings panels contract passed');

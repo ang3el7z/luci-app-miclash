@@ -6,6 +6,7 @@ function operation(kind) {
 	return { id: 'op_' + sprintf('%032x', ++sequence), kind };
 };
 
+let last_notification_arguments = null, last_log_arguments = null;
 let app = {
 	status: () => ({ state: 'ready' }), health: () => ({ ok: true }),
 	operation_get: (id) => ({ id, state: 'success', context: { token: 'secret' } }),
@@ -34,10 +35,16 @@ let app = {
 	devices_policy_list: () => [], devices_policy_set: () => operation('devices.set'),
 	devices_policy_delete: () => operation('devices.delete'),
 	notifications_settings: () => ({ auto_hide: true }), notifications_test: () => ({ sent: true }),
-	notifications_list: (arguments) => ({ generation: 'ng_' + sprintf('%032x', 1),
-		cursor: arguments.cursor, stale: false, events: [], has_more: false }),
-	logs_read: (arguments) => ({ generation: 'log_' + sprintf('%016x', 1),
-		cursor: arguments.cursor, stale: false, lines: [ 'ready' ], has_more: false }),
+	notifications_list: (arguments) => {
+		last_notification_arguments = arguments;
+		return { generation: 'ng_' + sprintf('%032x', 1), cursor: arguments.cursor,
+			stale: false, events: [], has_more: false };
+	},
+	logs_read: (arguments) => {
+		last_log_arguments = arguments;
+		return { generation: 'log_' + sprintf('%016x', 1), cursor: arguments.cursor,
+			stale: false, lines: [ 'ready' ], has_more: false };
+	},
 	system_info: () => ({ model: 'Router' }), network_interfaces: () => ({ interfaces: [ 'br-lan' ] }),
 	ruleset_list: () => [], ruleset_read: () => ({ content: '' }),
 	ruleset_write: () => operation('ruleset.write'), ruleset_delete: () => operation('ruleset.delete'),
@@ -73,6 +80,14 @@ assert_equal(methods.config_apply.call({ args: {
 	profile: '../config.yaml', content: 'mode: rule\n', source: 'luci'
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(methods.telegram_settings.call({ args: {} }).token, '[REDACTED]');
+assert_equal(length(methods.notifications_list.call({ args: {
+	generation: '', cursor: 0, limit: 200
+} }).events), 0);
+assert_equal(last_notification_arguments.generation, null);
+assert_equal(methods.logs_read.call({ args: {
+	generation: '', cursor: 0, limit: 200
+} }).lines[0], 'ready');
+assert_equal(last_log_arguments.generation, null);
 
 let transfer = methods.transfer_begin.call({ args: {
 	direction: 'download', kind: 'report', object_id: 'rpt_' + sprintf('%032x', 1),

@@ -13,12 +13,16 @@ let operations = {
 	list: (filter) => [ { id: 'listed' } ]
 };
 let actions = [];
+let readiness_deadlines = [];
 let service = {
 	start: (profile) => push(actions, 'start:' + profile),
 	stop: (profile) => push(actions, 'stop:' + profile),
 	reload: (profile) => { push(actions, 'reload:' + profile); return { ok: true }; },
 	restart_service: (profile) => push(actions, 'restart:' + profile),
-	wait_ready: (deadline, profile, options) => ({ ok: true })
+	wait_ready: (deadline, profile, options) => {
+		push(readiness_deadlines, deadline);
+		return { ok: true };
+	}
 };
 let settings_value = {
 	core: { proxy_mode: 'tproxy' },
@@ -134,6 +138,7 @@ for (let action in [ 'start', 'stop', 'reload', 'restart' ]) {
 }
 assert_equal(join(',', actions),
 	'start:config.yaml,stop:config.yaml,reload:config.yaml,restart:config.yaml');
+assert_equal(join(',', readiness_deadlines), '31000,6000,31000,31000');
 
 let before_config = length(submitted);
 app.config_validate('config.yaml', 'valid\n', 'luci');

@@ -98,22 +98,24 @@ function bounded_logs(runtime) {
 	if (type(popen) != 'function') return '';
 	let pipe = null, output = '';
 	try {
-		pipe = popen('/sbin/logread 2>/dev/null', 'r');
+		pipe = popen("/sbin/logread -l 1000 2>/dev/null | /bin/grep -E '(^|[[:space:]])(miclash|clash(-rules|-hotplug)?)(\\[[0-9]+\\])?:[[:space:]]'", 'r');
 		if (pipe == null) return '';
-		while (length(output) < 32768) {
-			let chunk = pipe.read(min(4096, 32768 - length(output)));
+		while (true) {
+			let chunk = pipe.read(4096);
 			if (type(chunk) != 'string' || !length(chunk)) break;
 			output += chunk;
+			if (length(output) > 262144)
+				output = substr(output, length(output) - 262144);
 		}
 	}
 	catch (error) { output = ''; }
 	if (pipe != null) try { pipe.close(); } catch (error) { output = ''; }
 	let selected = [];
 	for (let line in split(output, '\n'))
-		if (match(lc(line), /(clash(-rules|-hotplug)?|miclash)(\[[0-9]+\])?:/))
-			push(selected, redact.sanitize(line));
-	if (length(selected) > 1000)
-		selected = slice(selected, length(selected) - 1000);
+		if (match(lc(line), /(^|[ \t])(clash(-rules|-hotplug)?|miclash)(\[[0-9]+\])?:[ \t]/))
+			push(selected, substr(redact.sanitize(line), 0, 2048));
+	if (length(selected) > 200)
+		selected = slice(selected, length(selected) - 200);
 	return join('\n', selected);
 };
 

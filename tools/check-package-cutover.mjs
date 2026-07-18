@@ -13,6 +13,8 @@ const settings = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/settin
 const packageRemove = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/package-remove'), 'utf8');
 const subscription = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/subscription.uc'), 'utf8');
 const miclashd = fs.readFileSync(path.join(pkg, 'rootfs/usr/sbin/miclashd'), 'utf8');
+const daemon = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/daemon.uc'), 'utf8');
+const nft = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/firewall/nft.uc'), 'utf8');
 const installer = fs.readFileSync(path.join(root, 'install-miclash.sh'), 'utf8');
 
 function requireMatch(value, expression, message) {
@@ -66,6 +68,17 @@ forbid(dns, /\.dns_backup|migrate_legacy/, 'v2 DNS lifecycle still converts v0.9
 forbid(settings, /legacy_patch|migrate_legacy|INTERNET_ONLY_MICLASH/,
 	'v2 settings module still parses v0.9 settings');
 requireMatch(makefile, /miclash-guard start[\s\S]*miclashd start/, 'Guard must start before miclashd');
+requireMatch(runtime, /logger_adapter\(\)[\s\S]*\/usr\/bin\/logger[\s\S]*-t[\s\S]*miclash/,
+	'backend logs must use the structured miclash syslog tag');
+requireMatch(runtime, /capture\('\/sbin\/ip -j '/,
+	'device observation must use the OpenWrt 24/25 ip-full path');
+forbid(runtime, /\/usr\/sbin\/ip/, 'device observation still uses a missing OpenWrt 25 path');
+requireMatch(daemon, /\/sbin\/logread -l 1000[\s\S]*\/bin\/grep -E/,
+	'LuCI logs must read a bounded, source-filtered syslog tail');
+const observeStart = nft.indexOf('export function observe(runtime)');
+const observeEnd = nft.indexOf('function write_all', observeStart);
+forbid(nft.slice(observeStart, observeEnd), /runtime\.process\.run/,
+	'nft observation still emits captured JSON into the daemon syslog');
 
 forbid(runtime, /\/opt\/clash\/bin\/clash-rules/, 'runtime Guard must not call legacy clash-rules');
 forbid(clash, /clash-rules|dnsmasq|iptables|nft|ip rule|ip route|cron/, 'clash init must only supervise Mihomo');
@@ -101,6 +114,12 @@ requireMatch(installer, /mktemp -d \/tmp\/miclash-install\.XXXXXX[\s\S]*validate
 	'interactive installer must use a verified root-private workspace');
 requireMatch(installer, /WORK_DIR="\$\{STATUS_FILE%\/\*\}"[\s\S]*validate_work_dir/,
 	'app installer must reuse the verified update authority');
+requireMatch(installer,
+	/schedule_backend_reload\(\)[\s\S]*\/bin\/busybox sleep 3[\s\S]*\/etc\/init\.d\/miclashd restart/,
+	'successful in-app package updates must asynchronously reload the backend');
+requireMatch(installer,
+	/write_status success done[^}]*[\s\S]*schedule_backend_reload/,
+	'backend reload must only be scheduled after the final authenticated handoff');
 requireMatch(installer, /path_metadata\(\)[\s\S]*LC_ALL=C ls -ldn[\s\S]*owned_file_0600\(\)[\s\S]*marker_owned\(\)[\s\S]*create_marker\(\)[\s\S]*set -C/,
 	'package markers must be exclusively created and root:0600 verified');
 requireMatch(makefile, /LUCI_DEPENDS:=[^\n]*\+coreutils-stat/,

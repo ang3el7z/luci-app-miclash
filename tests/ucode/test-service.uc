@@ -112,7 +112,7 @@ assert_throws(() => mihomo_api.request(api_env.rt, 'GET', '/not-allowed'), 'INVA
 assert_throws(() => mihomo_api.request(api_env.rt, 'GET', '/version', null, '../config.yaml'), 'INVALID_ARGUMENT');
 
 for (let controller in [
-	'0.0.0.0:9090', '[::]:9090', '192.168.1.1:9090', '127.0.0.1:0',
+	'192.168.1.1:9090', '127.0.0.1:0',
 	'127.0.0.1:65536', 'user@127.0.0.1:9090', '127.0.0.1:9090/path'
 ]) {
 	let hostile = env({ files: {
@@ -126,6 +126,15 @@ for (let controller in [ 'localhost:9090', '[::1]:9090' ]) {
 		'/opt/clash/config.yaml': 'external-controller: ' + controller + '\nsecret: safe\n'
 	} });
 	assert_equal(mihomo_api.request(loopback.rt, 'GET', '/version').ok, true);
+};
+
+for (let controller in [ '0.0.0.0:9090', '[::]:9090' ]) {
+	let wildcard = env({ files: {
+		'/opt/clash/config.yaml': 'external-controller: ' + controller + '\nsecret: safe\n'
+	} });
+	assert_equal(mihomo_api.request(wildcard.rt, 'GET', '/version').ok, true);
+	assert_equal(wildcard.http.calls[0].host,
+		controller == '0.0.0.0:9090' ? '127.0.0.1' : '::1');
 };
 
 let ambiguous = env({ files: {
