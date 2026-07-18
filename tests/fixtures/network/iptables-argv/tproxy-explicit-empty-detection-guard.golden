@@ -289,6 +289,22 @@
           "-A",
           "MICLASH_OUTPUT",
           "-m",
+          "set",
+          "--match-set",
+          "miclash_local4",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
           "mark",
           "--mark",
           "0x0",
@@ -511,6 +527,22 @@
           "mark",
           "--mark",
           "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "set",
+          "--match-set",
+          "miclash_local6",
+          "dst",
           "-j",
           "RETURN"
         ]
@@ -1076,6 +1108,22 @@
           "-A",
           "MCL_OU_111111111111",
           "-m",
+          "set",
+          "--match-set",
+          "MCL_L4_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
           "mark",
           "--mark",
           "0x0",
@@ -1298,6 +1346,22 @@
           "mark",
           "--mark",
           "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L6_111111111111",
+          "dst",
           "-j",
           "RETURN"
         ]
@@ -1605,6 +1669,22 @@
           "-C",
           "MCL_OU_111111111111",
           "-m",
+          "set",
+          "--match-set",
+          "MCL_L4_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
           "mark",
           "--mark",
           "0x0",
@@ -1814,6 +1894,22 @@
           "mark",
           "--mark",
           "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L6_111111111111",
+          "dst",
           "-j",
           "RETURN"
         ]
@@ -3200,6 +3296,22 @@
         "-A",
         "MCL_OU_111111111111",
         "-m",
+        "set",
+        "--match-set",
+        "MCL_L4_111111111111",
+        "dst",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
         "mark",
         "--mark",
         "0x0",
@@ -3422,6 +3534,22 @@
         "mark",
         "--mark",
         "0xff00/0xff00",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "set",
+        "--match-set",
+        "MCL_L6_111111111111",
+        "dst",
         "-j",
         "RETURN"
       ]

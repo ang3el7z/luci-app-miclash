@@ -68,6 +68,8 @@ function normalized(desired) {
 	}
 	add(l, 'add rule inet miclash output meta mark 0x0002 return');
 	add(l, 'add rule inet miclash output meta mark and 0xff00 != 0 return');
+	add(l, 'add rule inet miclash output ip daddr @local4 return');
+	add(l, 'add rule inet miclash output ip6 daddr @local6 return');
 	if (length(servers4)) add(l, 'add rule inet miclash output ip daddr @proxy_servers4 return');
 	if (length(servers6)) add(l, 'add rule inet miclash output ip6 daddr @proxy_servers6 return');
 	if (desired.proxy_mode == 'mixed')

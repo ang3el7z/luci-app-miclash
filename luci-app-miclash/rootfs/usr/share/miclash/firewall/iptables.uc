@@ -174,6 +174,8 @@ function normalized(desired) {
 			'--mark', '0x0002', '-j', 'RETURN' ]);
 		add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_OUTPUT', '-m', 'mark',
 			'--mark', '0xff00/0xff00', '-j', 'RETURN' ]);
+		add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_OUTPUT', '-m', 'set',
+			'--match-set', local_set, 'dst', '-j', 'RETURN' ]);
 		for (let ip in servers)
 			add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_OUTPUT', '-d', ip, '-j', 'RETURN' ]);
 		if (desired.proxy_mode == 'mixed') {

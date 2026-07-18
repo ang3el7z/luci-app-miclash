@@ -51,6 +51,21 @@ for (let desired in scenarios) {
 	}
 	assert_true(index(encoded(compiled), 'MICLASH_GUARD_FORWARD') < 0,
 		desired.name + ': Task 4 never owns or weakens Guard');
+	for (let family in desired.ip_families) {
+		let local_set = family == 'ipv4' ? 'miclash_local4' : 'miclash_local6';
+		let executable = family == 'ipv4' ? 'iptables' : 'ip6tables';
+		let local_at = -1, mark_at = -1;
+		for (let i = 0; i < length(compiled.model.normalized); i++) {
+			let request = compiled.model.normalized[i], args = request.args;
+			if (request.command != executable || args[3] != 'MICLASH_OUTPUT') continue;
+			if (args[4] == '-m' && args[5] == 'set' && args[6] == '--match-set' &&
+			    args[7] == local_set && args[8] == 'dst' && args[10] == 'RETURN') local_at = i;
+			if (args[4] == '-m' && args[5] == 'mark' && args[6] == '--mark' &&
+			    args[7] == '0x0') mark_at = i;
+		}
+		assert_true(local_at >= 0 && mark_at > local_at,
+			desired.name + ': router replies to local destinations bypass proxy marks for ' + family);
+	}
 }
 
 let desired = { ...scenarios[0], generation: 'bbbbbbbbbbbb',

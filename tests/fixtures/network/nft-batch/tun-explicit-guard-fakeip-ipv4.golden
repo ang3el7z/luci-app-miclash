@@ -28,6 +28,8 @@ add rule inet miclash proxy_g_111111111111 ip6 daddr @local6_g_111111111111 retu
 add rule inet miclash proxy_g_111111111111 meta nfproto ipv4 ip daddr @fakeip_whitelist4_g_111111111111 meta l4proto { tcp, udp } meta mark set 0x1
 add rule inet miclash output_g_111111111111 meta mark 0x0002 return
 add rule inet miclash output_g_111111111111 meta mark and 0xff00 != 0 return
+add rule inet miclash output_g_111111111111 ip daddr @local4_g_111111111111 return
+add rule inet miclash output_g_111111111111 ip6 daddr @local6_g_111111111111 return
 add rule inet miclash output_g_111111111111 meta nfproto ipv4 meta mark 0x0 meta l4proto { tcp, udp } meta mark set 0x1
 add rule inet miclash tun_input_g_111111111111 iifname "clash-tun" accept comment "miclash-fwd"
 add rule inet miclash tun_forward_g_111111111111 iifname "clash-tun" accept comment "miclash-fwd"

@@ -32,5 +32,7 @@ add rule inet miclash proxy meta nfproto ipv4 meta l4proto tcp tproxy ip to 127.
 add rule inet miclash proxy meta nfproto ipv4 meta l4proto udp tproxy ip to 127.0.0.1:7894 meta mark set 0x1
 add rule inet miclash output meta mark 0x0002 return
 add rule inet miclash output meta mark and 0xff00 != 0 return
+add rule inet miclash output ip daddr @local4 return
+add rule inet miclash output ip6 daddr @local6 return
 add rule inet miclash output ip daddr @proxy_servers4 return
 add rule inet miclash output meta nfproto ipv4 meta mark 0x0 meta l4proto { tcp, udp } meta mark set 0x1

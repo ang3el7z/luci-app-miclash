@@ -42,6 +42,7 @@ iptables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port
 iptables -t mangle -A MICLASH_PROXY -p udp -j MARK --set-mark 0x3
 iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN
 iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN
+iptables -t mangle -A MICLASH_OUTPUT -m set --match-set miclash_local4 dst -j RETURN
 iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p tcp -j MARK --set-mark 0x1
 iptables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p udp -j MARK --set-mark 0x3
 ipset create miclash_local6 hash:net family inet6 -exist
@@ -80,6 +81,7 @@ ip6tables -t mangle -A MICLASH_PROXY -p tcp -j TPROXY --on-ip ::1 --on-port 7894
 ip6tables -t mangle -A MICLASH_PROXY -p udp -j MARK --set-mark 0x3
 ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN
 ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -m set --match-set miclash_local6 dst -j RETURN
 ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p tcp -j MARK --set-mark 0x1
 ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p udp -j MARK --set-mark 0x3
 ip6tables -t filter -I INPUT 1 -i clash-tun -j ACCEPT

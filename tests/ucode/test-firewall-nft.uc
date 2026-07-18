@@ -48,6 +48,14 @@ for (let desired in scenarios) {
 	assert_true(index(compiled.batch, 'add chain inet miclash prerouting_g_' + compiled.generation) >= 0 &&
 		index(compiled.batch, 'add chain inet miclash output_g_' + compiled.generation) >= 0,
 		desired.name + ': generation entry chains exist before anchor links');
+	for (let family in desired.ip_families) {
+		let local = family == 'ipv4' ? 'ip daddr @local4 return' : 'ip6 daddr @local6 return';
+		let local_at = index(compiled.model.normalized, 'add rule inet miclash output ' + local);
+		let mark_at = index(compiled.model.normalized,
+			'add rule inet miclash output meta nfproto ' + family + ' meta mark 0x0');
+		assert_true(local_at >= 0 && mark_at > local_at,
+			desired.name + ': router replies to local destinations bypass proxy marks for ' + family);
+	}
 }
 
 let open = compile(scenarios[1]);
