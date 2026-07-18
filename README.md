@@ -93,6 +93,31 @@ These are third-party download paths. jsDelivr may briefly serve a cached copy o
 
 </details>
 
+Or with `curl`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+<details>
+<summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
+
+Via `gh-proxy.com`:
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Via jsDelivr:
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
+
+</details>
+
 The script verifies a ready stable v2 release, saves profiles, the Mihomo core, rules/providers and settings to `/root/miclash-v09-backup-*`, removes v0.9, installs v2 and restores the data. There is no automatic rollback or journal; the backup remains available for manual recovery if installation fails.
 
 Guard is inactive during the short replacement interval. Run the transition from the local network if protected traffic must never leave directly.

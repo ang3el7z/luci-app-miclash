@@ -93,6 +93,31 @@ wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/
 
 </details>
 
+或使用 `curl`：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+<details>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
+
+通过 `gh-proxy.com`：
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+
 脚本会验证已就绪的稳定 v2 版本，将配置文件、Mihomo 内核、rules/providers 和设置保存到 `/root/miclash-v09-backup-*`，删除 v0.9，安装 v2 并恢复数据。脚本不提供自动 rollback 或 journal；安装失败时 backup 会保留，供手动恢复。
 
 在短暂的替换期间 Guard 不工作。如果受保护流量绝不能直连，请从本地网络执行升级。

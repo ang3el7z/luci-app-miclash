@@ -93,6 +93,31 @@ wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/
 
 </details>
 
+Или через `curl`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+<details>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
+
+Через `gh-proxy.com`:
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Через jsDelivr:
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
+
+</details>
+
 Скрипт проверит готовый стабильный релиз v2, сохранит профили, ядро Mihomo, rules/providers и настройки в `/root/miclash-v09-backup-*`, удалит v0.9, установит v2 и восстановит данные. Автоматического rollback и journal нет; при ошибке backup останется для ручного восстановления.
 
 Во время короткой замены Guard не работает. Если прямой выход защищённого трафика недопустим, запускайте переход из локальной сети.
