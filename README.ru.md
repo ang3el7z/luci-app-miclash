@@ -21,6 +21,25 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
+
+Через `gh-proxy.com`:
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+Через jsDelivr:
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
+
+</details>
+
+<details>
 <summary><strong>🟡 Использовать curl</strong></summary>
 
 ```sh
@@ -51,25 +70,6 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 </details>
 
 <details>
-<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
-
-Через `gh-proxy.com`:
-
-```sh
-wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-```
-
-Через jsDelivr:
-
-```sh
-wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
-```
-
-Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
-
-</details>
-
-<details>
 <summary><strong>🔴 Переход с v0.9.x на v2.x</strong></summary>
 
 Для установленной v0.9.x один раз запустите отдельный переходный скрипт:
@@ -77,6 +77,27 @@ wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/
 ```sh
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
+
+<blockquote>
+<details>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
+
+Через `gh-proxy.com`:
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Через jsDelivr:
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
+
+</details>
+</blockquote>
 
 <blockquote>
 <details>
@@ -106,27 +127,6 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 
 </details>
 </blockquote>
-
-</details>
-</blockquote>
-
-<blockquote>
-<details>
-<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
-
-Через `gh-proxy.com`:
-
-```sh
-wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-Через jsDelivr:
-
-```sh
-wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
 
 </details>
 </blockquote>
