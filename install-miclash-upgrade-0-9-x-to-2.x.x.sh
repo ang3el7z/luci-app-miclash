@@ -19,7 +19,7 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1
 
 usage() {
 	cat <<'EOF'
-Usage: install-miclash-upgrade-0-9-x-to-2.x.x.sh --release-tag v2.X.Y
+Usage: install-miclash-upgrade-0-9-x-to-2.x.x.sh [--release-tag v2.X.Y]
 
 Performs a clean reinstall from an installed MiClash v0.9.x to the exact v2
 release. Profiles, the installed Mihomo core, rules/providers and legacy
@@ -32,7 +32,8 @@ EOF
 
 cleanup_work() {
 	[ -n "$WORK" ] || return 0
-	rm -f "$WORK/install-miclash.sh" "$WORK/install-miclash.sh.sha256" 2>/dev/null || true
+	rm -f "$WORK/install-miclash.sh" "$WORK/install-miclash.sh.sha256" \
+		"$WORK/miclash-release-manifest.json" "$WORK/releases.json" 2>/dev/null || true
 	rmdir "$WORK" 2>/dev/null || true
 }
 
@@ -59,10 +60,13 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-printf '%s\n' "$TAG" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' || die 'release tag must be a stable v2 tag'
+if [ -n "$TAG" ]; then
+	printf '%s\n' "$TAG" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' ||
+		die 'release tag must be a stable v2 tag'
+fi
 [ "$(id -u)" = 0 ] || die 'root is required'
 
-for command in curl sha256sum sed awk grep cp rm mkdir chmod date id mktemp rmdir; do need "$command"; done
+for command in curl sha256sum jsonfilter sed awk grep cp rm mkdir chmod date id mktemp rmdir; do need "$command"; done
 
 if command -v apk >/dev/null 2>&1 && apk info -e luci-app-miclash >/dev/null 2>&1; then
 	PKG_MGR=apk
@@ -88,19 +92,54 @@ fi
 
 WORK="$(mktemp -d /tmp/miclash-v09-clean.XXXXXX)" || die 'cannot create temporary directory'
 chmod 0700 "$WORK" || die 'cannot protect temporary directory'
-release_base="https://github.com/ang3el7z/luci-app-miclash/releases/download/$TAG"
-curl --fail --show-error --location --proto '=https' --tlsv1.2 \
-	--connect-timeout 10 --max-time 120 --retry 2 \
-	--output "$WORK/install-miclash.sh" "$release_base/install-miclash.sh" || die 'cannot download the v2 installer'
-curl --fail --show-error --location --proto '=https' --tlsv1.2 \
-	--connect-timeout 10 --max-time 120 --retry 2 \
-	--output "$WORK/install-miclash.sh.sha256" "$release_base/install-miclash.sh.sha256" || die 'cannot download the installer checksum'
-chmod 0600 "$WORK/install-miclash.sh" "$WORK/install-miclash.sh.sha256" || die 'cannot protect installer files'
-expected="$(awk 'NF == 2 && $2 == "install-miclash.sh" { print $1 }' "$WORK/install-miclash.sh.sha256")"
-printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || die 'invalid installer checksum file'
-[ "$(sha256sum "$WORK/install-miclash.sh" | awk '{ print $1 }')" = "$expected" ] || die 'installer checksum mismatch'
-grep -Fq 'MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v1"' "$WORK/install-miclash.sh" ||
-	die 'selected v2 release does not support the clean v0.9 upgrade'
+
+download() {
+	curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+		--connect-timeout 10 --max-time 120 --retry 2 --output "$2" "$1"
+}
+
+release_ready() {
+	candidate="$1"
+	release_base="https://github.com/ang3el7z/luci-app-miclash/releases/download/$candidate"
+	rm -f "$WORK/install-miclash.sh" "$WORK/install-miclash.sh.sha256" "$WORK/miclash-release-manifest.json"
+	download "$release_base/install-miclash.sh" "$WORK/install-miclash.sh" || return 1
+	download "$release_base/install-miclash.sh.sha256" "$WORK/install-miclash.sh.sha256" || return 1
+	download "$release_base/miclash-release-manifest.json" "$WORK/miclash-release-manifest.json" || return 1
+	expected="$(awk 'NF == 2 && $2 == "install-miclash.sh" { print $1 }' "$WORK/install-miclash.sh.sha256")"
+	printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || return 1
+	[ "$(sha256sum "$WORK/install-miclash.sh" | awk '{ print $1 }')" = "$expected" ] || return 1
+	[ "$(jsonfilter -i "$WORK/miclash-release-manifest.json" -e '@.tag' 2>/dev/null)" = "$candidate" ] || return 1
+	package_type=ipk
+	[ "$PKG_MGR" != apk ] || package_type=apk
+	jsonfilter -i "$WORK/miclash-release-manifest.json" -e '@.artifacts[*].package_type' 2>/dev/null |
+		grep -Fxq "$package_type" || return 1
+	grep -Fq 'MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v1"' "$WORK/install-miclash.sh" || return 1
+	chmod 0600 "$WORK/install-miclash.sh" "$WORK/install-miclash.sh.sha256" \
+		"$WORK/miclash-release-manifest.json" || return 1
+}
+
+if [ -n "$TAG" ]; then
+	release_ready "$TAG" || die "requested v2 release is incomplete or unsupported: $TAG"
+else
+	catalog="$WORK/releases.json"
+	download 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20' "$catalog" ||
+		die 'cannot download the MiClash release catalog'
+	index=0
+	while [ "$index" -lt 20 ]; do
+		candidate="$(jsonfilter -i "$catalog" -e "@[$index].tag_name" 2>/dev/null || true)"
+		[ -n "$candidate" ] || break
+		draft="$(jsonfilter -i "$catalog" -e "@[$index].draft" 2>/dev/null || true)"
+		prerelease="$(jsonfilter -i "$catalog" -e "@[$index].prerelease" 2>/dev/null || true)"
+		if printf '%s\n' "$candidate" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' &&
+			[ "$draft" = false ] && [ "$prerelease" = false ] && release_ready "$candidate" 2>/dev/null; then
+			TAG="$candidate"
+			break
+		fi
+		index=$((index + 1))
+	done
+	[ -n "$TAG" ] || die 'no complete stable v2 release was found in the newest 20 releases'
+fi
+say "Selected ready MiClash release: $TAG"
 
 stamp="$(date +%Y%m%d-%H%M%S)"
 BACKUP="/root/miclash-v09-backup-$stamp"

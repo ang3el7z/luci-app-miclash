@@ -269,43 +269,11 @@ function runRepositoryContracts() {
 			`${path} must document the one-time v0.9.x to v2.x transition`);
 		assert.match(text, /install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
 			`${path} must name the standalone transition installer`);
-		assert.match(text, /mktemp[\s\S]*wget[\s\S]*\$script[\s\S]*ash "\$script"/i,
-			`${path} must download the transition installer to a secure local file before execution`);
-		assert.doesNotMatch(text, /upgrade-0-9-x-to-2\.x\.x\.sh\s*\|\s*ash/i,
-			`${path} must not pipe the stateful transition installer into ash`);
-		assert.doesNotMatch(text,
-			/raw\.githubusercontent\.com\/ang3el7z\/luci-app-miclash\/main\/install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/i,
-			`${path} must not execute a mutable raw-main transition installer`);
 		assert.match(text,
-			/https:\/\/api\.github\.com\/repos\/ang3el7z\/luci-app-miclash\/releases\?per_page=20/,
-			`${path} must query the bounded stable release catalog for the transition installer`);
-		assert.match(text, /jsonfilter/,
-			`${path} must use structured release metadata extraction`);
-		assert.match(text, /\^v2\\\.\[0-9\]\+\\\.\[0-9\]\+\$/,
-			`${path} must select only stable v2 transition tags`);
-		assert.match(text, /releases\/download\/\$tag\/\$asset/,
-			`${path} must derive the transition installer from the selected tag`);
-		assert.match(text, /releases\/download\/\$tag\/\$checksum_name/,
-			`${path} must derive the transition checksum from the selected tag`);
-		assert.match(text, /releases\/tags\/\$tag/,
-			`${path} must fetch exact structured metadata for each transition tag`);
-		for (const expression of [ '@.tag_name', '@.draft', '@.prerelease' ])
-			assert.ok(text.includes(expression),
-				`${path} must validate ${expression} in exact transition release metadata`);
-		assert.match(text, /awk -v asset="\$asset"/,
-			`${path} must compare the published checksum filename literally`);
-		assert.match(text, /name == asset/,
-			`${path} must reject a checksum for any other filename`);
-		assert.match(text, /sha256sum -c "\$checksum"/,
-			`${path} must verify the exact published transition checksum locally`);
-		assert.match(text, /ash "\$script"/,
-			`${path} must execute only the verified local transition installer`);
-		assert.match(text, /ash "\$script" --release-tag "\$tag"/,
-			`${path} must bind the transition to the selected strict stable tag`);
-		assert.match(text, /trap 'rm -rf "\$work"' EXIT INT TERM/,
-			`${path} must clean the secure transition workspace`);
-		assert.match(text, /continue/,
-			`${path} must fall back past incomplete newer transition releases`);
+			/wget --no-proxy -qO- https:\/\/raw\.githubusercontent\.com\/ang3el7z\/luci-app-miclash\/main\/install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh \| ash/,
+			`${path} must expose the one-line v0.9 clean upgrade`);
+		assert.doesNotMatch(text, /mktemp -d \/tmp\/miclash-v09-clean/,
+			`${path} must not expose internal release-selection code`);
 		for (const token of [ 'install-miclash.sh', '/root/miclash-v09-backup-',
 			'rollback', 'journal', 'guard' ])
 			assert.ok(text.toLowerCase().includes(token.toLowerCase()),
@@ -321,6 +289,12 @@ function runRepositoryContracts() {
 		assert.doesNotMatch(text, /releases\/latest|package="luci-app-miclash[-_]/,
 			`${path} must not construct a package from a possibly incomplete latest release`);
 	}
+	const transitionInstaller = readFileSync('install-miclash-upgrade-0-9-x-to-2.x.x.sh', 'utf8');
+	assert.match(transitionInstaller, /releases\?per_page=20/);
+	assert.match(transitionInstaller, /jsonfilter/);
+	assert.match(transitionInstaller, /\^v2\\\.\[0-9\]\+\\\.\[0-9\]\+\$/);
+	assert.match(transitionInstaller, /miclash-release-manifest\.json/);
+	assert.match(transitionInstaller, /release_ready "\$candidate"/);
 	for (const [ path, expression ] of Object.entries({
 		'README.ru.md': /пакет завершит установку ошибкой|повторите конфигурацию пакета/i,
 		'README.zh-cn.md': /软件包安装会明确失败|重新执行 package configuration/i

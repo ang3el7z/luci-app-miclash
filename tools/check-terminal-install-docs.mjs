@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 
 const installerUrl =
 	'https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh';
+const upgradeUrl =
+	'https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh';
 const readmes = [ 'README.md', 'README.ru.md', 'README.zh-cn.md' ];
 
 for (const path of readmes) {
@@ -18,10 +20,10 @@ for (const path of readmes) {
 	assert.doesNotMatch(text, /package="luci-app-miclash[-_]/,
 		`${path} must delegate exact package selection to the maintained installer`);
 	assert.match(text, /20/, `${path} must document the bounded ready-release scan`);
-	assert.match(text, /ash "\$script" --release-tag "\$tag"/,
-		`${path} must pass the selected stable tag into the transition`);
-	assert.match(text, /\^v2\\\.\[0-9\]\+\\\.\[0-9\]\+\$/,
-		`${path} must select only stable v2 transition releases`);
+	assert.ok(text.includes(`wget --no-proxy -qO- ${upgradeUrl} | ash`),
+		`${path} must provide the one-line v0.9 clean upgrade`);
+	assert.doesNotMatch(text, /mktemp -d \/tmp\/miclash-v09-clean/,
+		`${path} must not expose the release-selection bootstrap`);
 }
 
 assert.match(readFileSync('README.md', 'utf8'), /does \*\*not\*\* fall back/);
@@ -33,5 +35,11 @@ assert.match(installer, /releases\?per_page=20/);
 assert.match(installer, /luci-app-miclash-\$\{clean_tag\}\.apk/);
 assert.match(installer, /luci-app-miclash_\$\{clean_tag\}_all\.ipk/);
 assert.match(installer, /miclash-release-manifest\.json/);
+
+const upgrade = readFileSync('install-miclash-upgrade-0-9-x-to-2.x.x.sh', 'utf8');
+assert.match(upgrade, /releases\?per_page=20/);
+assert.match(upgrade, /jsonfilter/);
+assert.match(upgrade, /miclash-release-manifest\.json/);
+assert.match(upgrade, /Usage: .*\[--release-tag v2\.X\.Y\]/);
 
 console.log('terminal installation documentation contract passed');
