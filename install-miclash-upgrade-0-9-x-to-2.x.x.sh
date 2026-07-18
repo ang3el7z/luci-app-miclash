@@ -428,5 +428,6 @@ fi
 	die 'cannot mark the clean replacement complete'
 chmod 0600 "$BACKUP/upgrade-complete" || die 'cannot protect the completion marker'
 
+rm -rf "$BACKUP"
 say "MiClash $TAG clean installation completed."
-say "Your v0.9 backup is kept at: $BACKUP"
+say 'Temporary v0.9 backup removed after successful transition.'
