@@ -104,8 +104,17 @@ assert.doesNotMatch(upgrade, /UPGRADE_STATE='resume-restore'/,
 assert.doesNotMatch(upgrade, /\[ -n "\$TAG" \] \|\| TAG="\$backup_tag"/,
 	'an interrupted transition must select a newly ready v2 release by default');
 assert.match(upgrade,
-	/UPGRADE_STATE='resume-install'[\s\S]*Removing incomplete MiClash v2[\s\S]*(?:apk del|opkg remove) luci-app-miclash[\s\S]*clean-install --target-tag "\$TAG"/,
-	'an interrupted v2 post-install must remove the partial package and reinstall a ready release');
+	/remove_incomplete_v2\(\)[\s\S]*apk --no-scripts del luci-app-miclash[\s\S]*opkg --force-remove remove luci-app-miclash[\s\S]*apk add coreutils-timeout ip-full ucode-mod-socket/,
+	'an interrupted v2 post-install must bypass package hooks and then restore APK alternatives');
+assert.match(upgrade,
+	/remove_legacy_guard_rules\(\)[\s\S]*miclash_guard_bootstrap_v1 miclash_guard_emergency_v1 miclash_guard/,
+	'transition cleanup must recognize every v2 Guard table');
+assert.match(upgrade,
+	/remove_incomplete_v2\(\)[\s\S]*remove_legacy_guard_rules[\s\S]*rm -rf \/var\/run\/miclash \/tmp\/miclash/,
+	'an interrupted v2 post-install must clear only known Guard and volatile transition residue');
+assert.match(upgrade,
+	/UPGRADE_STATE='resume-install'[\s\S]*\[ "\$UPGRADE_STATE" = resume-install \][\s\S]*remove_incomplete_v2[\s\S]*clean-install --target-tag "\$TAG"/,
+	'an interrupted v2 post-install must perform a clean ready-release reinstall');
 const backupCreated = upgrade.indexOf('say "Backup created: $BACKUP"');
 const guardDisabled = upgrade.indexOf('disable_legacy_guard', backupCreated);
 const packageRemoved = upgrade.indexOf('apk del luci-app-miclash', guardDisabled);

@@ -13,7 +13,6 @@ OLD_ENABLED=0
 OLD_RUNNING=0
 PKG_MGR=''
 UPGRADE_STATE='fresh'
-PARTIAL_V2=0
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'MiClash clean upgrade failed: %s\n' "$*" >&2; exit 1; }
@@ -98,7 +97,9 @@ remove_legacy_guard_rules() {
 		/opt/clash/bin/clash-rules guard_stop >/dev/null 2>&1 || true
 	fi
 	if command -v nft >/dev/null 2>&1; then
-		nft delete table inet miclash_guard >/dev/null 2>&1 || true
+		for guard_table in miclash_guard_bootstrap_v1 miclash_guard_emergency_v1 miclash_guard; do
+			nft delete table inet "$guard_table" >/dev/null 2>&1 || true
+		done
 	fi
 	for firewall_cmd in iptables ip6tables; do
 		command -v "$firewall_cmd" >/dev/null 2>&1 || continue
@@ -112,9 +113,12 @@ remove_legacy_guard_rules() {
 }
 
 verify_legacy_guard_off() {
-	if command -v nft >/dev/null 2>&1 &&
-		nft list table inet miclash_guard >/dev/null 2>&1; then
-		return 1
+	if command -v nft >/dev/null 2>&1; then
+		for guard_table in miclash_guard_bootstrap_v1 miclash_guard_emergency_v1 miclash_guard; do
+			if nft list table inet "$guard_table" >/dev/null 2>&1; then
+				return 1
+			fi
+		done
 	fi
 	for firewall_cmd in iptables ip6tables; do
 		command -v "$firewall_cmd" >/dev/null 2>&1 || continue
@@ -137,6 +141,42 @@ disable_legacy_guard() {
 	remove_legacy_guard_rules
 	verify_legacy_guard_off || die 'legacy Guard rules are still active; refusing to remove MiClash'
 	say 'Legacy Guard disabled for the clean replacement.'
+}
+
+remove_incomplete_v2() {
+	say 'Cleaning the interrupted MiClash v2 installation...'
+	for service in miclashd clash; do
+		if command -v ubus >/dev/null 2>&1; then
+			ubus call service delete "{ \"name\": \"$service\" }" >/dev/null 2>&1 || true
+		fi
+		[ ! -x "/etc/init.d/$service" ] || "/etc/init.d/$service" disable >/dev/null 2>&1 || true
+	done
+
+	partial_version="$(installed_miclash_version "$PKG_MGR")"
+	if [ -n "$partial_version" ]; then
+		case "$PKG_MGR" in
+			apk)
+				apk --no-scripts del luci-app-miclash || true
+				;;
+			opkg)
+				opkg --force-remove remove luci-app-miclash || true
+				;;
+		esac
+		[ -z "$(installed_miclash_version "$PKG_MGR")" ] ||
+			die "cannot remove incomplete MiClash v2 package $partial_version"
+	fi
+	if [ "$PKG_MGR" = apk ]; then
+		# Skipping package scripts also skips alternative restoration for v2-only
+		# dependencies. Reinstall them immediately after the broken package is gone.
+		apk add coreutils-timeout ip-full ucode-mod-socket >/dev/null ||
+			die 'cannot restore APK runtime dependencies after clean retry removal'
+	fi
+
+	remove_legacy_guard_rules
+	verify_legacy_guard_off || die 'interrupted v2 Guard rules are still active'
+	rm -rf /var/run/miclash /tmp/miclash
+	rm -f /tmp/miclash-hard-reinstall
+	say 'Interrupted MiClash v2 state removed; the backup remains intact.'
 }
 
 usage() {
@@ -216,7 +256,6 @@ case "$INSTALLED_VERSION" in
 			die "no installed v0.9.x and no incomplete v0.9 backup to resume (installed: ${INSTALLED_VERSION:-none})"
 		load_resume_backup
 		UPGRADE_STATE='resume-install'
-		[ -z "$INSTALLED_VERSION" ] || PARTIAL_V2=1
 		say "Resuming the interrupted clean replacement from: $BACKUP"
 		;;
 	*) die "expected installed MiClash v0.9.x, found: $INSTALLED_VERSION" ;;
@@ -308,12 +347,8 @@ if [ "$UPGRADE_STATE" = fresh ]; then
 	verify_legacy_guard_off || die 'legacy Guard returned during package removal'
 fi
 
-if [ "$PARTIAL_V2" = 1 ]; then
-	say "Removing incomplete MiClash v2 package before retry..."
-	case "$PKG_MGR" in
-		opkg) opkg remove luci-app-miclash || die 'cannot remove the incomplete v2 package' ;;
-		apk) apk del luci-app-miclash || die 'cannot remove the incomplete v2 package' ;;
-	esac
+if [ "$UPGRADE_STATE" = resume-install ]; then
+	remove_incomplete_v2
 fi
 
 rm -rf /opt/clash /etc/config/miclash /etc/miclash
