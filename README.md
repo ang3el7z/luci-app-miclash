@@ -26,6 +26,25 @@ Or with `curl`:
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
+<details>
+<summary>GitHub download unavailable? Show alternative commands</summary>
+
+Via `gh-proxy.com`:
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+Via jsDelivr:
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
+
+</details>
+
 The installer verifies `.sha256`, repairs mismatched `zlib`/`libcurl4` when necessary, and offers update, reinstall, removal or exit for an existing MiClash installation. The LuCI updater does **not** fall back: it waits for the newest version's artifacts and checks again later.
 
 ## Upgrading from v0.9.x to v2.x
@@ -36,6 +55,25 @@ Run the separate transition script once on an installed v0.9.x system:
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
+<details>
+<summary>GitHub download unavailable? Show alternative commands</summary>
+
+Via `gh-proxy.com`:
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Via jsDelivr:
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
+
+</details>
+
 The script verifies a ready stable v2 release, saves profiles, the Mihomo core, rules/providers and settings to `/root/miclash-v09-backup-*`, removes v0.9, installs v2 and restores the data. There is no automatic rollback or journal; the backup remains available for manual recovery if installation fails.
 
 Guard is inactive during the short replacement interval. Run the transition from the local network if protected traffic must never leave directly.
@@ -44,7 +82,7 @@ Guard is inactive during the short replacement interval. Run the transition from
 
 Open **LuCI → Services → MiClash**.
 
-1. Install Mihomo in **Settings → Kernel**.
+1. Mihomo is installed automatically by the terminal installer.
 2. Add a subscription or edit a YAML profile.
 3. Validate the Draft without changing live routing.
 4. Apply the Draft to make it Active.

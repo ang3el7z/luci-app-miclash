@@ -26,6 +26,25 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
+<details>
+<summary>无法从 GitHub 下载？显示备用命令</summary>
+
+通过 `gh-proxy.com`：
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+
 安装器会验证 `.sha256`，在需要时修复不匹配的 `zlib`/`libcurl4`；如果已安装 MiClash，还可选择更新、重新安装、删除或退出。LuCI 内的更新**不会回退**：它会等待最新版本的文件发布，然后再次检查。
 
 ## 从 v0.9.x 升级到 v2.x
@@ -36,6 +55,25 @@ curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/inst
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
+<details>
+<summary>无法从 GitHub 下载？显示备用命令</summary>
+
+通过 `gh-proxy.com`：
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+
 脚本会验证已就绪的稳定 v2 版本，将配置文件、Mihomo 内核、rules/providers 和设置保存到 `/root/miclash-v09-backup-*`，删除 v0.9，安装 v2 并恢复数据。脚本不提供自动 rollback 或 journal；安装失败时 backup 会保留，供手动恢复。
 
 在短暂的替换期间 Guard 不工作。如果受保护流量绝不能直连，请从本地网络执行升级。
@@ -44,7 +82,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 
 打开 **LuCI → 服务 → MiClash**。
 
-1. 在 **设置 → 内核** 中安装 Mihomo。
+1. 终端安装脚本会自动安装 Mihomo。
 2. 添加订阅或编辑 YAML 配置。
 3. 验证 Draft；此操作不会更改当前路由。
 4. 应用 Draft，使其成为 Active。
