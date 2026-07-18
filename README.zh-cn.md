@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/inst
 ```
 
 <details>
-<summary>无法从 GitHub 下载？显示备用命令</summary>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
 通过 `gh-proxy.com`：
 
@@ -56,7 +56,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary>无法从 GitHub 下载？显示备用命令</summary>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
 通过 `gh-proxy.com`：
 

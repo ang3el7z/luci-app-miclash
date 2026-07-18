@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/inst
 ```
 
 <details>
-<summary>GitHub не открывается? Показать альтернативные команды</summary>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
 
 Через `gh-proxy.com`:
 
@@ -56,7 +56,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary>GitHub не открывается? Показать альтернативные команды</summary>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
 
 Через `gh-proxy.com`:
 

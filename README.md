@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/inst
 ```
 
 <details>
-<summary>GitHub download unavailable? Show alternative commands</summary>
+<summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
 
 Via `gh-proxy.com`:
 
@@ -56,7 +56,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary>GitHub download unavailable? Show alternative commands</summary>
+<summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
 
 Via `gh-proxy.com`:
 
