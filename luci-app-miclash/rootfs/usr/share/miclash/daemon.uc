@@ -642,7 +642,7 @@ export function compose(runtime, overrides) {
 		push(close_domains, memory_domain);
 
 		let timezone_adapter = utc_timezones(runtime.timezones);
-		let device_app = { ...runtime, timezones: timezone_adapter };
+		let device_app = { ...runtime, timezones: timezone_adapter, device_cache: {} };
 		let devices_closed = false;
 		let devices_domain = {
 			list: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.discover(device_app); },

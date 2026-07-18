@@ -1033,6 +1033,8 @@ let production_interfaces = production_methods.network_interfaces.call({ args: {
 assert_equal(production_interfaces.detected_lan, 'br-lan');
 assert_equal(production_interfaces.detected_wan, 'pppoe-wan');
 assert_equal(production_methods.memory_status.call({ args: {} }).baseline_rss_kb, 64000);
+assert_equal(type(production_methods.devices_list.call({ args: {} })?.devices), 'array',
+	'first device discovery must start with an empty daemon cache');
 assert_equal(production_methods.devices_timezones.call({ args: {} })[0], 'UTC');
 assert_equal(length(production_methods.backup_list.call({ args: {} })), 0);
 let production_diagnostics = production_methods.diagnostics_summary.call({ args: {} });

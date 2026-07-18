@@ -249,7 +249,9 @@ let many_center = diagnostics.create({ runtime,
 assert_throws(() => many_center.summary(), 'RESPONSE_TOO_LARGE');
 let huge_center = diagnostics.create({ runtime,
 	sources: { ...sources, logs: () => [ repeated('x', 20000) ] } });
-assert_throws(() => huge_center.summary(), 'RESPONSE_TOO_LARGE');
+assert_equal(huge_center.summary().schema_version, 1,
+	'summary must not collect report-only logs');
+assert_throws(() => huge_center.create_report(), 'RESPONSE_TOO_LARGE');
 
 let created = center.create_report();
 assert_true(match(created.id, /^rpt_[0-9a-f]{32}$/));

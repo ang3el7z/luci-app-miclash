@@ -694,7 +694,9 @@ export function method_table(app, transfers) {
 			exact(arguments, { profile: { type: 'string' }, limit: { type: 'int' } });
 			let limit = arguments.limit ?? 10;
 			if (limit < 1 || limit > 100) errors.fail('INVALID_ARGUMENT');
-			return domain_read('history_list', { profile: profile(arguments), limit });
+			return { revisions: domain_read('history_list', {
+				profile: profile(arguments), limit
+			}) };
 		}),
 		history_diff: method({ profile: '', from_revision: '', to_revision: '' }, (arguments) => {
 			exact(arguments, { profile: { type: 'string' },
@@ -788,7 +790,7 @@ export function method_table(app, transfers) {
 		}),
 		backup_list: method(empty, (arguments) => {
 			exact(arguments, {});
-			return domain_read('backup_list', {});
+			return { backups: domain_read('backup_list', {}) };
 		}),
 		backup_create: method({ options: {}, source: '' }, (arguments) => {
 			exact(arguments, { options: { type: 'object', required: true },
@@ -823,15 +825,15 @@ export function method_table(app, transfers) {
 		}),
 		devices_list: method(empty, (arguments) => {
 			exact(arguments, {});
-			return domain_read('devices_list', {});
+			return { devices: domain_read('devices_list', {}) };
 		}),
 		devices_timezones: method(empty, (arguments) => {
 			exact(arguments, {});
-			return domain_read('devices_timezones', {});
+			return { timezones: domain_read('devices_timezones', {}) };
 		}),
 		devices_policy_list: method(empty, (arguments) => {
 			exact(arguments, {});
-			return domain_read('devices_policy_list', {});
+			return { policies: domain_read('devices_policy_list', {}) };
 		}),
 		devices_policy_set: method({ policy: {}, source: '' }, (arguments) => {
 			exact(arguments, { policy: { type: 'object', required: true },

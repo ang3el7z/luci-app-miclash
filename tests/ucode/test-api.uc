@@ -527,6 +527,9 @@ function contract_delegate(name, operation) {
 		if (name == 'config_list') return [ { marker: 'read:' + name } ];
 		if (name == 'config_read' || name == 'config_read_draft') return 'read:' + name;
 		if (name == 'operation_list') return [ { marker: 'read:' + name } ];
+		if (index([ 'history_list', 'backup_list', 'devices_list',
+			'devices_timezones', 'devices_policy_list' ], name) >= 0)
+			return [ { marker: 'read:' + name } ];
 		if (name == 'logs_read') return { generation: args[0].generation,
 			cursor: args[0].cursor, next_cursor: args[0].cursor,
 			lines: [ 'miclash: ready' ], has_more: false, stale: false };
@@ -552,6 +555,12 @@ function expected_read_reply(entry, arguments) {
 	if (entry.name == 'operation_get') return { operation: marker };
 	if (entry.name == 'operation_list') return { operations: [ marker ] };
 	if (entry.name == 'config_list') return { profiles: [ marker ] };
+	let list_fields = {
+		history_list: 'revisions', backup_list: 'backups', devices_list: 'devices',
+		devices_timezones: 'timezones', devices_policy_list: 'policies'
+	};
+	if (list_fields[entry.name] != null)
+		return { [list_fields[entry.name]]: [ marker ] };
 	if (entry.name == 'config_read' || entry.name == 'config_read_draft')
 		return { profile: arguments.profile, content: 'read:' + entry.name };
 	if (entry.name == 'telegram_test') return { sent: true };

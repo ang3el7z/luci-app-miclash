@@ -188,17 +188,12 @@ function call(source, name) {
 	try { return json(sprintf('%J', source[name]())); }
 	catch (error) { return { state: 'unknown', code: 'UNAVAILABLE' }; }
 };
-function collect(sources) {
-	let result = {};
-	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
-		'updates', 'settings', 'last_repair', 'config', 'process', 'logs', 'uci',
-		'operations' ])
-		result[name] = call(sources, name);
-	let telegram = result.settings?.telegram;
-	let url = result.settings?.core?.subscription_url;
+function public_status(settings) {
+	let telegram = settings?.telegram;
+	let url = settings?.core?.subscription_url;
 	let transport = type(url) == 'string' && match(lc(url), /^https:\/\//) ? 'https' :
 		(type(url) == 'string' && match(lc(url), /^http:\/\//) ? 'http' : 'none');
-	result.public_status = {
+	return {
 		telegram: {
 			enabled: telegram?.enabled === true,
 			configured: type(telegram?.token) == 'string' && length(telegram.token) > 0 &&
@@ -210,6 +205,22 @@ function collect(sources) {
 			insecure: transport == 'http'
 		}
 	};
+};
+function collect_summary(sources) {
+	let result = {};
+	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
+		'updates', 'settings', 'last_repair', 'process', 'uci' ])
+		result[name] = call(sources, name);
+	result.public_status = public_status(result.settings);
+	return sanitize(result);
+};
+function collect(sources) {
+	let result = {};
+	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
+		'updates', 'settings', 'last_repair', 'config', 'process', 'logs', 'uci',
+		'operations' ])
+		result[name] = call(sources, name);
+	result.public_status = public_status(result.settings);
 	return sanitize(result);
 };
 function make_summary(safe, now) {
@@ -442,7 +453,7 @@ export function create(dependencies) {
 	return {
 		summary: (...args) => {
 			if (length(args)) invalid();
-			return clone(make_summary(collect(sources), runtime.clock.now()));
+			return clone(make_summary(collect_summary(sources), runtime.clock.now()));
 		},
 		create_report: (...args) => {
 			if (length(args)) invalid();
