@@ -1,6 +1,7 @@
 'use strict';
 'require baseclass';
 'require ui';
+'require view.miclash.background-refresh';
 
 const SOURCE = 'luci';
 const POLL_MS = 30000;
@@ -42,16 +43,17 @@ function create(options) {
 	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, retryMs = POLL_MS;
 	const cancels = new Set();
 
-	function report(error) {
+	function report(error, context) {
 		if (destroyed) return;
-		if (typeof options.onError === 'function') options.onError(error);
+		if (typeof options.onError === 'function') options.onError(error, context || {});
 		else ui.addNotification(null, E('p', {}, String(error?.message || error)), 'error');
 	}
+	const backgroundRefresh = view_miclash_background_refresh.create(report);
 	function progress(message, record) { if (typeof options.onProgress === 'function') options.onProgress(message, record || null); }
 	function clearTimer() { if (timer != null) win.clearTimeout(timer); timer = null; }
 	function schedule(delay) {
 		clearTimer(); if (destroyed || doc.hidden || !host) return;
-		timer = win.setTimeout(() => { timer = null; refresh().catch(report); }, delay || retryMs);
+		timer = win.setTimeout(() => { timer = null; backgroundRefresh.run(() => refresh()); }, delay || retryMs);
 	}
 	function wait(reply, message) {
 		const id = reply?.operation_id;
@@ -206,8 +208,8 @@ function create(options) {
 		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
 		finally { if (!destroyed && token === generation) schedule(); }
 	}
-	function visibilitychange() { if (doc.hidden) clearTimer(); else refresh().catch(report); }
-	function mount(node) { host = node; destroyed = false; paint(); refresh().catch(report); return host; }
+	function visibilitychange() { if (doc.hidden) clearTimer(); else backgroundRefresh.run(() => refresh()); }
+	function mount(node) { host = node; destroyed = false; paint(); backgroundRefresh.run(() => refresh()); return host; }
 	function destroy() {
 		if (destroyed) return; destroyed = true; generation++; modalGeneration++; clearTimer();
 		doc.removeEventListener('visibilitychange', visibilitychange);

@@ -9,6 +9,8 @@ const cssPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/
 assert.ok(existsSync(panelPath), `missing diagnostics panel: ${panelPath}`);
 
 const panelSource = readFileSync(panelPath, 'utf8');
+const backgroundRefreshSource = readFileSync(
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/background-refresh.js', 'utf8');
 const apiSource = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/api.js', 'utf8');
 const configSource = readFileSync(configPath, 'utf8');
 const css = readFileSync(cssPath, 'utf8');
@@ -169,8 +171,10 @@ const ui = {
 };
 const translate = (value) => String(value);
 const baseclass = { extend: (value) => value };
-const moduleApi = new Function('baseclass', 'ui', 'E', '_', 'window', 'document', 'Blob', panelSource)(
-	baseclass, ui, E, translate, windowMock, documentMock, Blob);
+const backgroundRefreshModule = new Function('baseclass', backgroundRefreshSource)(baseclass);
+const moduleApi = new Function('baseclass', 'ui', 'E', '_', 'window', 'document', 'Blob',
+	'view_miclash_background_refresh', panelSource)(
+	baseclass, ui, E, translate, windowMock, documentMock, Blob, backgroundRefreshModule);
 
 const calls = [];
 let destroyedApi = 0;

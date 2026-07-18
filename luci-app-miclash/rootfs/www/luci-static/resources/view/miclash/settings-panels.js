@@ -1,6 +1,7 @@
 'use strict';
 'require baseclass';
 'require ui';
+'require view.miclash.background-refresh';
 
 const MASK = '[REDACTED]';
 const SOURCE = 'luci';
@@ -96,11 +97,12 @@ function create(options) {
 	let state = { desired: {}, memory: {}, memorySettings: {}, telegram: {}, telegramSettings: {}, notifications: {} };
 	const cancels = new Set();
 
-	function report(error) {
+	function report(error, context) {
 		if (destroyed) return;
-		if (typeof options.onError === 'function') options.onError(error);
+		if (typeof options.onError === 'function') options.onError(error, context || {});
 		else ui.addNotification(null, E('p', {}, String(error?.message || error)), 'error');
 	}
+	const backgroundRefresh = view_miclash_background_refresh.create(report);
 	function progress(message, record) {
 		if (typeof options.onProgress === 'function') options.onProgress(message, record || null);
 	}
@@ -113,7 +115,7 @@ function create(options) {
 	function schedule(delay) {
 		clearTimer();
 		if (destroyed || doc.hidden || !host) return;
-		timer = win.setTimeout(() => { timer = null; refresh().catch(report); }, delay || retryMs);
+		timer = win.setTimeout(() => { timer = null; backgroundRefresh.run(() => refresh()); }, delay || retryMs);
 	}
 	function awaitOperation(reply, title) {
 		const id = reply?.operation_id;
@@ -323,8 +325,8 @@ function create(options) {
 		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
 		finally { if (!destroyed && token === generation) schedule(); }
 	}
-	function visibilitychange() { if (doc.hidden) clearTimer(); else refresh().catch(report); }
-	function mount(node) { host = node; destroyed = false; paint(); refresh().catch(report); return host; }
+	function visibilitychange() { if (doc.hidden) clearTimer(); else backgroundRefresh.run(() => refresh()); }
+	function mount(node) { host = node; destroyed = false; paint(); backgroundRefresh.run(() => refresh()); return host; }
 	function destroy() {
 		if (destroyed) return; destroyed = true; generation++; clearTimer();
 		doc.removeEventListener('visibilitychange', visibilitychange);

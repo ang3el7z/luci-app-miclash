@@ -1,6 +1,7 @@
 'use strict';
 'require baseclass';
 'require ui';
+'require view.miclash.background-refresh';
 
 const COMPONENTS = [
 	[ 'mihomo', () => _('Mihomo') ],
@@ -186,6 +187,7 @@ function create(options) {
 	let refreshPending = false;
 	let destroyed = false;
 	const objectUrls = new Set();
+	const backgroundRefresh = view_miclash_background_refresh.create((error) => showError(error));
 
 	function clearTimer(name) {
 		const value = name === 'poll' ? pollTimer : eventTimer;
@@ -199,7 +201,7 @@ function create(options) {
 		if (destroyed || doc.hidden) return;
 		pollTimer = win.setTimeout(() => {
 			pollTimer = null;
-			refresh().catch(() => {});
+			backgroundRefresh.run(() => refresh());
 		}, pollInterval);
 	}
 
@@ -267,8 +269,6 @@ function create(options) {
 				current = { status: values[0] || {}, health: values[1] || {}, summary: values[2] || {} };
 				paint();
 			}
-		} catch (error) {
-			if (!destroyed) showError(error);
 		} finally {
 			refreshing = false;
 			if (!destroyed && refreshPending) {
@@ -415,7 +415,7 @@ function create(options) {
 		if (doc.hidden) {
 			clearTimer('poll');
 			clearTimer('event');
-		} else refresh().catch(() => {});
+		} else backgroundRefresh.run(() => refresh());
 	}
 
 	function ubusEvent(event) {
@@ -423,14 +423,14 @@ function create(options) {
 		clearTimer('event');
 		eventTimer = win.setTimeout(() => {
 			eventTimer = null;
-			refresh().catch(() => {});
+			backgroundRefresh.run(() => refresh());
 		}, 150);
 	}
 
 	function mount(node) {
 		host = node;
 		paint();
-		if (!destroyed && !doc.hidden) refresh().catch(() => {});
+		if (!destroyed && !doc.hidden) backgroundRefresh.run(() => refresh());
 		return host;
 	}
 

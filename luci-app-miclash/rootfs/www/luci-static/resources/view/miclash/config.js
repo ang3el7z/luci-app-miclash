@@ -97,7 +97,10 @@ const managementOwner = (() => {
 			for (const factory of factories) created.push(factory.create({
 				api: view_miclash_api.create(),
 				onSave: () => saveAllSettings(),
-				onError: (error) => { setOperationError(error); notify('error', error?.message || error); },
+				onError: (error, context) => {
+					if (!context?.background) setOperationError(error);
+					notify('error', error?.message || error);
+				},
 				onNotificationSettings: (settings) => {
 					appState.notificationAutoHide = settings?.auto_hide !== false;
 				},
