@@ -42,7 +42,7 @@ miclash_mutation_lock_start() {
 }
 
 miclash_mutation_lock_nonce() {
-	nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')" || return 1
+	nonce="$(tr -d '-' < /proc/sys/kernel/random/uuid 2>/dev/null)" || return 1
 	case "$nonce" in
 		*[!0-9a-f]*|'') return 1 ;;
 	esac
@@ -307,7 +307,9 @@ miclash_mutation_lock_enter_internal() {
 		MICLASH_MUTATION_LOCK_DEPTH=$((MICLASH_MUTATION_LOCK_DEPTH + 1))
 		return 0
 	fi
-	attempts=$(( (wait_ms + 49) / 50 + 1 ))
+	# BusyBox sleep on OpenWrt 25 rejects fractional seconds. Round the
+	# requested wait up to portable whole-second retry intervals instead.
+	attempts=$(( (wait_ms + 999) / 1000 + 1 ))
 	while [ "$attempts" -gt 0 ]; do
 		if miclash_mutation_lock_settle_takeover; then
 			if [ -n "${MICLASH_MUTATION_LOCK_TOKEN:-}" ]; then
@@ -335,7 +337,7 @@ miclash_mutation_lock_enter_internal() {
 			return 0
 		fi
 		attempts=$((attempts - 1))
-		[ "$attempts" -le 0 ] || sleep 0.05
+		[ "$attempts" -le 0 ] || sleep 1
 	done
 	miclash_mutation_lock_busy
 }

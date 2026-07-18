@@ -86,8 +86,24 @@ function packaged_app_version(filesystem) {
 	return '0.9.3';
 };
 
+export function create_flush_adapter(filesystem) {
+	let probe = filesystem.open('/dev/null', 'w');
+	if (probe == null)
+		fail('INTERNAL');
+
+	let success_marker = probe.flush();
+	let probe_error = probe.error();
+	let closed = probe.close();
+	if ((success_marker !== true && success_marker != null) ||
+	    probe_error != null || closed !== true)
+		fail('INTERNAL');
+
+	return (handle) => handle.flush() === success_marker;
+};
+
 function fs_adapter() {
 	let fs = require('fs');
+	let flush = create_flush_adapter(fs);
 	return {
 		readfile: (path) => fs.readfile(path),
 		writefile: (path, data) => fs.writefile(path, data),
@@ -95,11 +111,9 @@ function fs_adapter() {
 		read: (handle, amount) => handle.read(amount),
 		fstat: (handle) => fs.stat('/proc/self/fd/' + handle.fileno()),
 		write: (handle, data) => handle.write(data),
-		flush: (handle) => {
-			let flushed = handle.flush();
-			// Pinned OpenWrt 24.10 returns null on success and true on failure.
-			return flushed == null;
-		},
+		// OpenWrt 24's pinned ucode and OpenWrt 25 use opposite success
+		// markers. The /dev/null probe normalizes the active ABI safely.
+		flush,
 		close: (handle) => handle.close(),
 		stat: (path) => fs.stat(path),
 		lstat: (path) => fs.lstat(path),
