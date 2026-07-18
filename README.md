@@ -21,32 +21,14 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary><strong>Use curl instead</strong></summary>
+<summary><strong>🟡 Use curl instead</strong></summary>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-</details>
-
 <details>
 <summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
-
-**wget**
-
-Via `gh-proxy.com`:
-
-```sh
-wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-```
-
-Via jsDelivr:
-
-```sh
-wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
-```
-
-**curl**
 
 Via `gh-proxy.com`:
 
@@ -64,8 +46,29 @@ These are third-party download paths. jsDelivr may briefly serve a cached copy o
 
 </details>
 
+</details>
+
 <details>
-<summary><strong>Upgrading from v0.9.x to v2.x</strong></summary>
+<summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
+
+Via `gh-proxy.com`:
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+Via jsDelivr:
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
+
+</details>
+
+<details>
+<summary><strong>🔴 Upgrading from v0.9.x to v2.x</strong></summary>
 
 Run the separate transition script once on an installed v0.9.x system:
 
@@ -74,32 +77,14 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary><strong>Use curl instead</strong></summary>
+<summary><strong>🟡 Use curl instead</strong></summary>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
-</details>
-
 <details>
 <summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
-
-**wget**
-
-Via `gh-proxy.com`:
-
-```sh
-wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-Via jsDelivr:
-
-```sh
-wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-**curl**
 
 Via `gh-proxy.com`:
 
@@ -111,6 +96,27 @@ Via jsDelivr:
 
 ```sh
 curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
+
+</details>
+
+</details>
+
+<details>
+<summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
+
+Via `gh-proxy.com`:
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Via jsDelivr:
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
 These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.

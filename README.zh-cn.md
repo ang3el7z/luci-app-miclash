@@ -21,32 +21,14 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary><strong>改用 curl</strong></summary>
+<summary><strong>🟡 改用 curl</strong></summary>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-</details>
-
 <details>
 <summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
-
-**wget**
-
-通过 `gh-proxy.com`：
-
-```sh
-wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-```
-
-通过 jsDelivr：
-
-```sh
-wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
-```
-
-**curl**
 
 通过 `gh-proxy.com`：
 
@@ -64,8 +46,29 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 
 </details>
 
+</details>
+
 <details>
-<summary><strong>从 v0.9.x 升级到 v2.x</strong></summary>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
+
+通过 `gh-proxy.com`：
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+
+<details>
+<summary><strong>🔴 从 v0.9.x 升级到 v2.x</strong></summary>
 
 已安装 v0.9.x 的设备应只运行一次独立的过渡脚本：
 
@@ -74,32 +77,14 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary><strong>改用 curl</strong></summary>
+<summary><strong>🟡 改用 curl</strong></summary>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
-</details>
-
 <details>
 <summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
-
-**wget**
-
-通过 `gh-proxy.com`：
-
-```sh
-wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-通过 jsDelivr：
-
-```sh
-wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-**curl**
 
 通过 `gh-proxy.com`：
 
@@ -111,6 +96,27 @@ curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-
 
 ```sh
 curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+
+</details>
+
+<details>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
+
+通过 `gh-proxy.com`：
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
 这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
