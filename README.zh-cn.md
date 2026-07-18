@@ -32,17 +32,31 @@ curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/inst
 <details>
 <summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
+**wget**
+
 通过 `gh-proxy.com`：
 
 ```sh
 wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
 通过 jsDelivr：
 
 ```sh
 wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+**curl**
+
+通过 `gh-proxy.com`：
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
 curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
 ```
 
@@ -71,17 +85,31 @@ curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/inst
 <details>
 <summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
+**wget**
+
 通过 `gh-proxy.com`：
 
 ```sh
 wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
 通过 jsDelivr：
 
 ```sh
 wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+**curl**
+
+通过 `gh-proxy.com`：
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
 curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
