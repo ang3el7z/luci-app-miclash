@@ -27,6 +27,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
@@ -45,6 +46,7 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
 
 </details>
+</blockquote>
 
 </details>
 
@@ -76,6 +78,7 @@ wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🟡 改用 curl</strong></summary>
 
@@ -83,6 +86,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
@@ -101,9 +105,12 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
 
 </details>
+</blockquote>
 
 </details>
+</blockquote>
 
+<blockquote>
 <details>
 <summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
@@ -122,6 +129,7 @@ wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/
 这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
 
 </details>
+</blockquote>
 
 脚本会验证已就绪的稳定 v2 版本，将配置文件、Mihomo 内核、rules/providers 和设置保存到 `/root/miclash-v09-backup-*`，删除 v0.9，安装 v2 并恢复数据。脚本不提供自动 rollback 或 journal；安装失败时 backup 会保留，供手动恢复。
 

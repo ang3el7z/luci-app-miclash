@@ -27,6 +27,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
 
@@ -45,6 +46,7 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
 
 </details>
+</blockquote>
 
 </details>
 
@@ -76,6 +78,7 @@ wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🟡 Использовать curl</strong></summary>
 
@@ -83,6 +86,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
 
@@ -101,9 +105,12 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
 
 </details>
+</blockquote>
 
 </details>
+</blockquote>
 
+<blockquote>
 <details>
 <summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
 
@@ -122,6 +129,7 @@ wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/
 Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
 
 </details>
+</blockquote>
 
 Скрипт проверит готовый стабильный релиз v2, сохранит профили, ядро Mihomo, rules/providers и настройки в `/root/miclash-v09-backup-*`, удалит v0.9, установит v2 и восстановит данные. Автоматического rollback и journal нет; при ошибке backup останется для ручного восстановления.
 

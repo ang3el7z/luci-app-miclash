@@ -27,6 +27,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
 
@@ -45,6 +46,7 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
 
 </details>
+</blockquote>
 
 </details>
 
@@ -76,6 +78,7 @@ Run the separate transition script once on an installed v0.9.x system:
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🟡 Use curl instead</strong></summary>
 
@@ -83,6 +86,7 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
+<blockquote>
 <details>
 <summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
 
@@ -101,9 +105,12 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
 
 </details>
+</blockquote>
 
 </details>
+</blockquote>
 
+<blockquote>
 <details>
 <summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
 
@@ -122,6 +129,7 @@ wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/
 These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
 
 </details>
+</blockquote>
 
 The script verifies a ready stable v2 release, saves profiles, the Mihomo core, rules/providers and settings to `/root/miclash-v09-backup-*`, removes v0.9, installs v2 and restores the data. There is no automatic rollback or journal; the backup remains available for manual recovery if installation fails.
 
