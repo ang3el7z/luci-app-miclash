@@ -4,9 +4,16 @@ import { readFileSync } from 'node:fs';
 const path = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/devices-panel.js';
 const source = readFileSync(path, 'utf8');
 const css = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css', 'utf8');
-const module = new Function('baseclass', source)({ extend: (value) => value });
+const vendorSource = readFileSync(
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/device-vendors.js', 'utf8');
+const vendorModule = new Function('baseclass', vendorSource)({ extend: (value) => value });
+const module = new Function('baseclass', 'view_miclash_device_vendors', source)(
+	{ extend: (value) => value }, vendorModule
+);
 
 assert.equal(typeof module.deviceRows, 'function', 'deviceRows model builder must be exported');
+assert.equal(typeof module.deviceDisplayName, 'function');
+assert.equal(typeof module.loadVendorDatabase, 'function');
 
 const neighbor = (mac, host) => ({ mac, hostname: host, addresses: [ {
 	address: '192.168.1.20', family: 'ipv4', current: true, source: 'neighbor', interfaces: [ 'br-lan' ]
@@ -40,8 +47,32 @@ assert.equal(rows[2].explicit, false);
 assert.deepEqual(module.currentAddresses(rows[0].device), [ '192.168.1.20' ],
 	'IPv4/IPv6 discovery sources do not duplicate the same visible address');
 
+const vendorDatabase = vendorModule.parseDatabase(readFileSync(
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/device-vendors.db', 'utf8'));
+const vendorRows = module.deviceRows([
+	neighbor('F8:17:2D:E1:4E:99', 'lwip0'),
+	neighbor('08:65:F0:AF:97:3D', null),
+	neighbor('36:F8:95:3F:B7:53', 'MacBookPro')
+], [], vendorDatabase);
+const byMac = Object.fromEntries(vendorRows.map((row) => [ row.mac, row ]));
+assert.equal(module.deviceDisplayName(byMac['F8:17:2D:E1:4E:99'].label, 'Unknown device'),
+	'Tuya Smart Inc. · lwip0');
+assert.equal(module.deviceDisplayName(byMac['08:65:F0:AF:97:3D'].label, 'Unknown device'),
+	'JM Zengge Co., Ltd — Unknown device');
+assert.equal(module.deviceDisplayName(byMac['36:F8:95:3F:B7:53'].label, 'Unknown device'),
+	'MacBookPro', 'a useful hostname must remain unchanged even for a private MAC');
+assert.equal(await module.loadVendorDatabase(async () => { throw new Error('offline'); }), null,
+	'vendor database failure must remain a silent UI fallback');
+assert.equal((await module.loadVendorDatabase(async () => readFileSync(
+	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/device-vendors.db', 'utf8'))).snapshot,
+	'2026-07-19');
+
 assert.match(source, /_\('Set policy'\)/, 'inherited rows need the Set policy action');
 assert.match(source, /_\('Change policy'\)/, 'explicit rows need the Change policy action');
+assert.match(source, /\/cgi-bin\/miclash-device-vendors/,
+	'the panel must load the local offline database without a large RPC response');
+assert.ok((source.match(/deviceDisplayName\(/g) || []).length >= 3,
+	'table, sorting model, and policy modal must share the resolved label');
 assert.doesNotMatch(source, /_\('Last seen'\)/, 'unified device list must not retain the history column');
 assert.match(css, /\.sbox-device-online[\s\S]*color:\s*var\(--sbox-success\)/,
 	'online device state must use the shared success color');

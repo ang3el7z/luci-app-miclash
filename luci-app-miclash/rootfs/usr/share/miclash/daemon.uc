@@ -24,6 +24,7 @@ import * as route_test from 'miclash.route-test';
 import * as routing from 'miclash.routing';
 import * as platform from 'miclash.platform';
 import * as app_update_scheduler from 'miclash.app-update-scheduler';
+import * as device_vendor_update from 'miclash.device-vendor-update';
 
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
@@ -401,7 +402,7 @@ export function compose(runtime, overrides) {
 		operations, settings, storage, service, config, state, application,
 		api, memory, devices, notify, telegram, mutation_lock,
 		reconcile_adapter, network, subscription, updates, http, diagnostics, route_test, routing,
-		mihomo_api, app_update_scheduler,
+		mihomo_api, app_update_scheduler, device_vendor_update,
 		...(overrides ?? {})
 	};
 	let operation_manager = modules.operations.create(runtime);
@@ -857,6 +858,12 @@ export function compose(runtime, overrides) {
 		push(close_domains, app_update_domain);
 		if (app_update_domain.start() !== true)
 			errors.fail('INTERNAL');
+		let device_vendor_domain = modules.device_vendor_update.create({
+			runtime, http: modules.http
+		});
+		push(close_domains, device_vendor_domain);
+		if (device_vendor_domain.start() !== true)
+			errors.fail('INTERNAL');
 		app.logs_read = (arguments) => bounded_log_page(runtime, arguments);
 		app.system_info = () => bounded_system_info(runtime);
 		app.network_interfaces = () => bounded_network_interfaces(runtime, settings_domain);
@@ -904,7 +911,8 @@ export function compose(runtime, overrides) {
 			architecture: () => bounded_system_info(runtime).architecture,
 			state: app.status, health: app.health, memory: app.memory_status,
 			updates: () => ({ ...updates_domain.status(),
-				automatic_miclash: app_update_domain.status() }),
+				automatic_miclash: app_update_domain.status(),
+				device_vendors: device_vendor_domain.status() }),
 			settings: settings_domain.get,
 			last_repair,
 			config: () => configuration.read_active('config.yaml'),
@@ -1033,7 +1041,7 @@ export function compose(runtime, overrides) {
 			transfers,
 			domains: { memory: memory_domain,
 				devices: devices_domain, notifications: notifications_domain,
-				app_update: app_update_domain },
+				app_update: app_update_domain, device_vendors: device_vendor_domain },
 			drain: () => app.set_draining(true),
 			// NORMAL_CLOSE_BEGIN
 			close: () => {

@@ -123,6 +123,8 @@ define Package/$(PKG_NAME)/install
 
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/miclash
 	$(CP) ./rootfs/www/luci-static/resources/view/miclash/* $(1)/www/luci-static/resources/view/miclash/
+	$(INSTALL_DIR) $(1)/www/cgi-bin
+	$(INSTALL_BIN) ./rootfs/www/cgi-bin/miclash-device-vendors $(1)/www/cgi-bin/
 
 	$(INSTALL_DIR) $(1)/opt/clash/lst
 

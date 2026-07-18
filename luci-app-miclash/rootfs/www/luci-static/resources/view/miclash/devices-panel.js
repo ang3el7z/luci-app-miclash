@@ -2,6 +2,7 @@
 'require baseclass';
 'require ui';
 'require view.miclash.background-refresh';
+'require view.miclash.device-vendors';
 
 const SOURCE = 'luci';
 const POLL_MS = 30000;
@@ -33,6 +34,21 @@ function deviceOnline(device) {
 function explicitPolicy(policy) {
 	return !!policy && [ 'proxy', 'direct', 'block' ].includes(policy.action);
 }
+function deviceDisplayName(label, unknownLabel) {
+	const unknown = String(unknownLabel || 'Unknown device');
+	if (label?.kind === 'hostname') return label.hostname;
+	if (label?.kind === 'generic') return label.manufacturer
+		? `${label.manufacturer} · ${label.hostname}` : label.hostname;
+	if (label?.kind === 'manufacturer') return `${label.manufacturer} — ${unknown}`;
+	return unknown;
+}
+async function loadVendorDatabase(loader) {
+	try {
+		const content = await loader();
+		return view_miclash_device_vendors.parseDatabase(content);
+	}
+	catch (error) { return null; }
+}
 function mergeDevice(current, incoming, mac) {
 	const addresses = [], seen = new Set();
 	for (const item of [ ...(current?.addresses || []), ...(incoming?.addresses || []) ]) {
@@ -46,7 +62,7 @@ function mergeDevice(current, incoming, mac) {
 		addresses
 	};
 }
-function deviceRows(discovered, savedPolicies) {
+function deviceRows(discovered, savedPolicies, vendorDatabase) {
 	const devices = new Map(), policies = new Map();
 	for (const device of Array.isArray(discovered) ? discovered : []) {
 		const mac = deviceMac(device?.mac);
@@ -63,13 +79,14 @@ function deviceRows(discovered, savedPolicies) {
 	const rows = [];
 	for (const [ mac, device ] of devices) {
 		const policy = policies.get(mac) || null;
-		rows.push({ mac, device, policy, explicit: explicitPolicy(policy), online: deviceOnline(device) });
+		rows.push({ mac, device, policy, explicit: explicitPolicy(policy), online: deviceOnline(device),
+			label: view_miclash_device_vendors.resolveDeviceLabel(device, vendorDatabase) });
 	}
 	return rows.sort((left, right) => {
 		if (left.explicit !== right.explicit) return left.explicit ? -1 : 1;
 		if (left.online !== right.online) return left.online ? -1 : 1;
-		const leftName = String(left.device?.hostname || '').toLocaleLowerCase();
-		const rightName = String(right.device?.hostname || '').toLocaleLowerCase();
+		const leftName = deviceDisplayName(left.label, '').toLocaleLowerCase();
+		const rightName = deviceDisplayName(right.label, '').toLocaleLowerCase();
 		if (leftName !== rightName) return leftName < rightName ? -1 : 1;
 		return left.mac.localeCompare(right.mac);
 	});
@@ -88,7 +105,18 @@ function create(options) {
 		typeof api.watchOperation !== 'function') throw new Error('Typed devices API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, modalGeneration = 0;
 	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, retryMs = POLL_MS;
+	let vendorDatabase = null, vendorLoadState = 'idle';
 	const cancels = new Set();
+	const vendorLoader = typeof options.loadVendorDatabase === 'function'
+		? options.loadVendorDatabase
+		: async () => {
+			if (typeof win.fetch !== 'function') throw new Error('fetch unavailable');
+			const response = await win.fetch('/cgi-bin/miclash-device-vendors', {
+				credentials: 'same-origin', cache: 'no-store'
+			});
+			if (!response?.ok) throw new Error('vendor database unavailable');
+			return response.text();
+		};
 
 	function report(error, context) {
 		if (destroyed) return;
@@ -131,12 +159,12 @@ function create(options) {
 	];
 	function table(models) {
 		const rows = models.slice(0, 512).map((row) => {
-			const { device, mac, policy, explicit, online } = row;
+			const { device, mac, policy, explicit, online, label } = row;
 			const edit = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral',
 				'data-device-mac': mac }, explicit ? _('Change policy') : _('Set policy'));
 			edit.addEventListener('click', () => openEditor(mac, device, policy));
 			return E('tr', {}, [
-				E('td', {}, text(device.hostname, _('Unknown device'))),
+				E('td', {}, deviceDisplayName(label, _('Unknown device'))),
 				E('td', {}, E('span', { 'class': online ? 'sbox-device-online' : 'sbox-device-offline' },
 					online ? _('Online') : _('Offline'))),
 				E('td', {}, currentAddresses(device).join(', ') || '-'), E('td', {}, text(mac)),
@@ -152,7 +180,7 @@ function create(options) {
 	}
 	function paint() {
 		if (!host || destroyed) return;
-		const rows = deviceRows(devices, policies);
+		const rows = deviceRows(devices, policies, vendorDatabase);
 		host.replaceChildren(
 			E('div', { 'class': 'sbox-device-heading' }, [
 				E('span', { 'class': 'sbox-device-count', 'aria-live': 'polite' },
@@ -160,6 +188,19 @@ function create(options) {
 			]),
 			E('p', { 'class': 'sbox-muted' }, _('Guard has highest precedence. A direct policy never disables or bypasses Guard protection.')),
 			table(rows));
+	}
+	function needsVendorDatabase() {
+		return devices.some((device) => !String(device?.hostname || '').trim() ||
+			view_miclash_device_vendors.isGenericHostname(device?.hostname));
+	}
+	function ensureVendorDatabase() {
+		if (destroyed || vendorLoadState !== 'idle' || !needsVendorDatabase()) return;
+		vendorLoadState = 'loading';
+		loadVendorDatabase(vendorLoader).then((database) => {
+			if (destroyed) return;
+			vendorLoadState = database == null ? 'failed' : 'ready';
+			if (database != null) { vendorDatabase = database; paint(); }
+		});
 	}
 	function optionSelect(policy) {
 		return E('select', { 'id': 'sbox-device-policy-action', 'class': 'cbi-input-select' }, ACTIONS.map((name) => {
@@ -195,8 +236,9 @@ function create(options) {
 					}, name))) ])
 			])
 		]);
+		const label = view_miclash_device_vendors.resolveDeviceLabel(device, vendorDatabase);
 		const body = E('div', { 'class': 'sbox-device-policy-editor sbox-modal-responsive' }, [
-			E('p', {}, [ E('strong', {}, text(device?.hostname, _('Unknown device'))), ' · ', text(mac) ]),
+			E('p', {}, [ E('strong', {}, deviceDisplayName(label, _('Unknown device'))), ' · ', text(mac) ]),
 			E('label', { 'for': 'sbox-device-policy-action' }, _('Policy')), optionSelect(policy),
 			E('label', { 'class': 'sbox-checkbox-row', 'for': 'sbox-device-schedule-enabled' }, [ scheduleEnabled, _('Use schedule') ]),
 			scheduleFields,
@@ -261,7 +303,7 @@ function create(options) {
 				throw new Error(_('Invalid timezone response.'));
 			devices = Array.isArray(replies[0]) ? replies[0] : (Array.isArray(replies[0]?.devices) ? replies[0].devices : []);
 			policies = Array.isArray(replies[1]) ? replies[1] : (Array.isArray(replies[1]?.policies) ? replies[1].policies : []);
-			timezones = zones.slice(); retryMs = POLL_MS; paint();
+			timezones = zones.slice(); retryMs = POLL_MS; paint(); ensureVendorDatabase();
 		}
 		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
 		finally { if (!destroyed && token === generation) schedule(); }
@@ -278,4 +320,6 @@ function create(options) {
 	return { mount, refresh, destroy, openEditor, policyFromEditor };
 }
 
-return baseclass.extend({ create, normalizedMac, currentAddresses, deviceRows });
+return baseclass.extend({
+	create, normalizedMac, currentAddresses, deviceRows, deviceDisplayName, loadVendorDatabase
+});
