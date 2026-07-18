@@ -12,7 +12,7 @@ MiClash is a LuCI application for managing Mihomo: subscriptions, routing, Guard
 
 ## Installation
 
-The installer detects the package manager, checks the newest 20 stable releases, and selects the first one with complete artifacts and checksums. If a new tag is still building, it installs the previous ready release.
+The installer detects the package manager, checks the newest 20 stable releases, and selects the first one with complete artifacts and checksums. If a new tag is still building, it installs the previous ready release. It verifies `.sha256`, repairs mismatched `zlib`/`libcurl4` when necessary, and offers update, reinstall, removal or exit for an existing MiClash installation. The LuCI updater does **not** fall back: it waits for the newest version's artifacts and checks again later.
 
 With `wget`:
 
@@ -21,29 +21,13 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
-
-Via `gh-proxy.com`:
-
-```sh
-wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
-```
-
-Via jsDelivr:
-
-```sh
-wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
-```
-
-These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
-
-</details>
-
-Or with `curl`:
+<summary><strong>Use curl instead</strong></summary>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
+
+</details>
 
 <details>
 <summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
@@ -51,12 +35,14 @@ curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/inst
 Via `gh-proxy.com`:
 
 ```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
 Via jsDelivr:
 
 ```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
 curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
 ```
 
@@ -64,9 +50,8 @@ These are third-party download paths. jsDelivr may briefly serve a cached copy o
 
 </details>
 
-The installer verifies `.sha256`, repairs mismatched `zlib`/`libcurl4` when necessary, and offers update, reinstall, removal or exit for an existing MiClash installation. The LuCI updater does **not** fall back: it waits for the newest version's artifacts and checks again later.
-
-## Upgrading from v0.9.x to v2.x
+<details>
+<summary><strong>Upgrading from v0.9.x to v2.x</strong></summary>
 
 Run the separate transition script once on an installed v0.9.x system:
 
@@ -75,29 +60,13 @@ wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash
 ```
 
 <details>
-<summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
-
-Via `gh-proxy.com`:
-
-```sh
-wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-Via jsDelivr:
-
-```sh
-wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-These are third-party download paths. jsDelivr may briefly serve a cached copy of `main` after an update.
-
-</details>
-
-Or with `curl`:
+<summary><strong>Use curl instead</strong></summary>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
+
+</details>
 
 <details>
 <summary><strong>🔵 GitHub download unavailable? Show alternative commands</strong></summary>
@@ -105,12 +74,14 @@ curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/inst
 Via `gh-proxy.com`:
 
 ```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
 Via jsDelivr:
 
 ```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
@@ -121,6 +92,8 @@ These are third-party download paths. jsDelivr may briefly serve a cached copy o
 The script verifies a ready stable v2 release, saves profiles, the Mihomo core, rules/providers and settings to `/root/miclash-v09-backup-*`, removes v0.9, installs v2 and restores the data. There is no automatic rollback or journal; the backup remains available for manual recovery if installation fails.
 
 Guard is inactive during the short replacement interval. Run the transition from the local network if protected traffic must never leave directly.
+
+</details>
 
 ## Quick start
 
