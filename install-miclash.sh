@@ -176,6 +176,24 @@ normalize_version() {
     printf '%s' "$1" | sed 's/^v//; s/-r[0-9][0-9]*$//'
 }
 
+installed_miclash_version() {
+    case "$1" in
+        apk)
+            apk list -I 2>/dev/null | awk '
+                $1 ~ /^luci-app-miclash-[0-9]/ {
+                    sub(/^luci-app-miclash-/, "", $1)
+                    print $1
+                    exit
+                }'
+            ;;
+        opkg)
+            opkg list-installed luci-app-miclash 2>/dev/null |
+                awk 'NR == 1 { print $3 }'
+            ;;
+        *) return 64 ;;
+    esac
+}
+
 version_major() {
     normalized="$(normalize_version "$1")"
     printf '%s\n' "$normalized" |
@@ -592,16 +610,7 @@ fetch_miclash_release() {
 }
 
 detect_installed_miclash() {
-    MICLASH_INSTALLED_VER=""
-
-    if [ "$PKG_MGR" = "apk" ]; then
-        if apk info -e luci-app-miclash >/dev/null 2>&1; then
-            MICLASH_INSTALLED_VER=$(apk info -v luci-app-miclash 2>/dev/null \
-                | sed -n '1s/^luci-app-miclash-//p')
-        fi
-    else
-        MICLASH_INSTALLED_VER=$(opkg list-installed luci-app-miclash 2>/dev/null | awk 'NR==1 {print $3}')
-    fi
+    MICLASH_INSTALLED_VER=$(installed_miclash_version "$PKG_MGR")
 
     MICLASH_INSTALLED_NORM=$(normalize_version "$MICLASH_INSTALLED_VER")
 

@@ -17,6 +17,24 @@ say() { printf '%s\n' "$*"; }
 die() { printf 'MiClash clean upgrade failed: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"; }
 
+installed_miclash_version() {
+	case "$1" in
+		apk)
+			apk list -I 2>/dev/null | awk '
+				$1 ~ /^luci-app-miclash-[0-9]/ {
+					sub(/^luci-app-miclash-/, "", $1)
+					print $1
+					exit
+				}'
+			;;
+		opkg)
+			opkg list-installed luci-app-miclash 2>/dev/null |
+				awk 'NR == 1 { print $3 }'
+			;;
+		*) return 64 ;;
+	esac
+}
+
 usage() {
 	cat <<'EOF'
 Usage: install-miclash-upgrade-0-9-x-to-2.x.x.sh [--release-tag v2.X.Y]
@@ -68,15 +86,14 @@ fi
 
 for command in curl sha256sum jsonfilter sed awk grep cp rm mkdir chmod date id mktemp rmdir; do need "$command"; done
 
-if command -v apk >/dev/null 2>&1 && apk info -e luci-app-miclash >/dev/null 2>&1; then
+if command -v apk >/dev/null 2>&1; then
 	PKG_MGR=apk
-	OLD_VERSION="$(apk info -v luci-app-miclash 2>/dev/null | sed -n '1s/^luci-app-miclash-//p')"
 elif command -v opkg >/dev/null 2>&1; then
 	PKG_MGR=opkg
-	OLD_VERSION="$(opkg list-installed luci-app-miclash 2>/dev/null | awk 'NR == 1 { print $3 }')"
 else
 	die 'installed MiClash package was not found'
 fi
+OLD_VERSION="$(installed_miclash_version "$PKG_MGR")"
 
 case "$OLD_VERSION" in 0.9.*) ;; *) die "expected installed MiClash v0.9.x, found: ${OLD_VERSION:-none}" ;; esac
 [ -x /etc/init.d/clash ] || die 'legacy clash service is missing'
