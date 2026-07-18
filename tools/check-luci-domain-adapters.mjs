@@ -44,8 +44,8 @@ assert.equal(fatalLog.levelClass, 'sbox-log-level-fatal');
 
 const styleSource = fs.readFileSync(`${root}/style.css`, 'utf8');
 assert.match(styleSource,
-	/\.sbox-log-level-crit \.sbox-log-level,[\s\S]*\.sbox-log-level-emerg \.sbox-log-level\s*\{[^}]*color:\s*var\(--sbox-danger\)/,
-	'critical badges must derive their color from the shared danger palette');
+	/\.sbox-log-level-crit \.sbox-log-level,[\s\S]*\.sbox-log-level-emerg \.sbox-log-level\s*\{[^}]*color:\s*var\(--sbox-code-key\)/,
+	'critical badges must reuse the YAML key color');
 
 const settingsCalls = [];
 let nextOperationId = 0;
