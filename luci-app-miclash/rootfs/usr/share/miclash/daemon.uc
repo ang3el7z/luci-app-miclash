@@ -183,7 +183,44 @@ export function parse_openwrt_version(openwrt_release, os_release) {
 	return primary_distrib || fallback_distrib;
 };
 
-function mihomo_version(runtime, core) {
+function normalized_mihomo_version(value) {
+	if (type(value) != 'string' || length(value) > 128 || match(value, /[[:cntrl:]]/))
+		return '';
+	let found = match(value,
+		/^v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?)$/);
+	return found == null ? '' : substr(found[1], 0, 64);
+};
+
+function binary_mihomo_version(runtime) {
+	let popen = runtime.fs?.popen ?? require('fs').popen;
+	if (type(popen) != 'function') return '';
+	let pipe = null, output = '';
+	try {
+		pipe = popen('/opt/clash/bin/clash -v 2>&1', 'r');
+		if (pipe == null) return '';
+		let chunk = null;
+		while ((chunk = pipe.read(128)) != null && length(chunk)) {
+			output += chunk;
+			if (length(output) > 512) {
+				pipe.close();
+				pipe = null;
+				return '';
+			}
+		}
+		let status = pipe.close();
+		pipe = null;
+		if (status != 0) return '';
+	}
+	catch (error) {
+		if (pipe != null) try { pipe.close(); } catch (close_error) {}
+		return '';
+	}
+	let found = match(trim(output),
+		/^(Mihomo|Clash) Meta v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?)([[:space:]]|$)/);
+	return found == null ? '' : substr(found[2], 0, 64);
+};
+
+export function mihomo_version(runtime, core) {
 	if (core?.type != 'file' || core.nlink != 1 || (core.uid != null && core.uid != 0) ||
 	    runtime.fs?.realpath('/opt/clash/bin/clash') != '/opt/clash/bin/clash')
 		return '';
@@ -191,12 +228,10 @@ function mihomo_version(runtime, core) {
 	try {
 		response = mihomo_api.request(runtime, 'GET', '/version', null, 'config.yaml');
 	}
-	catch (error) { return ''; }
-	let output = response?.ok === true && type(response?.data?.version) == 'string'
-		? response.data.version : '';
-	if (length(output) > 128 || match(output, /[[:cntrl:]]/)) return '';
-	let found = match(output, /^v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?)$/);
-	return found == null ? '' : substr(found[1], 0, 64);
+	catch (error) { response = null; }
+	let version = response?.ok === true
+		? normalized_mihomo_version(response?.data?.version) : '';
+	return length(version) ? version : binary_mihomo_version(runtime);
 };
 
 function stable_mac(runtime) {
