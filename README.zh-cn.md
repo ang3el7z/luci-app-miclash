@@ -6,136 +6,92 @@
 
 # MiClash
 
-MiClash 是在 OpenWrt 上管理 Mihomo 的 LuCI 应用。配置、订阅、路由、Guard 防护、诊断、更新、通知和恢复都集中在同一界面中。
+MiClash 是用于管理 Mihomo 的 LuCI 应用，在同一界面中提供订阅、路由、Guard、诊断、更新、通知和恢复功能。
 
-支持的平台：**带有 firewall4 的 OpenWrt 24.10+**。
+**要求：** 使用 firewall4 的 OpenWrt 24.10+。OpenWrt 25.12+ 使用 APK，OpenWrt 24.10 使用 opkg。
 
-- 稳定版 OpenWrt 25.12 使用 APK。
-- old-stable OpenWrt 24.10 使用 opkg。
+## 安装
 
-## 架构与安全
+安装器会检测软件包管理器，检查最新 20 个稳定版本，并选择第一个文件和校验和均已完整发布的版本。如果新 tag 仍在构建，则安装上一个已就绪版本。
 
-`miclashd` 是 MiClash 唯一的管理 backend。LuCI 与 Telegram 使用同一个类型化 `ubus` API；浏览器不会执行 shell、软件包管理器或任意文件操作。设置保存在 `UCI` 的 `/etc/config/miclash`，配置文件、rulesets 与 Mihomo 内核位于 `/opt/clash`。
-
-启用 Guard 后系统采用 fail-closed。早期启动的 Guard safety latch 会在 `miclashd` 或 Mihomo 就绪前保护选定流量。daemon 崩溃、内核缺失、升级失败或修复失败时，受保护流量不能悄悄直连。只有明确关闭 Guard 才能解除 latch，device policy 也不能覆盖该约束。
-
-## 终端安装
-
-维护中的安装器会自动检测 `apk` 或 `opkg`，检查最新 20 个稳定 release，并选择 manifest、软件包及 checksum 均已发布的第一个版本。如果 CI 仍在构建最新 tag，终端安装会提示并选择上一个已就绪的稳定 release。
-
-### 一次性 v0.9.x → v2.x 过渡
-
-`install-miclash.sh` 用于全新安装和同一 major 版本内的常规更新。已安装 v0.9.x 的设备应只运行一次独立的 clean-upgrade 脚本。它会把 profiles、已安装的 Mihomo core、rules/providers 和旧 settings 保存到 `/root/miclash-v09-backup-*`，完整删除 v0.9，安装选定的 v2 release，再恢复用户文件。它不提供自动 rollback 或 journal。安装后会恢复原来的 Guard 和服务状态；如果安装失败，backup 会保留以便手动恢复。在短暂的 clean-replacement 期间 Guard 不工作；如果担心流量直连，请从本地网络运行该命令。
-
-脚本会从最新 20 个 release 中自动选择最新且完整的稳定 v2 release，并在删除 v0.9.x 前验证 installer、checksum 和 publication manifest：
-
-```sh
-wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
-```
-
-使用 `wget`（即使已安装的 `curl` 损坏也可工作）：
+使用 `wget`：
 
 ```sh
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-等效的 `curl` 命令：
+或使用 `curl`：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-安装器会验证 `curl`、修复不匹配的 `zlib`/`libcurl4`，根据已验证 tag 为检测到的软件包管理器构造精确文件名，并在安装前校验 `.sha256`。已有 MiClash 时可选择 update、reinstall、removal 或 skip。
+安装器会验证 `.sha256`，在需要时修复不匹配的 `zlib`/`libcurl4`；如果已安装 MiClash，还可选择更新、重新安装、删除或退出。LuCI 内的更新**不会回退**：它会等待最新版本的文件发布，然后再次检查。
 
-已安装插件内的 updater 刻意**不会回退**到旧版本：最新 tag 始终是权威目标，在 CI 完整发布 artifacts 前隐藏更新操作，之后再重试检查。
+## 从 v0.9.x 升级到 v2.x
 
-## 首次设置
+已安装 v0.9.x 的设备应只运行一次独立的过渡脚本：
+
+```sh
+wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+脚本会验证已就绪的稳定 v2 版本，将配置文件、Mihomo 内核、rules/providers 和设置保存到 `/root/miclash-v09-backup-*`，删除 v0.9，安装 v2 并恢复数据。脚本不提供自动 rollback 或 journal；安装失败时 backup 会保留，供手动恢复。
+
+在短暂的替换期间 Guard 不工作。如果受保护流量绝不能直连，请从本地网络执行升级。
+
+## 快速开始
 
 打开 **LuCI → 服务 → MiClash**。
 
-1. 在 **设置 → 内核** 安装 Mihomo。MiClash 会检测架构、下载并验证 release、暂存替换；激活失败时保留或 restore 上一个内核。
+1. 在 **设置 → 内核** 中安装 Mihomo。
 2. 添加订阅或编辑 YAML 配置。
-3. 验证 Draft。验证不会更改当前路由。
-4. 应用后该 revision 才成为 Active。
-5. 选择 TPROXY、TUN 或 MIXED，并配置包含/排除的接口。
-6. 检查受保护设备与接口后再启用 Guard。
+3. 验证 Draft；此操作不会更改当前路由。
+4. 应用 Draft，使其成为 Active。
+5. 选择 TPROXY、TUN 或 MIXED，并设置所需接口。
+6. 检查受保护设备，然后启用 Guard。
 
-无效配置会保留为 Draft，不会应用；之前的 Active 继续工作，因此多次编辑不会丢失用户内容。
+无效 Draft 不会被应用，之前的 Active 配置会继续运行。
 
 ## 主要功能
 
-- **Draft / Active：** 独立保存草稿与运行版本，支持 validation、原子激活以及失败 rollback。
-- **配置 history：** revision 元数据与安全 diff；可将旧 revision 打开为 Draft，或明确 restore；rollback 前创建 recovery snapshot。
-- **订阅与 update：** 三个 profile URL，手动/定时订阅更新，MiClash update，经过验证的 Mihomo update 与内核 rollback。
-- **路由：** TPROXY、TUN、MIXED、接口包含/排除、LAN/WAN 自动检测、QUIC 阻断和本地 rulesets。
-- **诊断：** Mihomo、DNS、firewall、routing、Guard 状态；脱敏 diagnostic report；按 domain/IP、device/interface 解释路径的 route test。
-- **自修复与 memory recovery：** 修复 drift，并按 `reload → 内核内部 restart → 服务 restart` 逐级恢复；每步都有 health 检查，失败后进入长 cooldown。
-- **通知（notification）：** LuCI 中显示故障、Internet 恢复、update、Guard 和内存事件，也可发送到 Telegram。
-- **Backup / restore：** 有大小边界的导出/导入、secrets 警告、强制 inspection preview，以及 restore 前的 recovery snapshot。
-- **Device policies：** 已发现客户端、计划任务和 inherit/proxy/direct/block；Guard 始终优先。
+- **配置：** Draft/Active、验证、原子应用、历史（history）、diff、restore 和 recovery snapshot。
+- **订阅与更新：** 三个 URL、手动或定时刷新，以及安全的 MiClash 和 Mihomo 更新。
+- **路由：** TPROXY、TUN、MIXED、接口包含/排除、自动 LAN/WAN、QUIC 和本地 rulesets。
+- **诊断：** Mihomo、DNS、firewall、routing 和 Guard 状态、脱敏报告以及 route test。
+- **自恢复：** 修复 drift，并按 `reload → 内核 restart → 服务 restart` 逐级恢复。
+- **通知（notification）：** 在 LuCI 或 Telegram 中显示故障、Internet 恢复、更新、Guard 和 Memory Guard 事件。
+- **Backup/restore：** 导入 preview、secrets 警告和 recovery snapshot。
+- **设备策略（device policies）：** 计划任务以及 inherit/proxy/direct/block；Guard 始终优先。
+
+## Guard 与恢复
+
+`miclashd` 是 MiClash 唯一的 backend；LuCI 和 Telegram 使用其类型化 `ubus` API。UCI 设置位于 `/etc/config/miclash`，配置文件、rulesets 和内核位于 `/opt/clash`。
+
+- Guard 采用 fail-closed，在 Mihomo 就绪前保护所选流量。
+- 服务、内核、更新或修复失败不会关闭保护；只有明确关闭 Guard 才能解除 latch。
+- 配置会先验证，失败时 rollback 部分 DNS/firewall/routing 修改。
+- Mihomo 更新使用 staging，并可恢复上一个内核。
+- Memory Guard 只在 Mihomo 异常增长且存在内存压力时动作，检查每个恢复阶段，并在全部失败后进入长 cooldown。
+
+`/etc/config/miclash` 可能包含订阅 URL 和 Telegram token，应只允许 root 读取。
 
 ## Telegram 控制
 
-在 **设置 → Telegram** 中启用集成，填写 **BotFather** 提供的 token 和你自己的数字 Telegram user ID。Token 按 secret 保存，永远不会回传到 LuCI；后续保存时留空不会覆盖已有 token。
+在 **设置 → Telegram** 中启用集成，填写 **BotFather** 提供的 token 和你的数字 user ID。Token 按 secret 保存且不会返回 LuCI；留空会保留已有 token。
 
-安全模型：
-
-- 只进行出站 HTTPS long polling，不开放路由器入站端口；
-- 只允许一个精确 user ID；
-- 只接受 private chat，sender ID 与 chat ID 都必须匹配；
-- 不需要确认或一次性 token；
-- group、channel、edited message、重复 update 和未知命令会被拒绝；
-- logs/diagnostics 有边界并脱敏，同时有 rate limit 与 backoff。
-
-完整命令：
+Bot 仅使用出站 HTTPS long polling，只接受一个 user ID 的 private chat，校验 sender/chat ID，并拒绝 group、channel、edited message 和重复消息。Logs/diagnostics 有大小限制并脱敏，同时受 rate limit 和 backoff 保护。
 
 ```text
-/status
-/health
-/memory
-/diagnostics
-/logs
-/help
-/start
-/stop
-/restart
-/reload
-/reboot
-/subscription URL
-/update_subscription
-/update_miclash
-/update_mihomo
-/guard_on
-/guard_off
-/backup
+/status /health /memory /diagnostics /logs /help
+/start /stop /restart /reload /reboot
+/subscription URL /update_subscription /update_miclash /update_mihomo
+/guard_on /guard_off /backup
 ```
 
-`/reboot` 通过授权后立即重启路由器；设计上没有确认提示。
+`/reboot` 在用户验证后立即重启路由器，不再二次确认。
 
-## UCI 设置
-
-推荐通过 LuCI 修改。检查状态可使用：
-
-```sh
-uci show miclash
-ubus call miclash status '{}'
-ubus call miclash health '{}'
-```
-
-主要 UCI section 为 `core`、`interfaces`、`guard`、`memory`、`updates`、`telegram`、`notifications`、`backup` 与 `meta`。`/etc/config/miclash` 可能包含订阅 URL 和 Telegram token，应只允许 root 读取。
-
-## 安全 update 与 recovery
-
-- 配置激活先 validation；失败时 rollback 部分 DNS/firewall/routing 修改。
-- Mihomo update 使用 staging，并保留可 rollback 的候选。
-- 自动与手动 update 会同其他 mutation 串行执行。
-- Health reconcile 只修复 MiClash 拥有的 DNS/firewall/routing 对象，不接管无关规则。
-- Memory Guard 只有在 Mihomo 异常增长且系统存在内存压力时才动作；每一步都验证 RSS 是否下降，全部失败后进入 cooldown。
-- Internet 恢复与 repair 事件显示为 notification，并可发送到 Telegram。
-
-重大修改前建议创建不含 secrets 的 backup；只有受保护的本地 archive 才应显式包含 secrets。
-
-## 故障排查
+## 诊断
 
 ```sh
 /etc/init.d/miclashd status
@@ -145,26 +101,20 @@ ubus call miclash health '{}'
 logread -e miclashd
 ```
 
-寻求支持时使用 **下载 diagnostic report**，使用 **route test** 查看路径原因。操作失败时先查看 stage/error，并等当前 operation 终止后再重试。
+请求支持时请下载诊断报告，并使用 route test 检查所选路径。Guard 启用时不要手动删除其 nftables/routing rules 或 latch。
 
-Guard 启用时不要手工删除 nftables/routing rule 或 latch。应通过 LuCI 恢复服务、重新安装软件包，或仅在允许直连时明确关闭 Guard。
-
-## 安全删除（removal）
+## 删除（removal）
 
 ```sh
-# OpenWrt 25.12：
+# OpenWrt 25.12+：
 apk del luci-app-miclash
 
-# OpenWrt 24.10+：
+# OpenWrt 24.10：
 opkg remove luci-app-miclash
 ```
 
-删除协议会先保持 Guard 防护，停止服务，restore 由 MiClash 管理的 DNS/firewall/routing 状态，最后才移除 backend。清理失败会保持 retryable，不会报告虚假成功。
-
-交互式安装器还能选择 purge `/opt/clash`。非交互 removal 会保留 runtime/config 目录。软件包成功删除后，可手动清除：
+删除时会先停止服务，并恢复 MiClash 管理的 DNS/firewall/routing 设置。`/opt/clash` 会保留；创建 backup 后可手动永久删除：
 
 ```sh
 rm -rf /opt/clash
 ```
-
-此 final purge 不可恢复；请先导出 backup。

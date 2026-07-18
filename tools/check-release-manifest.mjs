@@ -215,7 +215,7 @@ function runRepositoryContracts() {
 		/^\s*grep -Eq .*usr\/libexec\/miclash\/migrate\\\.uc.*\$package_entries/m,
 		'release workflow must not require the retired migration helper');
 	assert.match(release,
-		/^\s*! grep -Eq .*usr\/libexec\/miclash\/migrate\\\.uc.*\$package_entries/m,
+		/^\s*if grep -Eq .*usr\/libexec\/miclash\/migrate\\\.uc.*\$package_entries"; then[\s\S]*?^\s*exit 1[\s\S]*?^\s*fi/m,
 		'release workflow must prove the retired migration helper is absent');
 	for (const asset of [ 'usr/share/miclash/mutation-lock.sh',
 		'usr/share/miclash/guard-bootstrap.uc', 'usr/share/miclash/guard-latch.uc',
@@ -280,7 +280,9 @@ function runRepositoryContracts() {
 				`${path} transition documentation is missing ${token}`);
 		const commandBlocks = [ ...text.matchAll(/```text\r?\n([\s\S]*?)```/g) ];
 		assert.equal(commandBlocks.length, 1, `${path} must contain one Telegram command block`);
-		assert.deepEqual(commandBlocks[0][1].trim().split(/\r?\n/), commands,
+		const documentedCommands = [ ...commandBlocks[0][1].matchAll(/\/subscription URL|\/[a-z_]+/g) ]
+			.map((match) => match[0]);
+		assert.deepEqual(documentedCommands, commands,
 			`${path} has inconsistent Telegram command documentation`);
 		assert.doesNotMatch(text, /-o \/tmp\/luci-app-miclash|apk add \/tmp\/luci-app-miclash|opkg install \/tmp\/luci-app-miclash/,
 			`${path} documents a predictable world-writable package path`);

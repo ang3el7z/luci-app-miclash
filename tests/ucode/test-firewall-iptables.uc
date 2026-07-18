@@ -589,7 +589,8 @@ for (let spelling in [ '-j', '-g', '--goto' ])
 		'foreign-chain ' + spelling + ' edge to permanent anchor');
 for (let edge in [ '-A FOREIGN -j MCL_AN_PR',
 	'-A FOREIGN -g MCL_AN_PR', '-A FOREIGN --goto MCL_AN_PR' ]) {
-	let recapture = runtime_with({ no_anchors: true, inventory: [], post_cleanup_edge: edge });
+	let recapture = runtime_with({ no_anchors: true, inventory: [],
+		orphan_generation: 'ffffffffffff', post_cleanup_edge: edge });
 	assert_throws(() => cleanup(recapture, { preserve_guard: true, generations: [] }), 'INTERNAL');
 	let mutated = false;
 	for (let request in recapture.process.calls)

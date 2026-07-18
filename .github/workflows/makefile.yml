@@ -378,7 +378,10 @@ jobs:
           grep -Eq '(^|[.]/)www/luci-static/resources/view/miclash/style.css$' "$package_entries"
           grep -Eq '(^|[.]/)usr/share/luci/menu.d/luci-app-miclash.json$' "$package_entries"
           grep -Eq '(^|[.]/)usr/sbin/miclashd$' "$package_entries"
-          ! grep -Eq '(^|[.]/)usr/libexec/miclash/migrate\.uc$' "$package_entries"
+          if grep -Eq '(^|[.]/)usr/libexec/miclash/migrate\.uc$' "$package_entries"; then
+            echo "Retired migration helper is still packaged." >&2
+            exit 1
+          fi
           grep -Eq '(^|[.]/)usr/share/miclash/mutation-lock\.sh$' "$package_entries"
           grep -Eq '(^|[.]/)usr/share/miclash/guard-bootstrap\.uc$' "$package_entries"
           grep -Eq '(^|[.]/)usr/share/miclash/guard-latch\.uc$' "$package_entries"
