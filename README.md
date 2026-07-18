@@ -131,7 +131,7 @@ These are third-party download paths. jsDelivr may briefly serve a cached copy o
 </details>
 </blockquote>
 
-The script verifies a ready stable v2 release, saves profiles, the Mihomo core, rules/providers and settings to `/root/miclash-v09-backup-*`, removes v0.9, installs v2 and restores the data. There is no automatic rollback or journal; the backup remains available for manual recovery if installation fails.
+The script verifies a ready stable v2 release, temporarily saves config profiles, subscription URLs and compatible UI settings to `/root/miclash-v09-backup-*`, then installs v2 and a fresh Mihomo core. Provider/runtime caches are rebuilt by v2 and are not migrated. There is no automatic rollback or journal; the temporary backup remains available only if installation fails.
 
 Guard is inactive during the short replacement interval. Run the transition from the local network if protected traffic must never leave directly.
 

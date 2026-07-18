@@ -131,7 +131,7 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 </details>
 </blockquote>
 
-脚本会验证已就绪的稳定 v2 版本，将配置文件、Mihomo 内核、rules/providers 和设置保存到 `/root/miclash-v09-backup-*`，删除 v0.9，安装 v2 并恢复数据。脚本不提供自动 rollback 或 journal；安装失败时 backup 会保留，供手动恢复。
+脚本会验证已就绪的稳定 v2 版本，将配置文件、订阅 URL 和兼容的 UI 设置临时保存到 `/root/miclash-v09-backup-*`，然后安装 v2 和全新的 Mihomo 内核。providers/runtime 缓存不会迁移，而是由 v2 重新创建。脚本不提供自动 rollback 或 journal；仅在安装失败时保留临时 backup。
 
 在短暂的替换期间 Guard 不工作。如果受保护流量绝不能直连，请从本地网络执行升级。
 

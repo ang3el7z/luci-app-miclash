@@ -1,8 +1,8 @@
 #!/bin/sh
 
 # One-time clean reinstall from MiClash v0.9.x to an exact MiClash v2 release.
-# This script deliberately has no migration or rollback engine: it keeps a
-# user-data backup in /root and performs a clean package replacement.
+# Only user-visible settings, subscription URLs and config profiles cross the
+# boundary. The Mihomo binary and provider/runtime caches are installed fresh.
 set -eu
 
 TAG=''
@@ -43,6 +43,106 @@ backup_value() {
 	' "$1/upgrade-info" 2>/dev/null
 }
 
+legacy_value() {
+	awk -F= -v key="$2" '
+		$1 == key { value = substr($0, length(key) + 2); found = 1 }
+		END { if (found) print value; else exit 1 }
+	' "$1/settings.v09" 2>/dev/null
+}
+
+legacy_bool() {
+	value="$(legacy_value "$1" "$2" || true)"
+	case "$value" in
+		true|1|yes|on) printf '1\n' ;;
+		false|0|no|off) printf '0\n' ;;
+		*) return 1 ;;
+	esac
+}
+
+uci_set() {
+	uci -q set "miclash.$1.$2=$3" || die "cannot restore MiClash setting $1.$2"
+}
+
+restore_bool() {
+	value="$(legacy_bool "$BACKUP" "$1" || true)"
+	[ -n "$value" ] || return 0
+	uci_set "$2" "$3" "$value"
+}
+
+restore_enum() {
+	value="$(legacy_value "$BACKUP" "$1" || true)"
+	case ":$4:" in *:"$value":*) uci_set "$2" "$3" "$value" ;; esac
+}
+
+restore_text() {
+	value="$(legacy_value "$BACKUP" "$1" || true)"
+	[ -n "$value" ] || return 0
+	[ "${#value}" -le 4096 ] || return 0
+	printf '%s' "$value" | grep -q '[[:cntrl:]]' && return 0
+	uci_set "$2" "$3" "$value"
+}
+
+restore_interface() {
+	value="$(legacy_value "$BACKUP" "$1" || true)"
+	[ -z "$value" ] || printf '%s\n' "$value" | grep -Eq '^[A-Za-z0-9_.:-]+$' || return 0
+	uci_set interfaces "$2" "$value"
+}
+
+restore_interfaces() {
+	value="$(legacy_value "$BACKUP" "$1" || true)"
+	[ -z "$value" ] || printf '%s\n' "$value" | grep -Eq '^[A-Za-z0-9_.:,-]+$' || return 0
+	uci_set interfaces "$2" "$value"
+}
+
+restore_url() {
+	value="$(legacy_value "$BACKUP" "$1" || true)"
+	[ -n "$value" ] || return 0
+	printf '%s\n' "$value" | grep -Eq '^https?://[^[:space:]]+$' || return 0
+	uci_set core "$2" "$value"
+}
+
+restore_legacy_user_data() {
+	restore_enum INTERFACE_MODE interfaces mode 'exclude:explicit'
+	restore_enum PROXY_MODE core proxy_mode 'tproxy:tun:mixed'
+	restore_enum TUN_STACK core tun_stack 'system:gvisor:mixed'
+	restore_bool AUTO_DETECT_LAN interfaces auto_detect_lan
+	restore_bool AUTO_DETECT_WAN interfaces auto_detect_wan
+	restore_bool BLOCK_QUIC core block_quic
+	restore_bool USE_TMPFS_RULES core use_tmpfs_rules
+	restore_bool ENABLE_HWID core hwid_enabled
+	restore_text HWID_USER_AGENT core hwid_user_agent
+	restore_text HWID_DEVICE_OS core hwid_device_os
+	restore_interface DETECTED_LAN detected_lan
+	restore_interface DETECTED_WAN detected_wan
+	restore_interfaces INCLUDED_INTERFACES included
+	restore_interfaces EXCLUDED_INTERFACES excluded
+	restore_bool AUTO_FAKEIP_WHITELIST guard auto_fakeip_whitelist
+	restore_bool ENABLE_MEMORY_GUARD memory enabled
+	restore_bool AUTO_HIDE_NOTIFICATIONS notifications auto_hide
+	restore_bool AUTO_UPDATE_CONFIG updates auto_subscription
+	restore_enum MICLASH_RELEASE_CHANNEL updates miclash_release_channel 'release:prerelease'
+	restore_enum MIHOMO_RELEASE_CHANNEL updates mihomo_release_channel 'release:prerelease'
+
+	interval="$(legacy_value "$BACKUP" AUTO_UPDATE_INTERVAL_HOURS || true)"
+	if printf '%s\n' "$interval" | grep -Eq '^[1-9][0-9]{0,3}$' &&
+		[ "$interval" -le 8760 ]; then
+		uci_set updates interval_hours "$interval"
+	fi
+
+	restore_url SUBSCRIPTION_URL subscription_url
+	restore_url SUBSCRIPTION_URL_CONFIG_YAML subscription_url_config_yaml
+	restore_url SUBSCRIPTION_URL_CONFIG2_YAML subscription_url_config2_yaml
+	restore_url SUBSCRIPTION_URL_CONFIG3_YAML subscription_url_config3_yaml
+	main_url="$(legacy_value "$BACKUP" SUBSCRIPTION_URL_CONFIG_YAML || true)"
+	[ -n "$main_url" ] || main_url="$(legacy_value "$BACKUP" SUBSCRIPTION_URL || true)"
+	if [ -n "$main_url" ] && printf '%s\n' "$main_url" | grep -Eq '^https?://[^[:space:]]+$'; then
+		uci_set core subscription_url_config_yaml "$main_url"
+	fi
+
+	uci_set guard enabled "$GUARD_ENABLED"
+	uci -q commit miclash || die 'cannot commit migrated MiClash settings'
+}
+
 find_resume_backup() {
 	BACKUP=''
 	for candidate in /root/miclash-v09-backup-*; do
@@ -51,7 +151,7 @@ find_resume_backup() {
 			grep -Eq '^miclash-v09-backup-[0-9]{8}-[0-9]{6}$' || continue
 		[ ! -e "$candidate/upgrade-complete" ] && [ ! -L "$candidate/upgrade-complete" ] || continue
 		[ ! -L "$candidate/upgrade-info" ] && [ -f "$candidate/upgrade-info" ] || continue
-		[ ! -L "$candidate/core/clash" ] && [ -f "$candidate/core/clash" ] || continue
+		[ ! -L "$candidate/settings.v09" ] && [ -f "$candidate/settings.v09" ] || continue
 		version="$(backup_value "$candidate" old_version || true)"
 		enabled="$(backup_value "$candidate" old_enabled || true)"
 		running="$(backup_value "$candidate" old_running || true)"
@@ -184,8 +284,8 @@ usage() {
 Usage: install-miclash-upgrade-0-9-x-to-2.x.x.sh [--release-tag v2.X.Y]
 
 Performs a clean reinstall from an installed MiClash v0.9.x to the exact v2
-release. Profiles, the installed Mihomo core, rules/providers and legacy
-settings are copied to a persistent /root/miclash-v09-backup-* directory.
+release. Existing config profiles, subscription URLs and compatible UI
+settings are retained. Mihomo and provider/runtime caches are installed fresh.
 
 There is no automatic rollback. The previous Guard and service enabled/running
 state are restored after the v2 package and user files are installed. If an
@@ -260,7 +360,7 @@ case "$INSTALLED_VERSION" in
 		;;
 	*) die "expected installed MiClash v0.9.x, found: $INSTALLED_VERSION" ;;
 esac
-[ "$GUARD_ENABLED" != 1 ] || need uci
+need uci
 ensure_stat_runtime
 
 WORK="$(mktemp -d /tmp/miclash-v09-clean.XXXXXX)" || die 'cannot create temporary directory'
@@ -320,7 +420,7 @@ release_ready() {
 	[ "$PKG_MGR" != apk ] || package_type=apk
 	jsonfilter -i "$WORK/miclash-release-manifest.json" -e '@.artifacts[*].package_type' 2>/dev/null |
 		grep -Fxq "$package_type" || return 1
-	grep -Fq 'MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v1"' "$WORK/install-miclash.sh" || return 1
+	grep -Fq 'MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v2"' "$WORK/install-miclash.sh" || return 1
 	chmod 0600 "$WORK/install-miclash.sh" "$WORK/install-miclash.sh.sha256" \
 		"$WORK/miclash-release-manifest.json" || return 1
 }
@@ -352,20 +452,23 @@ if [ "$UPGRADE_STATE" = fresh ]; then
 	stamp="$(date +%Y%m%d-%H%M%S)"
 	BACKUP="/root/miclash-v09-backup-$stamp"
 	[ ! -e "$BACKUP" ] || die "backup path already exists: $BACKUP"
-	mkdir -p "$BACKUP/profiles" "$BACKUP/ruleset" "$BACKUP/proxy_providers" "$BACKUP/core" || die 'cannot create backup'
-	chmod 0700 "$BACKUP" "$BACKUP/profiles" "$BACKUP/ruleset" "$BACKUP/proxy_providers" "$BACKUP/core" || die 'cannot protect backup'
+	mkdir -p "$BACKUP/profiles" || die 'cannot create backup'
+	chmod 0700 "$BACKUP" "$BACKUP/profiles" || die 'cannot protect backup'
 
-	for profile in /opt/clash/config*.yaml; do
-		[ -f "$profile" ] || continue
-		cp -p "$profile" "$BACKUP/profiles/" || die "cannot back up $profile"
+	for name in config.yaml config2.yaml config3.yaml; do
+		profile="/opt/clash/$name"
+		[ ! -L "$profile" ] && [ -f "$profile" ] || continue
+		cp -p "$profile" "$BACKUP/profiles/$name" || die "cannot back up $profile"
+		chmod 0600 "$BACKUP/profiles/$name" || die "cannot protect backed-up $name"
 	done
-	[ -f /opt/clash/settings ] && cp -p /opt/clash/settings "$BACKUP/settings.v09" || true
-	[ -f /opt/clash/bin/clash ] && cp -p /opt/clash/bin/clash "$BACKUP/core/clash" || die 'installed Mihomo core is missing'
-	[ ! -d /opt/clash/ruleset ] || cp -pR -L /opt/clash/ruleset/. "$BACKUP/ruleset/" || die 'cannot back up rulesets'
-	[ ! -d /opt/clash/proxy_providers ] || cp -pR -L /opt/clash/proxy_providers/. "$BACKUP/proxy_providers/" || die 'cannot back up providers'
+	if [ ! -L /opt/clash/settings ] && [ -f /opt/clash/settings ]; then
+		cp -p /opt/clash/settings "$BACKUP/settings.v09" || die 'cannot back up MiClash settings'
+	else
+		: > "$BACKUP/settings.v09" || die 'cannot create empty settings backup'
+	fi
 	printf 'old_version=%s\nold_enabled=%s\nold_running=%s\nguard_enabled=%s\nrelease_tag=%s\n' \
 		"$OLD_VERSION" "$OLD_ENABLED" "$OLD_RUNNING" "$GUARD_ENABLED" "$TAG" > "$BACKUP/upgrade-info"
-	chmod 0600 "$BACKUP/upgrade-info" "$BACKUP/settings.v09" "$BACKUP/core/clash" 2>/dev/null || true
+	chmod 0600 "$BACKUP/upgrade-info" "$BACKUP/settings.v09" 2>/dev/null || true
 	say "Backup created: $BACKUP"
 
 	disable_legacy_guard
@@ -398,18 +501,13 @@ say "Installing clean MiClash $TAG..."
 sh "$WORK/install-miclash.sh" clean-install --target-tag "$TAG" </dev/null ||
 	die "v2 installation failed; backup is kept at $BACKUP; run this transition command again to resume"
 
-mkdir -p /opt/clash/bin /opt/clash/ruleset /opt/clash/proxy_providers || die 'cannot create v2 data directories'
-cp -p "$BACKUP/core/clash" /opt/clash/bin/clash || die 'cannot restore Mihomo core'
-chmod 0700 /opt/clash/bin/clash || die 'cannot protect Mihomo core'
-for profile in "$BACKUP"/profiles/config*.yaml; do
-	[ -f "$profile" ] || continue
-	cp -p "$profile" /opt/clash/ || die "cannot restore ${profile##*/}"
+[ -x /opt/clash/bin/clash ] || die 'fresh Mihomo installation is missing'
+for name in config.yaml config2.yaml config3.yaml; do
+	profile="$BACKUP/profiles/$name"
+	[ ! -L "$profile" ] && [ -f "$profile" ] || continue
+	cp -p "$profile" "/opt/clash/$name" || die "cannot restore $name"
 done
-cp -pR "$BACKUP/ruleset/." /opt/clash/ruleset/ || die 'cannot restore rulesets'
-cp -pR "$BACKUP/proxy_providers/." /opt/clash/proxy_providers/ || die 'cannot restore providers'
-
-uci -q set "miclash.guard.enabled=$GUARD_ENABLED" || die 'cannot restore Guard setting'
-uci -q commit miclash || die 'cannot commit Guard setting'
+restore_legacy_user_data
 
 [ -x /etc/init.d/miclashd ] || die 'v2 miclashd service is missing'
 [ -x /etc/init.d/clash ] || die 'v2 clash service is missing'
@@ -420,8 +518,9 @@ if [ "$GUARD_ENABLED" = 1 ]; then
 fi
 if [ "$OLD_ENABLED" = 1 ]; then /etc/init.d/clash enable || die 'cannot restore service enable state'; fi
 if [ "$OLD_RUNNING" = 1 ]; then
-	/etc/init.d/clash start || die 'Mihomo did not start'
-	/etc/init.d/clash running >/dev/null 2>&1 || die 'Mihomo is not running after clean install'
+	if ! /etc/init.d/clash start || ! /etc/init.d/clash running >/dev/null 2>&1; then
+		say 'Mihomo is not ready yet; MiClash UI remains available and will continue recovery.'
+	fi
 fi
 
 (umask 077; set -C; : > "$BACKUP/upgrade-complete") 2>/dev/null ||

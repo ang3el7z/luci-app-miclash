@@ -20,7 +20,7 @@ MICLASH_IPK_SHA256_URL=""
 MICLASH_VER=""
 MICLASH_TAG_NAME=""
 MICLASH_TARGET_TAG=""
-MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v1"
+MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v2"
 MICLASH_TEST_FIXTURE_DIR=""
 MICLASH_CATALOG_FILE=""
 MICLASH_FETCHED_FILE=""
@@ -823,6 +823,7 @@ run_clean_install_mode() {
     printf '%s\n' "$MICLASH_TARGET_TAG" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' ||
         die "clean v0.9 upgrade requires a stable v2 target"
     detect_openwrt
+    detect_arch
     detect_installed_miclash
     [ -z "$MICLASH_INSTALLED_VER" ] || die "clean-install requires the old package to be removed first"
     prepare_work_dir
@@ -832,7 +833,8 @@ run_clean_install_mode() {
     pkg_update
     install_deps
     install_miclash
-    echo "MiClash package installed; services remain stopped"
+    install_mihomo
+    echo "MiClash package and fresh Mihomo core installed; services remain stopped"
 }
 
 run_app_mode() {

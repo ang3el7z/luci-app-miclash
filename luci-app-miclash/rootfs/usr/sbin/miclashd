@@ -3,6 +3,7 @@
 import * as uloop from 'uloop';
 import * as runtime from 'miclash.runtime';
 import * as daemon from 'miclash.daemon';
+import * as daemon_activation from 'miclash.daemon-activation';
 import * as daemon_readiness from 'miclash.daemon-readiness';
 import * as startup_guard from 'miclash.startup-guard';
 
@@ -15,9 +16,9 @@ readiness.clear();
 let process = daemon.compose(environment);
 let shutting_down = false;
 let aborting = false;
-let ready_published = false;
 let startup = null;
 let observation_timer = null;
+let lifecycle = null;
 
 function abort_startup() {
 	if (aborting)
@@ -25,6 +26,7 @@ function abort_startup() {
 	aborting = true;
 	shutting_down = true;
 	try { readiness.revoke(); } catch (readiness_error) {}
+	try { lifecycle?.close?.(); } catch (lifecycle_error) {}
 	try { startup?.close?.(); } catch (startup_error) {}
 	try { process.drain(); } catch (drain_error) {}
 	try { process.close(); } catch (close_error) {}
@@ -32,14 +34,8 @@ function abort_startup() {
 	die('INTERNAL');
 };
 
-function start_normal_lifecycle() {
-	if (shutting_down)
-		return false;
-	if (!ready_published) {
-		try { readiness.activate(environment.reconcile, 'daemon-startup'); }
-		catch (error) { abort_startup(); }
-		ready_published = true;
-	}
+function start_observation() {
+	if (shutting_down) return false;
 	if (observation_timer != null)
 		return true;
 	let candidate = uloop.timer(0, () => {
@@ -52,6 +48,17 @@ function start_normal_lifecycle() {
 		abort_startup();
 	observation_timer = candidate;
 	return true;
+};
+
+lifecycle = daemon_activation.create({
+	clock: environment.clock,
+	activate: () => readiness.activate(environment.reconcile, 'daemon-startup'),
+	observe: start_observation
+});
+
+function start_normal_lifecycle() {
+	if (shutting_down) return false;
+	return lifecycle.start();
 };
 
 try {
@@ -72,6 +79,7 @@ function shutdown() {
 		return;
 	shutting_down = true;
 	readiness.revoke();
+	lifecycle.close();
 	process.drain();
 	try { observation_timer.cancel(); } catch (timer_error) {}
 	try { startup.close(); } catch (startup_error) {}
