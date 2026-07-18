@@ -83,7 +83,14 @@ function operation_reply(record) {
 };
 
 function method(policy, callback) {
-	return { args: policy, call: guarded(callback) };
+	return {
+		args: { ...policy, ubus_rpc_session: '' },
+		call: guarded((arguments) => {
+			let domain_arguments = { ...arguments };
+			delete domain_arguments.ubus_rpc_session;
+			return callback(domain_arguments);
+		})
+	};
 };
 
 function telegram_settings_value(app) {

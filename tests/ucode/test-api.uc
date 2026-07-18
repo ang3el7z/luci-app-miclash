@@ -307,32 +307,36 @@ function invoke(name, args) {
 	return methods[name].call({ args: args ?? {} });
 };
 
-// Published policies are exact and compatible with ucode ubus type hints.
-json_equal(methods.status.args, {});
-json_equal(methods.operation_get.args, { operation_id: '' });
-json_equal(methods.service_start.args, { profile: '', source: '' });
-json_equal(methods.config_validate.args, { profile: '', content: '', source: '' });
-json_equal(methods.config_read_draft.args, { profile: '' });
-json_equal(methods.config_save_draft.args, { profile: '', content: '', source: '' });
-json_equal(methods.config_swap.args, { profile: '', source: '' });
-json_equal(methods.history_open_draft.args, { profile: '', revision: '', source: '' });
-json_equal(methods.settings_set.args, { settings: {}, source: '' });
-json_equal(methods.guard_transition.args, { enabled: false, source: '' });
-json_equal(methods.telegram_status.args, {});
-json_equal(methods.telegram_settings.args, {});
-	json_equal(methods.telegram_test.args, {});
-	json_equal(methods.notifications_list.args, { generation: '', cursor: 0, limit: 0 });
-	json_equal(methods.logs_read.args, { generation: '', cursor: 0, limit: 0 });
-	json_equal(methods.system_info.args, {});
-	json_equal(methods.network_interfaces.args, {});
-	json_equal(methods.ruleset_read.args, { name: '' });
-	json_equal(methods.ruleset_write.args, { name: '', content: '', source: '' });
+// rpcd appends ubus_rpc_session to every LuCI request. The transport accepts
+// that field, then removes it before strict domain argument validation.
+json_equal(methods.status.args, { ubus_rpc_session: '' });
+json_equal(methods.operation_get.args, { operation_id: '', ubus_rpc_session: '' });
+json_equal(methods.service_start.args, { profile: '', source: '', ubus_rpc_session: '' });
+json_equal(methods.config_validate.args, { profile: '', content: '', source: '', ubus_rpc_session: '' });
+json_equal(methods.config_read_draft.args, { profile: '', ubus_rpc_session: '' });
+json_equal(methods.config_save_draft.args, { profile: '', content: '', source: '', ubus_rpc_session: '' });
+json_equal(methods.config_swap.args, { profile: '', source: '', ubus_rpc_session: '' });
+json_equal(methods.history_open_draft.args, { profile: '', revision: '', source: '', ubus_rpc_session: '' });
+json_equal(methods.settings_set.args, { settings: {}, source: '', ubus_rpc_session: '' });
+json_equal(methods.guard_transition.args, { enabled: false, source: '', ubus_rpc_session: '' });
+json_equal(methods.telegram_status.args, { ubus_rpc_session: '' });
+json_equal(methods.telegram_settings.args, { ubus_rpc_session: '' });
+	json_equal(methods.telegram_test.args, { ubus_rpc_session: '' });
+	json_equal(methods.notifications_list.args, { generation: '', cursor: 0, limit: 0, ubus_rpc_session: '' });
+	json_equal(methods.logs_read.args, { generation: '', cursor: 0, limit: 0, ubus_rpc_session: '' });
+	json_equal(methods.system_info.args, { ubus_rpc_session: '' });
+	json_equal(methods.network_interfaces.args, { ubus_rpc_session: '' });
+	json_equal(methods.ruleset_read.args, { name: '', ubus_rpc_session: '' });
+	json_equal(methods.ruleset_write.args, { name: '', content: '', source: '', ubus_rpc_session: '' });
 for (let name in names) {
 	assert_equal(type(methods[name].call), 'function');
 	assert_equal(type(methods[name].args), 'object');
 	for (let forbidden in [ 'command', 'path', 'controller', 'secret', 'token' ])
 		assert_equal(exists(methods[name].args, forbidden), false, name + ' exposes ' + forbidden);
 }
+
+let rpcd_session = sprintf('%032x', 1);
+assert_true(invoke('status', { ubus_rpc_session: rpcd_session }).desired != null);
 
 // Reads are immediate, defensive and never expose configured credentials.
 let status_reply = invoke('status');
@@ -461,7 +465,8 @@ let canonical = json(require('fs').readfile('tests/fixtures/api/methods.json')).
 let transfer_fixture = json(require('fs').readfile('tests/fixtures/api/transfers.json'));
 json_equal(sort(map(canonical, (entry) => entry.name)), names);
 for (let entry in canonical)
-	json_equal(sort(keys(methods[entry.name].args)), sort(entry.params),
+	json_equal(sort(filter(keys(methods[entry.name].args),
+		(name) => name != 'ubus_rpc_session')), sort(entry.params),
 		entry.name + ' backend policy differs from canonical params');
 assert_equal(invoke('transfer_abort', { transfer_id: sprintf('%064x', 1) }).error.code,
 	'HEALTH_FAILED');
