@@ -41,5 +41,16 @@ assert.match(upgrade, /releases\?per_page=20/);
 assert.match(upgrade, /jsonfilter/);
 assert.match(upgrade, /miclash-release-manifest\.json/);
 assert.match(upgrade, /Usage: .*\[--release-tag v2\.X\.Y\]/);
+assert.match(upgrade, /ensure_stat_runtime\(\)[\s\S]*coreutils-stat/,
+	'transition installer must bootstrap stat before invoking older v2 installers');
+assert.match(upgrade, /find_resume_backup\(\)[\s\S]*upgrade-complete/,
+	'transition installer must resume an interrupted replacement from its backup');
+const backupCreated = upgrade.indexOf('say "Backup created: $BACKUP"');
+const guardDisabled = upgrade.indexOf('disable_legacy_guard', backupCreated);
+const packageRemoved = upgrade.indexOf('apk del luci-app-miclash', guardDisabled);
+assert.ok(backupCreated >= 0 && guardDisabled > backupCreated && packageRemoved > guardDisabled,
+	'legacy Guard must be disabled after backup and before package removal');
+assert.match(upgrade, /verify_legacy_guard_off \|\| die 'legacy Guard returned during package removal'/,
+	'transition installer must verify that package removal did not restore legacy Guard');
 
 console.log('terminal installation documentation contract passed');

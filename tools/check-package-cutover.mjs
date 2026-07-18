@@ -101,8 +101,10 @@ requireMatch(installer, /mktemp -d \/tmp\/miclash-install\.XXXXXX[\s\S]*validate
 	'interactive installer must use a verified root-private workspace');
 requireMatch(installer, /WORK_DIR="\$\{STATUS_FILE%\/\*\}"[\s\S]*validate_work_dir/,
 	'app installer must reuse the verified update authority');
-requireMatch(installer, /marker_owned\(\)[\s\S]*stat -c '%u:%a:%h'[\s\S]*0:600:1[\s\S]*create_marker\(\)[\s\S]*set -C/,
+requireMatch(installer, /path_metadata\(\)[\s\S]*LC_ALL=C ls -ldn[\s\S]*owned_file_0600\(\)[\s\S]*marker_owned\(\)[\s\S]*create_marker\(\)[\s\S]*set -C/,
 	'package markers must be exclusively created and root:0600 verified');
+requireMatch(makefile, /LUCI_DEPENDS:=[^\n]*\+coreutils-stat/,
+	'package runtime must include stat on OpenWrt builds where BusyBox omits it');
 requireMatch(installer, /verify_download_checksum[\s\S]*sha256sum/,
 	'installer must verify downloaded artifacts');
 requireMatch(installer, /download_artifact "\$MICLASH_APK_URL"[\s\S]*verify_download_checksum "\$PKG_FILE" "\$MICLASH_APK_SHA256_URL"/,

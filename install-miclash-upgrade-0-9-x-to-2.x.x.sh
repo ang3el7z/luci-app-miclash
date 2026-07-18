@@ -12,6 +12,7 @@ GUARD_ENABLED=0
 OLD_ENABLED=0
 OLD_RUNNING=0
 PKG_MGR=''
+UPGRADE_STATE='fresh'
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'MiClash clean upgrade failed: %s\n' "$*" >&2; exit 1; }
@@ -35,6 +36,109 @@ installed_miclash_version() {
 	esac
 }
 
+backup_value() {
+	awk -F= -v key="$2" '
+		$1 == key { value = substr($0, length(key) + 2); count++ }
+		END { if (count == 1) print value; else exit 1 }
+	' "$1/upgrade-info" 2>/dev/null
+}
+
+find_resume_backup() {
+	BACKUP=''
+	for candidate in /root/miclash-v09-backup-*; do
+		[ ! -L "$candidate" ] && [ -d "$candidate" ] || continue
+		printf '%s\n' "${candidate##*/}" |
+			grep -Eq '^miclash-v09-backup-[0-9]{8}-[0-9]{6}$' || continue
+		[ ! -e "$candidate/upgrade-complete" ] && [ ! -L "$candidate/upgrade-complete" ] || continue
+		[ ! -L "$candidate/upgrade-info" ] && [ -f "$candidate/upgrade-info" ] || continue
+		[ ! -L "$candidate/core/clash" ] && [ -f "$candidate/core/clash" ] || continue
+		version="$(backup_value "$candidate" old_version || true)"
+		enabled="$(backup_value "$candidate" old_enabled || true)"
+		running="$(backup_value "$candidate" old_running || true)"
+		guard="$(backup_value "$candidate" guard_enabled || true)"
+		release="$(backup_value "$candidate" release_tag || true)"
+		case "$version" in 0.9.*) ;; *) continue ;; esac
+		case "$enabled:$running:$guard" in
+			[01]:[01]:[01]) ;;
+			*) continue ;;
+		esac
+		printf '%s\n' "$release" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' || continue
+		BACKUP="$candidate"
+	done
+	[ -n "$BACKUP" ]
+}
+
+load_resume_backup() {
+	OLD_VERSION="$(backup_value "$BACKUP" old_version)"
+	OLD_ENABLED="$(backup_value "$BACKUP" old_enabled)"
+	OLD_RUNNING="$(backup_value "$BACKUP" old_running)"
+	GUARD_ENABLED="$(backup_value "$BACKUP" guard_enabled)"
+	backup_tag="$(backup_value "$BACKUP" release_tag)"
+	[ -n "$TAG" ] || TAG="$backup_tag"
+}
+
+ensure_stat_runtime() {
+	command -v stat >/dev/null 2>&1 && return 0
+	say 'Installing the OpenWrt stat compatibility dependency...'
+	case "$PKG_MGR" in
+		apk)
+			apk update >/dev/null && apk add coreutils-stat >/dev/null ||
+				die 'cannot install coreutils-stat on OpenWrt APK'
+			;;
+		opkg)
+			opkg update >/dev/null && opkg install coreutils-stat >/dev/null ||
+				die 'cannot install coreutils-stat on OpenWrt opkg'
+			;;
+	esac
+	command -v stat >/dev/null 2>&1 || die 'stat is still unavailable after dependency installation'
+}
+
+remove_legacy_guard_rules() {
+	if [ -x /opt/clash/bin/clash-rules ]; then
+		/opt/clash/bin/clash-rules guard_stop >/dev/null 2>&1 || true
+	fi
+	if command -v nft >/dev/null 2>&1; then
+		nft delete table inet miclash_guard >/dev/null 2>&1 || true
+	fi
+	for firewall_cmd in iptables ip6tables; do
+		command -v "$firewall_cmd" >/dev/null 2>&1 || continue
+		while "$firewall_cmd" -t filter -D FORWARD -j MICLASH_GUARD_FORWARD >/dev/null 2>&1; do :; done
+		"$firewall_cmd" -t filter -F MICLASH_GUARD_FORWARD >/dev/null 2>&1 || true
+		"$firewall_cmd" -t filter -X MICLASH_GUARD_FORWARD >/dev/null 2>&1 || true
+		while "$firewall_cmd" -t filter -D OUTPUT -j MICLASH_GUARD_OUTPUT >/dev/null 2>&1; do :; done
+		"$firewall_cmd" -t filter -F MICLASH_GUARD_OUTPUT >/dev/null 2>&1 || true
+		"$firewall_cmd" -t filter -X MICLASH_GUARD_OUTPUT >/dev/null 2>&1 || true
+	done
+}
+
+verify_legacy_guard_off() {
+	if command -v nft >/dev/null 2>&1 &&
+		nft list table inet miclash_guard >/dev/null 2>&1; then
+		return 1
+	fi
+	for firewall_cmd in iptables ip6tables; do
+		command -v "$firewall_cmd" >/dev/null 2>&1 || continue
+		if "$firewall_cmd" -t filter -S 2>/dev/null | grep -Eq 'MICLASH_GUARD_(FORWARD|OUTPUT)'; then
+			return 1
+		fi
+	done
+}
+
+disable_legacy_guard() {
+	if [ -f /opt/clash/settings ]; then
+		if grep -q '^INTERNET_ONLY_MICLASH=' /opt/clash/settings; then
+			sed -i 's/^INTERNET_ONLY_MICLASH=.*/INTERNET_ONLY_MICLASH=false/' /opt/clash/settings ||
+				die 'cannot disable Guard in legacy settings'
+		else
+			printf '%s\n' 'INTERNET_ONLY_MICLASH=false' >> /opt/clash/settings ||
+				die 'cannot disable Guard in legacy settings'
+		fi
+	fi
+	remove_legacy_guard_rules
+	verify_legacy_guard_off || die 'legacy Guard rules are still active; refusing to remove MiClash'
+	say 'Legacy Guard disabled for the clean replacement.'
+}
+
 usage() {
 	cat <<'EOF'
 Usage: install-miclash-upgrade-0-9-x-to-2.x.x.sh [--release-tag v2.X.Y]
@@ -44,7 +148,8 @@ release. Profiles, the installed Mihomo core, rules/providers and legacy
 settings are copied to a persistent /root/miclash-v09-backup-* directory.
 
 There is no automatic rollback. The previous Guard and service enabled/running
-state are restored after the v2 package and user files are installed.
+state are restored after the v2 package and user files are installed. If an
+earlier attempt stopped after creating its backup, run the same command again.
 EOF
 }
 
@@ -93,19 +198,37 @@ elif command -v opkg >/dev/null 2>&1; then
 else
 	die 'installed MiClash package was not found'
 fi
-OLD_VERSION="$(installed_miclash_version "$PKG_MGR")"
-
-case "$OLD_VERSION" in 0.9.*) ;; *) die "expected installed MiClash v0.9.x, found: ${OLD_VERSION:-none}" ;; esac
-[ -x /etc/init.d/clash ] || die 'legacy clash service is missing'
-[ -x /opt/clash/bin/clash-rules ] || die 'legacy cleanup helper is missing'
-
-/etc/init.d/clash enabled >/dev/null 2>&1 && OLD_ENABLED=1 || true
-/etc/init.d/clash running >/dev/null 2>&1 && OLD_RUNNING=1 || true
-if [ -f /opt/clash/settings ] &&
-	grep -Eq '^INTERNET_ONLY_MICLASH=(true|1)$' /opt/clash/settings; then
-	GUARD_ENABLED=1
-fi
+INSTALLED_VERSION="$(installed_miclash_version "$PKG_MGR")"
+case "$INSTALLED_VERSION" in
+	0.9.*)
+		OLD_VERSION="$INSTALLED_VERSION"
+		[ -x /etc/init.d/clash ] || die 'legacy clash service is missing'
+		[ -x /opt/clash/bin/clash-rules ] || die 'legacy cleanup helper is missing'
+		/etc/init.d/clash enabled >/dev/null 2>&1 && OLD_ENABLED=1 || true
+		/etc/init.d/clash running >/dev/null 2>&1 && OLD_RUNNING=1 || true
+		if [ -f /opt/clash/settings ] &&
+			grep -Eq '^INTERNET_ONLY_MICLASH=(true|1)$' /opt/clash/settings; then
+			GUARD_ENABLED=1
+		fi
+		;;
+	''|2.*)
+		find_resume_backup ||
+			die "no installed v0.9.x and no incomplete v0.9 backup to resume (installed: ${INSTALLED_VERSION:-none})"
+		load_resume_backup
+		if [ -n "$INSTALLED_VERSION" ]; then
+			UPGRADE_STATE='resume-restore'
+			installed_clean="$(printf '%s' "$INSTALLED_VERSION" | sed 's/-r[0-9][0-9]*$//')"
+			[ "v$installed_clean" = "$TAG" ] ||
+				die "installed v2 version $INSTALLED_VERSION does not match incomplete backup target $TAG"
+		else
+			UPGRADE_STATE='resume-install'
+		fi
+		say "Resuming the interrupted clean replacement from: $BACKUP"
+		;;
+	*) die "expected installed MiClash v0.9.x, found: $INSTALLED_VERSION" ;;
+esac
 [ "$GUARD_ENABLED" != 1 ] || need uci
+ensure_stat_runtime
 
 WORK="$(mktemp -d /tmp/miclash-v09-clean.XXXXXX)" || die 'cannot create temporary directory'
 chmod 0700 "$WORK" || die 'cannot protect temporary directory'
@@ -135,66 +258,80 @@ release_ready() {
 		"$WORK/miclash-release-manifest.json" || return 1
 }
 
-if [ -n "$TAG" ]; then
-	release_ready "$TAG" || die "requested v2 release is incomplete or unsupported: $TAG"
+if [ "$UPGRADE_STATE" != 'resume-restore' ]; then
+	if [ -n "$TAG" ]; then
+		release_ready "$TAG" || die "requested v2 release is incomplete or unsupported: $TAG"
+	else
+		catalog="$WORK/releases.json"
+		download 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20' "$catalog" ||
+			die 'cannot download the MiClash release catalog'
+		index=0
+		while [ "$index" -lt 20 ]; do
+			candidate="$(jsonfilter -i "$catalog" -e "@[$index].tag_name" 2>/dev/null || true)"
+			[ -n "$candidate" ] || break
+			draft="$(jsonfilter -i "$catalog" -e "@[$index].draft" 2>/dev/null || true)"
+			prerelease="$(jsonfilter -i "$catalog" -e "@[$index].prerelease" 2>/dev/null || true)"
+			if printf '%s\n' "$candidate" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' &&
+				[ "$draft" = false ] && [ "$prerelease" = false ] && release_ready "$candidate" 2>/dev/null; then
+				TAG="$candidate"
+				break
+			fi
+			index=$((index + 1))
+		done
+		[ -n "$TAG" ] || die 'no complete stable v2 release was found in the newest 20 releases'
+	fi
+	say "Selected ready MiClash release: $TAG"
 else
-	catalog="$WORK/releases.json"
-	download 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20' "$catalog" ||
-		die 'cannot download the MiClash release catalog'
-	index=0
-	while [ "$index" -lt 20 ]; do
-		candidate="$(jsonfilter -i "$catalog" -e "@[$index].tag_name" 2>/dev/null || true)"
-		[ -n "$candidate" ] || break
-		draft="$(jsonfilter -i "$catalog" -e "@[$index].draft" 2>/dev/null || true)"
-		prerelease="$(jsonfilter -i "$catalog" -e "@[$index].prerelease" 2>/dev/null || true)"
-		if printf '%s\n' "$candidate" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' &&
-			[ "$draft" = false ] && [ "$prerelease" = false ] && release_ready "$candidate" 2>/dev/null; then
-			TAG="$candidate"
-			break
-		fi
-		index=$((index + 1))
+	say "MiClash v2 is already installed; restoring data and service state from $BACKUP"
+fi
+
+if [ "$UPGRADE_STATE" = fresh ]; then
+	stamp="$(date +%Y%m%d-%H%M%S)"
+	BACKUP="/root/miclash-v09-backup-$stamp"
+	[ ! -e "$BACKUP" ] || die "backup path already exists: $BACKUP"
+	mkdir -p "$BACKUP/profiles" "$BACKUP/ruleset" "$BACKUP/proxy_providers" "$BACKUP/core" || die 'cannot create backup'
+	chmod 0700 "$BACKUP" "$BACKUP/profiles" "$BACKUP/ruleset" "$BACKUP/proxy_providers" "$BACKUP/core" || die 'cannot protect backup'
+
+	for profile in /opt/clash/config*.yaml; do
+		[ -f "$profile" ] || continue
+		cp -p "$profile" "$BACKUP/profiles/" || die "cannot back up $profile"
 	done
-	[ -n "$TAG" ] || die 'no complete stable v2 release was found in the newest 20 releases'
-fi
-say "Selected ready MiClash release: $TAG"
+	[ -f /opt/clash/settings ] && cp -p /opt/clash/settings "$BACKUP/settings.v09" || true
+	[ -f /opt/clash/bin/clash ] && cp -p /opt/clash/bin/clash "$BACKUP/core/clash" || die 'installed Mihomo core is missing'
+	[ ! -d /opt/clash/ruleset ] || cp -pR -L /opt/clash/ruleset/. "$BACKUP/ruleset/" || die 'cannot back up rulesets'
+	[ ! -d /opt/clash/proxy_providers ] || cp -pR -L /opt/clash/proxy_providers/. "$BACKUP/proxy_providers/" || die 'cannot back up providers'
+	printf 'old_version=%s\nold_enabled=%s\nold_running=%s\nguard_enabled=%s\nrelease_tag=%s\n' \
+		"$OLD_VERSION" "$OLD_ENABLED" "$OLD_RUNNING" "$GUARD_ENABLED" "$TAG" > "$BACKUP/upgrade-info"
+	chmod 0600 "$BACKUP/upgrade-info" "$BACKUP/settings.v09" "$BACKUP/core/clash" 2>/dev/null || true
+	say "Backup created: $BACKUP"
 
-stamp="$(date +%Y%m%d-%H%M%S)"
-BACKUP="/root/miclash-v09-backup-$stamp"
-[ ! -e "$BACKUP" ] || die "backup path already exists: $BACKUP"
-mkdir -p "$BACKUP/profiles" "$BACKUP/ruleset" "$BACKUP/proxy_providers" "$BACKUP/core" || die 'cannot create backup'
-chmod 0700 "$BACKUP" "$BACKUP/profiles" "$BACKUP/ruleset" "$BACKUP/proxy_providers" "$BACKUP/core" || die 'cannot protect backup'
-
-for profile in /opt/clash/config*.yaml; do
-	[ -f "$profile" ] || continue
-	cp -p "$profile" "$BACKUP/profiles/" || die "cannot back up $profile"
-done
-[ -f /opt/clash/settings ] && cp -p /opt/clash/settings "$BACKUP/settings.v09" || true
-[ -f /opt/clash/bin/clash ] && cp -p /opt/clash/bin/clash "$BACKUP/core/clash" || die 'installed Mihomo core is missing'
-[ ! -d /opt/clash/ruleset ] || cp -pR -L /opt/clash/ruleset/. "$BACKUP/ruleset/" || die 'cannot back up rulesets'
-[ ! -d /opt/clash/proxy_providers ] || cp -pR -L /opt/clash/proxy_providers/. "$BACKUP/proxy_providers/" || die 'cannot back up providers'
-printf 'old_version=%s\nold_enabled=%s\nold_running=%s\nguard_enabled=%s\nrelease_tag=%s\n' \
-	"$OLD_VERSION" "$OLD_ENABLED" "$OLD_RUNNING" "$GUARD_ENABLED" "$TAG" > "$BACKUP/upgrade-info"
-chmod 0600 "$BACKUP/upgrade-info" "$BACKUP/settings.v09" "$BACKUP/core/clash" 2>/dev/null || true
-say "Backup created: $BACKUP"
-
-say 'Stopping and removing MiClash v0.9.x...'
-/etc/init.d/clash stop >/dev/null 2>&1 || true
-/etc/init.d/clash disable >/dev/null 2>&1 || true
-/opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || die 'legacy network cleanup failed'
-case "$PKG_MGR" in
-	opkg) opkg remove luci-app-miclash || die 'cannot remove the v0.9 package' ;;
-	apk) apk del luci-app-miclash || die 'cannot remove the v0.9 package' ;;
-esac
-
-rm -rf /opt/clash /etc/config/miclash /etc/miclash
-rm -f /etc/init.d/clash /etc/init.d/miclash-autoupdate /etc/init.d/miclash-memory-guard \
-	/etc/hotplug.d/iface/40-clash /etc/hotplug.d/net/99-clash-tun /var/etc/miclash.include
-if [ -f /etc/crontabs/root ]; then
-	sed -i '\|/opt/clash/bin/clash-rules update|d' /etc/crontabs/root || die 'cannot clean legacy cron entry'
+	disable_legacy_guard
+	say 'Stopping and removing MiClash v0.9.x...'
+	/etc/init.d/clash stop >/dev/null 2>&1 || true
+	/etc/init.d/clash disable >/dev/null 2>&1 || true
+	/opt/clash/bin/clash-rules full_cleanup >/dev/null 2>&1 || die 'legacy network cleanup failed'
+	case "$PKG_MGR" in
+		opkg) opkg remove luci-app-miclash || die 'cannot remove the v0.9 package' ;;
+		apk) apk del luci-app-miclash || die 'cannot remove the v0.9 package' ;;
+	esac
+	remove_legacy_guard_rules
+	verify_legacy_guard_off || die 'legacy Guard returned during package removal'
 fi
 
-say "Installing clean MiClash $TAG..."
-sh "$WORK/install-miclash.sh" clean-install --target-tag "$TAG" </dev/null || die "v2 installation failed; backup is kept at $BACKUP"
+if [ "$UPGRADE_STATE" != 'resume-restore' ]; then
+	rm -rf /opt/clash /etc/config/miclash /etc/miclash
+	rm -f /etc/init.d/clash /etc/init.d/miclash-autoupdate /etc/init.d/miclash-memory-guard \
+		/etc/hotplug.d/iface/40-clash /etc/hotplug.d/net/99-clash-tun /var/etc/miclash.include
+	if [ -f /etc/crontabs/root ]; then
+		sed -i '\|/opt/clash/bin/clash-rules update|d' /etc/crontabs/root || die 'cannot clean legacy cron entry'
+	fi
+	remove_legacy_guard_rules
+	verify_legacy_guard_off || die 'legacy Guard rules are still active before v2 installation'
+
+	say "Installing clean MiClash $TAG..."
+	sh "$WORK/install-miclash.sh" clean-install --target-tag "$TAG" </dev/null ||
+		die "v2 installation failed; backup is kept at $BACKUP; run this transition command again to resume"
+fi
 
 mkdir -p /opt/clash/bin /opt/clash/ruleset /opt/clash/proxy_providers || die 'cannot create v2 data directories'
 cp -p "$BACKUP/core/clash" /opt/clash/bin/clash || die 'cannot restore Mihomo core'
@@ -206,10 +343,8 @@ done
 cp -pR "$BACKUP/ruleset/." /opt/clash/ruleset/ || die 'cannot restore rulesets'
 cp -pR "$BACKUP/proxy_providers/." /opt/clash/proxy_providers/ || die 'cannot restore providers'
 
-if [ "$GUARD_ENABLED" = 1 ]; then
-	uci -q set miclash.guard.enabled=1 || die 'cannot restore Guard setting'
-	uci -q commit miclash || die 'cannot commit Guard setting'
-fi
+uci -q set "miclash.guard.enabled=$GUARD_ENABLED" || die 'cannot restore Guard setting'
+uci -q commit miclash || die 'cannot commit Guard setting'
 
 [ -x /etc/init.d/miclashd ] || die 'v2 miclashd service is missing'
 [ -x /etc/init.d/clash ] || die 'v2 clash service is missing'
@@ -223,6 +358,10 @@ if [ "$OLD_RUNNING" = 1 ]; then
 	/etc/init.d/clash start || die 'Mihomo did not start'
 	/etc/init.d/clash running >/dev/null 2>&1 || die 'Mihomo is not running after clean install'
 fi
+
+(umask 077; set -C; : > "$BACKUP/upgrade-complete") 2>/dev/null ||
+	die 'cannot mark the clean replacement complete'
+chmod 0600 "$BACKUP/upgrade-complete" || die 'cannot protect the completion marker'
 
 say "MiClash $TAG clean installation completed."
 say "Your v0.9 backup is kept at: $BACKUP"

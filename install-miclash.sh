@@ -87,7 +87,7 @@ write_status() {
     ) || { rm -f "$tmp" 2>/dev/null || true; return 1; }
     mv "$tmp" "$STATUS_FILE" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
     [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] &&
-        [ "$(stat -c '%u:%a' "$STATUS_FILE" 2>/dev/null)" = 0:600 ]
+        owned_file_0600 "$STATUS_FILE"
 }
 
 validate_status_authority() {
@@ -97,7 +97,7 @@ validate_status_authority() {
     status_dir="${STATUS_FILE%/*}"
     [ "$status_dir" = /tmp/miclash/updates ] || return 1
     [ ! -L "$status_dir" ] && [ -d "$status_dir" ] || return 1
-    [ "$(stat -c '%u:%a' "$status_dir" 2>/dev/null)" = 0:700 ] || return 1
+    owned_directory_0700 "$status_dir" || return 1
     [ "$(readlink -f "$status_dir" 2>/dev/null)" = "$status_dir" ] || return 1
     status_name="${STATUS_FILE##*/}"
     operation="${status_name#handoff-}"
@@ -108,9 +108,33 @@ validate_status_authority() {
         grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
     if [ -e "$STATUS_FILE" ] || [ -L "$STATUS_FILE" ]; then
         [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] || return 1
-        [ "$(stat -c '%u:%a' "$STATUS_FILE" 2>/dev/null)" = 0:600 ] || return 1
+        owned_file_0600 "$STATUS_FILE" || return 1
         [ "$(readlink -f "$STATUS_FILE" 2>/dev/null)" = "$STATUS_FILE" ] || return 1
     fi
+}
+
+path_metadata() {
+    if command -v stat >/dev/null 2>&1; then
+        stat -c '%F:%u:%a:%h' "$1" 2>/dev/null && return 0
+    fi
+    LC_ALL=C ls -ldn "$1" 2>/dev/null |
+        awk 'NR == 1 { print $1 ":" $3 ":" $2 }'
+}
+
+owned_directory_0700() {
+    metadata="$(path_metadata "$1")" || return 1
+    case "$metadata" in
+        directory:0:700:*|drwx------:0:*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+owned_file_0600() {
+    metadata="$(path_metadata "$1")" || return 1
+    case "$metadata" in
+        regular*:0:600:1|-rw-------:0:1) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 validate_work_dir() {
@@ -124,7 +148,7 @@ validate_work_dir() {
         *) return 1 ;;
     esac
     [ ! -L "$WORK_DIR" ] && [ -d "$WORK_DIR" ] || return 1
-    [ "$(stat -c '%u:%a' "$WORK_DIR" 2>/dev/null)" = 0:700 ] || return 1
+    owned_directory_0700 "$WORK_DIR" || return 1
     [ "$(readlink -f "$WORK_DIR" 2>/dev/null)" = "$WORK_DIR" ] || return 1
 }
 
@@ -143,7 +167,7 @@ prepare_work_dir() {
 marker_owned() {
     marker="$1"
     [ ! -L "$marker" ] && [ -f "$marker" ] || return 1
-    [ "$(stat -c '%u:%a:%h' "$marker" 2>/dev/null)" = 0:600:1 ] || return 1
+    owned_file_0600 "$marker" || return 1
     [ "$(readlink -f "$marker" 2>/dev/null)" = "$marker" ] || return 1
 }
 
@@ -359,10 +383,10 @@ install_deps() {
     log "Installing dependencies..."
     write_status running dependencies "Installing dependencies"
     if [ "$PKG_MGR" = "apk" ]; then
-        apk add zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
+        apk add zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 coreutils-stat \
             || die "Dependency installation failed"
     else
-        opkg install zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
+        opkg install zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 coreutils-stat \
             || die "Dependency installation failed"
     fi
 }
