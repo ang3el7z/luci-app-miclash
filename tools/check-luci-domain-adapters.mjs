@@ -32,6 +32,20 @@ assert.deepEqual(logCalls, [
 	{ generation: '', cursor: 0, limit: 200 },
 	{ generation: 'log_1', cursor: 2, limit: 200 }
 ]);
+const errLog = logs.formatLine('daemon.err miclash[123]: recoverable failure');
+assert.equal(errLog.level, 'ERROR', 'syslog ERR must normalize to ERROR');
+assert.equal(errLog.levelClass, 'sbox-log-level-error');
+const critLog = logs.formatLine('daemon.crit miclash[123]: critical failure');
+assert.equal(critLog.level, 'CRIT', 'syslog CRIT must retain a distinct critical level');
+assert.equal(critLog.levelClass, 'sbox-log-level-crit');
+const fatalLog = logs.formatLine('daemon.fatal miclash[123]: fatal failure');
+assert.equal(fatalLog.level, 'FATAL', 'critical aliases must retain their original labels');
+assert.equal(fatalLog.levelClass, 'sbox-log-level-fatal');
+
+const styleSource = fs.readFileSync(`${root}/style.css`, 'utf8');
+assert.match(styleSource,
+	/\.sbox-log-level-crit \.sbox-log-level,[\s\S]*\.sbox-log-level-emerg \.sbox-log-level\s*\{[^}]*color:\s*var\(--sbox-danger\)/,
+	'critical badges must derive their color from the shared danger palette');
 
 const settingsCalls = [];
 let nextOperationId = 0;

@@ -472,6 +472,15 @@
 .sbox-log-level-info .sbox-log-level { color: var(--sbox-log-info); }
 .sbox-log-level-warn .sbox-log-level { color: var(--sbox-warn); }
 .sbox-log-level-error .sbox-log-level { color: var(--sbox-danger); }
+.sbox-log-level-crit .sbox-log-level,
+.sbox-log-level-critical .sbox-log-level,
+.sbox-log-level-fatal .sbox-log-level,
+.sbox-log-level-panic .sbox-log-level,
+.sbox-log-level-alert .sbox-log-level,
+.sbox-log-level-emerg .sbox-log-level {
+	color: var(--sbox-danger);
+	filter: brightness(1.16);
+}
 .sbox-log-level-debug .sbox-log-level,
 .sbox-log-level-trace .sbox-log-level,
 .sbox-log-level-muted .sbox-log-level {

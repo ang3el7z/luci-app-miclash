@@ -41,7 +41,7 @@ function extractLogTime(line) {
 
 function normalizeLevel(level) {
 	const clean = String(level || '').toUpperCase();
-	if (/^(FATAL|PANIC|ERRO|ERROR)$/.test(clean)) return 'ERROR';
+	if (/^(ERR|ERRO|ERROR)$/.test(clean)) return 'ERROR';
 	if (/^(WARN|WARNING)$/.test(clean)) return 'WARN';
 	if (/^DEBUG$/.test(clean)) return 'DEBUG';
 	if (/^TRACE$/.test(clean)) return 'TRACE';
