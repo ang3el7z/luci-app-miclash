@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require ui';
 
 const SOURCE = 'luci';
@@ -242,4 +243,4 @@ function create(options) {
 	return { mount, refresh, destroy, importArchive, inspect, download, showPlan };
 }
 
-return { create, MAX_ARCHIVE };
+return baseclass.extend({ create, MAX_ARCHIVE });

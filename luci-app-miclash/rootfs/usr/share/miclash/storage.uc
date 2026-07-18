@@ -198,8 +198,7 @@ export function atomic_write(runtime, path, data, mode) {
 		if (temp_stat?.type != 'file' || temp_stat.nlink != 1 ||
 		    temp_stat.size != length(data))
 			fail('INTERNAL');
-		if (runtime.fs.realpath(owned) != canonical_member(directory, owned) ||
-		    !same_device(temp_stat, directory_stat))
+		if (runtime.fs.realpath(owned) != canonical_member(directory, owned))
 			fail('INVALID_ARGUMENT');
 
 		let data_digest = runtime.digest.sha256(data);
@@ -212,8 +211,7 @@ export function atomic_write(runtime, path, data, mode) {
 			fail('INVALID_ARGUMENT');
 		let current_directory = secure_directory(runtime, path);
 		if (directory.canonical != current_directory.canonical ||
-		    !same_directory_authority(directory_stat, current_directory.stat) ||
-		    !same_device(verified_stat, current_directory.stat))
+		    !same_directory_authority(directory_stat, current_directory.stat))
 			fail('INVALID_ARGUMENT');
 		if (runtime.fs.rename(owned, path) != true)
 			fail('INTERNAL');
@@ -244,8 +242,7 @@ export function atomic_replace(runtime, source, destination) {
 	let directory = secure_directory(runtime, destination);
 	let source_stat = runtime.fs.lstat(source);
 	if (source_stat?.type != 'file' || source_stat.nlink != 1 ||
-	    runtime.fs.realpath(source) != canonical_member(directory, source) ||
-	    !same_device(source_stat, directory.stat))
+	    runtime.fs.realpath(source) != canonical_member(directory, source))
 		fail('INVALID_ARGUMENT');
 	let current_stat = runtime.fs.lstat(source);
 	let current_directory = secure_directory(runtime, destination);

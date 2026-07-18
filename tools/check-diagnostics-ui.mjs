@@ -168,8 +168,9 @@ const ui = {
 	addNotification(_title, body, type) { notifications.push({ type, text: body?.textContent || '' }); }
 };
 const translate = (value) => String(value);
-const moduleApi = new Function('ui', 'E', '_', 'window', 'document', 'Blob', panelSource)(
-	ui, E, translate, windowMock, documentMock, Blob);
+const baseclass = { extend: (value) => value };
+const moduleApi = new Function('baseclass', 'ui', 'E', '_', 'window', 'document', 'Blob', panelSource)(
+	baseclass, ui, E, translate, windowMock, documentMock, Blob);
 
 const calls = [];
 let destroyedApi = 0;
@@ -383,8 +384,8 @@ const rpcMock = { declare(spec) { return async (...args) => {
 	const reply = rpcReplies.get(spec.method);
 	return typeof reply === 'function' ? reply(...args) : (reply || {});
 }; } };
-const typedApi = new Function('rpc', 'window', 'TextEncoder', 'Uint8Array', 'ArrayBuffer',
-	'btoa', 'atob', apiSource)(rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
+const typedApi = new Function('baseclass', 'rpc', 'window', 'TextEncoder', 'Uint8Array', 'ArrayBuffer',
+	'btoa', 'atob', apiSource)(baseclass, rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
 	(value) => Buffer.from(value, 'binary').toString('base64'),
 	(value) => Buffer.from(value, 'base64').toString('binary'));
 rpcReplies.set('status', replies.status);

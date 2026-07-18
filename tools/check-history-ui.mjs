@@ -77,7 +77,8 @@ const E = (tag, attrs, children) => {
 const _ = (value) => String(value);
 const modalCalls = [];
 const ui = { showModal(title, body) { modalCalls.push({ title, body }); }, hideModal() { modalCalls.push({ hidden: true }); } };
-const historyModule = new Function('ui', 'E', '_', panel)(ui, E, _);
+const historyModule = new Function('baseclass', 'ui', 'E', '_', panel)(
+	{ extend: (value) => value }, ui, E, _);
 const calls = [];
 const revisions = [
 	{ revision: '0000000000001-aaaaaaaaaaaaaaaa', timestamp: 1, source: '<img src=x onerror=alert(1)>', validation_result: 'success' },

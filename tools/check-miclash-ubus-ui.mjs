@@ -163,8 +163,8 @@ const windowMock = {
 	setTimeout(callback) { const id = nextTimer++; scheduled.set(id, callback); return id; },
 	clearTimeout(id) { cleared.push(id); scheduled.delete(id); }
 };
-const moduleApi = new Function('rpc', 'window', 'TextEncoder', 'Uint8Array', 'ArrayBuffer',
-	'btoa', 'atob', ui)(rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
+const moduleApi = new Function('baseclass', 'rpc', 'window', 'TextEncoder', 'Uint8Array', 'ArrayBuffer',
+	'btoa', 'atob', ui)({ extend: (value) => value }, rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
 	(value) => Buffer.from(value, 'binary').toString('base64'),
 	(value) => Buffer.from(value, 'base64').toString('binary'));
 

@@ -99,6 +99,13 @@ assert.match(upgrade, /ensure_stat_runtime\(\)[\s\S]*coreutils-stat/,
 	'transition installer must bootstrap stat before invoking older v2 installers');
 assert.match(upgrade, /find_resume_backup\(\)[\s\S]*upgrade-complete/,
 	'transition installer must resume an interrupted replacement from its backup');
+assert.doesNotMatch(upgrade, /UPGRADE_STATE='resume-restore'/,
+	'an installed v2 package must not be trusted after an interrupted post-install');
+assert.doesNotMatch(upgrade, /\[ -n "\$TAG" \] \|\| TAG="\$backup_tag"/,
+	'an interrupted transition must select a newly ready v2 release by default');
+assert.match(upgrade,
+	/UPGRADE_STATE='resume-install'[\s\S]*Removing incomplete MiClash v2[\s\S]*(?:apk del|opkg remove) luci-app-miclash[\s\S]*clean-install --target-tag "\$TAG"/,
+	'an interrupted v2 post-install must remove the partial package and reinstall a ready release');
 const backupCreated = upgrade.indexOf('say "Backup created: $BACKUP"');
 const guardDisabled = upgrade.indexOf('disable_legacy_guard', backupCreated);
 const packageRemoved = upgrade.indexOf('apk del luci-app-miclash', guardDisabled);

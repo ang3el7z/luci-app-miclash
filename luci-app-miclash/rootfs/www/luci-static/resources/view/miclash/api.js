@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require rpc';
 
 const METHOD_SPECS = [
@@ -351,7 +352,7 @@ function createClient(options) {
 	return client;
 }
 
-return {
+return baseclass.extend({
 	create: createClient,
 	methods: METHOD_SPECS
-};
+});

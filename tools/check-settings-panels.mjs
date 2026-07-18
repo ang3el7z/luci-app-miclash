@@ -84,8 +84,9 @@ assert.match(config, /autoMajorMiclashEl[\s\S]*autoMajorMiclash/,
 	'automatic major checkbox value is not collected for atomic save');
 
 const identity = (value) => String(value);
-const load = (source) => new Function('ui', 'E', '_', 'document', 'window', source)(
-	{}, () => ({}), identity, {}, {});
+const baseclass = { extend: (value) => value };
+const load = (source) => new Function('baseclass', 'ui', 'E', '_', 'document', 'window', source)(
+	baseclass, {}, () => ({}), identity, {}, {});
 const settingsModule = load(settings);
 assert.equal(settingsModule.exactTelegramId('9007199254740993123456789'), true,
 	'Telegram ID beyond JS safe integer lost exact string semantics');
@@ -158,8 +159,9 @@ const windowMock = {
 		revokeObjectURL(url) { urls.delete(url); } }
 };
 const uiMock = { showModal(title, body) { modalCalls.push({ title, body }); }, hideModal() { modalCalls.push({ hidden: true }); }, addNotification() {} };
-const dynamicLoad = (source) => new Function('ui', 'E', '_', 'document', 'window', source)(
-	uiMock, E, identity, documentMock, windowMock);
+const dynamicLoad = (source) => new Function(
+	'baseclass', 'ui', 'E', '_', 'document', 'window', source
+)(baseclass, uiMock, E, identity, documentMock, windowMock);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 const settingsCalls = [], settingsErrors = [], autoHideChanges = [];

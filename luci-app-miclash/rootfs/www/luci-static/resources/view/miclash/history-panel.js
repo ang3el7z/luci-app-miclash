@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require ui';
 
 function operationWatch(api, operationId, onProgress) {
@@ -185,4 +186,8 @@ function create(options) {
 	return { open, refresh, destroy, invalidate, selectRevision, owns };
 }
 
-return { create: create, operationWatch: operationWatch, normalizeRecords: normalizeRecords };
+return baseclass.extend({
+	create: create,
+	operationWatch: operationWatch,
+	normalizeRecords: normalizeRecords
+});

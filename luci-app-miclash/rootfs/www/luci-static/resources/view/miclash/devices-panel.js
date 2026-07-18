@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require ui';
 
 const SOURCE = 'luci';
@@ -217,4 +218,4 @@ function create(options) {
 	return { mount, refresh, destroy, openEditor, policyFromEditor };
 }
 
-return { create, normalizedMac, currentAddresses };
+return baseclass.extend({ create, normalizedMac, currentAddresses });

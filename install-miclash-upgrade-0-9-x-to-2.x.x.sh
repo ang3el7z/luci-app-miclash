@@ -13,6 +13,7 @@ OLD_ENABLED=0
 OLD_RUNNING=0
 PKG_MGR=''
 UPGRADE_STATE='fresh'
+PARTIAL_V2=0
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'MiClash clean upgrade failed: %s\n' "$*" >&2; exit 1; }
@@ -73,8 +74,7 @@ load_resume_backup() {
 	OLD_ENABLED="$(backup_value "$BACKUP" old_enabled)"
 	OLD_RUNNING="$(backup_value "$BACKUP" old_running)"
 	GUARD_ENABLED="$(backup_value "$BACKUP" guard_enabled)"
-	backup_tag="$(backup_value "$BACKUP" release_tag)"
-	[ -n "$TAG" ] || TAG="$backup_tag"
+	backup_value "$BACKUP" release_tag >/dev/null
 }
 
 ensure_stat_runtime() {
@@ -215,14 +215,8 @@ case "$INSTALLED_VERSION" in
 		find_resume_backup ||
 			die "no installed v0.9.x and no incomplete v0.9 backup to resume (installed: ${INSTALLED_VERSION:-none})"
 		load_resume_backup
-		if [ -n "$INSTALLED_VERSION" ]; then
-			UPGRADE_STATE='resume-restore'
-			installed_clean="$(printf '%s' "$INSTALLED_VERSION" | sed 's/-r[0-9][0-9]*$//')"
-			[ "v$installed_clean" = "$TAG" ] ||
-				die "installed v2 version $INSTALLED_VERSION does not match incomplete backup target $TAG"
-		else
-			UPGRADE_STATE='resume-install'
-		fi
+		UPGRADE_STATE='resume-install'
+		[ -z "$INSTALLED_VERSION" ] || PARTIAL_V2=1
 		say "Resuming the interrupted clean replacement from: $BACKUP"
 		;;
 	*) die "expected installed MiClash v0.9.x, found: $INSTALLED_VERSION" ;;
@@ -258,32 +252,28 @@ release_ready() {
 		"$WORK/miclash-release-manifest.json" || return 1
 }
 
-if [ "$UPGRADE_STATE" != 'resume-restore' ]; then
-	if [ -n "$TAG" ]; then
-		release_ready "$TAG" || die "requested v2 release is incomplete or unsupported: $TAG"
-	else
-		catalog="$WORK/releases.json"
-		download 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20' "$catalog" ||
-			die 'cannot download the MiClash release catalog'
-		index=0
-		while [ "$index" -lt 20 ]; do
-			candidate="$(jsonfilter -i "$catalog" -e "@[$index].tag_name" 2>/dev/null || true)"
-			[ -n "$candidate" ] || break
-			draft="$(jsonfilter -i "$catalog" -e "@[$index].draft" 2>/dev/null || true)"
-			prerelease="$(jsonfilter -i "$catalog" -e "@[$index].prerelease" 2>/dev/null || true)"
-			if printf '%s\n' "$candidate" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' &&
-				[ "$draft" = false ] && [ "$prerelease" = false ] && release_ready "$candidate" 2>/dev/null; then
-				TAG="$candidate"
-				break
-			fi
-			index=$((index + 1))
-		done
-		[ -n "$TAG" ] || die 'no complete stable v2 release was found in the newest 20 releases'
-	fi
-	say "Selected ready MiClash release: $TAG"
+if [ -n "$TAG" ]; then
+	release_ready "$TAG" || die "requested v2 release is incomplete or unsupported: $TAG"
 else
-	say "MiClash v2 is already installed; restoring data and service state from $BACKUP"
+	catalog="$WORK/releases.json"
+	download 'https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20' "$catalog" ||
+		die 'cannot download the MiClash release catalog'
+	index=0
+	while [ "$index" -lt 20 ]; do
+		candidate="$(jsonfilter -i "$catalog" -e "@[$index].tag_name" 2>/dev/null || true)"
+		[ -n "$candidate" ] || break
+		draft="$(jsonfilter -i "$catalog" -e "@[$index].draft" 2>/dev/null || true)"
+		prerelease="$(jsonfilter -i "$catalog" -e "@[$index].prerelease" 2>/dev/null || true)"
+		if printf '%s\n' "$candidate" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' &&
+			[ "$draft" = false ] && [ "$prerelease" = false ] && release_ready "$candidate" 2>/dev/null; then
+			TAG="$candidate"
+			break
+		fi
+		index=$((index + 1))
+	done
+	[ -n "$TAG" ] || die 'no complete stable v2 release was found in the newest 20 releases'
 fi
+say "Selected ready MiClash release: $TAG"
 
 if [ "$UPGRADE_STATE" = fresh ]; then
 	stamp="$(date +%Y%m%d-%H%M%S)"
@@ -318,20 +308,26 @@ if [ "$UPGRADE_STATE" = fresh ]; then
 	verify_legacy_guard_off || die 'legacy Guard returned during package removal'
 fi
 
-if [ "$UPGRADE_STATE" != 'resume-restore' ]; then
-	rm -rf /opt/clash /etc/config/miclash /etc/miclash
-	rm -f /etc/init.d/clash /etc/init.d/miclash-autoupdate /etc/init.d/miclash-memory-guard \
-		/etc/hotplug.d/iface/40-clash /etc/hotplug.d/net/99-clash-tun /var/etc/miclash.include
-	if [ -f /etc/crontabs/root ]; then
-		sed -i '\|/opt/clash/bin/clash-rules update|d' /etc/crontabs/root || die 'cannot clean legacy cron entry'
-	fi
-	remove_legacy_guard_rules
-	verify_legacy_guard_off || die 'legacy Guard rules are still active before v2 installation'
-
-	say "Installing clean MiClash $TAG..."
-	sh "$WORK/install-miclash.sh" clean-install --target-tag "$TAG" </dev/null ||
-		die "v2 installation failed; backup is kept at $BACKUP; run this transition command again to resume"
+if [ "$PARTIAL_V2" = 1 ]; then
+	say "Removing incomplete MiClash v2 package before retry..."
+	case "$PKG_MGR" in
+		opkg) opkg remove luci-app-miclash || die 'cannot remove the incomplete v2 package' ;;
+		apk) apk del luci-app-miclash || die 'cannot remove the incomplete v2 package' ;;
+	esac
 fi
+
+rm -rf /opt/clash /etc/config/miclash /etc/miclash
+rm -f /etc/init.d/clash /etc/init.d/miclash-autoupdate /etc/init.d/miclash-memory-guard \
+	/etc/hotplug.d/iface/40-clash /etc/hotplug.d/net/99-clash-tun /var/etc/miclash.include
+if [ -f /etc/crontabs/root ]; then
+	sed -i '\|/opt/clash/bin/clash-rules update|d' /etc/crontabs/root || die 'cannot clean legacy cron entry'
+fi
+remove_legacy_guard_rules
+verify_legacy_guard_off || die 'legacy Guard rules are still active before v2 installation'
+
+say "Installing clean MiClash $TAG..."
+sh "$WORK/install-miclash.sh" clean-install --target-tag "$TAG" </dev/null ||
+	die "v2 installation failed; backup is kept at $BACKUP; run this transition command again to resume"
 
 mkdir -p /opt/clash/bin /opt/clash/ruleset /opt/clash/proxy_providers || die 'cannot create v2 data directories'
 cp -p "$BACKUP/core/clash" /opt/clash/bin/clash || die 'cannot restore Mihomo core'

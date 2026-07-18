@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require ui';
 
 const COMPONENTS = [
@@ -482,4 +483,4 @@ function createOwner(options) {
 	};
 }
 
-return { create, createOwner };
+return baseclass.extend({ create, createOwner });

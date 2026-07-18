@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 
 const GENERATION = /^ng_[0-9a-f]{32}$/;
 const BATCH = 32;
@@ -100,4 +101,4 @@ function create(options) {
 	return { start, poll, destroy };
 }
 
-return { create };
+return baseclass.extend({ create });

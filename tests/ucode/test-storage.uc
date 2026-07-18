@@ -48,6 +48,20 @@ for (let mode in [ 0o0700, 0o0755 ]) {
 	assert_equal(storage.atomic_write(secure,
 		'/etc/miclash/state.json', '{}', 0o600), true);
 }
+
+// OpenWrt 25 overlayfs may report the merged directory and a newly-created
+// upper-layer file with different st_dev values. The pathname is still an
+// exclusive member of the same trusted directory and rename is authoritative.
+let overlay_write = runtime({ '/etc/miclash/.keep': '' });
+overlay_write.fs.set_device('/etc/miclash', 20);
+overlay_write.fs.on_lstat = (path) => {
+	if (index(path, '/etc/miclash/.state.json.miclash.') == 0)
+		overlay_write.fs.set_device(path, 21);
+};
+assert_equal(storage.atomic_write(overlay_write,
+	'/etc/miclash/state.json', '{}', 0o600), true);
+assert_equal(overlay_write.fs.readfile('/etc/miclash/state.json'), '{}');
+
 let corrupt_authority = runtime({ '/etc/miclash': 'attacker' });
 assert_throws(() => storage.atomic_write(corrupt_authority,
 	'/etc/miclash/state.json', '{}', 0o600), 'INVALID_ARGUMENT');
@@ -122,13 +136,13 @@ assert_equal(length(digest_write.digest.calls.file), 1);
 assert_equal(index(digest_write.fs.calls.readfile,
 	digest_write.fs.temp_paths()[0]), -1);
 
-let cross_device_source = '/opt/clash/.config.yaml.miclash.1700000000000-1.abcdef01';
-let cross_device = runtime({ [cross_device_source]: 'new', '/opt/clash/config.yaml': 'old' });
-cross_device.fs.set_device(cross_device_source, 2);
-assert_throws(() => storage.atomic_replace(
-	 cross_device, cross_device_source, '/opt/clash/config.yaml'), 'INVALID_ARGUMENT');
-assert_equal(cross_device.fs.readfile(cross_device_source), 'new');
-assert_equal(cross_device.fs.readfile('/opt/clash/config.yaml'), 'old');
+let overlay_source = '/opt/clash/.config.yaml.miclash.1700000000000-1.abcdef01';
+let overlay_replace = runtime({ [overlay_source]: 'new', '/opt/clash/config.yaml': 'old' });
+overlay_replace.fs.set_device('/opt/clash', 20);
+overlay_replace.fs.set_device(overlay_source, 21);
+assert_equal(storage.atomic_replace(
+	overlay_replace, overlay_source, '/opt/clash/config.yaml'), true);
+assert_equal(overlay_replace.fs.readfile('/opt/clash/config.yaml'), 'new');
 
 let owned_source = '/opt/clash/.config.yaml.miclash.1700000000000-2.abcdef02';
 let replace = runtime({ [owned_source]: 'new', '/opt/clash/config.yaml': 'old' });

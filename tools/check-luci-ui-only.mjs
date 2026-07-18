@@ -20,6 +20,8 @@ for (const name of files) {
 		if (pattern.test(source)) violations.push(`${name}: ${description}`);
 	if (name !== 'api.js' && /\brpc\s*\.\s*declare\s*\(/.test(source))
 		violations.push(`${name}: rpc.declare outside api.js`);
+	if (!/return\s+(?:baseclass|view|L\.Class)\.extend\s*\(\s*\{/m.test(source))
+		violations.push(`${name}: factory does not return a LuCI class constructor`);
 }
 
 assert.deepEqual(violations, [],

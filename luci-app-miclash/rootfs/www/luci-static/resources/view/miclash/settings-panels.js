@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require ui';
 
 const MASK = '[REDACTED]';
@@ -333,4 +334,13 @@ function create(options) {
 	return { mount, refresh, destroy, formPatch, exactTelegramId, exactTelegramToken };
 }
 
-return { create, exactTelegramId, exactTelegramToken, KNOWN_EVENTS, KNOWN_CHANNELS, MEMORY_FIELDS, MEMORY_LABELS, EVENT_LABELS };
+return baseclass.extend({
+	create,
+	exactTelegramId,
+	exactTelegramToken,
+	KNOWN_EVENTS,
+	KNOWN_CHANNELS,
+	MEMORY_FIELDS,
+	MEMORY_LABELS,
+	EVENT_LABELS
+});
