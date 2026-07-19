@@ -205,6 +205,18 @@ function with_direct_accept(text, mac) {
 	return sprintf('%J', document);
 };
 
+function with_interface_scope(text, op, right) {
+	let document = cloned_document(text);
+	for (let entry in document.nftables) {
+		let expr = entry.rule?.expr;
+		if (type(expr) != 'array' || length(expr) != 2 ||
+		    type(expr[1]) != 'object' || !exists(expr[1], 'drop')) continue;
+		entry.rule.expr = [ { match: { op, left: { meta: { key: 'iifname' } }, right } },
+			...expr ];
+	}
+	return sprintf('%J', document);
+};
+
 assert_equal(guard.verify_nft_table(valid_nft, PRIMARY_TABLE), true,
 	'real nft JSON topology verifies');
 let direct_mac = 'ac:bb:cc:dd:ee:10';
@@ -218,6 +230,29 @@ assert_equal(guard.verify_nft_table(valid_nft, PRIMARY_TABLE, [ direct_mac ]), f
 assert_true(index(guard.nft_ruleset(PRIMARY_TABLE, false, [ direct_mac ]),
 	'ether saddr "' + direct_mac + '" accept comment "miclash-guard-direct"') >= 0,
 	'generated early Guard rules include the explicit Direct MAC exception');
+let explicit_guard = guard.nft_ruleset(PRIMARY_TABLE, false, [ direct_mac ], {
+	mode: 'explicit', included: [ 'br-lan' ], excluded: []
+});
+assert_true(index(explicit_guard,
+	'iifname { "br-lan" } meta nfproto ipv4 drop comment "miclash-guard-bootstrap"') >= 0,
+	'explicit Guard must drop only traffic entering through the selected scope');
+let exclude_guard = guard.nft_ruleset(PRIMARY_TABLE, false, [], {
+	mode: 'exclude', included: [], excluded: [ 'wan' ]
+});
+assert_true(index(exclude_guard,
+	'iifname != { "wan" } meta nfproto ipv4 drop comment "miclash-guard-bootstrap"') >= 0,
+	'exclude Guard must leave excluded ingress completely untouched');
+assert_equal(guard.verify_nft_table(with_interface_scope(valid_nft, '==', 'br-lan'),
+	PRIMARY_TABLE, [], { mode: 'explicit', included: [ 'br-lan' ], excluded: [] }), true,
+	'real nft JSON scalar explicit ingress verifies');
+assert_equal(guard.verify_nft_table(with_interface_scope(valid_nft, '!=', 'wan'),
+	PRIMARY_TABLE, [], { mode: 'exclude', included: [], excluded: [ 'wan' ] }), true,
+	'real nft JSON scalar excluded ingress verifies');
+let empty_explicit_guard = guard.nft_ruleset(PRIMARY_TABLE, false, [], {
+	mode: 'explicit', included: [], excluded: []
+});
+assert_true(index(empty_explicit_guard, 'miclash-guard-bootstrap') < 0,
+	'an empty explicit scope must not Guard unrelated forwarding');
 assert_equal(guard.verify_nft_table(changed_chain(valid_nft, { hook: null }), PRIMARY_TABLE), false,
 	'unhooked chain must fail verification');
 assert_equal(guard.verify_nft_table(changed_chain(valid_nft, { prio: -309 }), PRIMARY_TABLE), false,

@@ -15,6 +15,7 @@ import * as telegram from 'miclash.telegram';
 import * as mutation_lock from 'miclash.mutation_lock';
 import * as reconcile_adapter from 'miclash.reconcile-adapter';
 import * as network from 'miclash.network';
+import * as interface_scope from 'miclash.interface-scope';
 import * as subscription from 'miclash.subscription';
 import * as updates from 'miclash.updates';
 import * as http from 'miclash.http';
@@ -260,35 +261,11 @@ function bounded_system_info(runtime) {
 };
 
 function bounded_network_interfaces(runtime, settings_domain) {
-	let names = [];
-	try { names = runtime.fs?.lsdir('/sys/class/net') ?? []; }
-	catch (error) { names = []; }
-	if (type(names) != 'array') names = [];
-	let interfaces = [];
-	for (let name in names) {
-		if (length(interfaces) >= 128) break;
-		if (type(name) != 'string' || !match(name, /^[A-Za-z0-9_.:@-]{1,64}$/) ||
-		    name == 'lo' || name == 'clash-tun' || index(interfaces, name) >= 0)
-			continue;
-		push(interfaces, name);
-	}
-	interfaces = sort(interfaces);
-	let configured = settings_domain.get().interfaces;
-	let lan = configured.detected_lan, wan = configured.detected_wan;
-	if (type(lan) != 'string' || index(interfaces, lan) < 0)
-		lan = index(interfaces, 'br-lan') >= 0 ? 'br-lan' :
-			(index(interfaces, 'lan') >= 0 ? 'lan' : '');
-	if (type(wan) != 'string' || index(interfaces, wan) < 0) {
-		wan = '';
-		let routes = bounded_file(runtime, '/proc/net/route', 65536);
-		for (let line in split(routes, '\n')) {
-			let found = match(line,
-				/^([A-Za-z0-9_.:@-]{1,64})[ \t]+00000000[ \t]+[0-9A-Fa-f]{8}[ \t]+/);
-			if (found != null && index(interfaces, found[1]) >= 0) { wan = found[1]; break; }
-		}
-		if (!length(wan) && index(interfaces, 'wan') >= 0) wan = 'wan';
-	}
-	return { interfaces, detected_lan: lan, detected_wan: wan };
+	return interface_scope.detect(runtime, settings_domain.get());
+};
+
+export function effective_network_settings(runtime, wanted) {
+	return interface_scope.effective_settings(wanted, interface_scope.detect(runtime, wanted));
 };
 
 export function device_external_interfaces(snapshot) {
@@ -388,7 +365,7 @@ export function compose(runtime, overrides) {
 	let modules = {
 		operations, settings, storage, service, config, state, application,
 		api, memory, devices, notify, notification_settings, telegram, mutation_lock,
-		reconcile_adapter, network, subscription, updates, http, diagnostics, route_test, routing,
+		reconcile_adapter, network, interface_scope, subscription, updates, http, diagnostics, route_test, routing,
 		mihomo_api, app_update_scheduler, device_vendor_update,
 		...(overrides ?? {})
 	};
@@ -426,7 +403,7 @@ export function compose(runtime, overrides) {
 			validate: (patch) => modules.settings.validate_patch(patch),
 			set: (patch) => modules.settings.save(runtime, patch)
 		};
-		let desired = settings_domain.get();
+		let desired = effective_network_settings(runtime, settings_domain.get());
 		let device_app = null;
 		let native_network = modules.network.create(runtime);
 		let policy_network = {
@@ -434,15 +411,17 @@ export function compose(runtime, overrides) {
 				if (device_app == null) errors.fail('HEALTH_FAILED');
 				let timestamp = int(runtime.clock.now() / 1000);
 				let device_policies = modules.devices.active_device_policies(device_app, timestamp);
-				return native_network.apply(settings, { device_policies });
+				let effective = modules.interface_scope.effective_settings(settings,
+					modules.interface_scope.detect(runtime, settings));
+				return native_network.apply(effective, { device_policies });
 			},
 			cleanup: (settings) => native_network.cleanup(settings)
 		};
 		let reconcile_settings = {
-			get: settings_domain.get,
+			get: () => effective_network_settings(runtime, settings_domain.get()),
 			set: (patch) => {
 				let saved = settings_domain.set(patch);
-				desired = saved;
+				desired = effective_network_settings(runtime, saved);
 				if (state_model != null) state_model.set_desired(saved);
 				return saved;
 			}
@@ -711,7 +690,13 @@ export function compose(runtime, overrides) {
 			}
 		};
 		let devices_domain = {
-			list: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.discover_effective(device_app); },
+			list: () => {
+				if (devices_closed) errors.fail('HEALTH_FAILED');
+				let wanted = settings_domain.get();
+				return modules.devices.discover_effective(device_app,
+					modules.interface_scope.resolve(wanted,
+						modules.interface_scope.detect(runtime, wanted)));
+			},
 			timezones: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.timezones(device_app); },
 			policy_list: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.policy_list(device_app); },
 			policy_set: (policy, stage) => {
@@ -954,14 +939,17 @@ export function compose(runtime, overrides) {
 		app.diagnostics_summary = () => diagnostics_domain.summary();
 		app.diagnostics_create_report = () => diagnostics_domain.create_report();
 		app.diagnostics_route_test = (arguments) => {
-			let wanted = settings_domain.get(), device_policies = [], interface_policies = [],
+			let persisted = settings_domain.get(), snapshot = modules.interface_scope.detect(runtime, persisted),
+				projection = modules.interface_scope.resolve(persisted, snapshot),
+				wanted = modules.interface_scope.effective_settings(persisted, snapshot),
+				device_policies = [], interface_policies = [],
 				config_content = configuration.read_active('config.yaml');
 			if (arguments.device != null) {
 				let effective = modules.devices.effective({ ...device_app,
 					core_available: runtime.core_available }, {
 					mac: arguments.device, interfaces: arguments.interface == null
 						? [] : [ arguments.interface ], timestamp: int(runtime.clock.now() / 1000)
-				});
+				}, projection);
 				push(device_policies, { mac: arguments.device, decision: uc(effective.action) });
 			}
 			// Diagnose the queried interface from the exact projection used to compile

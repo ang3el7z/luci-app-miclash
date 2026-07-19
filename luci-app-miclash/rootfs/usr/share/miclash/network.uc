@@ -2,6 +2,7 @@ import { fail } from 'miclash.errors';
 import * as nft from 'miclash.firewall.nft';
 import * as routing from 'miclash.routing';
 import * as dns from 'miclash.dns';
+import * as interface_scope from 'miclash.interface-scope';
 import { with_lock } from 'miclash.mutation_lock';
 
 function unique(values) {
@@ -12,11 +13,15 @@ function unique(values) {
 	return result;
 };
 
-export function interface_projection(settings) {
+export function interface_projection(settings, snapshot) {
 	let interfaces = settings?.interfaces;
 	if (type(interfaces) != 'object' ||
 	    (interfaces.mode != 'explicit' && interfaces.mode != 'exclude'))
 		fail('INVALID_ARGUMENT');
+	if (snapshot != null) {
+		let projection = interface_scope.resolve(settings, snapshot);
+		return { mode: projection.mode, lan: projection.included, wan: projection.excluded };
+	}
 	let lan = [ ...(interfaces.included ?? []) ], wan = [ ...(interfaces.excluded ?? []) ];
 	if (interfaces.auto_detect_lan === true && length(interfaces.detected_lan ?? ''))
 		push(lan, interfaces.detected_lan);
@@ -25,8 +30,8 @@ export function interface_projection(settings) {
 	return { mode: interfaces.mode, lan: unique(lan), wan: unique(wan) };
 };
 
-export function interface_decision(settings, name) {
-	let projection = interface_projection(settings);
+export function interface_decision(settings, name, snapshot) {
+	let projection = interface_projection(settings, snapshot);
 	if (type(name) != 'string' || !length(name)) fail('INVALID_ARGUMENT');
 	if (projection.mode == 'explicit')
 		return index(projection.lan, name) >= 0 ? 'PROXY' : 'DIRECT';

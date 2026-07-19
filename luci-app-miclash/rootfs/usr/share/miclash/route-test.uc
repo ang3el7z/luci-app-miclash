@@ -198,6 +198,7 @@ function mapping_server(value, flow) {
 			invalid();
 		}
 		let key = trim(substr(field, 0, colon));
+		if (key == '<<') continue;
 		if (!match(key, /^[A-Za-z0-9_-]+$/)) invalid();
 		if (key != 'server') continue;
 		if (server != null) invalid();
@@ -377,12 +378,32 @@ function mihomo_reason(dependencies, input, answers) {
 				return { available: true, matched: false, type: null,
 					ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
 			for (let name in rule)
-				if (name != 'type' && name != 'payload' && name != 'proxy' && name != 'size')
+				if (name != 'type' && name != 'payload' && name != 'proxy' && name != 'size' &&
+				    name != 'index' && name != 'extra')
 					return { available: true, matched: false, type: null,
 						ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
-			if (rule.size != null && (type(rule.size) != 'int' || rule.size < 0))
+			// Mihomo uses -1 when a rule does not expose a finite size.
+			if (rule.size != null && (type(rule.size) != 'int' || rule.size < -1))
 				return { available: true, matched: false, type: null,
 					ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
+			if (rule.index != null && (type(rule.index) != 'int' || rule.index < 0))
+				return { available: true, matched: false, type: null,
+					ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
+			if (rule.extra != null) {
+				if (type(rule.extra) != 'object' || type(rule.extra) == 'array')
+					return { available: true, matched: false, type: null,
+						ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
+				for (let name in rule.extra) {
+					let value = rule.extra[name];
+					if ((name == 'disabled' && type(value) == 'bool') ||
+					    ((name == 'hitCount' || name == 'missCount') &&
+					     type(value) == 'int' && value >= 0) ||
+					    ((name == 'hitAt' || name == 'missAt') && type(value) == 'string' &&
+					     length(value) <= 64 && !match(value, /[[:cntrl:]]/))) continue;
+					return { available: true, matched: false, type: null,
+						ordered: false, code: 'MALFORMED_RULE', decision: 'unknown' };
+				}
+			}
 			let outcome = rule_match(rule, input, answers);
 			if (!outcome.known)
 				return { available: true, matched: false, type: uc(rule.type),
@@ -647,22 +668,27 @@ export function create(dependencies) {
 				device: input.device, interface: input.interface }, 'unknown');
 			step(steps, 'dns', { available: dns_available, cached: dns_cached, answers },
 				'unknown');
-			let device = policy(desired.devices, 'mac', input.device);
-			if (candidate == 'unknown' && device.matched) {
-				candidate = device.decision; candidate_source = 'device_policy';
-			}
-			step(steps, 'device_policy', { available: device.available, valid: device.valid,
-				code: device.code, matched: device.matched }, device.decision);
 			let interface_policy = policy(desired.interfaces, 'name', input.interface);
-			if (candidate == 'unknown' && interface_policy.matched) {
-				candidate = interface_policy.decision; candidate_source = 'interface_policy';
+			let outside_scope = interface_policy.matched && interface_policy.decision == 'DIRECT';
+			if (outside_scope) {
+				candidate = 'DIRECT'; candidate_source = 'interface_scope';
+			}
+			else if (interface_policy.matched && interface_policy.decision == 'BLOCK') {
+				candidate = 'BLOCK'; candidate_source = 'interface_policy';
 			}
 			step(steps, 'interface_policy', { available: interface_policy.available,
 				valid: interface_policy.valid, code: interface_policy.code,
-				matched: interface_policy.matched },
+				matched: interface_policy.matched, outside_scope },
 				interface_policy.decision);
+			let device = policy(desired.devices, 'mac', input.device);
+			if (!outside_scope && candidate == 'unknown' && device.matched) {
+				candidate = device.decision; candidate_source = 'device_policy';
+			}
+			step(steps, 'device_policy', { available: device.available, valid: device.valid,
+				code: device.code, matched: device.matched, applied: !outside_scope && device.matched },
+				device.decision);
 			let proxy_servers = bypass(desired.proxy_servers, input);
-			if (candidate != 'BLOCK' && proxy_servers.matched) {
+			if (!outside_scope && candidate != 'BLOCK' && proxy_servers.matched) {
 				candidate = 'DIRECT'; candidate_source = 'proxy_server_bypass';
 			}
 			step(steps, 'proxy_server_bypass', { available: proxy_servers.available,
@@ -678,7 +704,8 @@ export function create(dependencies) {
 				code: rule.code }, rule.decision);
 			let route = routing_reason(observed, input, answers);
 			if (!route.valid && candidate != 'BLOCK' &&
-				candidate_source != 'proxy_server_bypass') {
+				candidate_source != 'proxy_server_bypass' &&
+				candidate_source != 'interface_scope') {
 				candidate = 'unknown'; candidate_source = null;
 			}
 			let desired_valid = device.valid && interface_policy.valid && proxy_servers.valid;
@@ -690,17 +717,21 @@ export function create(dependencies) {
 				guard_known = type(guard_value) == 'bool',
 				guard_on = guard_known && guard_value === true,
 				overridden = false;
-			if (!guard_known && candidate != 'BLOCK') {
+			if (!guard_known && !outside_scope && candidate != 'BLOCK') {
 				candidate = 'BLOCK'; overridden = true;
 			}
 			else if (guard_on && candidate_source != 'proxy_server_bypass' &&
+				candidate_source != 'interface_scope' &&
+				!(candidate_source == 'device_policy' && candidate == 'DIRECT') &&
 				(candidate == 'DIRECT' || candidate == 'unknown')) {
 				candidate = 'BLOCK'; overridden = true;
 			}
 			step(steps, 'guard', { known: guard_known,
 				state: guard_known ? (guard_on ? 'enabled' : 'disabled') : 'unknown',
 				enabled: guard_known ? guard_on : null, fail_closed: overridden,
-				proxy_server_exception: candidate_source == 'proxy_server_bypass' }, candidate);
+				proxy_server_exception: candidate_source == 'proxy_server_bypass',
+				device_direct_exception: candidate_source == 'device_policy' && candidate == 'DIRECT',
+				outside_scope }, candidate);
 			let result = redact.value('route_test', { input, decision: candidate, steps });
 			if (length(sprintf('%J', result)) > 32768) fail('RESPONSE_TOO_LARGE');
 			return result;

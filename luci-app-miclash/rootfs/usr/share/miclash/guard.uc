@@ -39,6 +39,38 @@ function direct_macs(values) {
 	return sort(result);
 };
 
+function interface_scope(value) {
+	if (value == null) return { mode: 'exclude', included: [], excluded: [] };
+	if (type(value) != 'object' ||
+	    (value.mode != 'explicit' && value.mode != 'exclude') ||
+	    type(value.included) != 'array' || type(value.excluded) != 'array' ||
+	    length(value.included) > 128 || length(value.excluded) > 128)
+		fail('INVALID_ARGUMENT');
+	let output = { mode: value.mode, included: [], excluded: [] };
+	for (let key in [ 'included', 'excluded' ]) {
+		let seen = {};
+		for (let name in value[key]) {
+			if (type(name) != 'string' || length(name) < 1 || length(name) > 15 ||
+			    !match(name, /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/) || seen[name])
+				fail('INVALID_ARGUMENT');
+			seen[name] = true; push(output[key], name);
+		}
+	}
+	return output;
+};
+
+function quoted_interfaces(values) {
+	let output = [];
+	for (let value in values) push(output, sprintf('%J', value));
+	return '{ ' + join(', ', output) + ' }';
+};
+
+function scope_prefix(value) {
+	let scope = interface_scope(value), values = scope.mode == 'explicit' ? scope.included : scope.excluded;
+	if (!length(values)) return scope.mode == 'explicit' ? null : '';
+	return 'iifname ' + (scope.mode == 'exclude' ? '!= ' : '') + quoted_interfaces(values) + ' ';
+};
+
 function reserved_table(table) {
 	return type(table) == 'string' && includes(BOOTSTRAP_TABLES, table);
 };
@@ -164,21 +196,41 @@ function direct_accept(rule) {
 	return normalize_mac(matched.right);
 };
 
-function terminal_drop(rule, family) {
+function interface_scope_match(value, expected) {
+	let matched = match_expression(value), scope = interface_scope(expected);
+	let values = scope.mode == 'explicit' ? scope.included : scope.excluded;
+	if (!length(values) || matched?.op != (scope.mode == 'explicit' ? '==' : '!=') ||
+	    matched.left?.meta?.key != 'iifname' || length(keys(matched.left)) != 1 ||
+	    length(keys(matched.left.meta)) != 1) return false;
+	let observed = type(matched.right?.set) == 'array' ? matched.right.set :
+		(type(matched.right) == 'string' ? [ matched.right ] : []);
+	if (length(observed) != length(values)) return false;
+	for (let name in values) if (!includes(observed, name)) return false;
+	return true;
+};
+
+function terminal_drop(rule, family, expected_scope) {
 	let expr = rule?.expr;
-	return type(expr) == 'array' && length(expr) == 2 &&
+	let prefix = scope_prefix(expected_scope);
+	if (prefix == null) return false;
+	if (!length(prefix)) return type(expr) == 'array' && length(expr) == 2 &&
 		meta_match(expr[0], 'nfproto', family) && verdict(expr[1], 'drop');
+	return type(expr) == 'array' && length(expr) == 3 &&
+		interface_scope_match(expr[0], expected_scope) &&
+		meta_match(expr[1], 'nfproto', family) && verdict(expr[2], 'drop');
 };
 
 export function bootstrap_tables() {
 	return [ ...BOOTSTRAP_TABLES ];
 };
 
-export function verify_nft_table(text, table, expected_direct_macs) {
+export function verify_nft_table(text, table, expected_direct_macs, expected_scope) {
 	if (!reserved_table(table))
 		return false;
-	let wanted;
+	let wanted, scope;
 	try { wanted = direct_macs(expected_direct_macs); }
+	catch (error) { return false; }
+	try { scope = interface_scope(expected_scope); }
 	catch (error) { return false; }
 	let document = parse_json(text);
 	if (type(document) != 'object' || type(document.nftables) != 'array')
@@ -209,7 +261,8 @@ export function verify_nft_table(text, table, expected_direct_macs) {
 		else
 			return false;
 	}
-	if (table_count != 1 || chain_count != 1 || length(rules) != 9 + length(wanted))
+	let drops = scope.mode == 'explicit' && !length(scope.included) ? 0 : 2;
+	if (table_count != 1 || chain_count != 1 || length(rules) != 7 + length(wanted) + drops)
 		return false;
 	let categories = {};
 	for (let i = 0; i < 7; i++) {
@@ -226,10 +279,11 @@ export function verify_nft_table(text, table, expected_direct_macs) {
 		accepted[mac] = true;
 	}
 	for (let mac in wanted) if (!accepted[mac]) return false;
-	let drop_at = 7 + length(wanted);
-	if (!terminal_drop(rules[drop_at], 'ipv4') ||
-	    !terminal_drop(rules[drop_at + 1], 'ipv6'))
-		return false;
+	if (drops) {
+		let drop_at = 7 + length(wanted);
+		if (!terminal_drop(rules[drop_at], 'ipv4', scope) ||
+		    !terminal_drop(rules[drop_at + 1], 'ipv6', scope)) return false;
+	}
 	return true;
 };
 
@@ -253,10 +307,10 @@ export function owned_nft_tables(text) {
 	return found;
 };
 
-export function nft_ruleset(table, replace_existing, expected_direct_macs) {
+export function nft_ruleset(table, replace_existing, expected_direct_macs, expected_scope) {
 	if (!reserved_table(table) || type(replace_existing) != 'bool')
 		fail('INVALID_ARGUMENT');
-	let wanted = direct_macs(expected_direct_macs);
+	let wanted = direct_macs(expected_direct_macs), drop_scope = scope_prefix(expected_scope);
 	let lines = [];
 	if (replace_existing)
 		push(lines, 'delete table inet ' + table);
@@ -273,10 +327,11 @@ export function nft_ruleset(table, replace_existing, expected_direct_macs) {
 	for (let mac in wanted)
 		push(lines, 'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' ether saddr "' + mac +
 			'" accept comment "miclash-guard-direct"');
-	push(lines,
-		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' meta nfproto ipv4 drop comment "miclash-guard-bootstrap"',
-		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' meta nfproto ipv6 drop comment "miclash-guard-bootstrap"',
-		'');
+	if (drop_scope != null)
+		push(lines,
+			'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' ' + drop_scope + 'meta nfproto ipv4 drop comment "miclash-guard-bootstrap"',
+			'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' ' + drop_scope + 'meta nfproto ipv6 drop comment "miclash-guard-bootstrap"');
+	push(lines, '');
 	return join('\n', lines);
 };
 
@@ -296,7 +351,7 @@ export function create_nft_backend(io) {
 	    type(io?.apply) != 'function' || type(io?.remove) != 'function')
 		fail('INVALID_ARGUMENT');
 
-	function snapshot(expected_direct_macs) {
+	function snapshot(expected_direct_macs, expected_scope) {
 		let wanted;
 		try { wanted = direct_macs(expected_direct_macs); }
 		catch (error) { return null; }
@@ -305,13 +360,13 @@ export function create_nft_backend(io) {
 			return null;
 		let verified = [];
 		for (let table in present)
-			if (verify_nft_table(io.list_table(table), table, wanted))
+			if (verify_nft_table(io.list_table(table), table, wanted, expected_scope))
 				push(verified, table);
 		return { present, verified };
 	};
 
-	function installed(expected_direct_macs) {
-		let state = snapshot(expected_direct_macs);
+	function installed(expected_direct_macs, expected_scope) {
+		let state = snapshot(expected_direct_macs, expected_scope);
 		return state != null && length(state.present) > 0 &&
 			length(state.verified) == length(state.present);
 	};
@@ -323,11 +378,11 @@ export function create_nft_backend(io) {
 		let state = snapshot([]);
 		return state != null && length(state.present) > 0;
 	};
-	function install(expected_direct_macs) {
+	function install(expected_direct_macs, expected_scope) {
 		let wanted;
 		try { wanted = direct_macs(expected_direct_macs); }
 		catch (error) { return false; }
-		let state = snapshot(wanted);
+		let state = snapshot(wanted, expected_scope);
 		if (state == null)
 			return false;
 		if (length(state.present) && length(state.verified) == length(state.present))
@@ -335,9 +390,9 @@ export function create_nft_backend(io) {
 		let targets = length(state.present) ? state.present : [ BOOTSTRAP_TABLES[0] ];
 		for (let table in targets)
 			if (!includes(state.verified, table) &&
-			    io.apply(table, nft_ruleset(table, includes(state.present, table), wanted)) !== true)
+			    io.apply(table, nft_ruleset(table, includes(state.present, table), wanted, expected_scope)) !== true)
 				continue;
-		return installed(wanted);
+		return installed(wanted, expected_scope);
 	};
 	function remove() {
 		let state = snapshot();
@@ -355,7 +410,8 @@ export function create_nft_backend(io) {
 function valid_desired(value) {
 	if (type(value) != 'object' || type(value.enabled) != 'bool')
 		fail('INVALID_ARGUMENT');
-	return { ...value, direct_macs: direct_macs(value.direct_macs) };
+	return { ...value, direct_macs: direct_macs(value.direct_macs),
+		interface_scope: interface_scope(value.interface_scope) };
 };
 
 function valid_transition_state(value, next) {
@@ -379,22 +435,23 @@ function adapter(runtime) {
 export function desired(settings, observations) {
 	let setting = settings?.guard?.enabled;
 	let exceptions = direct_macs(observations?.direct_macs);
+	let scope = interface_scope(observations?.interface_scope);
 
 	if (setting === true)
 		return {
 			enabled: true,
 			source: 'settings',
 			explicit_disable: false,
-			direct_macs: exceptions
+			direct_macs: exceptions, interface_scope: scope
 		};
 
 	if (setting === false)
-		return { enabled: false, source: 'settings', explicit_disable: true, direct_macs: [] };
+		return { enabled: false, source: 'settings', explicit_disable: true, direct_macs: [], interface_scope: scope };
 
 	// An unreadable canonical source can only fail closed; observed or persisted
 	// runtime state is diagnostic evidence, never a competing desired setting.
 	return { enabled: true, source: 'fail_closed', explicit_disable: false,
-		direct_macs: exceptions };
+		direct_macs: exceptions, interface_scope: scope };
 };
 
 export function verify(runtime, wanted) {

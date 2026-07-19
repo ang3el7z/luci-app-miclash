@@ -70,6 +70,18 @@ assert_true(index(open.model.normalized, 'proxy ip daddr @proxy_servers4 return'
 	index(open.model.normalized, 'meta l4proto tcp tproxy'),
 	'client proxy-server bypass precedes redirect when Guard is off');
 
+let scoped_explicit = compile(scenarios[4]).model.normalized;
+assert_true(index(scoped_explicit,
+	'iifname { "br-lan", "wlan0" } meta nfproto ipv4 ether saddr "02:00:00:00:00:40" drop') >= 0,
+	'explicit Block policy must be constrained to the selected ingress scope');
+assert_true(index(scoped_explicit,
+	'iifname { "br-lan", "wlan0" } meta nfproto ipv4 ether saddr "02:00:00:00:00:41" return') >= 0,
+	'explicit Direct policy must be constrained to the selected ingress scope');
+let scoped_exclude = compile(scenarios[10]).model.normalized;
+assert_true(index(scoped_exclude, 'prerouting iifname { "eth1" } return') <
+	index(scoped_exclude, 'device-policy:block:blocked-console'),
+	'excluded ingress must return before any device policy participates');
+
 for (let invalid in [
 	{ ...scenarios[0], lan: [ 'br-lan\"; delete table inet miclash_guard_bootstrap_v1' ] },
 	{ ...scenarios[0], server_ips: [ '999.1.1.1' ] },

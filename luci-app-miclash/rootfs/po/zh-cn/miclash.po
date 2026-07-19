@@ -2215,3 +2215,6 @@ msgstr "此设备使用私有 MAC 地址。策略仍绑定到此地址，如果�
 
 msgid "No MiClash or Mihomo records match the current log level yet. Current level: %s"
 msgstr "当前日志级别下尚无 MiClash 或 Mihomo 记录。当前级别：%s"
+
+msgid "Online devices are shown only for interfaces in the current traffic scope. Saved policies remain visible while devices are offline."
+msgstr "仅显示当前流量范围内接口上的在线设备。设备离线时，已保存的策略仍会显示。"

@@ -30,17 +30,23 @@ function normalized(desired) {
 		add(l, 'add set inet miclash ' + item[0] + ' { type ' + item[1] + ';' + (index(item[0], 'fake') == 0 ? ' flags interval;' : '') + ' }');
 		add(l, 'add element inet miclash ' + item[0] + ' { ' + join(', ', item[2]) + ' }');
 	}
+	let interfaces = desired.interface_mode == 'explicit' ? desired.lan : desired.wan;
+	if (desired.interface_mode == 'exclude' && length(interfaces))
+		add(l, 'add rule inet miclash prerouting iifname ' + quoted_set(interfaces) + ' return');
+	let policy_scope = desired.interface_mode == 'explicit' && length(interfaces)
+		? ' iifname ' + quoted_set(interfaces) : '';
 	for (let action in [ 'block', 'direct' ]) for (let policy in desired.device_policies) {
 		if (policy.action != action) continue;
+		if (desired.interface_mode == 'explicit' && !length(interfaces)) continue;
 		for (let family in desired.ip_families)
-			add(l, 'add rule inet miclash prerouting meta nfproto ' + family + ' ether saddr "' +
+			add(l, 'add rule inet miclash prerouting' + policy_scope + ' meta nfproto ' + family + ' ether saddr "' +
 				policy.mac + '" ' + (action == 'block' ? 'drop' : 'return') +
 				' comment "device-policy:' + action + ':' + policy.id + '"');
 	}
-	let interfaces = desired.interface_mode == 'explicit' ? desired.lan : desired.wan;
 	if (!length(interfaces) && desired.interface_mode == 'explicit') add(l, '# explicit interface selection empty: no client-ingress jump');
 	else {
-		if (length(interfaces)) add(l, 'add rule inet miclash prerouting iifname ' + quoted_set(interfaces) + (desired.interface_mode == 'explicit' ? ' jump proxy' : ' return'));
+		if (length(interfaces) && desired.interface_mode == 'explicit')
+			add(l, 'add rule inet miclash prerouting iifname ' + quoted_set(interfaces) + ' jump proxy');
 		if (desired.interface_mode == 'exclude') add(l, 'add rule inet miclash prerouting jump proxy');
 	}
 	for (let policy in desired.device_policies) {

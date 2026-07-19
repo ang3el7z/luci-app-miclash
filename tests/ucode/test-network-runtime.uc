@@ -93,6 +93,14 @@ let settings = {
 	guard: { enabled: false }
 };
 
+let live_projection = network.interface_projection({ ...settings, interfaces: {
+	...settings.interfaces, mode: 'exclude', auto_detect_lan: true, auto_detect_wan: true,
+	detected_lan: '', detected_wan: ''
+} }, { interfaces: [ 'br-lan', 'wan' ], detected_lan: 'br-lan', detected_wan: 'wan' });
+assert_equal(sprintf('%J', live_projection), sprintf('%J', {
+	mode: 'exclude', lan: [ 'br-lan' ], wan: [ 'wan' ]
+}), 'network projection must consume current detection instead of empty persisted hints');
+
 // One owner lease covers routing, DNS and the final atomic nft generation.
 let applied = environment();
 assert_equal(applied.api.apply(settings).firewall_generation, 'generation-7');

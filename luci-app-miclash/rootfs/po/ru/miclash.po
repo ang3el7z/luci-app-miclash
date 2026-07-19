@@ -2262,3 +2262,6 @@ msgstr "Это устройство использует частный MAC-ад
 
 msgid "No MiClash or Mihomo records match the current log level yet. Current level: %s"
 msgstr "Пока нет записей MiClash или Mihomo для текущего уровня журнала. Текущий уровень: %s"
+
+msgid "Online devices are shown only for interfaces in the current traffic scope. Saved policies remain visible while devices are offline."
+msgstr "Онлайн-устройства отображаются только для интерфейсов из текущей области трафика. Сохранённые политики остаются видимыми, когда устройства не в сети."

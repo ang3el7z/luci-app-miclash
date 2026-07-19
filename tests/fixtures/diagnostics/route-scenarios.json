@@ -1,16 +1,29 @@
 [
   {
-    "name": "device direct is blocked by Guard",
+    "name": "device direct bypasses Guard inside traffic scope",
     "input": { "target": "example.com", "device": "AA:BB:CC:DD:EE:FF", "interface": "lan" },
     "desired": {
       "guard": { "enabled": true },
       "devices": [{ "mac": "AA:BB:CC:DD:EE:FF", "decision": "DIRECT" }],
-      "interfaces": [],
+      "interfaces": [{ "name": "lan", "decision": "PROXY" }],
       "proxy_servers": []
     },
     "answers": ["203.0.113.20"],
     "rules": [{ "type": "DOMAIN", "payload": "example.com", "proxy": "DIRECT" }],
-    "expected": "BLOCK"
+    "expected": "DIRECT"
+  },
+  {
+    "name": "outside-scope interface bypasses device Block and Guard",
+    "input": { "target": "outside.example", "device": "AA:BB:CC:DD:EE:FE", "interface": "guest" },
+    "desired": {
+      "guard": { "enabled": true },
+      "devices": [{ "mac": "AA:BB:CC:DD:EE:FE", "decision": "BLOCK" }],
+      "interfaces": [{ "name": "guest", "decision": "DIRECT" }],
+      "proxy_servers": []
+    },
+    "answers": ["203.0.113.21"],
+    "rules": [{ "type": "DOMAIN", "payload": "outside.example", "proxy": "PROXY" }],
+    "expected": "DIRECT"
   },
   {
     "name": "device proxy policy wins",

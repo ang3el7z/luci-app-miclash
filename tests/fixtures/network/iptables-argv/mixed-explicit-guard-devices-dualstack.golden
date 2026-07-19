@@ -204,6 +204,8 @@
           "mangle",
           "-A",
           "MICLASH_PREROUTING",
+          "-i",
+          "br-lan",
           "-m",
           "mac",
           "--mac-source",
@@ -219,6 +221,42 @@
           "mangle",
           "-A",
           "MICLASH_PREROUTING",
+          "-i",
+          "wlan0",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:40",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PREROUTING",
+          "-i",
+          "br-lan",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:41",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PREROUTING",
+          "-i",
+          "wlan0",
           "-m",
           "mac",
           "--mac-source",
@@ -605,6 +643,8 @@
           "mangle",
           "-A",
           "MICLASH_PREROUTING",
+          "-i",
+          "br-lan",
           "-m",
           "mac",
           "--mac-source",
@@ -620,6 +660,42 @@
           "mangle",
           "-A",
           "MICLASH_PREROUTING",
+          "-i",
+          "wlan0",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:40",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PREROUTING",
+          "-i",
+          "br-lan",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:41",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PREROUTING",
+          "-i",
+          "wlan0",
           "-m",
           "mac",
           "--mac-source",
@@ -1325,6 +1401,8 @@
           "mangle",
           "-A",
           "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
           "-m",
           "mac",
           "--mac-source",
@@ -1340,6 +1418,42 @@
           "mangle",
           "-A",
           "MCL_PR_111111111111",
+          "-i",
+          "wlan0",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:40",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:41",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PR_111111111111",
+          "-i",
+          "wlan0",
           "-m",
           "mac",
           "--mac-source",
@@ -1723,6 +1837,8 @@
           "mangle",
           "-A",
           "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
           "-m",
           "mac",
           "--mac-source",
@@ -1738,6 +1854,42 @@
           "mangle",
           "-A",
           "MCL_PR_111111111111",
+          "-i",
+          "wlan0",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:40",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:41",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PR_111111111111",
+          "-i",
+          "wlan0",
           "-m",
           "mac",
           "--mac-source",
@@ -2182,6 +2334,8 @@
           "mangle",
           "-C",
           "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
           "-m",
           "mac",
           "--mac-source",
@@ -2197,6 +2351,42 @@
           "mangle",
           "-C",
           "MCL_PR_111111111111",
+          "-i",
+          "wlan0",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:40",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:41",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PR_111111111111",
+          "-i",
+          "wlan0",
           "-m",
           "mac",
           "--mac-source",
@@ -2567,6 +2757,8 @@
           "mangle",
           "-C",
           "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
           "-m",
           "mac",
           "--mac-source",
@@ -2582,6 +2774,42 @@
           "mangle",
           "-C",
           "MCL_PR_111111111111",
+          "-i",
+          "wlan0",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:40",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:41",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PR_111111111111",
+          "-i",
+          "wlan0",
           "-m",
           "mac",
           "--mac-source",
@@ -4105,6 +4333,8 @@
         "mangle",
         "-A",
         "MCL_PR_111111111111",
+        "-i",
+        "br-lan",
         "-m",
         "mac",
         "--mac-source",
@@ -4120,6 +4350,42 @@
         "mangle",
         "-A",
         "MCL_PR_111111111111",
+        "-i",
+        "wlan0",
+        "-m",
+        "mac",
+        "--mac-source",
+        "02:00:00:00:00:40",
+        "-j",
+        "DROP"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PR_111111111111",
+        "-i",
+        "br-lan",
+        "-m",
+        "mac",
+        "--mac-source",
+        "02:00:00:00:00:41",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PR_111111111111",
+        "-i",
+        "wlan0",
         "-m",
         "mac",
         "--mac-source",
@@ -4503,6 +4769,8 @@
         "mangle",
         "-A",
         "MCL_PR_111111111111",
+        "-i",
+        "br-lan",
         "-m",
         "mac",
         "--mac-source",
@@ -4518,6 +4786,42 @@
         "mangle",
         "-A",
         "MCL_PR_111111111111",
+        "-i",
+        "wlan0",
+        "-m",
+        "mac",
+        "--mac-source",
+        "02:00:00:00:00:40",
+        "-j",
+        "DROP"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PR_111111111111",
+        "-i",
+        "br-lan",
+        "-m",
+        "mac",
+        "--mac-source",
+        "02:00:00:00:00:41",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PR_111111111111",
+        "-i",
+        "wlan0",
         "-m",
         "mac",
         "--mac-source",
@@ -4795,10 +5099,8 @@
     ],
     "guard": true,
     "quic": true,
-    "server_ips": [
-    ],
-    "fakeip_cidrs": [
-    ],
+    "server_ips": [],
+    "fakeip_cidrs": [],
     "device_policies": [
       {
         "id": "quarantined-camera",

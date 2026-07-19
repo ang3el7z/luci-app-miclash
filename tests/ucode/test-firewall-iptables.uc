@@ -72,6 +72,18 @@ let desired = { ...scenarios[0], generation: 'bbbbbbbbbbbb',
 	previous_generation: 'aaaaaaaaaaaa' };
 let staged = compile(desired);
 let serialized = encoded(staged.stages);
+
+let scoped_explicit = encoded(compile(scenarios[4]).model.normalized);
+assert_true(index(scoped_explicit,
+	'"-i", "br-lan", "-m", "mac", "--mac-source", "02:00:00:00:00:40", "-j", "DROP"') >= 0,
+	'explicit Block policy must be constrained to a selected ingress');
+assert_true(index(scoped_explicit,
+	'"-i", "wlan0", "-m", "mac", "--mac-source", "02:00:00:00:00:41", "-j", "RETURN"') >= 0,
+	'explicit Direct policy must be constrained to every selected ingress');
+let scoped_exclude = encoded(compile(scenarios[10]).model.normalized);
+assert_true(index(scoped_exclude, '"-i", "eth1", "-j", "RETURN"') <
+	index(scoped_exclude, '"--mac-source", "02:00:00:00:00:50", "-j", "DROP"'),
+	'excluded ingress must return before any device policy participates');
 assert_true(index(serialized, 'MCL_PR_bbbbbbbbbbbb') >= 0 &&
 	index(serialized, 'MCL_PX_bbbbbbbbbbbb') >= 0 &&
 	index(serialized, 'MCL_OU_bbbbbbbbbbbb') >= 0,

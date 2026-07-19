@@ -28,7 +28,7 @@ iptables -t filter -A MICLASH_GUARD_FORWARD -m conntrack --ctstate DNAT -j RETUR
 iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -m set --match-set miclash_local4 dst -j RETURN
-iptables -t filter -A MICLASH_GUARD_FORWARD -j DROP
+iptables -t filter -A MICLASH_GUARD_FORWARD -i br-lan -j DROP
 iptables -t mangle -A MICLASH_PREROUTING -i br-lan -j MICLASH_PROXY
 iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RETURN
 # iptables: Guard ON client proxy-server bypass intentionally omitted
@@ -63,7 +63,7 @@ ip6tables -t filter -A MICLASH_GUARD_FORWARD -m conntrack --ctstate DNAT -j RETU
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETURN
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN
 ip6tables -t filter -A MICLASH_GUARD_FORWARD -m set --match-set miclash_local6 dst -j RETURN
-ip6tables -t filter -A MICLASH_GUARD_FORWARD -j DROP
+ip6tables -t filter -A MICLASH_GUARD_FORWARD -i br-lan -j DROP
 ip6tables -t mangle -A MICLASH_PREROUTING -i br-lan -j MICLASH_PROXY
 ip6tables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local6 dst -j RETURN
 # ip6tables: Guard ON client proxy-server bypass intentionally omitted

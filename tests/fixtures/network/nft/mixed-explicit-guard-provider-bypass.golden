@@ -24,8 +24,8 @@ add rule inet miclash_guard forward udp sport 67 udp dport 68 accept
 add rule inet miclash_guard forward udp sport 68 udp dport 67 accept
 add rule inet miclash_guard forward ip daddr @local4 accept
 add rule inet miclash_guard forward ip6 daddr @local6 accept
-add rule inet miclash_guard forward meta nfproto ipv4 drop comment "miclash-guard"
-add rule inet miclash_guard forward meta nfproto ipv6 drop comment "miclash-guard"
+add rule inet miclash_guard forward iifname { "br-lan" } meta nfproto ipv4 drop comment "miclash-guard"
+add rule inet miclash_guard forward iifname { "br-lan" } meta nfproto ipv6 drop comment "miclash-guard"
 add rule inet miclash prerouting iifname { "br-lan" } jump proxy
 add rule inet miclash proxy ip daddr @local4 return
 add rule inet miclash proxy ip6 daddr @local6 return

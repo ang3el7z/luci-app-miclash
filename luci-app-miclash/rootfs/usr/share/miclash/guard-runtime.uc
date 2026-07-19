@@ -5,6 +5,8 @@ import * as runtime_guard from 'miclash.guard_runtime';
 import * as runtime_module from 'miclash.runtime';
 import * as guard_latch from 'miclash.guard-latch';
 import * as devices from 'miclash.devices';
+import * as settings_module from 'miclash.settings';
+import * as interface_scope from 'miclash.interface-scope';
 import { acquire, assert_held, release } from 'miclash.mutation_lock';
 import { atomic_write } from 'miclash.storage';
 import { fail } from 'miclash.errors';
@@ -34,8 +36,8 @@ function capture(command) {
 	return pipe.close() == 0 ? output : null;
 };
 function inventory(nft) { return guard.owned_nft_tables(capture(nft + ' -j list tables')); };
-function verified(nft, table, direct_macs) {
-	return guard.verify_nft_table(capture(nft + ' -j list table inet ' + table), table, direct_macs);
+function verified(nft, table, direct_macs, scope) {
+	return guard.verify_nft_table(capture(nft + ' -j list table inet ' + table), table, direct_macs, scope);
 };
 function mutate(runtime, lease, nft, batch) {
 	assert_held(runtime, lease);
@@ -58,24 +60,24 @@ function mutate_terminal(runtime, lease, nft, batch) {
 	assert_held(runtime, lease);
 	return runtime.process.run({ command: nft, args: [ '-f', BATCH ] }).code == 0;
 };
-function ensure_table(runtime, lease, nft, table, direct_macs) {
+function ensure_table(runtime, lease, nft, table, direct_macs, scope) {
 	let present = inventory(nft);
 	if (present == null) return false;
 	let occupied = false;
 	for (let item in present) if (item == table) occupied = true;
-	if (!verified(nft, table, direct_macs) &&
-	    !mutate(runtime, lease, nft, guard.nft_ruleset(table, occupied, direct_macs)))
+	if (!verified(nft, table, direct_macs, scope) &&
+	    !mutate(runtime, lease, nft, guard.nft_ruleset(table, occupied, direct_macs, scope)))
 		return false;
 	assert_held(runtime, lease);
-	return verified(nft, table, direct_macs);
+	return verified(nft, table, direct_macs, scope);
 };
-function protect(runtime, lease, nft, direct_macs) {
-	return ensure_table(runtime, lease, nft, EMERGENCY, direct_macs);
+function protect(runtime, lease, nft, direct_macs, scope) {
+	return ensure_table(runtime, lease, nft, EMERGENCY, direct_macs, scope);
 };
-function release_emergency(runtime, lease, nft, direct_macs) {
+function release_emergency(runtime, lease, nft, direct_macs, scope) {
 	// Enabled runtime release must never consume the independent crash owner.
 	// Prove/repair primary while emergency still protects direct traffic.
-	if (!ensure_table(runtime, lease, nft, PRIMARY, direct_macs)) return false;
+	if (!ensure_table(runtime, lease, nft, PRIMARY, direct_macs, scope)) return false;
 	let present = inventory(nft);
 	if (present == null) return false;
 	let occupied = false;
@@ -85,7 +87,7 @@ function release_emergency(runtime, lease, nft, direct_macs) {
 	present = inventory(nft);
 	if (present == null) return false;
 	for (let table in present) if (table == EMERGENCY) return false;
-	return verified(nft, PRIMARY, direct_macs);
+	return verified(nft, PRIMARY, direct_macs, scope);
 };
 function disable_bootstrap(runtime, lease, nft) {
 	let present = inventory(nft);
@@ -105,6 +107,13 @@ function stdin() { return require('fs').readfile('/dev/stdin'); };
 function current_direct_macs(runtime) {
 	try { return devices.direct_macs(runtime, int(runtime.clock.now() / 1000)); }
 	catch (error) { return []; }
+};
+function current_scope(runtime) {
+	try {
+		let settings = settings_module.load(runtime);
+		return interface_scope.resolve(settings, interface_scope.detect(runtime, settings));
+	}
+	catch (error) { return { mode: 'exclude', included: [], excluded: [] }; }
 };
 
 function main() {
@@ -133,9 +142,10 @@ function main() {
 			let nft = nft_binary(runtime);
 			if (nft == null) fail('INTERNAL');
 			let direct_macs = ARGV[0] == 'protect-strict' ? [] : current_direct_macs(runtime);
+			let scope = current_scope(runtime);
 			if (ARGV[0] == 'protect' || ARGV[0] == 'protect-strict')
-				ok = protect(runtime, lease, nft, direct_macs);
-			else if (ARGV[0] == 'release') ok = release_emergency(runtime, lease, nft, direct_macs);
+				ok = protect(runtime, lease, nft, direct_macs, scope);
+			else if (ARGV[0] == 'release') ok = release_emergency(runtime, lease, nft, direct_macs, scope);
 			else if (ARGV[0] == 'disable') {
 				ok = disable_bootstrap(runtime, lease, nft);
 				terminal_success = ok;
@@ -145,12 +155,12 @@ function main() {
 				if (present != null && ARGV[0] == 'verify-protected') {
 					ok = length(present) > 0;
 					for (let table in present)
-						if (!verified(nft, table, direct_macs)) ok = false;
+						if (!verified(nft, table, direct_macs, scope)) ok = false;
 				}
 				else if (present != null && ARGV[0] == 'verify-bootstrap-off') ok = !length(present);
 				else if (present != null) {
 					ok = length(present) == 1 && present[0] == PRIMARY &&
-						verified(nft, PRIMARY, direct_macs);
+						verified(nft, PRIMARY, direct_macs, scope);
 				}
 			}
 		}

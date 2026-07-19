@@ -204,12 +204,10 @@
           "mangle",
           "-A",
           "MICLASH_PREROUTING",
-          "-m",
-          "mac",
-          "--mac-source",
-          "02:00:00:00:00:50",
+          "-i",
+          "eth1",
           "-j",
-          "DROP"
+          "RETURN"
         ]
       },
       {
@@ -219,10 +217,12 @@
           "mangle",
           "-A",
           "MICLASH_PREROUTING",
-          "-i",
-          "eth1",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:50",
           "-j",
-          "RETURN"
+          "DROP"
         ]
       },
       {
@@ -757,12 +757,10 @@
           "mangle",
           "-A",
           "MCL_PR_111111111111",
-          "-m",
-          "mac",
-          "--mac-source",
-          "02:00:00:00:00:50",
+          "-i",
+          "eth1",
           "-j",
-          "DROP"
+          "RETURN"
         ]
       },
       {
@@ -772,10 +770,12 @@
           "mangle",
           "-A",
           "MCL_PR_111111111111",
-          "-i",
-          "eth1",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:50",
           "-j",
-          "RETURN"
+          "DROP"
         ]
       },
       {
@@ -1168,12 +1168,10 @@
           "mangle",
           "-C",
           "MCL_PR_111111111111",
-          "-m",
-          "mac",
-          "--mac-source",
-          "02:00:00:00:00:50",
+          "-i",
+          "eth1",
           "-j",
-          "DROP"
+          "RETURN"
         ]
       },
       {
@@ -1183,10 +1181,12 @@
           "mangle",
           "-C",
           "MCL_PR_111111111111",
-          "-i",
-          "eth1",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:50",
           "-j",
-          "RETURN"
+          "DROP"
         ]
       },
       {
@@ -2134,12 +2134,10 @@
         "mangle",
         "-A",
         "MCL_PR_111111111111",
-        "-m",
-        "mac",
-        "--mac-source",
-        "02:00:00:00:00:50",
+        "-i",
+        "eth1",
         "-j",
-        "DROP"
+        "RETURN"
       ]
     },
     {
@@ -2149,10 +2147,12 @@
         "mangle",
         "-A",
         "MCL_PR_111111111111",
-        "-i",
-        "eth1",
+        "-m",
+        "mac",
+        "--mac-source",
+        "02:00:00:00:00:50",
         "-j",
-        "RETURN"
+        "DROP"
       ]
     },
     {
@@ -2377,10 +2377,8 @@
     ],
     "guard": true,
     "quic": true,
-    "server_ips": [
-    ],
-    "fakeip_cidrs": [
-    ],
+    "server_ips": [],
+    "fakeip_cidrs": [],
     "device_policies": [
       {
         "id": "blocked-console",

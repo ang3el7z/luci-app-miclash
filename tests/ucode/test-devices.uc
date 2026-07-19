@@ -141,6 +141,22 @@ assert_equal(guarded_kitchen.effective.action, 'proxy',
 assert_equal(guarded_kitchen.effective.safety, 'guard_default',
 	'discovery preserves Guard provenance for the UI');
 
+let scoped_clients = runtime({ guard: true, core_available: true, observers: {
+	dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+	neighbors: (family) => ({ observed_at: 1710000000, data: family == 'ipv4' ? enc([
+		{ dst: '192.168.1.40', dev: 'br-lan', lladdr: 'ac:bb:cc:dd:ee:40', state: [ 'REACHABLE' ] },
+		{ dst: '192.168.8.41', dev: 'guest0', lladdr: 'ac:bb:cc:dd:ee:41', state: [ 'REACHABLE' ] }
+	]) : '[]' })
+} });
+let lan_only = devices.discover_effective(scoped_clients,
+	{ mode: 'explicit', included: [ 'br-lan' ], excluded: [] });
+assert_equal(length(lan_only), 1, 'online list contains only devices inside explicit interface scope');
+assert_equal(lan_only[0].mac, 'ac:bb:cc:dd:ee:40', 'explicit scope retains matching LAN device');
+let without_lan = devices.discover_effective(scoped_clients,
+	{ mode: 'exclude', included: [], excluded: [ 'br-lan' ] });
+assert_equal(length(without_lan), 1, 'excluded interfaces remove their online devices from the list');
+assert_equal(without_lan[0].mac, 'ac:bb:cc:dd:ee:41', 'exclude scope retains another covered interface');
+
 let client_only = devices.discover(runtime({
 	external_interfaces: () => [ 'wan' ],
 	observers: {
@@ -623,6 +639,12 @@ assert_equal(guarded_direct_effective.safety, 'direct_exception',
 	'Direct Guard exception provenance is explicit');
 assert_equal(enc(devices.direct_macs(guarded_policy_runtime, 1710000000)),
 	enc([ guarded_direct.mac ]), 'active Direct device MAC is exported for early Guard');
+let outside_scope = devices.effective(guarded_policy_runtime, {
+	mac: guarded_direct.mac, interface: 'br-lan', timestamp: 1710000000
+}, { mode: 'exclude', included: [], excluded: [ 'br-lan' ] });
+assert_equal(outside_scope.action, 'direct', 'outside-scope traffic bypasses policy and Guard');
+assert_equal(outside_scope.safety, 'interface_out_of_scope',
+	'outside-scope provenance is explicit');
 
 // Device > interface > global, inactive schedules inherit, and block is explicit.
 let precedence = runtime({ guard: false });

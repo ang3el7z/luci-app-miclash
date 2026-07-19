@@ -137,17 +137,23 @@ function normalized(desired) {
 			add(commands, executable, [ '-t', 'mangle', '-N', chain ]);
 		add(commands, executable, [ '-t', 'mangle', '-A', 'PREROUTING', '-j', 'MICLASH_PREROUTING' ]);
 		add(commands, executable, [ '-t', 'mangle', '-A', 'OUTPUT', '-j', 'MICLASH_OUTPUT' ]);
+		let interfaces = desired.interface_mode == 'explicit' ? desired.lan : desired.wan;
+		if (desired.interface_mode == 'exclude') for (let interface in interfaces)
+			add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_PREROUTING', '-i', interface,
+				'-j', 'RETURN' ]);
 		for (let action in [ 'block', 'direct' ]) for (let policy in desired.device_policies) {
 			if (policy.action != action) continue;
-			add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_PREROUTING',
-				'-m', 'mac', '--mac-source', policy.mac,
-				'-j', action == 'block' ? 'DROP' : 'RETURN' ]);
+			let scoped = desired.interface_mode == 'explicit' ? interfaces : [ null ];
+			for (let interface in scoped) {
+				let prefix = interface == null ? [] : [ '-i', interface ];
+				add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_PREROUTING',
+					...prefix, '-m', 'mac', '--mac-source', policy.mac,
+					'-j', action == 'block' ? 'DROP' : 'RETURN' ]);
+			}
 		}
-
-		let interfaces = desired.interface_mode == 'explicit' ? desired.lan : desired.wan;
-		for (let interface in interfaces)
+		if (desired.interface_mode == 'explicit') for (let interface in interfaces)
 			add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_PREROUTING', '-i', interface,
-				'-j', desired.interface_mode == 'explicit' ? 'MICLASH_PROXY' : 'RETURN' ]);
+				'-j', 'MICLASH_PROXY' ]);
 		if (desired.interface_mode == 'exclude')
 			add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_PREROUTING', '-j', 'MICLASH_PROXY' ]);
 

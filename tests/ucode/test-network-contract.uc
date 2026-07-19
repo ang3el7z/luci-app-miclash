@@ -90,12 +90,37 @@ for (let scenario in document.scenarios) {
 		for (let family in scenario.ip_families) {
 			let nft_family = family == 'ipv4' ? 'ipv4' : 'ipv6';
 			let ipt = family == 'ipv4' ? 'iptables' : 'ip6tables';
-			let nft_drop = 'miclash_guard forward meta nfproto ' + nft_family + ' drop';
+			let scoped = scenario.interface_mode != 'explicit' || length(scenario.lan) > 0;
+			let nft_prefix = '';
+			if (scenario.interface_mode == 'explicit')
+				nft_prefix = 'iifname { "' + join('", "', scenario.lan) + '" } ';
+			else if (length(scenario.wan))
+				nft_prefix = 'iifname != { "' + join('", "', scenario.wan) + '" } ';
+			let nft_drop = 'miclash_guard forward ' + nft_prefix +
+				'meta nfproto ' + nft_family + ' drop';
 			let ipt_drop = ipt + ' -t filter -A MICLASH_GUARD_FORWARD -j DROP';
+			if (!scoped) {
+				review(index(nft, 'miclash_guard forward meta nfproto ' + nft_family + ' drop') < 0,
+					scenario.name + ': empty explicit scope must not install nft Guard drops');
+				review(index(iptables, ipt_drop) < 0,
+					scenario.name + ': empty explicit scope must not install iptables Guard drops');
+				continue;
+			}
 			review(index(nft, nft_drop) >= 0,
-				scenario.name + ': nft Guard needs family-wide ' + family + ' drop');
-			review(index(iptables, ipt_drop) >= 0,
-				scenario.name + ': iptables Guard needs family-wide ' + family + ' drop');
+				scenario.name + ': nft Guard drop must match the effective interface scope');
+			if (scenario.interface_mode == 'explicit')
+				for (let name in scenario.lan)
+					review(index(iptables, ipt + ' -t filter -A MICLASH_GUARD_FORWARD -i ' + name + ' -j DROP') >= 0,
+						scenario.name + ': iptables Guard missing explicit ingress ' + name);
+			else {
+				review(index(iptables, ipt_drop) >= 0,
+					scenario.name + ': iptables Guard needs a terminal in-scope drop');
+				for (let name in scenario.wan) {
+					let outside = ipt + ' -t filter -A MICLASH_GUARD_FORWARD -i ' + name + ' -j RETURN';
+					review(index(iptables, outside) >= 0 && index(iptables, outside) < index(iptables, ipt_drop),
+						scenario.name + ': excluded ingress must bypass iptables Guard');
+				}
+			}
 			let nft_drop_at = index(nft, nft_drop);
 			let nft_tun_at = index(nft, 'miclash_guard forward oifname "clash-tun" accept');
 			let nft_local_at = index(nft, family == 'ipv4' ?
@@ -103,7 +128,9 @@ for (let scenario in document.scenarios) {
 				'miclash_guard forward ip6 daddr @local6 accept');
 			review(nft_drop_at > nft_tun_at && nft_drop_at > nft_local_at,
 				scenario.name + ': nft Guard drop must follow narrow safe exceptions');
-			let ipt_drop_at = index(iptables, ipt_drop);
+			let ipt_drop_at = scenario.interface_mode == 'explicit' ? index(iptables,
+				ipt + ' -t filter -A MICLASH_GUARD_FORWARD -i ' + scenario.lan[0] + ' -j DROP') :
+				index(iptables, ipt_drop);
 			let ipt_tun_at = index(iptables, ipt + ' -t filter -A MICLASH_GUARD_FORWARD -o clash-tun -j RETURN');
 			let ipt_local_at = index(iptables, ipt + ' -t filter -A MICLASH_GUARD_FORWARD -m set');
 			review(ipt_drop_at > ipt_tun_at && ipt_drop_at > ipt_local_at,
@@ -119,18 +146,16 @@ for (let scenario in document.scenarios) {
 		}
 		for (let policy in scenario.device_policies) if (policy.action == 'direct') {
 			let nft_direct = 'miclash_guard forward ether saddr "' + policy.mac + '" accept';
-			let nft_drop = 'miclash_guard forward meta nfproto ipv4 drop';
-			review(index(nft, nft_direct) >= 0 && index(nft, nft_direct) < index(nft, nft_drop),
+			let nft_drop = match(nft, /miclash_guard forward [^\n]*meta nfproto ipv4 drop/);
+			review(index(nft, nft_direct) >= 0 && nft_drop != null &&
+				index(nft, nft_direct) < index(nft, nft_drop[0]),
 				scenario.name + ': nft Guard must exempt Direct MAC before terminal drops');
 			let ipt_direct = 'MICLASH_GUARD_FORWARD -m mac --mac-source ' + policy.mac + ' -j RETURN';
-			let ipt_drop = 'MICLASH_GUARD_FORWARD -j DROP';
-			review(index(iptables, ipt_direct) >= 0 && index(iptables, ipt_direct) < index(iptables, ipt_drop),
+			let ipt_drop = match(iptables, /MICLASH_GUARD_FORWARD [^\n]*-j DROP/);
+			review(index(iptables, ipt_direct) >= 0 && ipt_drop != null &&
+				index(iptables, ipt_direct) < index(iptables, ipt_drop[0]),
 				scenario.name + ': iptables Guard must exempt Direct MAC before terminal drop');
 		}
-		review(!match(nft, /miclash_guard forward oifname [^\n]* drop/),
-			scenario.name + ': nft Guard must cover unknown WAN interfaces');
-		review(!match(iptables, /MICLASH_GUARD_FORWARD -o [^\n]* -j DROP/),
-			scenario.name + ': iptables Guard must cover unknown WAN interfaces');
 	}
 
 	review(!!match(iptables, / -A PREROUTING -j MICLASH_PREROUTING/),
@@ -235,9 +260,15 @@ for (let scenario in document.scenarios) {
 			let at = index(content, policy.mac);
 			review(at >= 0 || policy.action == 'inherit',
 				scenario.name + ': ' + backend + ' missing device policy ' + policy.id);
-			let compiler_at = backend == 'nft' ?
-				index(content, 'miclash prerouting meta nfproto ipv4 ether saddr "' + policy.mac + '"') :
-				index(content, 'MICLASH_PREROUTING -m mac --mac-source ' + policy.mac);
+			let compiler_at = -1;
+			for (let line in split(content, '\n')) {
+				let owned = backend == 'nft' ?
+					(match(line, /^add rule inet miclash prerouting /) &&
+					 index(line, 'ether saddr "' + policy.mac + '"') >= 0) :
+					(match(line, /tables -t mangle -A MICLASH_PREROUTING /) &&
+					 index(line, '--mac-source ' + policy.mac) >= 0);
+				if (owned) { compiler_at = index(content, line); break; }
+			}
 			if (compiler_at >= 0 && (first_policy[backend] == null || compiler_at < first_policy[backend]))
 				first_policy[backend] = compiler_at;
 			if (policy.action == 'block') block_policy[backend] = compiler_at;
@@ -345,7 +376,8 @@ for (let scenario in document.scenarios) {
 				assert_match(content, /miclash output ip6? daddr @proxy_servers/,
 					'router output loop prevention must remain');
 			}
-			if (scenario.guard && !length(scenario.wan)) {
+			if (scenario.guard &&
+			    (scenario.interface_mode != 'explicit' || length(scenario.lan))) {
 				for (let family in scenario.ip_families)
 					assert_true(index(content, 'meta nfproto ' + family + ' drop') >= 0,
 						'missing fail-closed nft family: ' + family);
@@ -374,8 +406,9 @@ for (let scenario in document.scenarios) {
 					'Guard ON must omit iptables client provider bypass');
 				assert_match(content, /MICLASH_OUTPUT -d [0-9a-fA-F:.]+ -j RETURN/);
 			}
-			if (scenario.guard && !length(scenario.wan))
-				assert_match(content, /MICLASH_GUARD_FORWARD -j DROP/);
+			if (scenario.guard &&
+			    (scenario.interface_mode != 'explicit' || length(scenario.lan)))
+				assert_match(content, /MICLASH_GUARD_FORWARD [^\n]*-j DROP/);
 		}
 		else {
 			assert_match(content, /^# MiClash intended routing contract v1\n/);

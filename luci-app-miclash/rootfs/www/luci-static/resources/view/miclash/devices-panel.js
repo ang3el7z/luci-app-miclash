@@ -220,6 +220,7 @@ function create(options) {
 					String(rows.length))
 			]),
 			E('p', { 'class': 'sbox-muted' }, _('Priority: Block → Direct → Inherit')),
+			E('p', { 'class': 'sbox-muted' }, _('Online devices are shown only for interfaces in the current traffic scope. Saved policies remain visible while devices are offline.')),
 			content);
 	}
 	function needsVendorDatabase() {

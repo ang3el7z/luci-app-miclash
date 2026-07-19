@@ -5,6 +5,7 @@ import * as storage from 'miclash.storage';
 import { with_lock } from 'miclash.mutation_lock';
 import * as schedule from 'miclash.schedule';
 import * as guard_latch from 'miclash.guard-latch';
+import * as interface_scope from 'miclash.interface-scope';
 
 const CONFIG = 'miclash';
 const POLICY_TYPE = 'device_policy';
@@ -765,11 +766,21 @@ function safe_action(app, action, policy_id, scope) {
 			{ action: 'block', safety: 'guard_core_unavailable' };
 	return { action, safety: 'ordinary' };
 };
-export function effective(app, input) {
+function subject_in_scope(wanted, projection) {
+	if (projection == null) return true;
+	for (let name in wanted.interfaces)
+		if (interface_scope.contains(projection, name)) return true;
+	return false;
+};
+
+export function effective(app, input, projection) {
 	let wanted = subject(input);
 	if (wanted.interfaces_truncated) return { action: 'block', policy_id: null, scope: null,
 		safety: 'interface_evidence_truncated',
 		reason: redact.text('interface evidence truncated; conservative block') };
+	if (!subject_in_scope(wanted, projection)) return { action: 'direct', policy_id: null,
+		scope: null, safety: 'interface_out_of_scope',
+		reason: redact.text('interface is outside the MiClash traffic scope') };
 	let policies = policy_list(app), active = [], selected = null;
 	for (let scope in [ 'device', 'interface', 'global' ]) {
 		for (let policy in policies) {
@@ -819,19 +830,22 @@ export function direct_macs(app, timestamp) {
 	return result;
 };
 
-export function discover_effective(app) {
+export function discover_effective(app, projection) {
 	let discovered = discover(app);
 	let now = app?.clock?.now();
 	if (type(now) != 'int' || now < 0) invalid('INTERNAL');
 	let timestamp = int(now / 1000), output = [];
 	for (let item in discovered) {
-		let enforced = effective(app, {
+		let wanted = {
 			mac: item.mac,
 			interfaces: item.interfaces,
 			interface_total: item.interface_total,
 			interfaces_truncated: item.interfaces_truncated,
 			timestamp
-		});
+		};
+		if (projection != null && (wanted.interfaces_truncated ||
+		    !subject_in_scope(wanted, projection))) continue;
+		let enforced = effective(app, wanted, projection);
 		push(output, { ...item, effective: enforced });
 	}
 	return output;

@@ -389,6 +389,14 @@ assert_equal(join(',', route_test.proxy_servers(
 	'    plugin-opts:\n' +
 	'      server: nested.example.test\n' +
 	'    server: endpoint.example.test\n')), 'endpoint.example.test');
+assert_equal(join(',', route_test.proxy_servers(
+	'proxy-defaults: &defaults\n' +
+	'  type: ss\n' +
+	'proxies:\n' +
+	'  - name: inherited\n' +
+	'    <<: *defaults\n' +
+	'    server: merged.example.test\n')), 'merged.example.test',
+	'valid YAML merge keys do not hide the proxy endpoint');
 assert_throws(() => route_test.proxy_servers('proxies:\n  - server: bad host name\n'),
 	'INVALID_ARGUMENT');
 assert_throws(() => route_test.proxy_servers(repeated('x', 1048577)),
