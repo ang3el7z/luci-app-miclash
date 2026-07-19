@@ -96,6 +96,19 @@ assert_equal(automatic.outbox.coalesce(second), false);
 assert_equal(length(automatic.outbox.pending()), 1);
 assert_equal(automatic.outbox.pending()[0].payload.count, 2);
 
+let notify_automatic = environment({ results: [ false ] });
+let notify_receipt = receipt('notify.1700000000000.0000000000000001',
+	'automatic', 'notify.failure', 'event');
+notify_receipt.operation_id = null;
+notify_receipt.message_id = null;
+notify_receipt.payload = {
+	type: 'failure', title: 'Routing failed', severity: 'error',
+	message: 'https://user:pass@example.test/?token=event-secret'
+};
+assert_equal(notify_automatic.outbox.coalesce(notify_receipt), true);
+assert_equal(notify_automatic.outbox.attempt(), false);
+assert_equal(length(notify_automatic.outbox.pending()), 1);
+
 let nonterminal = environment();
 let waiting = receipt('waiting-1'); waiting.state = 'verifying';
 nonterminal.outbox.enqueue(waiting);

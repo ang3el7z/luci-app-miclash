@@ -537,12 +537,23 @@ for (let secret in [ '42', 'telegram-secret', '/status', 'url-secret' ])
 let masking = environment({ send_failure: true });
 let masking_controller = telegram.create(masking.app);
 assert_equal(masking_controller.test(), false);
-assert_equal(masking_controller.send_event({
+let masking_event_accepted = masking_controller.send_event({
 	type: 'failure', severity: 'error', component: 'routing',
 	title: 'Routing failed', message: 'https://user:pass@example.test/?token=event-secret',
 	dedupe_key: 'failure/failure-1-1710000000000', occurred_at: 1710000000000,
 	recovery_of: null, context: { authorization: 'Bearer context-secret' }
-}), false);
+});
+assert_equal(masking_event_accepted, true,
+	'notification enqueue failed: ' + masking_controller.status().last_error);
+assert_equal(masking_controller.status().pending_deliveries, 1);
+assert_equal(masking_controller.send_event({
+	type: 'failure', severity: 'error', component: 'routing',
+	title: 'Routing failed', message: 'Repeated routing failure',
+	dedupe_key: 'failure/failure-1-1710000000000', occurred_at: 1710000001000,
+	recovery_of: null, context: {}
+}), true);
+assert_equal(masking_controller.status().pending_deliveries, 1,
+	'repeated automatic outcomes are coalesced while Telegram is unavailable');
 let public_state = sprintf('%J', masking_controller.status());
 for (let secret in [ 'telegram-secret', 'event-secret', 'context-secret', 'user:pass', '42' ])
 	assert_equal(index(public_state, secret), -1, 'public state leaked ' + secret);
@@ -661,9 +672,14 @@ assert_equal(length(expired_env.submitted), 0);
 // is reported but does not disable polling.
 let command_env = environment(), command_controller = telegram.create(command_env.app);
 assert_equal(command_controller.configure(), true);
-assert_equal(request_method(command_env.requests[0]), 'setMyCommands');
+assert_equal(length(command_env.requests), 0,
+	'BotFather synchronization must not block settings RPC');
+assert_equal(command_controller.start(), true);
+command_env.clock.advance(0);
+assert_equal(request_method(command_env.requests[0]), 'getUpdates');
 assert_equal(request_method(command_env.requests[1]), 'setMyCommands');
-assert_true(index(command_env.requests[1].url, 'language_code=ru') >= 0);
+assert_equal(request_method(command_env.requests[2]), 'setMyCommands');
+assert_true(index(command_env.requests[2].url, 'language_code=ru') >= 0);
 
 // API exposes only redacted Telegram reads and an isolated channel test.
 let api_env = environment();

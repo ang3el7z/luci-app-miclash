@@ -227,7 +227,10 @@ export function create(runtime, deliver) {
 				commit(candidate);
 				return false;
 			}
-			return add(checked);
+			// Revalidate the caller's original receipt in add(). Passing the already
+			// redacted copy through the sanitizer again is not idempotent for masked
+			// credential-bearing URLs.
+			return add(value);
 		},
 		close: () => { if (closed) return false; closed = true; return true; }
 	};

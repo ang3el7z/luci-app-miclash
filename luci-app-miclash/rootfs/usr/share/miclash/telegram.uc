@@ -187,7 +187,8 @@ export function create(app) {
 	let outbox = null, operation_bridge = null;
 	let session = {
 		generation: 0, screen: 'main', awaiting: null,
-		command_locale: null, command_sync_error: null
+		command_locale: null, command_sync_error: null, command_sync_next_at: 0,
+		command_sync_requested: false
 	};
 
 	state.last_update_id = read_offset(app.runtime);
@@ -344,11 +345,18 @@ export function create(app) {
 	};
 
 	function deliver_receipt(entry, saved_panel) {
-		if (entry.state != 'success' && entry.state != 'failure' && entry.state != 'interrupted')
-			return false;
 		let settings = configuration(app);
 		if (!settings.available || !settings.enabled || !settings.configured ||
 		    settings.user_id != entry.chat_id) return false;
+		if (entry.audience == 'automatic') {
+			let text = event_text(entry.payload);
+			if (type(entry.payload?.count) == 'int' && entry.payload.count > 1)
+				text += ' (x' + entry.payload.count + ')';
+			return transport.send(settings, entry.chat_id, text, null) == null ? false :
+				{ delivered: true };
+		}
+		if (entry.state != 'success' && entry.state != 'failure' && entry.state != 'interrupted')
+			return false;
 		let state_key = entry.state == 'success' ? 'operation_success' :
 			(entry.state == 'interrupted' ? 'operation_interrupted' : 'operation_failure');
 		let prefix = telegram_i18n.text(entry.locale, 'operation_result', {
@@ -655,11 +663,13 @@ export function create(app) {
 	controller.configure = () => {
 		let settings = configuration(app);
 		if (!settings.available || !settings.enabled || !settings.configured) return false;
-		try { return sync_commands(settings); }
-		catch (error) {
-			session.command_sync_error = errors.normalize(error).code;
-			return false;
-		}
+		// Bot API I/O must never run inside the settings ubus transaction.
+		// The polling timer performs the bounded synchronization in background.
+		session.command_locale = null;
+		session.command_sync_error = null;
+		session.command_sync_next_at = 0;
+		session.command_sync_requested = true;
+		return true;
 	};
 	controller.handle_update = (update) =>
 		handle_update(update, configuration(app)).handled;
@@ -700,6 +710,19 @@ export function create(app) {
 			}
 			try { operation_bridge.recover(); } catch (error) {}
 			try { outbox.attempt(); } catch (error) {}
+			let locale = telegram_i18n.locale(app.runtime);
+			if ((session.command_sync_requested ||
+			    (session.command_locale != null && session.command_locale != locale)) &&
+			    app.runtime.clock.now() >= session.command_sync_next_at) {
+				try {
+					if (!sync_commands(settings)) errors.fail('UNAVAILABLE');
+					session.command_sync_requested = false;
+				}
+				catch (error) {
+					session.command_sync_error = errors.normalize(error).code;
+					session.command_sync_next_at = app.runtime.clock.now() + 60000;
+				}
+			}
 			state.last_success_at = app.runtime.clock.now();
 			state.last_error = null;
 			state.retry_after_ms = 0;
@@ -764,8 +787,33 @@ export function create(app) {
 	};
 	controller.test = () => send_message('MiClash Telegram test');
 	controller.send_event = (event) => {
-		try { return send_message(event_text(event)); }
-		catch (error) { return false; }
+		let settings = configuration(app);
+		if (!settings.available || !settings.enabled || !settings.configured ||
+		    type(event) != 'object' || type(event.type) != 'string' ||
+		    !match(event.type, /^[a-z][a-z0-9_.-]{0,63}$/)) return false;
+		let payload = {
+			type: event.type,
+			title: type(event.title) == 'string' ? event.title : 'MiClash',
+			message: type(event.message) == 'string' ? event.message : 'State changed',
+			severity: type(event.severity) == 'string' ? event.severity : 'notice'
+		};
+		try {
+			outbox.coalesce({
+				id: sprintf('notify.%d.%s', app.runtime.clock.now(),
+					app.runtime.random.hex(8)),
+				audience: 'automatic', kind: 'notify.' + event.type,
+				locale: telegram_i18n.locale(app.runtime), chat_id: settings.user_id,
+				message_id: null, operation_id: null, state: 'event',
+				created_at: app.runtime.clock.now(), payload
+			});
+			try { outbox.attempt(); } catch (delivery_error) {}
+			return true;
+		}
+		catch (error) {
+			state.last_error = errors.normalize(error).code;
+			log_failure('Telegram notification enqueue failed');
+			return false;
+		}
 	};
 	return controller;
 };
