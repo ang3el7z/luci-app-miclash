@@ -3,7 +3,7 @@ import * as redact from 'miclash.redact';
 
 const ROOT = '/tmp/miclash/diagnostics';
 const TTL = 900000;
-const MAX_REPORT = 131072;
+const MAX_REPORT = 786432;
 const RETENTION = 5;
 const MAX_ROOT_ENTRIES = 32;
 const MAX_DEPTH = 16;
@@ -12,6 +12,17 @@ const MAX_INPUT = 131072;
 const MAX_STRING = 16384;
 const MAX_RAW_SECRETS = 64;
 const MAX_SECRET_VARIANTS = 256;
+const REPORT_MAX_DEPTH = 16;
+const REPORT_MAX_NODES = 8192;
+const REPORT_MAX_INPUT = 786432;
+const REPORT_MAX_STRING = 131072;
+const REPORT_SECTION_LIMITS = {
+	config: 65536,
+	process: 32768,
+	logs: 131072,
+	uci: 32768,
+	operations: 65536
+};
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
 function clone(value) {
@@ -73,22 +84,26 @@ function discover_text(secrets, input) {
 		offset = max(end + 1, start);
 	}
 };
-function validate_and_discover(value) {
+function validate_and_discover(value, limits) {
+	let max_depth = limits?.max_depth ?? MAX_DEPTH;
+	let max_nodes = limits?.max_nodes ?? MAX_NODES;
+	let max_input = limits?.max_input ?? MAX_INPUT;
+	let max_string = limits?.max_string ?? MAX_STRING;
 	let secrets = [], stack = [ { value, key: null, depth: 0, sensitive: false } ];
 	let nodes = 0, aggregate = 0;
 	while (length(stack)) {
 		let item = pop(stack), kind = type(item.value);
-		if (item.depth > MAX_DEPTH || ++nodes > MAX_NODES)
+		if (item.depth > max_depth || ++nodes > max_nodes)
 			errors.fail('RESPONSE_TOO_LARGE');
 		let sensitive = item.sensitive;
 		if (type(item.key) == 'string') {
-			if (length(item.key) > MAX_STRING) errors.fail('RESPONSE_TOO_LARGE');
+			if (length(item.key) > max_string) errors.fail('RESPONSE_TOO_LARGE');
 			aggregate += length(item.key);
 			discover_text(secrets, item.key);
 			sensitive = sensitive || redact.secret_name(item.key);
 		}
 		if (kind == 'string') {
-			if (length(item.value) > MAX_STRING) errors.fail('RESPONSE_TOO_LARGE');
+			if (length(item.value) > max_string) errors.fail('RESPONSE_TOO_LARGE');
 			aggregate += length(item.value);
 			discover_text(secrets, item.value);
 			if (sensitive) add_secret(secrets, item.value);
@@ -101,7 +116,7 @@ function validate_and_discover(value) {
 				push(stack, { value: child, key: name, depth: item.depth + 1, sensitive });
 		else if (kind != null && kind != 'bool' && kind != 'int' && kind != 'double')
 			errors.fail('INVALID_RESPONSE');
-		if (aggregate > MAX_INPUT) errors.fail('RESPONSE_TOO_LARGE');
+		if (aggregate > max_input) errors.fail('RESPONSE_TOO_LARGE');
 	}
 	return secrets;
 };
@@ -177,10 +192,10 @@ function scrub(value, secrets, depth) {
 	if (type(value) != 'string') return value;
 	return scrub_string(value, secrets);
 };
-function sanitize(value) {
-	let secrets = variants(validate_and_discover(value));
+function sanitize(value, limits) {
+	let secrets = variants(validate_and_discover(value, limits));
 	let safe = scrub(value, secrets, 0);
-	if (length(sprintf('%J', safe)) > MAX_REPORT)
+	if (length(sprintf('%J', safe)) > (limits?.max_output ?? MAX_REPORT))
 		errors.fail('RESPONSE_TOO_LARGE');
 	return safe;
 };
@@ -214,14 +229,104 @@ function collect_summary(sources) {
 	result.public_status = public_status(result.settings);
 	return sanitize(result);
 };
+function serialized_size(value) {
+	try { return length(sprintf('%J', value)); }
+	catch (error) { errors.fail('INVALID_RESPONSE'); }
+};
+function bound_section(name, value, limit) {
+	let original = type(value) == 'string' ? length(value) : serialized_size(value);
+	let selected = value;
+	if (original > limit) {
+		if (type(value) == 'string')
+			selected = name == 'logs' ? substr(value, max(0, length(value) - limit)) :
+				substr(value, 0, limit);
+		else if (type(value) == 'array') {
+			selected = [];
+			for (let index = length(value) - 1; index >= 0; index--) {
+				let candidate = [ value[index], ...selected ];
+				if (serialized_size(candidate) > limit) break;
+				selected = candidate;
+			}
+		}
+		else if (type(value) == 'object') {
+			selected = {};
+			for (let key, item in value) {
+				selected[key] = item;
+				if (serialized_size(selected) > limit) {
+					delete selected[key];
+					break;
+				}
+			}
+		}
+		else selected = { state: 'unknown', code: 'SECTION_TRUNCATED' };
+	}
+	let included = type(selected) == 'string' ? length(selected) : serialized_size(selected);
+	return { value: selected, metadata: {
+		truncated: original > included,
+		original_bytes: original,
+		included_bytes: included
+	} };
+};
 function collect(sources) {
 	let result = {};
 	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
-		'updates', 'settings', 'last_repair', 'config', 'process', 'logs', 'uci',
-		'operations' ])
+		'updates', 'settings', 'last_repair' ])
 		result[name] = call(sources, name);
+	let sections = {};
+	for (let name in [ 'config', 'process', 'logs', 'uci', 'operations' ]) {
+		let bounded = bound_section(name, call(sources, name), REPORT_SECTION_LIMITS[name]);
+		result[name] = bounded.value;
+		sections[name] = bounded.metadata;
+	}
 	result.public_status = public_status(result.settings);
-	return sanitize(result);
+	result.collection = { sections };
+	return sanitize(result, {
+		max_depth: REPORT_MAX_DEPTH,
+		max_nodes: REPORT_MAX_NODES,
+		max_input: REPORT_MAX_INPUT,
+		max_string: REPORT_MAX_STRING,
+		max_output: REPORT_MAX_INPUT
+	});
+};
+function report_issues(safe) {
+	let issues = [];
+	function add(section, component, state, code, message) {
+		if (length(issues) >= 64) return;
+		if (state == null) return;
+		let normalized = lc(sprintf('%s', state ?? 'unknown'));
+		if (normalized == 'ok' || normalized == 'ready' || normalized == 'running' ||
+			normalized == 'success' || normalized == 'idle' || normalized == 'completed' ||
+			normalized == 'none' || normalized == 'inactive' || normalized == 'disabled' ||
+			normalized == 'not_required') return;
+		push(issues, {
+			section,
+			component: sprintf('%s', component ?? 'unknown'),
+			severity: normalized == 'failed' || normalized == 'failure' || normalized == 'error' ||
+				normalized == 'stopped' ?
+				'error' : 'warning',
+			state: normalized,
+			code: code ?? null,
+			message: message ?? null
+		});
+	};
+	let components = safe.health?.components ?? safe.health?.observed?.readiness?.components ??
+		safe.state?.observed?.readiness?.components ?? safe.health;
+	if (type(components) == 'array')
+		for (let item in components)
+			if (type(item) == 'object') add('components', item.name ?? item.component,
+				item.state, item.code, item.message);
+	else if (type(components) == 'object')
+		for (let name, item in components)
+			if (type(item) == 'object') add('components', name, item.state, item.code, item.message);
+	if (type(safe.operations) == 'array')
+		for (let item in safe.operations)
+			if (type(item) == 'object') add('operations', item.kind ?? item.id,
+				item.state ?? item.result ?? item.outcome, item.code, item.error ?? item.message);
+	if (type(safe.last_repair) == 'object' && length(safe.last_repair))
+		add('automatic_recovery', safe.last_repair.component, safe.last_repair.state ??
+			safe.last_repair.result ?? safe.last_repair.outcome, safe.last_repair.code,
+			safe.last_repair.message ?? safe.last_repair.error);
+	return issues;
 };
 function make_summary(safe, now) {
 	return {
@@ -513,7 +618,8 @@ export function create(dependencies) {
 				directory = { path, identity: verify_directory(runtime, path, initial) };
 				let safe = collect(sources);
 				let summary = make_summary(safe, now);
-				let report = { schema_version: 1, generated_at: now, summary,
+				let report = { schema_version: 2, generated_at: now, summary,
+					issues: report_issues(safe), collection: safe.collection,
 					details: { config: safe.config, process: safe.process, logs: safe.logs,
 						uci: safe.uci, operations: safe.operations } };
 				let json_text = sprintf('%J\n', report);

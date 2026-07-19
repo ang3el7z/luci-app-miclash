@@ -28,6 +28,10 @@ for (const token of [
 
 expect(files.diagnostics.includes('sbox-overview-card'), 'diagnostics renders overview cards');
 expect(files.diagnostics.includes('sbox-overview-protection'), 'diagnostics renders protection overview');
+expect(files.config.includes('data-action="route-test"'), 'routing overview owns the route test action');
+expect(!files.diagnostics.includes("actionButton(_('Details')"), 'redundant details action is removed');
+expect(!files.diagnostics.includes("actionButton(_('Route test')"), 'route test is not duplicated in diagnostics');
+expect(files.diagnostics.includes("_('Recovery')"), 'protection overview uses compact recovery copy');
 expect(files.settings.includes('sbox-integration-card'), 'management panels use integration cards');
 expect(files.settings.includes('sbox-protection-integration-card'), 'Memory Guard and Telegram share one integration card');
 expect(files.settings.includes('sbox-integration-pane'), 'integration card uses calm internal panes');

@@ -1844,22 +1844,27 @@ function buildSettingsSummary() {
 	const lines = [];
 
 	if (s.mode === 'explicit') {
-		lines.push(_('Mode: Explicit (proxy only selected interfaces)'));
-		if (s.autoDetectLan && appState.detectedLan) lines.push(_('Auto LAN: %s').format(appState.detectedLan));
+		lines.push([ _('Mode'), _('Explicit mode: proxy only selected interfaces') ]);
+		if (s.autoDetectLan && appState.detectedLan) lines.push([ _('Interfaces'), appState.detectedLan ]);
 	} else {
-		lines.push(_('Mode: Exclude (proxy all except selected interfaces)'));
-		if (s.autoDetectWan && appState.detectedWan) lines.push(_('Auto WAN: %s').format(appState.detectedWan));
+		lines.push([ _('Mode'), _('Exclude mode: proxy all interfaces except selected ones') ]);
+		if (s.autoDetectWan && appState.detectedWan) lines.push([ _('WAN'), appState.detectedWan ]);
 	}
 
 	const manual = (s.mode === 'explicit' ? s.includedInterfaces : s.excludedInterfaces) || [];
 	if (manual.length) {
-		lines.push(_('Manual interfaces: %s').format(manual.join(', ')));
+		lines.push([ _('Interfaces'), manual.join(', ') ]);
 	}
 
-	lines.push(_('Proxy mode: %s').format(s.proxyMode || appState.proxyMode || 'tproxy'));
-	lines.push(_('Tun stack: %s').format(s.tunStack || 'system'));
+	lines.push([ _('Proxy Mode'), s.proxyMode || appState.proxyMode || 'tproxy' ]);
+	lines.push([ _('Tun stack'), s.tunStack || 'system' ]);
 
-	return lines.map((line) => '<div>' + safeText(line) + '</div>').join('');
+	return lines.map((line) =>
+		'<div class="sbox-diagnostics-row">' +
+			'<span class="sbox-diagnostics-label">' + safeText(line[0]) + '</span>' +
+			'<span class="sbox-diagnostics-value">' + safeText(line[1]) + '</span>' +
+		'</div>'
+	).join('');
 }
 
 function buildAutoUpdateIntervalChoicesHtml(settings) {
@@ -2005,6 +2010,9 @@ function buildSettingsPaneHtml() {
 					'<article id="sbox-settings-status" class="sbox-settings-card sbox-overview-card sbox-overview-routing">' +
 						'<h4>' + safeText(_('Routing')) + '</h4>' +
 						'<div class="sbox-settings-summary-current">' + buildSettingsSummary() + '</div>' +
+						'<div class="sbox-diagnostics-actions">' +
+							'<button type="button" class="cbi-button cbi-button-neutral" data-action="route-test">' + safeText(_('Route test')) + '</button>' +
+						'</div>' +
 					'</article>' +
 					'<div id="sbox-diagnostics-summary" class="sbox-diagnostics-summary"></div>' +
 				'</div>' +
@@ -2528,6 +2536,8 @@ async function saveAllSettings() {
 function bindSettingsPaneEvents() {
 	const pane = pageRoot.querySelector('#sbox-pane-settings');
 	if (!pane) return;
+	const routeTestButton = pane.querySelector('[data-action="route-test"]');
+	if (routeTestButton) routeTestButton.addEventListener('click', () => diagnosticsOwner.openRouteTest());
 
 	pane.querySelectorAll('input[name="sbox-interface-mode"]').forEach((radio) => {
 		radio.addEventListener('change', async function() {

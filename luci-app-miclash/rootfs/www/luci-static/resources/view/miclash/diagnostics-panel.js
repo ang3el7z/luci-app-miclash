@@ -258,9 +258,7 @@ function create(options) {
 		const button = E('button', { 'type': 'button',
 			'class': 'cbi-button cbi-button-neutral', 'data-action': action }, label);
 		button.addEventListener('click', () => {
-			if (action === 'details') openDetails();
-			else if (action === 'download-report') downloadReport().catch(showError);
-			else if (action === 'route-test') openRouteTest();
+			if (action === 'download-report') downloadReport().catch(showError);
 		});
 		return button;
 	}
@@ -309,9 +307,7 @@ function create(options) {
 					valueRow(_('Telegram'), telegramValue(summary))
 				]),
 				E('div', { 'class': 'sbox-diagnostics-actions', 'aria-label': _('Diagnostic actions') }, [
-					actionButton(_('Details'), 'details'),
-					actionButton(_('Download diagnostic report'), 'download-report'),
-					actionButton(_('Route test'), 'route-test')
+					actionButton(_('Download diagnostic report'), 'download-report')
 				])
 			]),
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
@@ -329,7 +325,7 @@ function create(options) {
 						memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb') : _('Inactive')),
 					valueRow(_('Pressure'), memoryPhaseValue(memory)),
 					valueRow(_('Cooldown'), cooldown),
-					valueRow(_('Last automatic recovery'), repairValue(summary.last_repair))
+					valueRow(_('Recovery'), repairValue(summary.last_repair), 'sbox-diagnostics-row-nowrap')
 				])
 			])
 		]);
@@ -369,32 +365,10 @@ function create(options) {
 		ui.addNotification(null, E('p', {}, message), 'error');
 	}
 
-	function detailsEvidence(record) {
-		return E('li', {}, [
-			E('strong', {}, text(record.label) + ': '),
-			stateName(record.value?.state) + ' · ' + text(record.value?.code) + ' · ' +
-			text(record.value?.message) + ' · ' + evidence(record.value?.details || {})
-		]);
-	}
-
 	function closeButton() {
 		const button = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral' }, _('Close'));
 		button.addEventListener('click', () => ui.hideModal());
 		return button;
-	}
-
-	function openDetails() {
-		const health = componentGraph(current);
-		const records = COMPONENTS.map(([ name, label ]) => ({ label: label(), value: health[name] || {} }));
-		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-modal-responsive' }, [
-			E('h4', {}, _('Component evidence')),
-			E('ul', { 'class': 'sbox-diagnostics-evidence' }, records.map(detailsEvidence)),
-			E('h4', {}, _('Last self-heal')),
-			E('p', {}, repairValue(current.summary?.last_repair)),
-			E('div', { 'class': 'right' }, closeButton())
-		]);
-		ui.showModal(_('MiClash diagnostics'), body);
-		return body;
 	}
 
 	async function downloadReport() {
@@ -534,7 +508,7 @@ function create(options) {
 	doc.addEventListener('visibilitychange', visibilityChanged);
 	win.addEventListener('miclash:ubus-event', ubusEvent);
 
-	return { renderSummary, openDetails, downloadReport, openRouteTest, mount, refresh, destroy };
+	return { renderSummary, downloadReport, openRouteTest, mount, refresh, destroy };
 }
 
 function createOwner(options) {
@@ -556,6 +530,10 @@ function createOwner(options) {
 		mount(node) {
 			if (panel && node) panel.mount(node);
 			return panel;
+		},
+		openRouteTest() {
+			if (!panel || typeof panel.openRouteTest !== 'function') return null;
+			return panel.openRouteTest();
 		},
 		destroy() {
 			if (!panel) return false;

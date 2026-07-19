@@ -1131,6 +1131,11 @@
 	gap: 8px;
 	min-width: 0;
 }
+.sbox-diagnostics-row-nowrap,
+.sbox-diagnostics-row-nowrap .sbox-diagnostics-label,
+.sbox-diagnostics-row-nowrap .sbox-diagnostics-value {
+	white-space: nowrap;
+}
 .sbox-diagnostics-label {
 	color: var(--sbox-muted);
 }

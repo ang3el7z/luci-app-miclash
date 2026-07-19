@@ -14,13 +14,15 @@ const backgroundRefreshSource = readFileSync(
 const apiSource = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/api.js', 'utf8');
 const configSource = readFileSync(configPath, 'utf8');
 const css = readFileSync(cssPath, 'utf8');
-assert.match(configSource, /Mode: Explicit \(proxy only selected interfaces\)/);
-assert.match(configSource, /Mode: Exclude \(proxy all except selected interfaces\)/);
-assert.match(configSource, /Proxy mode: %s/);
-assert.match(configSource, /Tun stack: %s/);
+assert.match(configSource, /Explicit mode: proxy only selected interfaces/);
+assert.match(configSource, /Exclude mode: proxy all interfaces except selected ones/);
+assert.match(configSource, /_\('Proxy Mode'\)/);
+assert.match(configSource, /_\('Tun stack'\)/);
 assert.match(configSource, /view\.miclash\.api/);
 assert.match(configSource, /view\.miclash\.diagnostics-panel/);
 assert.match(configSource, /sbox-diagnostics-summary/);
+assert.match(configSource, /data-action="route-test"/,
+	'route test must live in the routing overview card');
 assert.match(configSource, /diagnosticsOwner\s*=\s*view_miclash_diagnostics_panel\.createOwner/,
 	'config.js must consume the executable diagnostics ownership helper');
 assert.doesNotMatch(panelSource, /(?:innerHTML|outerHTML|insertAdjacentHTML|document\.write)/,
@@ -229,8 +231,9 @@ const api = {
 };
 
 const panel = moduleApi.create({ api, document: documentMock, window: windowMock, pollInterval: 30000 });
-for (const method of ['renderSummary', 'openDetails', 'downloadReport', 'openRouteTest', 'mount', 'destroy'])
+for (const method of ['renderSummary', 'downloadReport', 'openRouteTest', 'mount', 'destroy'])
 	assert.equal(typeof panel[method], 'function', `missing public method ${method}`);
+assert.equal(panel.openDetails, undefined, 'redundant details modal must not remain public');
 
 const host = new MiniNode('div', { id: 'sbox-diagnostics-summary' });
 panel.mount(host);
@@ -243,9 +246,11 @@ assert.deepEqual(calls.map((call) => call[0]),
 	['diagnosticsSummary'], 'summary refresh must use one cached diagnostics RPC');
 const summaryText = host.textContent;
 for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Guard', 'RSS', 'Baseline',
-	'Pressure', 'Cooldown', 'Last automatic recovery', 'Subscription', 'Telegram',
-	'Details', 'Download diagnostic report', 'Route test'])
+	'Pressure', 'Cooldown', 'Recovery', 'Subscription', 'Telegram',
+	'Download diagnostic report'])
 	assert.match(summaryText, new RegExp(label), `summary is missing ${label}`);
+assert.doesNotMatch(summaryText, /Details|Route test/,
+	'diagnostics cards must not duplicate details or routing actions');
 assert.doesNotMatch(summaryText, /Subscription activation/,
 	'legacy subscription activation label must not remain');
 assert.equal(host.querySelectorAll('[role="status"]').length >= 5, true,
@@ -254,9 +259,10 @@ for (const node of host.querySelectorAll('[role="status"]'))
 	assert.ok(node.getAttribute('aria-label'), 'status icon/text needs an accessible label');
 assert.equal(host.querySelector('button[data-action="download-report"]')?.textContent,
 	'Download diagnostic report', 'report action must use the standard LuCI button');
-for (const action of [ 'details', 'download-report', 'route-test' ])
-	assert.ok(host.querySelector(`button[data-action="${action}"]`),
-		`${action} must render as a button`);
+assert.ok(host.querySelector('button[data-action="download-report"]'));
+for (const action of [ 'details', 'route-test' ])
+	assert.equal(host.querySelector(`button[data-action="${action}"]`), null,
+		`${action} must not remain in the component card`);
 assert.equal(host.querySelector('a[data-action="download-report"]'), null,
 	'diagnostic actions must not remain hyperlink controls');
 assert.match(summaryText, /Guard●Enabled/, 'Guard must show desired enabled/disabled state, not only health');
@@ -308,7 +314,7 @@ assert.match(disabledMemory, /RSS100\.0 MiB/, 'live RSS must remain visible whil
 assert.match(disabledMemory, /BaselineInactive/);
 assert.match(disabledMemory, /PressureInactive/);
 assert.match(disabledMemory, /CooldownInactive/);
-assert.match(disabledMemory, /Last automatic recoveryNot required/);
+assert.match(disabledMemory, /RecoveryNot required/);
 
 const originalSummary = api.diagnosticsSummary;
 const stableText = host.textContent;
@@ -348,19 +354,6 @@ for (const [id, timer] of [...timers]) {
 await new Promise((resolve) => setImmediate(resolve));
 assert.ok(calls.length > callsBeforeEvent, 'ubus event refresh did not call typed API');
 
-panel.openDetails();
-let modal = modalCalls.at(-1);
-assert.equal(modal.title, 'MiClash diagnostics');
-assert.match(modal.body.textContent, /Component evidence/);
-assert.match(modal.body.textContent, /Last self-heal/);
-assert.match(modal.body.textContent, /Firewall drift/);
-assert.match(modal.body.textContent, /"table":"miclash"/);
-assert.match(modal.body.textContent, /Last self-healfirewall · reconcile · success/);
-assert.match(modal.body.textContent, /<img src=x onerror=alert\(1\)>/,
-	'backend evidence must remain literal text, proving no HTML interpretation');
-assert.equal(modal.body.querySelector('img'), null, 'malicious evidence created an element');
-assert.doesNotMatch(modal.body.textContent, /token=|authorization|123456:/i);
-
 await panel.downloadReport();
 assert.deepEqual(calls.find((call) => call[0] === 'downloadChunks')?.slice(1),
 	['report', 'rpt_' + 'a'.repeat(32), { format: 'json' }]);
@@ -369,7 +362,7 @@ assert.equal(clickedDownloads[0].download, 'miclash-diagnostic-report.json');
 assert.deepEqual(revoked, [createdUrls[0].value], 'object URL must always be revoked');
 
 panel.openRouteTest();
-modal = modalCalls.at(-1);
+let modal = modalCalls.at(-1);
 assert.equal(modal.title, 'Route test');
 const routeBody = modal.body;
 const target = routeBody.querySelector('#sbox-route-target');
@@ -436,6 +429,7 @@ const owner = moduleApi.createOwner({
 		panelsCreated++;
 		const owned = { api: options.api, mounts: [], destroys: 0,
 			mount(node) { this.mounts.push(node); },
+			openRouteTest() { this.routeTests = (this.routeTests || 0) + 1; },
 			destroy() { this.destroys++; this.api.destroy(); } };
 		ownedPanels.push(owned);
 		return owned;
@@ -444,6 +438,8 @@ const owner = moduleApi.createOwner({
 owner.replace();
 owner.mount('first-host');
 owner.mount('rerendered-settings-host');
+owner.openRouteTest();
+assert.equal(ownedPanels[0].routeTests, 1, 'routing card action must delegate to the current panel');
 assert.equal(clientsCreated, 1, 'settings rerender created a duplicate typed client');
 assert.equal(panelsCreated, 1, 'settings rerender created a duplicate panel');
 assert.deepEqual(ownedPanels[0].mounts, ['first-host', 'rerendered-settings-host']);

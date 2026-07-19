@@ -255,11 +255,47 @@ for (let index = 0; index < 4200; index++) push(many, index);
 let many_center = diagnostics.create({ runtime,
 	sources: { ...sources, state: () => many } });
 assert_throws(() => many_center.summary(), 'RESPONSE_TOO_LARGE');
-let huge_center = diagnostics.create({ runtime,
-	sources: { ...sources, logs: () => [ repeated('x', 20000) ] } });
+let huge_filesystem = fakes.fs({});
+for (let directory in [ '/tmp', '/tmp/miclash' ]) huge_filesystem.mkdir(directory);
+huge_filesystem.chmod('/tmp/miclash', 0o700);
+let huge_runtime = { ...runtime,
+	fs: huge_filesystem,
+	clock: fakes.clock(1700000000000),
+	digest: fakes.digest(huge_filesystem) };
+let huge_center = diagnostics.create({ runtime: huge_runtime,
+	sources: { ...sources,
+		config: () => repeated('c', 70000),
+		logs: () => repeated('x', 140000),
+		health: () => ({ observed: { readiness: { components: [
+			{ component: 'process', state: 'ready' },
+			{ component: 'dns', state: 'failed', code: 'HEALTH_FAILED',
+				message: 'DNS probe failed' }
+		] } } }),
+		operations: () => [ { id: 'failed-operation', kind: 'subscription.update',
+			state: 'failure', code: 'HEALTH_FAILED', message: 'Activation failed' } ],
+		last_repair: () => ({ state: 'none' }) } });
 assert_equal(huge_center.summary().schema_version, 1,
 	'summary must not collect report-only logs');
-assert_throws(() => huge_center.create_report(), 'RESPONSE_TOO_LARGE');
+let huge_created = huge_center.create_report();
+let huge_report = json(huge_center.read_report({ id: huge_created.id, format: 'json' }).content);
+assert_equal(huge_report.schema_version, 2);
+assert_true(type(huge_report.issues) == 'array');
+assert_equal(length(huge_report.issues), 2);
+assert_equal(huge_report.issues[0].component, 'dns');
+assert_equal(huge_report.issues[0].severity, 'error');
+assert_equal(huge_report.issues[1].component, 'subscription.update');
+assert_equal(huge_report.issues[1].severity, 'error');
+assert_equal(huge_report.collection.sections.config.truncated, true);
+assert_equal(huge_report.collection.sections.logs.truncated, true);
+assert_true(huge_report.collection.sections.config.original_bytes >
+	huge_report.collection.sections.config.included_bytes);
+assert_true(huge_report.collection.sections.logs.original_bytes >
+	huge_report.collection.sections.logs.included_bytes);
+assert_true(length(huge_report.details.config) <= 65536);
+assert_true(length(huge_report.details.logs) <= 131072);
+huge_runtime.clock.advance(900000);
+assert_throws(() => huge_center.read_report({ id: huge_created.id, format: 'json' }),
+	'NOT_FOUND');
 
 for (let name in report_source_calls) report_source_calls[name] = 0;
 let created = center.create_report();
