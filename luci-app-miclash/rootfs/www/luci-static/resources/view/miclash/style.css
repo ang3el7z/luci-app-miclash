@@ -568,6 +568,12 @@
 }
 .sbox-overview-card {
 	grid-column: span 4;
+	background: var(--sbox-panel);
+}
+@supports (background: color-mix(in srgb, CanvasText 10%, transparent)) {
+	.sbox-overview-card {
+		background: color-mix(in srgb, var(--sbox-panel) 96%, var(--sbox-text) 4%);
+	}
 }
 .sbox-settings-summary-current {
 	display: grid;

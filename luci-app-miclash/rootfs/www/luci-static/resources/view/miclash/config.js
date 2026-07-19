@@ -1536,7 +1536,7 @@ async function hydrateConfigWorkspace(generation) {
 }
 
 function beginPageHydration(generation) {
-	Promise.resolve().then(() => hydrateConfigWorkspace(generation)).catch((error) => {
+	return Promise.resolve().then(() => hydrateConfigWorkspace(generation)).catch((error) => {
 		if (generation !== pageGeneration || !pageRoot) return;
 		console.error('[MiClash] Failed to hydrate config workspace:', error);
 		// Keep the editor shimmer visible. A later page visit can retry safely.
@@ -3161,7 +3161,6 @@ return view.extend({
 		if (appState.activeCfgTab === 'settings') managementOwner.replace();
 		renderSettingsPane();
 		updateHeaderAndControlDom();
-		refreshReleaseMeta({ force: true }).catch(() => {});
 
 		startControlPolling();
 		startUpdatePolling();
@@ -3179,7 +3178,10 @@ return view.extend({
 			}
 		};
 		document.addEventListener('visibilitychange', visibilityChangeHandler);
-		beginPageHydration(generation);
+		beginPageHydration(generation).finally(() => {
+			if (generation === pageGeneration && pageRoot && !document.hidden)
+				refreshReleaseMeta({ force: true }).catch(() => {});
+		});
 
 		return pageRoot;
 	},

@@ -47,6 +47,26 @@ function invalid() { fail('INVALID_ARGUMENT'); };
 function corrupt() { fail('CORRUPT_STATE'); };
 function copy(value) { return json(sprintf('%J', value)); };
 
+export function live_status(controller, enabled, service_snapshot) {
+	if (type(controller?.status) != 'function' ||
+	    type(controller?.observe) != 'function' || type(enabled) != 'bool')
+		fail('INVALID_ARGUMENT');
+
+	let state = controller.status(), observed = null;
+	try { observed = controller.observe(service_snapshot); }
+	catch (error) {}
+	if (observed?.running === true && type(observed.rss_kb) != 'int')
+		try { observed = controller.observe(); }
+		catch (error) {}
+	state.enabled = enabled;
+	if (observed?.running === true) {
+		state.pid = observed.pid ?? null;
+		state.current_rss_kb = observed.rss_kb ?? null;
+		state.mem_total_kb = observed.mem_total_kb ?? null;
+	}
+	return state;
+};
+
 function exact_fields(value, fields) {
 	if (type(value) != 'object') return false;
 	for (let name in value)

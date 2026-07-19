@@ -2,6 +2,7 @@
 'require baseclass';
 'require ui';
 'require view.miclash.background-refresh';
+'require view.miclash.ui-shell';
 
 const COMPONENTS = [
 	[ 'mihomo', () => _('Mihomo') ],
@@ -118,11 +119,46 @@ function normalizedGraph(value) {
 	return graph;
 }
 
+function readinessByName(value) {
+	const readiness = {};
+	if (Array.isArray(value)) {
+		for (const item of value.slice(0, 32)) {
+			if (!item || typeof item !== 'object') continue;
+			const name = String(item.name || item.component || '').toLowerCase();
+			if (name) readiness[name] = item;
+		}
+		return readiness;
+	}
+	if (!value || typeof value !== 'object') return readiness;
+	for (const [ name, item ] of Object.entries(value).slice(0, 32))
+		if (item && typeof item === 'object') readiness[String(name).toLowerCase()] = item;
+	return readiness;
+}
+
+function combineReadiness(process, api) {
+	const records = [ process, api ].filter((item) => item && typeof item === 'object');
+	if (!records.length) return null;
+	const rank = { failed: 4, error: 4, stopped: 4, degraded: 3, warning: 3,
+		unknown: 2, ready: 1, ok: 1, running: 1, success: 1 };
+	let selected = records[0];
+	for (const record of records)
+		if ((rank[String(record.state || 'unknown').toLowerCase()] || 2) >
+		    (rank[String(selected.state || 'unknown').toLowerCase()] || 2)) selected = record;
+	return { ...selected, details: { process: process || null, api: api || null } };
+}
+
 function componentGraph(state) {
 	const summary = normalizedGraph(state?.summary?.health);
 	if (Object.keys(summary).length) return summary;
 	const direct = normalizedGraph(state?.health);
 	if (Object.keys(direct).length) return direct;
+	const readiness = readinessByName(state?.summary?.state?.observed?.readiness?.components);
+	if (Object.keys(readiness).length) return {
+		mihomo: combineReadiness(readiness.process, readiness.api),
+		dns: readiness.dns,
+		routing: readiness.policy,
+		firewall: readiness.forward
+	};
 	return normalizedGraph(state?.health?.observed?.readiness?.components);
 }
 
@@ -135,9 +171,22 @@ function dateValue(value) {
 }
 
 function repairValue(repair) {
-	if (!repair || typeof repair !== 'object' || !Object.keys(repair).length) return _('None');
+	if (!repair || typeof repair !== 'object' || !Object.keys(repair).length || repair.state === 'none')
+		return _('Not required');
 	return [ repair.component, repair.action, repair.result || repair.outcome, dateValue(repair.at || repair.finished_at) ]
-		.filter((item) => item != null && item !== '' && item !== '-').map(text).join(' · ') || _('None');
+		.filter((item) => item != null && item !== '' && item !== '-').map(text).join(' · ') || _('Not required');
+}
+
+function memoryPhaseValue(memory) {
+	if (memory?.enabled !== true) return _('Inactive');
+	const labels = {
+		waiting_for_mihomo: _('Waiting for Mihomo'),
+		warming_up: _('Warming up'),
+		learning_baseline: _('Learning baseline'),
+		monitoring: _('Monitoring'),
+		cooldown: _('Cooldown')
+	};
+	return labels[memory?.phase] || _('Inactive');
 }
 
 function subscriptionValue(summary) {
@@ -175,8 +224,7 @@ function create(options) {
 	const doc = options.document || document;
 	const win = options.window || window;
 	const pollInterval = Math.max(5000, Number(options.pollInterval) || 30000);
-	if (!api || typeof api.status !== 'function' || typeof api.health !== 'function' ||
-		typeof api.diagnosticsSummary !== 'function')
+	if (!api || typeof api.diagnosticsSummary !== 'function')
 		throw new Error('Typed diagnostics API is required');
 
 	let host = null;
@@ -186,6 +234,7 @@ function create(options) {
 	let refreshing = false;
 	let refreshPending = false;
 	let destroyed = false;
+	let hasGoodSummary = false;
 	const objectUrls = new Set();
 	const backgroundRefresh = view_miclash_background_refresh.create((error) => showError(error));
 
@@ -205,15 +254,28 @@ function create(options) {
 		}, pollInterval);
 	}
 
-	function actionLink(label, action) {
-		const link = E('a', { 'href': '#', 'class': 'sbox-diagnostics-link', 'data-action': action }, label);
-		link.addEventListener('click', (event) => {
-			event.preventDefault();
+	function actionButton(label, action) {
+		const button = E('button', { 'type': 'button',
+			'class': 'cbi-button cbi-button-neutral', 'data-action': action }, label);
+		button.addEventListener('click', () => {
 			if (action === 'details') openDetails();
 			else if (action === 'download-report') downloadReport().catch(showError);
 			else if (action === 'route-test') openRouteTest();
 		});
-		return link;
+		return button;
+	}
+
+	function renderLoading() {
+		return E('div', { 'class': 'sbox-diagnostics-card-grid' }, [
+			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health' }, [
+				E('h4', {}, _('Component status')),
+				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 4 })
+			]),
+			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
+				E('h4', {}, _('Guard') + ' / ' + _('Memory Guard')),
+				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 4 })
+			])
+		]);
 	}
 
 	function renderSummary(state) {
@@ -222,7 +284,8 @@ function create(options) {
 		const health = componentGraph(state);
 		const memory = summary.memory || {};
 		const status = state.status || {};
-		const serviceRunning = status.observed?.service?.running ?? status.state?.observed?.service?.running ?? status.running;
+		const serviceRunning = summary.state?.observed?.service?.running ??
+			status.observed?.service?.running ?? status.state?.observed?.service?.running ?? status.running;
 		const guardEnabled = summary.state?.desired?.guard?.enabled ?? status.desired?.guard?.enabled ??
 			status.state?.desired?.guard?.enabled;
 		const componentRows = COMPONENTS.filter(([ name ]) => name !== 'guard').map(([ name, label ]) => {
@@ -234,19 +297,21 @@ function create(options) {
 				statusNode(label(), componentState)
 			]);
 		});
-		const cooldown = memory.cooldown_until ? dateValue(memory.cooldown_until) : _('Inactive');
+		const memoryEnabled = memory.enabled === true;
+		const cooldown = memoryEnabled && memory.cooldown_until ?
+			dateValue(memory.cooldown_until) : _('Inactive');
 		return E('div', { 'class': 'sbox-diagnostics-card-grid' }, [
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health' }, [
 				E('h4', {}, _('Component status')),
 				E('div', { 'class': 'sbox-diagnostics-components', 'aria-label': _('Component status') }, componentRows),
 				E('div', { 'class': 'sbox-diagnostics-facts' }, [
-					valueRow(_('Subscription activation'), subscriptionValue(summary)),
+					valueRow(_('Subscription'), subscriptionValue(summary)),
 					valueRow(_('Telegram'), telegramValue(summary))
 				]),
 				E('div', { 'class': 'sbox-diagnostics-actions', 'aria-label': _('Diagnostic actions') }, [
-					actionLink(_('Details'), 'details'),
-					actionLink(_('Download diagnostic report'), 'download-report'),
-					actionLink(_('Route test'), 'route-test')
+					actionButton(_('Details'), 'details'),
+					actionButton(_('Download diagnostic report'), 'download-report'),
+					actionButton(_('Route test'), 'route-test')
 				])
 			]),
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
@@ -260,10 +325,11 @@ function create(options) {
 				E('div', { 'class': 'sbox-diagnostics-facts' }, [
 					valueRow(_('RSS'), memoryBytes(memory, 'rss_bytes', 'current_rss_kb') !== '-'
 						? memoryBytes(memory, 'rss_bytes', 'current_rss_kb') : memoryBytes(memory, 'rss_bytes', 'rss_kb')),
-					valueRow(_('Baseline'), memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb')),
-					valueRow(_('Pressure'), memory.pressure || memory.phase || '-'),
+					valueRow(_('Baseline'), memoryEnabled ?
+						memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb') : _('Inactive')),
+					valueRow(_('Pressure'), memoryPhaseValue(memory)),
 					valueRow(_('Cooldown'), cooldown),
-					valueRow(_('Last repair'), repairValue(summary.last_repair))
+					valueRow(_('Last automatic recovery'), repairValue(summary.last_repair))
 				])
 			])
 		]);
@@ -278,9 +344,12 @@ function create(options) {
 		if (refreshing) { refreshPending = true; return; }
 		refreshing = true;
 		try {
-			const values = await Promise.all([ api.status(), api.health(), api.diagnosticsSummary() ]);
+			const summary = await api.diagnosticsSummary();
+			if (!summary || typeof summary !== 'object' || Array.isArray(summary))
+				throw Object.assign(new Error(_('Invalid diagnostics response')), { code: 'INVALID_RESPONSE' });
 			if (!destroyed) {
-				current = { status: values[0] || {}, health: values[1] || {}, summary: values[2] || {} };
+				current = { summary: summary || {} };
+				hasGoodSummary = true;
 				paint();
 			}
 		} finally {
@@ -443,7 +512,8 @@ function create(options) {
 
 	function mount(node) {
 		host = node;
-		paint();
+		if (hasGoodSummary) paint();
+		else host.replaceChildren(renderLoading());
 		if (!destroyed && !doc.hidden) backgroundRefresh.run(() => refresh());
 		return host;
 	}

@@ -29,6 +29,22 @@ let operations = {
 };
 let guard = memory.create(runtime, service, operations, () => {});
 
+let visible_disabled = memory.live_status(guard, false, {
+	running: true,
+	pid: 42,
+	rss_kb: 32768,
+	mem_total_kb: 262144,
+	mem_available_kb: 196608,
+	start_time: 100,
+	psi_full_avg10: 0
+});
+assert_equal(visible_disabled.enabled, false);
+assert_equal(visible_disabled.pid, 42);
+assert_equal(visible_disabled.current_rss_kb, 32768);
+assert_equal(visible_disabled.mem_total_kb, 262144);
+assert_equal(visible_disabled.baseline_rss_kb, null);
+assert_equal(guard.status().phase, 'waiting_for_mihomo');
+
 assert_equal(sprintf('%J', guard.settings()), sprintf('%J', fixture.defaults));
 for (let router in fixture.routers)
 	assert_equal(guard.observe({ mem_total_kb: router.total_kb }).reserve_kb,
@@ -83,6 +99,13 @@ assert_equal(proc_snapshot.rss_kb, 62000);
 assert_equal(proc_snapshot.mem_total_kb, 262144);
 assert_equal(proc_snapshot.mem_available_kb, 12000);
 assert_equal(proc_snapshot.psi_full_avg10, 0.25);
+let proc_visible = memory.live_status(proc_guard, false, { running: true, pid: 7 });
+assert_equal(proc_visible.enabled, false);
+assert_equal(proc_visible.pid, 7);
+assert_equal(proc_visible.current_rss_kb, 62000);
+assert_equal(proc_visible.mem_total_kb, 262144);
+assert_equal(proc_visible.baseline_rss_kb, null);
+assert_equal(proc_guard.status().phase, 'waiting_for_mihomo');
 optional_reads_throw = true;
 let no_psi_snapshot = proc_guard.observe();
 assert_equal(no_psi_snapshot.rss_kb, 62000);

@@ -2131,3 +2131,24 @@ msgstr "显示令牌"
 
 msgid "Telegram token is not configured."
 msgstr "尚未配置 Telegram 令牌。"
+
+msgid "Last automatic recovery"
+msgstr "上次自动恢复"
+
+msgid "Not required"
+msgstr "无需执行"
+
+msgid "Waiting for Mihomo"
+msgstr "正在等待 Mihomo"
+
+msgid "Warming up"
+msgstr "正在预热"
+
+msgid "Learning baseline"
+msgstr "正在学习基线"
+
+msgid "Monitoring"
+msgstr "监控中"
+
+msgid "Invalid diagnostics response"
+msgstr "诊断响应无效"

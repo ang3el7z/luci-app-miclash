@@ -1494,7 +1494,7 @@ msgid "Pressure"
 msgstr "Давление памяти"
 
 msgid "Inactive"
-msgstr "Неактивен"
+msgstr "Неактивно"
 
 msgid "Cooldown"
 msgstr "Период ожидания"
@@ -2178,3 +2178,24 @@ msgstr "Показать токен"
 
 msgid "Telegram token is not configured."
 msgstr "Токен Telegram не настроен."
+
+msgid "Last automatic recovery"
+msgstr "Последнее автоматическое восстановление"
+
+msgid "Not required"
+msgstr "Не требовалось"
+
+msgid "Waiting for Mihomo"
+msgstr "Ожидание Mihomo"
+
+msgid "Warming up"
+msgstr "Прогрев"
+
+msgid "Learning baseline"
+msgstr "Определение базового уровня"
+
+msgid "Monitoring"
+msgstr "Мониторинг"
+
+msgid "Invalid diagnostics response"
+msgstr "Некорректный ответ диагностики"

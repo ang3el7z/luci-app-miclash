@@ -638,7 +638,8 @@ export function compose(runtime, overrides) {
 			return true;
 		};
 		let memory_domain = {
-			status: () => guard.status(),
+			status: () => modules.memory.live_status(guard, memory_enabled,
+				state_model?.snapshot()?.observed?.service),
 			settings: () => ({ enabled: memory_enabled, ...guard.settings() }),
 			reset_baseline: () => guard.reset_baseline(),
 			prepare: prepare_memory_settings,

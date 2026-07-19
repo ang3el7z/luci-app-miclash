@@ -45,6 +45,11 @@ let runtime = {
 	digest: fakes.digest(filesystem),
 	paths: { tmp: '/tmp/miclash' }
 };
+let report_source_calls = { config: 0, process: 0, logs: 0, uci: 0, operations: 0 };
+function report_source(name, value) {
+	report_source_calls[name]++;
+	return value;
+};
 let sources = {
 	versions: () => ({ miclash: 'v0.9.2', mihomo: 'v1.19.10' }),
 	architecture: () => 'aarch64_cortex-a53',
@@ -59,7 +64,7 @@ let sources = {
 	health: () => ({ mihomo: { state: 'ok', details: {
 		header: 'Authorization: ' + secrets.authorization } } }),
 	memory: () => ({ phase: 'monitoring', diagnostic:
-		'rss sampled with ' + secrets.password }),
+		'password=' + secrets.password }),
 	updates: () => ({ state: 'idle', url: secrets.subscription_url,
 		automatic_miclash: { enabled: true, readiness: 'assets_pending',
 			publication_retry_count: 1, response_body: secrets.password,
@@ -70,17 +75,17 @@ let sources = {
 	}),
 	last_repair: () => ({ result: 'success', context:
 		'cookie=' + secrets.cookie }),
-	config: () => 'secret: ' + secrets.api_key + '\n',
-	process: () => ({ stdout: 'password=' + secrets.password,
+	config: () => report_source('config', 'secret: ' + secrets.api_key + '\n'),
+	process: () => report_source('process', { stdout: 'password=' + secrets.password,
 		stderr: 'Bearer ' + secrets.authorization }),
-	logs: () => [
+	logs: () => report_source('logs', [
 		'url=' + secrets.subscription_url,
 		'token=' + secrets.telegram_token
-	],
-	uci: () => ({ telegram: { token: secrets.telegram_token },
+	]),
+	uci: () => report_source('uci', { telegram: { token: secrets.telegram_token },
 		remote: { api_key: secrets.api_key } }),
-	operations: () => [ { id: 'safe-operation', context:
-		'cookie=' + secrets.cookie + ' password=' + secrets.password } ]
+	operations: () => report_source('operations', [ { id: 'safe-operation', context:
+		'cookie=' + secrets.cookie + ' password=' + secrets.password } ])
 };
 
 assert_equal(type(diagnostics.create), 'function');
@@ -100,6 +105,9 @@ function assert_no_secrets(value, label) {
 };
 
 let summary = center.summary();
+for (let name in report_source_calls)
+	assert_equal(report_source_calls[name], 0,
+		'summary must not collect report-only source ' + name);
 assert_equal(summary.schema_version, 1);
 assert_equal(summary.versions.miclash, 'v0.9.2');
 assert_equal(summary.architecture, 'aarch64_cortex-a53');
@@ -253,7 +261,11 @@ assert_equal(huge_center.summary().schema_version, 1,
 	'summary must not collect report-only logs');
 assert_throws(() => huge_center.create_report(), 'RESPONSE_TOO_LARGE');
 
+for (let name in report_source_calls) report_source_calls[name] = 0;
 let created = center.create_report();
+for (let name in report_source_calls)
+	assert_true(report_source_calls[name] > 0,
+		'full report must collect source ' + name);
 assert_true(match(created.id, /^rpt_[0-9a-f]{32}$/));
 assert_equal(created.created_at, 1700000000000);
 assert_true(created.expires_at > created.created_at);

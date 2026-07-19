@@ -209,7 +209,7 @@ function public_status(settings) {
 function collect_summary(sources) {
 	let result = {};
 	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
-		'updates', 'settings', 'last_repair', 'process', 'uci' ])
+		'updates', 'settings', 'last_repair' ])
 		result[name] = call(sources, name);
 	result.public_status = public_status(result.settings);
 	return sanitize(result);

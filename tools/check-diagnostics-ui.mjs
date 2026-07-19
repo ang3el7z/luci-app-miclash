@@ -31,6 +31,10 @@ assert.doesNotMatch(configSource, /sbox-diagnostics-dashboard-card/,
 	'diagnostics must not become a standalone dashboard card');
 assert.match(css, /\.sbox-settings-summary-grid[\s\S]*grid-template-columns:\s*repeat\(2/);
 assert.match(css, /@media[^}]*max-width:[^}]*[\s\S]*\.sbox-settings-summary-grid[\s\S]*grid-template-columns:\s*1fr/);
+assert.match(css, /\.sbox-overview-card\s*\{[^}]*background:\s*var\(--sbox-panel\)/s,
+	'overview cards must be brighter than ordinary settings surfaces');
+assert.match(css, /@supports[^}]*color-mix[\s\S]*\.sbox-overview-card[^}]*color-mix/s,
+	'overview brightness should use a supported theme-aware color mix');
 
 class MiniNode {
 	constructor(tag, attrs = {}) {
@@ -172,9 +176,15 @@ const ui = {
 const translate = (value) => String(value);
 const baseclass = { extend: (value) => value };
 const backgroundRefreshModule = new Function('baseclass', backgroundRefreshSource)(baseclass);
+const uiShell = {
+	loadingBlock(options = {}) {
+		return E('div', { 'class': `sbox-loading-surface sbox-loading-${options.kind || 'normal'}`,
+			'aria-busy': 'true', 'role': 'status' });
+	}
+};
 const moduleApi = new Function('baseclass', 'ui', 'E', '_', 'window', 'document', 'Blob',
-	'view_miclash_background_refresh', panelSource)(
-	baseclass, ui, E, translate, windowMock, documentMock, Blob, backgroundRefreshModule);
+	'view_miclash_background_refresh', 'view_miclash_ui_shell', panelSource)(
+	baseclass, ui, E, translate, windowMock, documentMock, Blob, backgroundRefreshModule, uiShell);
 
 const calls = [];
 let destroyedApi = 0;
@@ -183,6 +193,7 @@ const replies = {
 	status: { desired: { guard: { enabled: true } }, observed: { service: { running: true } } },
 	health: { observed: { service: { running: true }, readiness: { components: [] } }, observed_at: 1710000000000 },
 	summary: {
+		state: { desired: { guard: { enabled: true } }, observed: { service: { running: true } } },
 		health: {
 			mihomo: { state: 'ok', code: 'READY', message: malicious, details: { pid: 7 } },
 			dns: { state: 'ok', code: 'READY', message: 'DNS ready', details: { listener: '127.0.0.1' } },
@@ -190,7 +201,8 @@ const replies = {
 			routing: { state: 'ok', code: 'READY', message: 'Routes ready', details: { mark: '0x162' } },
 			guard: { state: 'ok', code: 'ENABLED', message: 'Fail closed', details: { enabled: true } }
 		},
-		memory: { current_rss_kb: 102400, baseline_rss_kb: 81920, phase: 'monitoring', cooldown_until: 1710000200000 },
+		memory: { enabled: true, current_rss_kb: 102400, baseline_rss_kb: 81920,
+			phase: 'monitoring', cooldown_until: 1710000200000 },
 		last_repair: { component: 'firewall', action: 'reconcile', result: 'success', at: 1710000000 },
 		updates: { running: true, enabled: true, last_activation: 1710000100000,
 			automatic_miclash: { enabled: true, readiness: 'assets_pending',
@@ -222,20 +234,31 @@ for (const method of ['renderSummary', 'openDetails', 'downloadReport', 'openRou
 
 const host = new MiniNode('div', { id: 'sbox-diagnostics-summary' });
 panel.mount(host);
+assert.equal(host.querySelectorAll('.sbox-loading-surface').length, 2,
+	'initial mount must show one independent shimmer per overview card');
 await new Promise((resolve) => setImmediate(resolve));
-assert.deepEqual(calls.slice(0, 3).map((call) => call[0]).sort(),
-	['diagnosticsSummary', 'health', 'status'], 'summary must use all typed read methods');
+assert.equal(host.querySelectorAll('.sbox-loading-surface').length, 0,
+	'first valid summary must replace both overview shimmers');
+assert.deepEqual(calls.map((call) => call[0]),
+	['diagnosticsSummary'], 'summary refresh must use one cached diagnostics RPC');
 const summaryText = host.textContent;
 for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Guard', 'RSS', 'Baseline',
-	'Pressure', 'Cooldown', 'Last repair', 'Subscription activation', 'Telegram',
+	'Pressure', 'Cooldown', 'Last automatic recovery', 'Subscription', 'Telegram',
 	'Details', 'Download diagnostic report', 'Route test'])
 	assert.match(summaryText, new RegExp(label), `summary is missing ${label}`);
+assert.doesNotMatch(summaryText, /Subscription activation/,
+	'legacy subscription activation label must not remain');
 assert.equal(host.querySelectorAll('[role="status"]').length >= 5, true,
 	'component states must expose accessible status roles');
 for (const node of host.querySelectorAll('[role="status"]'))
 	assert.ok(node.getAttribute('aria-label'), 'status icon/text needs an accessible label');
-assert.equal(host.querySelector('a[data-action="download-report"]')?.textContent,
-	'Download diagnostic report', 'report action must be hyperlink-styled semantic link');
+assert.equal(host.querySelector('button[data-action="download-report"]')?.textContent,
+	'Download diagnostic report', 'report action must use the standard LuCI button');
+for (const action of [ 'details', 'download-report', 'route-test' ])
+	assert.ok(host.querySelector(`button[data-action="${action}"]`),
+		`${action} must render as a button`);
+assert.equal(host.querySelector('a[data-action="download-report"]'), null,
+	'diagnostic actions must not remain hyperlink controls');
 assert.match(summaryText, /Guard●Enabled/, 'Guard must show desired enabled/disabled state, not only health');
 assert.match(summaryText, /RSS100\.0 MiB/);
 assert.match(summaryText, /Baseline80\.0 MiB/);
@@ -246,7 +269,7 @@ assert.match(summaryText, new RegExp(new Date(1710000100000).toLocaleString().re
 assert.equal(host.querySelector('img'), null, 'summary created an unexpected element');
 const statusFallback = panel.renderSummary({
 	status: { desired: { guard: { enabled: false } }, observed: { service: { running: true } } },
-	health: {}, summary: { ...replies.summary, health: {} }
+	health: {}, summary: { ...replies.summary, state: {}, health: {} }
 }).textContent;
 assert.match(statusFallback, /Mihomo●Ready/, 'Mihomo status must fall back to typed status state');
 assert.match(statusFallback, /Guard●Disabled/, 'Guard status must fall back to typed desired state');
@@ -254,6 +277,58 @@ const arrayHealth = panel.renderSummary({ status: replies.status, health: {}, su
 	...replies.summary, health: { components: [ { component: 'mihomo', state: 'degraded' } ] }
 } }).textContent;
 assert.match(arrayHealth, /Mihomo●Degraded/, 'component arrays must normalize safely');
+const readinessHealth = panel.renderSummary({ summary: {
+	...replies.summary,
+	health: {},
+	state: {
+		desired: { guard: { enabled: true } },
+		observed: {
+			service: { running: true },
+			readiness: { components: [
+				{ name: 'process', state: 'ready' },
+				{ name: 'api', state: 'ready' },
+				{ name: 'dns', state: 'ready' },
+				{ name: 'policy', state: 'ready' },
+				{ name: 'forward', state: 'ready' }
+			] }
+		}
+	}
+} }).textContent;
+for (const label of [ 'Mihomo', 'DNS', 'Firewall', 'Routing' ])
+	assert.match(readinessHealth, new RegExp(label + '●Ready'),
+		`${label} must derive from cached readiness components`);
+
+const disabledMemory = panel.renderSummary({ summary: {
+	...replies.summary,
+	memory: { enabled: false, current_rss_kb: 102400, baseline_rss_kb: 81920,
+		phase: 'waiting_for_mihomo', pressure_samples: 4, cooldown_until: 1710000200000 },
+	last_repair: { state: 'none' }
+} }).textContent;
+assert.match(disabledMemory, /RSS100\.0 MiB/, 'live RSS must remain visible while Memory Guard is disabled');
+assert.match(disabledMemory, /BaselineInactive/);
+assert.match(disabledMemory, /PressureInactive/);
+assert.match(disabledMemory, /CooldownInactive/);
+assert.match(disabledMemory, /Last automatic recoveryNot required/);
+
+const originalSummary = api.diagnosticsSummary;
+const stableText = host.textContent;
+api.diagnosticsSummary = async () => { throw new Error('later refresh failed'); };
+await assert.rejects(panel.refresh(), /later refresh failed/);
+assert.equal(host.textContent, stableText, 'later refresh failure must preserve last good overview');
+api.diagnosticsSummary = originalSummary;
+
+const initialFailureApi = { ...api,
+	async diagnosticsSummary() { throw new Error('initial refresh failed'); },
+	destroy() {}
+};
+const initialFailurePanel = moduleApi.create({ api: initialFailureApi,
+	document: documentMock, window: windowMock, pollInterval: 30000 });
+const initialFailureHost = new MiniNode('div');
+initialFailurePanel.mount(initialFailureHost);
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(initialFailureHost.querySelectorAll('.sbox-loading-surface').length, 2,
+	'initial RPC failure must preserve both overview shimmers');
+initialFailurePanel.destroy();
 
 assert.equal(timers.size, 1, 'visible page must schedule one bounded poll');
 hidden = true;
