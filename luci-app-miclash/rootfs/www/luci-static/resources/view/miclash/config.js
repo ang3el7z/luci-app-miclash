@@ -163,6 +163,7 @@ const appState = {
 		kernelVersion: '',
 		checkedAt: 0
 	},
+	systemMetadataReady: false,
 	serviceActionBusy: false,
 	serviceJobBusy: false,
 	updateJobBusy: false,
@@ -338,6 +339,7 @@ const normalizeReleaseChannel = view_miclash_release.normalizeReleaseChannel;
 const compareNumericVersions = view_miclash_release.compareNumericVersions;
 const findKernelAsset = view_miclash_release.findKernelAsset;
 const detectPackageManager = view_miclash_package.detectPackageManager;
+const getNetworkSnapshot = view_miclash_settings_model.getNetworkSnapshot;
 const getNetworkInterfaces = view_miclash_settings_model.getNetworkInterfaces;
 const transformProxyMode = view_miclash_settings_model.transformProxyMode;
 const detectCurrentProxyMode = view_miclash_settings_model.detectCurrentProxyMode;
@@ -1554,6 +1556,7 @@ async function hydrateSystemMetadata(generation) {
 		installed: system?.mihomo?.installed === true,
 		version: system?.mihomo?.installed ? String(system.mihomo.version || '') : null
 	};
+	appState.systemMetadataReady = true;
 	updateHeaderAndControlDom();
 }
 
@@ -2137,24 +2140,27 @@ function buildPageHtml() {
 	const appActionState = resolveAppActionState();
 	const kernelActionState = resolveKernelActionState();
 	const dashboardButtonState = resolveDashboardButtonState();
-	const versionApp = safeText(appState.versions.app || _('unknown'));
+	const metadataReady = appState.systemMetadataReady === true;
+	const versionLoadingClass = metadataReady ? '' : ' class="sbox-version-loading"';
+	const versionLoadingState = metadataReady ? '' : ' aria-busy="true" aria-label="' + safeText(_('Loading…')) + '"';
+	const versionApp = metadataReady ? safeText(appState.versions.app || _('unknown')) : '';
 	const appTarget = appActionState.scheduled && appActionState.targetVersion
 		? ' data-target-version="' + safeText(appActionState.targetVersion) + '"' : '';
-	const versionKernel = safeText(
+	const versionKernel = metadataReady ? safeText(
 		appState.kernelStatus && appState.kernelStatus.installed
 			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
 			: _('Not installed')
-	);
+	) : '';
 
 	return '' +
 		'<div class="sbox-header">' +
 			'MiClash <span class="sbox-version-inline">' +
-				'<strong id="sbox-app-version">' + versionApp + '</strong>' +
-				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '"' + appTarget + '>' + buildVersionActionIcon(appActionState) + '</button>' +
+				'<strong id="sbox-app-version"' + versionLoadingClass + versionLoadingState + '>' + versionApp + '</strong>' +
+				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '"' + appTarget + (metadataReady ? '' : ' hidden') + '>' + buildVersionActionIcon(appActionState) + '</button>' +
 			'</span>' +
 			'mihomo <span class="sbox-version-inline">' +
-				'<strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
-				'<button id="sbox-kernel-action" type="button" class="cbi-button ' + kernelActionState.className + ' sbox-version-action-button" title="' + safeText(kernelActionState.title) + '" aria-label="' + safeText(kernelActionState.title) + '">' + buildVersionActionIcon(kernelActionState) + '</button>' +
+				'<strong id="sbox-kernel-version"' + versionLoadingClass + versionLoadingState + '>' + versionKernel + '</strong>' +
+				'<button id="sbox-kernel-action" type="button" class="cbi-button ' + kernelActionState.className + ' sbox-version-action-button" title="' + safeText(kernelActionState.title) + '" aria-label="' + safeText(kernelActionState.title) + '"' + (metadataReady ? '' : ' hidden') + '>' + buildVersionActionIcon(kernelActionState) + '</button>' +
 			'</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
 			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select" aria-label="' + safeText(_('Mode')) + '">' +
@@ -2301,8 +2307,15 @@ function updateHeaderAndControlDom() {
 		dashboardBtn.setAttribute('aria-label', dashboardState.title);
 	}
 
-	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
+	if (appVersion) {
+		appVersion.classList.toggle('sbox-version-loading', !appState.systemMetadataReady);
+		appVersion.toggleAttribute('aria-busy', !appState.systemMetadataReady);
+		if (appState.systemMetadataReady) appVersion.removeAttribute('aria-label');
+		else appVersion.setAttribute('aria-label', _('Loading…'));
+		appVersion.textContent = appState.systemMetadataReady ? (appState.versions.app || _('unknown')) : '';
+	}
 	if (appAction && !appAction.classList.contains('sbox-version-action-busy')) {
+		appAction.hidden = !appState.systemMetadataReady;
 		const appActionState = resolveAppActionState();
 		appAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
 		appAction.classList.add(appActionState.className);
@@ -2315,11 +2328,16 @@ function updateHeaderAndControlDom() {
 			appAction.removeAttribute('data-target-version');
 	}
 	if (kernelVersion) {
-		kernelVersion.textContent = appState.kernelStatus && appState.kernelStatus.installed
+		kernelVersion.classList.toggle('sbox-version-loading', !appState.systemMetadataReady);
+		kernelVersion.toggleAttribute('aria-busy', !appState.systemMetadataReady);
+		if (appState.systemMetadataReady) kernelVersion.removeAttribute('aria-label');
+		else kernelVersion.setAttribute('aria-label', _('Loading…'));
+		kernelVersion.textContent = !appState.systemMetadataReady ? '' : appState.kernelStatus && appState.kernelStatus.installed
 			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
 			: _('Not installed');
 	}
 	if (kernelAction && !kernelAction.classList.contains('sbox-version-action-busy')) {
+		kernelAction.hidden = !appState.systemMetadataReady;
 		const kernelActionState = resolveKernelActionState();
 		kernelAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
 		kernelAction.classList.add(kernelActionState.className);
@@ -3130,10 +3148,10 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			L.resolveDefault(readMiClashServiceState(), null),
-			L.resolveDefault(getNetworkInterfaces(), [])
-		]).then(([ serviceState, interfaces ]) => [
+			L.resolveDefault(getNetworkSnapshot(), { interfaces: [], detectedLan: '', detectedWan: '' })
+		]).then(([ serviceState, networkSnapshot ]) => [
 			view_miclash_settings_model.operationalSettingsFromTyped(serviceState?.desired || {}),
-			interfaces,
+			networkSnapshot,
 			null,
 			serviceState
 		]);
@@ -3149,8 +3167,10 @@ return view.extend({
 		appState.configContent = '';
 		appState.subscriptionUrl = '';
 		appState.configReady = false;
+		appState.systemMetadataReady = false;
 		appState.settings = data[0] || {};
-		appState.interfaces = data[1] || [];
+		const networkSnapshot = data[1] || { interfaces: [], detectedLan: '', detectedWan: '' };
+		appState.interfaces = Array.isArray(networkSnapshot.interfaces) ? networkSnapshot.interfaces : [];
 		const system = data[2] || {};
 		appState.versions = {
 			app: normalizeAppVersion(system.app_version || 'unknown'),
@@ -3169,8 +3189,8 @@ return view.extend({
 		appState.selectedInterfaces = (appState.settings.mode === 'explicit'
 			? appState.settings.includedInterfaces
 			: appState.settings.excludedInterfaces) || [];
-		appState.detectedLan = appState.settings.detectedLan || '';
-		appState.detectedWan = appState.settings.detectedWan || '';
+		appState.detectedLan = appState.settings.detectedLan || networkSnapshot.detectedLan || '';
+		appState.detectedWan = appState.settings.detectedWan || networkSnapshot.detectedWan || '';
 
 		pageRoot = E('div', { 'class': 'sbox-page' }, [
 			E('link', { 'rel': 'stylesheet', 'href': L.resource('view/miclash/style.css') }),

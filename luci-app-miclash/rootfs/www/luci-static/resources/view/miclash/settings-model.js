@@ -58,17 +58,26 @@ function createInterfaceEntry(name) {
 	};
 }
 
-async function getNetworkInterfaces() {
+async function getNetworkSnapshot() {
 	const reply = await withApi((api) => api.network_interfaces());
 	const result = Array.isArray(reply?.interfaces)
 		? reply.interfaces.filter((name) => typeof name === 'string').map(createInterfaceEntry) : [];
 	const order = ['wan', 'ethernet', 'wifi', 'vpn', 'virtual', 'other'];
-	return result.sort((a, b) => {
+	const interfaces = result.sort((a, b) => {
 		const ca = order.indexOf(a.category);
 		const cb = order.indexOf(b.category);
 		if (ca !== cb) return ca - cb;
 		return a.name.localeCompare(b.name);
 	});
+	return {
+		interfaces,
+		detectedLan: typeof reply?.detected_lan === 'string' ? reply.detected_lan : '',
+		detectedWan: typeof reply?.detected_wan === 'string' ? reply.detected_wan : ''
+	};
+}
+
+async function getNetworkInterfaces() {
+	return (await getNetworkSnapshot()).interfaces;
 }
 
 async function getHwidValues() {
@@ -424,6 +433,7 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 }
 
 return L.Class.extend({
+	getNetworkSnapshot: getNetworkSnapshot,
 	getNetworkInterfaces: getNetworkInterfaces,
 	transformProxyMode: transformProxyMode,
 	detectCurrentProxyMode: detectCurrentProxyMode,

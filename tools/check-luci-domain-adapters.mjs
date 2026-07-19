@@ -116,6 +116,13 @@ assert.equal(settingsModel.operationalSettingsChanged(mappedSettings, {
 }), true, 'an interface policy change must apply Mihomo settings');
 assert.deepEqual((await settingsModel.getNetworkInterfaces()).map((item) => item.name),
 	[ 'wan', 'br-lan', 'wlan0' ]);
+const networkSnapshot = await settingsModel.getNetworkSnapshot();
+assert.deepEqual(networkSnapshot.interfaces.map((item) => item.name),
+	[ 'wan', 'br-lan', 'wlan0' ]);
+assert.equal(networkSnapshot.detectedLan, 'br-lan',
+	'initial UI snapshot must preserve the detected LAN interface');
+assert.equal(networkSnapshot.detectedWan, 'wan',
+	'initial UI snapshot must preserve the detected WAN interface');
 assert.equal(await settingsModel.detectLanBridge(), 'br-lan');
 assert.equal(await settingsModel.detectWanInterface(), 'wan');
 assert.ok(settingsCalls.some((call) => call.method === 'settings_get'));
