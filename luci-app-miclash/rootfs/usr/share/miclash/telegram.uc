@@ -2,22 +2,20 @@ import * as errors from 'miclash.errors';
 import * as redact from 'miclash.redact';
 import * as schema from 'miclash.schema';
 import * as storage from 'miclash.storage';
+import * as telegram_transport from 'miclash.telegram-transport';
 
 const OFFSET_NAME = 'telegram-offset.json';
 // miclashd serves ubus and timers on one event loop. Telegram long polling would
 // monopolize that loop and make unrelated LuCI RPC calls time out, so use a
 // bounded short poll and leave an explicit gap before the next request.
-const POLL_TIMEOUT_SECONDS = 0;
-const REQUEST_TIMEOUT_MS = 5000;
-const CONNECT_TIMEOUT_MS = 2000;
-const RESPONSE_LIMIT = 65536;
 const MAX_MESSAGE_BYTES = 480;
 const MAX_COMMANDS = 5;
 const RATE_WINDOW_MS = 60000;
 const MAX_BACKOFF_MS = 60000;
 const SUCCESS_DELAY_MS = 3000;
-const HELP = '/status /health /memory /diagnostics /logs /help /start /stop ' +
-	'/restart /reload /reboot /subscription URL /update_subscription ' +
+const HELP = '/start /menu /status /health /memory /diagnostics /logs /help ' +
+	'/start_service /stop_service /restart_service /reload_service /reboot_router ' +
+	'/subscription URL /update_subscription ' +
 	'/update_miclash /update_mihomo /guard_on /guard_off';
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
@@ -119,16 +117,6 @@ function configuration(app) {
 	};
 };
 
-function percent_encode(value) {
-	let output = '';
-	for (let offset = 0; offset < length(value); offset++) {
-		let character = substr(value, offset, 1);
-		output += match(character, /^[A-Za-z0-9_.~-]$/) ? character :
-			sprintf('%%%02X', ord(value, offset));
-	}
-	return output;
-};
-
 function bounded_text(value) {
 	let safe;
 	try {
@@ -148,27 +136,6 @@ function operation_message(record) {
 	if (type(record?.id) != 'string' || type(record?.kind) != 'string')
 		return 'Command accepted';
 	return 'Queued ' + record.kind + ' (' + record.id + ')';
-};
-
-function retry_seconds(reply, document) {
-	let header = reply?.headers?.['retry-after'];
-	let value = document?.parameters?.retry_after;
-	if (type(value) != 'int' && type(header) == 'string' && match(header, /^[0-9]+$/))
-		value = int(header);
-	if (type(value) != 'int' || value < 1)
-		value = 1;
-	return min(value, 3600);
-};
-
-function parse_document(reply) {
-	if (type(reply?.body) != 'string' || length(reply.body) > RESPONSE_LIMIT)
-		errors.fail('INVALID_RESPONSE');
-	let document;
-	try { document = json(reply.body); }
-	catch (error) { errors.fail('INVALID_RESPONSE'); }
-	if (type(document) != 'object' || type(document.ok) != 'bool')
-		errors.fail('INVALID_RESPONSE');
-	return document;
 };
 
 function event_text(event) {
@@ -212,6 +179,7 @@ export function create(app) {
 	};
 	let timer = null;
 	let command_times = [];
+	let transport = telegram_transport.create(app);
 
 	state.last_update_id = read_offset(app.runtime);
 
@@ -249,37 +217,12 @@ export function create(app) {
 		state.last_update_id = update_id;
 	};
 
-	function api_request(path, query, settings) {
-		let parts = [];
-		for (let name, value in query)
-			push(parts, percent_encode(name) + '=' + percent_encode('' + value));
-		let url = 'https://api.telegram.org/bot' + settings.token + '/' + path +
-			(length(parts) ? '?' + join('&', parts) : '');
-		return app.http.request(app.runtime, {
-			url,
-			connect_timeout_ms: CONNECT_TIMEOUT_MS,
-			timeout_ms: REQUEST_TIMEOUT_MS,
-			max_redirects: 0,
-			max_bytes: RESPONSE_LIMIT,
-			managed: true,
-			accept_statuses: [ 429 ]
-		});
-	};
-
 	function send_message(text, settings) {
 		settings = settings ?? configuration(app);
 		if (!settings.available || !settings.enabled || !settings.configured)
 			return false;
 		try {
-			let reply = api_request('sendMessage', {
-				chat_id: settings.user_id,
-				text: bounded_text(text),
-				disable_web_page_preview: 'true'
-			}, settings);
-			if (reply.status == 429)
-				return false;
-			let document = parse_document(reply);
-			return reply.status >= 200 && reply.status < 300 && document.ok === true;
+			return transport.send(settings, settings.user_id, bounded_text(text), null) != null;
 		}
 		catch (error) {
 			log_failure('Telegram delivery failed');
@@ -306,8 +249,10 @@ export function create(app) {
 		let simple = {
 			'/status': 'status', '/health': 'health', '/memory': 'memory',
 			'/diagnostics': 'diagnostics', '/logs': 'logs', '/help': 'help',
-			'/start': 'start', '/stop': 'stop', '/restart': 'restart',
-			'/reload': 'reload', '/reboot': 'reboot',
+			'/start': 'menu', '/menu': 'menu',
+			'/start_service': 'start_service', '/stop_service': 'stop_service',
+			'/restart_service': 'restart_service', '/reload_service': 'reload_service',
+			'/reboot_router': 'reboot_router',
 			'/update_subscription': 'update_subscription',
 			'/update_miclash': 'update_miclash', '/update_mihomo': 'update_mihomo',
 			'/guard_on': 'guard_on', '/guard_off': 'guard_off'
@@ -335,15 +280,17 @@ export function create(app) {
 			return app.logs_read();
 		if (command.name == 'help')
 			return HELP;
-		if (command.name == 'start')
+		if (command.name == 'menu')
+			return HELP;
+		if (command.name == 'start_service')
 			return operation_message(app.service_start('config.yaml', 'telegram'));
-		if (command.name == 'stop')
+		if (command.name == 'stop_service')
 			return operation_message(app.service_stop('config.yaml', 'telegram'));
-		if (command.name == 'restart')
+		if (command.name == 'restart_service')
 			return operation_message(app.service_restart('config.yaml', 'telegram'));
-		if (command.name == 'reload')
+		if (command.name == 'reload_service')
 			return operation_message(app.service_reload('config.yaml', 'telegram'));
-		if (command.name == 'reboot') {
+		if (command.name == 'reboot_router') {
 			let record = app.operations.submit('system.reboot', 'telegram', {}, (ctx) => {
 				ctx.stage('reboot', 50, '');
 				app.reboot();
@@ -446,23 +393,16 @@ export function create(app) {
 		}
 		state.last_poll_at = app.runtime.clock.now();
 		try {
-			let reply = api_request('getUpdates', {
-				offset: state.last_update_id + 1,
-				timeout: POLL_TIMEOUT_SECONDS,
-				limit: 20,
-				allowed_updates: '["message"]'
-			}, settings);
-			let document = parse_document(reply);
-			if (reply.status == 429 || document.error_code == 429) {
+			let reply = transport.poll(settings, state.last_update_id);
+			if (reply.retry_after_ms > 0) {
 				state.failures++;
 				state.last_error = 'RATE_LIMITED';
-				state.retry_after_ms = retry_seconds(reply, document) * 1000;
+				state.retry_after_ms = reply.retry_after_ms;
 				return false;
 			}
-			if (reply.status < 200 || reply.status >= 300 || document.ok !== true ||
-			    type(document.result) != 'array' || length(document.result) > 100)
+			if (type(reply.updates) != 'array' || length(reply.updates) > 100)
 				errors.fail('INVALID_RESPONSE');
-			for (let update in document.result) {
+			for (let update in reply.updates) {
 				let outcome = handle_update(update, settings);
 				if (outcome.retryable)
 					errors.fail(outcome.error);

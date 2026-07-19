@@ -65,7 +65,10 @@ function environment(changes) {
 			}
 			if (options.send_failure)
 				die('DOWNLOAD_FAILED');
-			return { status: 200, headers: {}, body: '{"ok":true,"result":{}}' };
+			return { status: 200, headers: {}, body: sprintf('%J', {
+				ok: true,
+				result: index(request.url, '/sendMessage?') >= 0 ? { message_id: 1 } : true
+			}) };
 		}
 	};
 	let submitted = [], domain_calls = [], audit = [], logs = [];
@@ -233,7 +236,7 @@ for (let command in commands) {
 	}
 	else
 		assert_equal(length(env.submitted), 0, command.text);
-	if (command.text == '/reboot')
+	if (command.text == '/reboot_router')
 		env.submitted[0].worker({ stage: () => null });
 	let expected_calls = command.call == null ? [] : [ command.call ];
 	assert_equal(sprintf('%J', env.domain_calls), sprintf('%J', expected_calls), command.text);
@@ -323,7 +326,7 @@ write_authority_swap.filesystem.on_lstat = (path, count) => {
 	if (path == offset_path && count == 4)
 		write_authority_swap.filesystem.bump_inode('/etc/miclash');
 };
-assert_equal(write_authority_swap_controller.handle_update(update(703, '/reboot')), false);
+assert_equal(write_authority_swap_controller.handle_update(update(703, '/reboot_router')), false);
 assert_equal(length(write_authority_swap.submitted), 0);
 
 // Directory size is mutable metadata and must not invalidate a stable authority identity.
@@ -339,14 +342,14 @@ resized_authority.filesystem.lstat = (path) => {
 	}
 	return identity;
 };
-assert_equal(resized_authority_controller.handle_update(update(704, '/reboot')), true);
+assert_equal(resized_authority_controller.handle_update(update(704, '/reboot_router')), true);
 assert_equal(length(resized_authority.submitted), 1);
 assert_equal(json(resized_authority.filesystem.readfile(offset_path)).last_update_id, 704);
 
 // A durable write failure is a batch barrier: later updates wait while N retries.
 let barrier_document = sprintf('%J', {
 	ok: true,
-	result: [ update(800, '/reboot'), update(801, '/status', 43) ]
+	result: [ update(800, '/reboot_router'), update(801, '/status', 43) ]
 });
 let barrier_fs = fakes.fs({ [offset_path]: '{"last_update_id":799}\n' });
 let barrier = environment({
@@ -412,7 +415,7 @@ assert_equal(lifecycle_controller.status().running, false);
 let snapshot = environment({ poll_replies: [ {
 	status: 200,
 	headers: {},
-	body: sprintf('%J', { ok: true, result: [ update(900, '/reboot') ] })
+	body: sprintf('%J', { ok: true, result: [ update(900, '/reboot_router') ] })
 } ] });
 let snapshot_reads = 0;
 snapshot.app.settings_get = () => {
