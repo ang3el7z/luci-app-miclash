@@ -232,6 +232,11 @@ export function create(dependencies) {
 		notifications_list: (arguments) => dependencies.notifications.list(arguments),
 		telegram_status: () => dependencies.telegram.status(),
 		telegram_settings: () => dependencies.telegram.settings(),
+		telegram_token_reveal: () => {
+			let settings = dependencies.telegram.settings();
+			let token = type(settings?.token) == 'string' ? settings.token : '';
+			return { configured: length(token) > 0, token };
+		},
 		telegram_test: () => dependencies.telegram.test() === true,
 		set_draining: (value) => {
 			if (type(value) != 'bool')

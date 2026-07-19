@@ -3,6 +3,7 @@
 'require ui';
 'require view.miclash.background-refresh';
 'require view.miclash.device-vendors';
+'require view.miclash.ui-shell';
 
 const SOURCE = 'luci';
 const POLL_MS = 30000;
@@ -105,6 +106,7 @@ function create(options) {
 		typeof api.watchOperation !== 'function') throw new Error('Typed devices API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, modalGeneration = 0;
 	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, retryMs = POLL_MS;
+	let hydrated = false;
 	let vendorDatabase = null, vendorLoadState = 'idle';
 	const cancels = new Set();
 	const vendorLoader = typeof options.loadVendorDatabase === 'function'
@@ -181,13 +183,16 @@ function create(options) {
 	function paint() {
 		if (!host || destroyed) return;
 		const rows = deviceRows(devices, policies, vendorDatabase);
+		const content = hydrated ? table(rows) :
+			view_miclash_ui_shell.loadingBlock({ kind: 'table', lines: 6 });
+		if (!hydrated) { host.replaceChildren(content); return; }
 		host.replaceChildren(
 			E('div', { 'class': 'sbox-device-heading' }, [
 				E('span', { 'class': 'sbox-device-count', 'aria-live': 'polite' },
 					String(rows.length))
 			]),
 			E('p', { 'class': 'sbox-muted' }, _('Guard has highest precedence. A direct policy never disables or bypasses Guard protection.')),
-			table(rows));
+			content);
 	}
 	function needsVendorDatabase() {
 		return devices.some((device) => !String(device?.hostname || '').trim() ||
@@ -303,13 +308,13 @@ function create(options) {
 				throw new Error(_('Invalid timezone response.'));
 			devices = Array.isArray(replies[0]) ? replies[0] : (Array.isArray(replies[0]?.devices) ? replies[0].devices : []);
 			policies = Array.isArray(replies[1]) ? replies[1] : (Array.isArray(replies[1]?.policies) ? replies[1].policies : []);
-			timezones = zones.slice(); retryMs = POLL_MS; paint(); ensureVendorDatabase();
+			timezones = zones.slice(); hydrated = true; retryMs = POLL_MS; paint(); ensureVendorDatabase();
 		}
 		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
 		finally { if (!destroyed && token === generation) schedule(); }
 	}
 	function visibilitychange() { if (doc.hidden) clearTimer(); else backgroundRefresh.run(() => refresh()); }
-	function mount(node) { host = node; destroyed = false; paint(); backgroundRefresh.run(() => refresh()); return host; }
+	function mount(node) { host = node; destroyed = false; hydrated = false; paint(); backgroundRefresh.run(() => refresh()); return host; }
 	function destroy() {
 		if (destroyed) return; destroyed = true; generation++; modalGeneration++; clearTimer();
 		doc.removeEventListener('visibilitychange', visibilitychange);
@@ -317,7 +322,7 @@ function create(options) {
 		if (typeof api.destroy === 'function') api.destroy(); host = null;
 	}
 	doc.addEventListener('visibilitychange', visibilitychange);
-	return { mount, refresh, destroy, openEditor, policyFromEditor };
+	return { mount, refresh, destroy, openEditor, policyFromEditor, ready: () => hydrated };
 }
 
 return baseclass.extend({

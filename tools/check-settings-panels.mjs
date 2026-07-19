@@ -28,17 +28,33 @@ for (const [name, source] of Object.entries({ settings, devices })) {
 
 for (const token of [
 	'memoryStatus', 'memorySettings', 'memoryResetBaseline', 'telegram_status',
-	'telegram_settings', 'telegram_test', 'notificationSettings', 'testNotification',
+	'telegram_settings', 'telegram_token_reveal', 'telegram_test', 'notificationSettings', 'testNotification',
 	'settings_get', 'collectPatch', 'markSaved', 'Expert settings', 'Reset baseline',
 	'BotFather token', 'Allowed Telegram user ID', 'Send test', 'KNOWN_EVENTS',
 	'MEMORY_LABELS', 'EVENT_LABELS', 'visibilitychange', 'destroy'
 ]) assert.match(settings, new RegExp(token), `settings panel missing ${token}`);
+assert.match(settings, /view\.miclash\.ui-shell/,
+	'settings panel must use the shared loading surface');
+assert.match(settings, /let hydrated = false/,
+	'settings panel must distinguish loading from real defaults');
+assert.match(settings, /loadingBlock\(\{ kind: 'normal'/,
+	'settings panel must render a card-level shimmer before RPC hydration');
+assert.match(settings, /if \(!hydrated\)[\s\S]*Settings panel is still loading/,
+	'settings cannot collect false defaults before hydration');
+assert.match(settings, /Automatically close LuCI notifications/,
+	'notification auto-close wording is not user friendly');
+assert.match(settings, /Delivery channels/,
+	'notification delivery channels must be named explicitly');
+assert.match(settings, /Notification events/,
+	'notification event selection must be named explicitly');
 assert.doesNotMatch(settings, /Save management settings|data-action[^\n]*save/,
 	'management panel still owns a separate save button');
 assert.doesNotMatch(settings, /backup_outcome|Backup result/,
 	'removed Backup notification remains in Settings');
-assert.match(settings, /token[^\n]*value[^\n]*''|value[^\n]*''[^\n]*token/i,
-	'stored Telegram token may be populated into the input');
+assert.match(settings, /'value': configured \? MASK : ''/,
+	'stored Telegram token must render only as a masked sentinel');
+assert.match(settings, /await api\.telegram_token_reveal\(\)/,
+	'token reveal must use the dedicated authenticated RPC method');
 assert.doesNotMatch(settings, /Number\([^\n]*user[_-]?id|parseInt\([^\n]*user[_-]?id/i,
 	'Telegram IDs must stay exact decimal strings beyond Number.MAX_SAFE_INTEGER');
 
@@ -61,6 +77,8 @@ assert.match(css, /@media\s*\(max-width:\s*1050px\)[\s\S]*\.sbox-overview-routin
 	'settings overview lacks its intermediate responsive layout');
 assert.match(css, /@media\s*\(max-width:\s*760px\)[\s\S]*\.sbox-settings-pair-grid[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
 	'settings cards lack the compact single-column layout');
+assert.match(config, /class="sbox-form-grid sbox-hwid-fields"[\s\S]{0,120}s\.enableHwid \? '' : ' hidden'/,
+	'HWID detail fields must stay hidden until the option is enabled');
 
 const identity = (value) => String(value);
 const baseclass = { extend: (value) => value };

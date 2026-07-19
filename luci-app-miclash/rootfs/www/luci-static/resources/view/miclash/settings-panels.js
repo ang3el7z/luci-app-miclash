@@ -2,6 +2,7 @@
 'require baseclass';
 'require ui';
 'require view.miclash.background-refresh';
+'require view.miclash.ui-shell';
 
 const MASK = '[REDACTED]';
 const SOURCE = 'luci';
@@ -88,12 +89,14 @@ function create(options) {
 	const api = options.api, doc = options.document || document, win = options.window || window;
 	if (!api || typeof api.memoryStatus !== 'function' || typeof api.memorySettings !== 'function' ||
 		typeof api.memoryResetBaseline !== 'function' || typeof api.telegram_status !== 'function' ||
-		typeof api.telegram_settings !== 'function' || typeof api.telegram_test !== 'function' ||
+		typeof api.telegram_settings !== 'function' || typeof api.telegram_token_reveal !== 'function' ||
+		typeof api.telegram_test !== 'function' ||
 		typeof api.notificationSettings !== 'function' || typeof api.testNotification !== 'function' ||
 		typeof api.settings_get !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
 		dirty = false, retryMs = POLL_MS;
+	let hydrated = false;
 	let state = { desired: {}, memory: {}, memorySettings: {}, telegram: {}, telegramSettings: {}, notifications: {} };
 	const cancels = new Set();
 
@@ -170,17 +173,30 @@ function create(options) {
 	function telegramSection() {
 		const desired = state.desired.telegram || {}, settings = state.telegramSettings || {}, status = state.telegram || {};
 		const userId = exactTelegramId(settings.user_id) ? settings.user_id : '';
-		const tokenState = settings.token === MASK || status.configured === true ? _('Configured; leave blank to keep') : _('Not configured');
+		// telegram_settings always redacts the token field, including an empty one;
+		// only the dedicated status flag can tell whether a secret is configured.
+		const configured = status.configured === true;
+		const tokenInput = E('input', { 'id': 'sbox-telegram-token', 'type': 'password', 'class': 'cbi-input-text',
+			'value': configured ? MASK : '', 'autocomplete': 'new-password' });
+		const reveal = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral sbox-secret-reveal',
+			'data-action': 'telegram-token-reveal', 'aria-label': _('Show token'), 'aria-pressed': 'false' }, [
+			E('svg', { 'viewBox': '0 0 24 24', 'aria-hidden': 'true', 'focusable': 'false' }, [
+				E('path', { 'd': 'M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6' }),
+				E('circle', { 'cx': '12', 'cy': '12', 'r': '2.6' })
+			])
+		]);
+		const tokenField = E('div', { 'class': 'sbox-management-field' }, [
+			E('label', { 'for': 'sbox-telegram-token' }, _('BotFather token')),
+			E('div', { 'class': 'sbox-secret-input' }, [ tokenInput, reveal ])
+		]);
 		return E('section', { 'class': 'sbox-integration-pane sbox-telegram-pane', 'data-panel': 'telegram' }, [
 			E('h4', {}, _('Telegram')),
 			check('sbox-telegram-enabled', _('Enable Telegram control'), desired.enabled === true),
 			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
 				status.running === true ? _('Poller is running') : _('Poller is stopped')),
-			field('sbox-telegram-token', _('BotFather token'), E('input', { 'type': 'password', 'class': 'cbi-input-text',
-				'value': '', 'autocomplete': 'new-password', 'placeholder': tokenState })),
+			tokenField,
 			field('sbox-telegram-user-id', _('Allowed Telegram user ID'), E('input', { 'type': 'text',
 				'class': 'cbi-input-text', 'value': userId, 'inputmode': 'numeric', 'autocomplete': 'off' })),
-			E('p', { 'class': 'sbox-muted' }, _('Only this exact user ID is accepted in a private chat.')),
 			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Send test'), 'telegram-test') ])
 		]);
 	}
@@ -202,24 +218,42 @@ function create(options) {
 		const eventNodes = KNOWN_EVENTS.map((name) => check('sbox-notify-event-' + name, EVENT_LABELS[name](),
 			events.includes(name), 'event', name));
 		const select = E('select', { 'id': 'sbox-notification-test-channel', 'class': 'cbi-input-select',
-			'aria-label': _('Channels') },
+			'aria-label': _('Delivery channels') },
 			KNOWN_CHANNELS.map((name) => E('option', { 'value': name }, name)));
 		return E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-notifications-card sbox-management-card sbox-management-wide',
 			'data-panel': 'notifications' }, [
 			E('h4', {}, _('Notifications')),
-			check('sbox-notification-auto-hide', _('Auto-hide notifications'), desired.auto_hide !== false),
+			check('sbox-notification-auto-hide', _('Automatically close LuCI notifications'), desired.auto_hide !== false),
 			E('div', { 'class': 'sbox-notification-layout' }, [
 				E('div', { 'class': 'sbox-notification-group sbox-notification-channels' }, [
-					E('h5', {}, _('Channels')),
+					E('h5', {}, _('Delivery channels')),
 					E('div', { 'class': 'sbox-management-switches' }, channelNodes),
 					E('div', { 'class': 'sbox-management-actions' }, [ select, action(_('Send test'), 'notification-test') ])
 				]),
 				E('div', { 'class': 'sbox-notification-group sbox-notification-events' }, [
-					E('h5', {}, _('Events')),
+					E('h5', {}, _('Notification events')),
 					E('div', { 'class': 'sbox-management-switches' }, eventNodes)
 				])
 			])
 		]);
+	}
+	function loadingPane(title) {
+		return E('section', { 'class': 'sbox-integration-pane' }, [
+			E('h4', {}, title),
+			view_miclash_ui_shell.loadingBlock({ kind: 'normal', lines: 4 })
+		]);
+	}
+	function paintLoading() {
+		if (!host || destroyed) return;
+		host.replaceChildren(
+			E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-protection-integration-card sbox-management-card sbox-management-wide' }, [
+				loadingPane(_('Memory Guard')), loadingPane(_('Telegram'))
+			]),
+			E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-notifications-card sbox-management-card sbox-management-wide' }, [
+				E('h4', {}, _('Notifications')),
+				view_miclash_ui_shell.loadingBlock({ kind: 'normal', lines: 5 })
+			])
+		);
 	}
 
 	function paint() {
@@ -262,15 +296,14 @@ function create(options) {
 		const enabled = !!host.querySelector('#sbox-telegram-enabled')?.checked;
 		const token = String(host.querySelector('#sbox-telegram-token')?.value || '').trim();
 		const userId = String(host.querySelector('#sbox-telegram-user-id')?.value || '').trim();
-		if (token === MASK) throw new Error(_('The masked token cannot be saved as a replacement.'));
-		if (token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
+		if (token !== MASK && token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
 		if (userId && !exactTelegramId(userId)) throw new Error(_('Enter an exact numeric Telegram user ID.'));
 		const configured = state.telegram?.configured === true;
-		if (enabled && !(token && exactTelegramId(userId)) && !configured)
+		const hasToken = token === MASK ? configured : exactTelegramToken(token);
+		if (enabled && !(hasToken && exactTelegramId(userId)))
 			throw new Error(_('Enabling Telegram requires a BotFather token and exact user ID.'));
-		const telegram = { enabled };
-		if (token) telegram.token = token;
-		if (userId) telegram.user_id = userId;
+		const telegram = { enabled, user_id: userId };
+		if (token !== MASK) telegram.token = token;
 		return { memory, telegram, notifications: {
 			auto_hide: !!host.querySelector('#sbox-notification-auto-hide')?.checked,
 			channels: checked('channel'), events: checked('event')
@@ -278,6 +311,7 @@ function create(options) {
 	}
 	function collectPatch() {
 		if (!host || destroyed) throw new Error(_('Settings panel is not available.'));
+		if (!hydrated) throw new Error(_('Settings panel is still loading.'));
 		return formPatch();
 	}
 	async function markSaved() {
@@ -304,7 +338,25 @@ function create(options) {
 		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () =>
 			withBusy(button, async () => {
 				const actionName = button.getAttribute('data-action');
-				if (actionName === 'memory-reset') {
+				if (actionName === 'telegram-token-reveal') {
+					const input = host.querySelector('#sbox-telegram-token');
+					if (!input) return;
+					if (input.type === 'text') {
+						input.type = 'password';
+						button.setAttribute('aria-label', _('Show token'));
+						button.setAttribute('aria-pressed', 'false');
+						return;
+					}
+					if (input.value === MASK) {
+						const reply = await api.telegram_token_reveal();
+						if (!exactTelegramToken(reply?.token)) throw new Error(_('Telegram token is not configured.'));
+						input.value = reply.token;
+					}
+					input.type = 'text';
+					button.setAttribute('aria-label', _('Hide token'));
+					button.setAttribute('aria-pressed', 'true');
+				}
+				else if (actionName === 'memory-reset') {
 					await awaitOperation(await api.memoryResetBaseline(SOURCE), _('Resetting memory baseline…'));
 					await refresh(true);
 				}
@@ -327,11 +379,13 @@ function create(options) {
 		if (destroyed || doc.hidden && !force) return;
 		const token = ++generation;
 		try {
-			const replies = await Promise.all([ api.settings_get(), api.memoryStatus(), api.memorySettings(),
-				api.telegram_status(), api.telegram_settings(), api.notificationSettings() ]);
+			const replies = await Promise.all([ api.settings_get(), api.memoryStatus(), api.telegram_status() ]);
 			if (destroyed || token !== generation) return;
-			state = { desired: replies[0] || {}, memory: replies[1] || {}, memorySettings: replies[2] || {},
-				telegram: replies[3] || {}, telegramSettings: replies[4] || {}, notifications: replies[5] || {} };
+			const desired = replies[0] || {};
+			state = { desired, memory: replies[1] || {}, memorySettings: desired.memory || {},
+				telegram: replies[2] || {}, telegramSettings: desired.telegram || {},
+				notifications: desired.notifications || {} };
+			hydrated = true;
 			publishNotificationSettings();
 			retryMs = POLL_MS;
 			if (replaceForm || (!dirty && !busy)) paint(); else paintStatus();
@@ -340,7 +394,7 @@ function create(options) {
 		finally { if (!destroyed && token === generation) schedule(); }
 	}
 	function visibilitychange() { if (doc.hidden) clearTimer(); else backgroundRefresh.run(() => refresh()); }
-	function mount(node) { host = node; destroyed = false; paint(); backgroundRefresh.run(() => refresh()); return host; }
+	function mount(node) { host = node; destroyed = false; hydrated = false; paintLoading(); backgroundRefresh.run(() => refresh()); return host; }
 	function destroy() {
 		if (destroyed) return; destroyed = true; generation++; clearTimer();
 		doc.removeEventListener('visibilitychange', visibilitychange);
@@ -348,7 +402,8 @@ function create(options) {
 		if (typeof api.destroy === 'function') api.destroy(); host = null;
 	}
 	doc.addEventListener('visibilitychange', visibilitychange);
-	return { mount, refresh, destroy, collectPatch, markSaved, exactTelegramId, exactTelegramToken };
+	return { mount, refresh, destroy, collectPatch, markSaved, ready: () => hydrated,
+		exactTelegramId, exactTelegramToken };
 }
 
 return baseclass.extend({

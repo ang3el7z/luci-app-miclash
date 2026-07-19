@@ -37,6 +37,7 @@ const bindControlBlock = functionBlock('bindControlAndHeaderEvents');
 const operationStatusRenderBlock = blockBetween('operationStatus.innerHTML =', 'operationStatus.title = state.message;', config);
 const rulesetsSaveBlock = blockBetween("const saveBtn = body.querySelector('#sbox-ruleset-save');", 'if (data.whitelistMode', config);
 const rulesetsWhitelistBlock = blockBetween("const saveWhitelistBtn = body.querySelector('#sbox-ruleset-save-whitelist');", '\n}\n\nfunction buildSettingsPaneHtml', config);
+const refreshLogsBlock = functionBlock('refreshLogs');
 
 check(!config.includes('data-ctrl-tab="settings"'),
 	'Settings must move out of the top control tab group.');
@@ -49,6 +50,10 @@ check(configTabBindingBlock.includes("settings: '#sbox-pane-settings'"),
 	'Config tab binding must include the settings pane.');
 check(!controlTabBindingBlock.includes("settings: '#sbox-pane-settings'"),
 	'Settings pane must not remain wired to the control tab group.');
+check(config.includes('let logsLoaded = false') &&
+	buildPageBlock.includes("loadingHtml({ kind: 'editor'") &&
+	refreshLogsBlock.includes('logsLoaded = true'),
+	'Logs must shimmer until the first successful response.');
 
 check(config.includes('detail:') && config.includes('autoClearMs: opts.autoClearMs == null ? 0'),
 	'operationStatus errors must store detail and persist by default.');

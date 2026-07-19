@@ -24,8 +24,17 @@ const rulesetsBody = cssBlock('.sbox-modal-wide .sbox-rulesets-modal-body');
 const iconButton = cssBlock('.sbox-icon-button');
 const versionActionButton = cssBlock('.sbox-version-action-button');
 const versionActionIcon = cssBlock('.sbox-version-action-icon');
+const loadingSurface = cssBlock('.sbox-loading-surface');
+const loadingMotion = cssBlock('.sbox-loading-surface::after');
 
 const checks = [
+	{
+		name: 'shared loading surfaces are accessible and motion-aware',
+		pass: uiShell.includes('function loadingBlock') && uiShell.includes('function loadingHtml') &&
+			uiShell.includes("'aria-busy': 'true'") && uiShell.includes("_('Loading…')") &&
+			/min-height:/.test(loadingSurface) && /animation:/.test(loadingMotion) &&
+			css.includes('@media (prefers-reduced-motion: reduce)')
+	},
 	{
 		name: 'wide modal stays inside LuCI modal padding',
 		pass: /box-sizing:\s*border-box;/.test(modalWide) && /max-width:\s*100%;/.test(modalWide)

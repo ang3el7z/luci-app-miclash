@@ -718,6 +718,13 @@ export function method_table(app, transfers) {
 			exact(arguments, {});
 			return telegram_settings_value(app);
 		}),
+		telegram_token_reveal: method(empty, (arguments) => {
+			exact(arguments, {});
+			let revealed = type(app.telegram_token_reveal) == 'function'
+				? app.telegram_token_reveal() : {};
+			let token = type(revealed?.token) == 'string' ? revealed.token : '';
+			return { configured: length(token) > 0, token };
+		}),
 		telegram_test: method(empty, (arguments) => {
 			exact(arguments, {});
 			return { sent: type(app.telegram_test) == 'function' &&

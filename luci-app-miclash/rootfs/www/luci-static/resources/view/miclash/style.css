@@ -583,7 +583,7 @@
 }
 .sbox-routing-config-grid {
 	display: grid;
-	grid-template-columns: minmax(0, 7fr) minmax(240px, 5fr);
+	grid-template-columns: repeat(2, minmax(0, 1fr));
 	min-width: 0;
 }
 .sbox-settings-subgroup {
@@ -657,14 +657,12 @@
 	font-size: 12px;
 	line-height: 1.35;
 }
-.sbox-major-update-policy,
-.sbox-runtime-config-update {
+.sbox-major-update-policy {
 	margin-top: 10px;
 	padding-top: 9px;
-	border-top: 1px solid var(--sbox-border);
 }
 .sbox-major-update-policy .sbox-checkbox-row,
-.sbox-runtime-config-update .sbox-checkbox-row {
+.sbox-runtime-switches .sbox-auto-update-row {
 	margin-top: 0;
 	margin-bottom: 0;
 }
@@ -753,8 +751,8 @@
 	display: grid;
 	gap: 1px;
 }
-.sbox-hwid-details {
-	margin-top: auto;
+.sbox-hwid-fields {
+	margin-top: 8px;
 }
 
 .sbox-management-grid {
@@ -806,6 +804,32 @@
 	max-width: none;
 }
 
+.sbox-secret-input {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 6px;
+	align-items: stretch;
+}
+.sbox-secret-input input {
+	min-width: 0;
+}
+.sbox-secret-reveal {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 36px;
+	padding: 0 9px;
+}
+.sbox-secret-reveal svg {
+	width: 16px;
+	height: 16px;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.8;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
 .sbox-management-facts {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -823,8 +847,7 @@
 
 .sbox-management-expert {
 	margin-top: .75rem;
-	border-top: 1px solid var(--border-color-medium, #d8d8d8);
-	padding-top: .65rem;
+	padding-top: .35rem;
 }
 
 .sbox-management-expert summary {
@@ -865,11 +888,11 @@
 	grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr);
 	gap: 16px;
 	margin-top: 6px;
+	padding-top: 10px;
+	border-top: 1px solid var(--sbox-border);
 }
 .sbox-notification-group {
 	min-width: 0;
-	padding-top: 10px;
-	border-top: 1px solid var(--sbox-border);
 }
 .sbox-notification-channels .sbox-management-switches {
 	grid-template-columns: minmax(0, 1fr);
@@ -1266,6 +1289,59 @@
 	border-radius: 50%;
 	animation: sbox-spin 0.65s linear infinite;
 	vertical-align: -0.1em;
+}
+.sbox-sr-only {
+	position: absolute !important;
+	width: 1px !important;
+	height: 1px !important;
+	padding: 0 !important;
+	margin: -1px !important;
+	overflow: hidden !important;
+	clip: rect(0, 0, 0, 0) !important;
+	white-space: nowrap !important;
+	border: 0 !important;
+}
+@keyframes sbox-shimmer {
+	from { transform: translateX(-115%); }
+	to { transform: translateX(115%); }
+}
+.sbox-loading-surface {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 10px;
+	min-height: 112px;
+	box-sizing: border-box;
+	overflow: hidden;
+	padding: 13px;
+	background: var(--sbox-panel-soft);
+	border-radius: 7px;
+}
+.sbox-loading-compact { min-height: 68px; }
+.sbox-loading-editor { min-height: 420px; justify-content: flex-start; padding-top: 18px; }
+.sbox-loading-table { min-height: 220px; justify-content: flex-start; padding-top: 18px; }
+.sbox-loading-line {
+	display: block;
+	width: 86%;
+	height: 10px;
+	background: var(--sbox-border);
+	border-radius: 999px;
+	opacity: .58;
+}
+.sbox-loading-line-2 { width: 64%; }
+.sbox-loading-line-3 { width: 92%; }
+.sbox-loading-line-4 { width: 48%; }
+.sbox-loading-surface::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(100deg, transparent 25%, rgba(255, 255, 255, .11) 48%, transparent 72%);
+	animation: sbox-shimmer 1.35s ease-in-out infinite;
+	pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	.sbox-loading-surface::after { animation: none; }
 }
 .sbox-modal-wide {
 	width: min(96vw, 1180px);

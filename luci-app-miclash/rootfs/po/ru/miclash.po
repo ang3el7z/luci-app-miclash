@@ -2155,3 +2155,26 @@ msgstr "В сети"
 
 msgid "State"
 msgstr "Состояние"
+msgid "Automatically close LuCI notifications"
+msgstr "Автоматически закрывать уведомления LuCI"
+
+msgid "Delivery channels"
+msgstr "Куда отправлять"
+
+msgid "Hide token"
+msgstr "Скрыть токен"
+
+msgid "Loading…"
+msgstr "Загрузка…"
+
+msgid "Notification events"
+msgstr "О каких событиях уведомлять"
+
+msgid "Settings panel is still loading."
+msgstr "Настройки ещё загружаются."
+
+msgid "Show token"
+msgstr "Показать токен"
+
+msgid "Telegram token is not configured."
+msgstr "Токен Telegram не настроен."

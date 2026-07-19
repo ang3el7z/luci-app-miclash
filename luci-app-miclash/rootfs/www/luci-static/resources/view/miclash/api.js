@@ -36,6 +36,7 @@ const METHOD_SPECS = [
 	{ name: 'diagnostics_route_test', params: ['target', 'device', 'interface'], operation: false, access: 'write' },
 	{ name: 'telegram_status', params: [], operation: false, access: 'read' },
 	{ name: 'telegram_settings', params: [], operation: false, access: 'read' },
+	{ name: 'telegram_token_reveal', params: [], operation: false, access: 'write' },
 	{ name: 'telegram_test', params: [], operation: false, access: 'write' },
 	{ name: 'devices_list', params: [], operation: false, access: 'read' },
 	{ name: 'devices_timezones', params: [], operation: false, access: 'read' },

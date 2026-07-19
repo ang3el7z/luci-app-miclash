@@ -1,6 +1,40 @@
 'use strict';
 'require ui';
 
+function escapeHtml(value) {
+	return String(value == null ? '' : value)
+		.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+		.replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+}
+
+function loadingOptions(options) {
+	const opts = options || {};
+	const kind = [ 'compact', 'normal', 'editor', 'table' ].includes(opts.kind) ? opts.kind : 'normal';
+	const lines = Number.isInteger(opts.lines) ? Math.max(2, Math.min(8, opts.lines)) :
+		(kind === 'compact' ? 3 : (kind === 'editor' ? 7 : (kind === 'table' ? 6 : 4)));
+	return { kind, lines, label: String(opts.label || _('Loading…')) };
+}
+
+function loadingHtml(options) {
+	const opts = loadingOptions(options);
+	let rows = '';
+	for (let index = 0; index < opts.lines; index++)
+		rows += '<span class="sbox-loading-line sbox-loading-line-' + ((index % 4) + 1) + '"></span>';
+	return '<div class="sbox-loading-surface sbox-loading-' + opts.kind + '" aria-busy="true" role="status">' +
+		'<span class="sbox-sr-only">' + escapeHtml(opts.label) + '</span>' + rows + '</div>';
+}
+
+function loadingBlock(options) {
+	const opts = loadingOptions(options);
+	const rows = [ E('span', { 'class': 'sbox-sr-only' }, opts.label) ];
+	for (let index = 0; index < opts.lines; index++)
+		rows.push(E('span', { 'class': 'sbox-loading-line sbox-loading-line-' + ((index % 4) + 1) }));
+	return E('div', {
+		'class': 'sbox-loading-surface sbox-loading-' + opts.kind,
+		'aria-busy': 'true', 'role': 'status'
+	}, rows);
+}
+
 function showModal(options) {
 	const opts = options || {};
 	const bodyNode = opts.body && opts.body.nodeType
@@ -150,6 +184,8 @@ return L.Class.extend({
 	showModal: showModal,
 	withButtons: withButtons,
 	bindTabGroup: bindTabGroup,
+	loadingBlock: loadingBlock,
+	loadingHtml: loadingHtml,
 	startInterval: startInterval,
 	stopInterval: stopInterval
 });

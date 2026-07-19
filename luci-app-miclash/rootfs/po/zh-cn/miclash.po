@@ -2108,3 +2108,26 @@ msgstr "在线"
 
 msgid "State"
 msgstr "状态"
+msgid "Automatically close LuCI notifications"
+msgstr "自动关闭 LuCI 通知"
+
+msgid "Delivery channels"
+msgstr "发送渠道"
+
+msgid "Hide token"
+msgstr "隐藏令牌"
+
+msgid "Loading…"
+msgstr "正在加载…"
+
+msgid "Notification events"
+msgstr "通知事件"
+
+msgid "Settings panel is still loading."
+msgstr "设置仍在加载。"
+
+msgid "Show token"
+msgstr "显示令牌"
+
+msgid "Telegram token is not configured."
+msgstr "尚未配置 Telegram 令牌。"

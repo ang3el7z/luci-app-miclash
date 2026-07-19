@@ -45,6 +45,8 @@ let rulesetWhitelistEditor = null;
 let configApi = null;
 let visibilityChangeHandler = null;
 let subscriptionUpdateBusy = false;
+let logsLoaded = false;
+let pageGeneration = 0;
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
@@ -165,7 +167,8 @@ const appState = {
 	serviceJobBusy: false,
 	updateJobBusy: false,
 	autoUpdateIntervalProbeBusy: false,
-	autoUpdateIntervalProbeAttempted: false
+	autoUpdateIntervalProbeAttempted: false,
+	configReady: false
 };
 
 function notify(type, message) {
@@ -366,12 +369,7 @@ async function typedCall(callback) {
 async function typedSettings() { return typedCall((api) => api.settings_get()); }
 
 async function loadOperationalSettings() {
-	const [ legacy, typed ] = await Promise.all([
-		loadLegacyOperationalSettings(),
-		typedSettings()
-	]);
-	legacy.internetOnlyMiclash = !!(typed.guard && typed.guard.enabled);
-	return legacy;
+	return loadLegacyOperationalSettings();
 }
 
 function operationFailure(record) {
@@ -662,7 +660,8 @@ async function readMiClashServiceState() {
 		service: running ? 'running' : 'stopped',
 		health: running ? (readiness.ok === true ? 'ready' : 'not_ready') : 'stopped',
 		operation: current ? 'running' : 'idle', phase: current?.stage || '',
-		message: readiness?.message || ''
+		message: readiness?.message || '',
+		desired: snapshot?.desired || null
 	};
 }
 
@@ -680,6 +679,8 @@ function applyServiceState(status) {
 	appState.serviceRunning = service === 'running';
 	appState.serviceHealth = health || (appState.serviceRunning ? 'unknown' : 'stopped');
 	appState.serviceJobBusy = operation === 'running';
+	if (state.desired?.guard && appState.settings)
+		appState.settings.internetOnlyMiclash = state.desired.guard.enabled === true;
 
 	return state;
 }
@@ -1495,7 +1496,56 @@ async function initializeConfigEditor(content) {
 	resizeConfigEditor();
 }
 
+function setConfigWorkspaceReady(ready) {
+	appState.configReady = !!ready;
+	if (!pageRoot) return;
+	[
+		'#sbox-config-select', '#sbox-subscription-url', '#sbox-save-sub-url',
+		'#sbox-update-sub', '#sbox-clear-sub-url', '#sbox-validate', '#sbox-save',
+		'#sbox-clear-editor', '#sbox-set-main-config', '#sbox-open-rulesets'
+	].forEach((selector) => {
+		const control = pageRoot.querySelector(selector);
+		if (control) control.disabled = !ready;
+	});
+}
+
+async function hydrateConfigWorkspace(generation) {
+	const mainContent = await readConfigFileByName(MAIN_CONFIG_NAME);
+	if (generation !== pageGeneration || !pageRoot) return;
+	await ensureConfigProfilesReady(mainContent || '');
+	if (generation !== pageGeneration || !pageRoot) return;
+
+	const [ content, subscriptionUrl ] = await Promise.all([
+		readConfigFileByName(MAIN_CONFIG_NAME),
+		readSubscriptionUrl(MAIN_CONFIG_NAME)
+	]);
+	if (generation !== pageGeneration || !pageRoot) return;
+
+	appState.configProfiles = CONFIG_PROFILES.slice();
+	appState.selectedConfigName = MAIN_CONFIG_NAME;
+	appState.configContent = String(content || '');
+	appState.subscriptionUrl = String(subscriptionUrl || '');
+	const select = pageRoot.querySelector('#sbox-config-select');
+	const subscription = pageRoot.querySelector('#sbox-subscription-url');
+	if (select) select.innerHTML = buildConfigOptionsHtml();
+	if (subscription) subscription.value = appState.subscriptionUrl;
+
+	await initializeConfigEditor(appState.configContent);
+	if (generation !== pageGeneration || !pageRoot) return;
+	setConfigWorkspaceReady(true);
+}
+
+function beginPageHydration(generation) {
+	Promise.resolve().then(() => hydrateConfigWorkspace(generation)).catch((error) => {
+		if (generation !== pageGeneration || !pageRoot) return;
+		console.error('[MiClash] Failed to hydrate config workspace:', error);
+		// Keep the editor shimmer visible. A later page visit can retry safely.
+	});
+}
+
 function releaseConfigRuntime() {
+	pageGeneration++;
+	appState.configReady = false;
 	subscriptionUpdateBusy = false;
 	if (visibilityChangeHandler) document.removeEventListener('visibilitychange', visibilityChangeHandler);
 	visibilityChangeHandler = null;
@@ -2020,22 +2070,17 @@ function buildSettingsPaneHtml() {
 							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' /><span>' + safeText(_('Block QUIC (UDP/443)')) + '</span></label>' +
 							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' /><span>' + safeText(_('Client devices only through MiClash (Protection)')) + '</span></label>' +
 							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' /><span>' + safeText(_('Store rules/providers on tmpfs')) + '</span></label>' +
-						'</div>' +
-						'<div class="sbox-runtime-config-update">' +
 							'<label class="sbox-checkbox-row sbox-auto-update-row">' +
 								'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
 								'<span>' + safeText(_('Auto-update config')) + '</span>' +
 								buildAutoUpdateIntervalChoicesHtml(s) +
 							'</label>' +
-						'</div>' +
-						'<details class="sbox-management-expert sbox-hwid-details"' + (s.enableHwid ? ' open' : '') + '>' +
-							'<summary>HWID</summary>' +
 							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' /><span>' + safeText(_('Inject HWID headers into proxy-providers')) + '</span></label>' +
-							'<div class="sbox-form-grid sbox-hwid-fields">' +
+						'</div>' +
+						'<div class="sbox-form-grid sbox-hwid-fields"' + (s.enableHwid ? '' : ' hidden') + '>' +
 								'<div><label for="sbox-hwid-user-agent">' + safeText(_('User-Agent')) + '</label><input id="sbox-hwid-user-agent" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidUserAgent || 'MiClash') + '" /></div>' +
 								'<div><label for="sbox-hwid-device-os">' + safeText(_('Device OS')) + '</label><input id="sbox-hwid-device-os" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidDeviceOS || 'OpenWrt') + '" /></div>' +
-							'</div>' +
-						'</details>' +
+						'</div>' +
 					'</article>' +
 				'</div>' +
 			'</section>' +
@@ -2131,29 +2176,31 @@ function buildPageHtml() {
 
 				'<div id="sbox-pane-config">' +
 					'<div class="sbox-config-toolbar">' +
-						'<select id="sbox-config-select" class="cbi-input-select sbox-select" aria-label="' + safeText(_('Config')) + '">' + buildConfigOptionsHtml() + '</select>' +
-						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" aria-label="' + safeText(_('Subscription URL')) + '" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
+						'<select id="sbox-config-select" class="cbi-input-select sbox-select" aria-label="' + safeText(_('Config')) + '" disabled>' + buildConfigOptionsHtml() + '</select>' +
+						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" aria-label="' + safeText(_('Subscription URL')) + '" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" disabled />' +
 						'<div class="sbox-subscription-actions">' +
-							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-positive sbox-subscription-action">' + safeText(_('Save')) + '</button>' +
-							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action">' + safeText(_('Update')) + '</button>' +
-							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button sbox-icon-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '">' + buildInlineIcon('x', 'sbox-button-icon') + '</button>' +
+							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-positive sbox-subscription-action" disabled>' + safeText(_('Save')) + '</button>' +
+							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action" disabled>' + safeText(_('Update')) + '</button>' +
+							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button sbox-icon-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '" disabled>' + buildInlineIcon('x', 'sbox-button-icon') + '</button>' +
 						'</div>' +
 					'</div>' +
-					'<div id="miclash-editor" class="sbox-editor"></div>' +
+					'<div id="miclash-editor" class="sbox-editor">' + view_miclash_ui_shell.loadingHtml({ kind: 'editor', lines: 8 }) + '</div>' +
 					'<div class="sbox-actions">' +
-						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Validate')) + '</button>' +
-						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Apply')) + '</button>' +
-						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear editor content')) + '</button>' +
-						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
+						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply" disabled>' + safeText(_('Validate')) + '</button>' +
+						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive" disabled>' + safeText(_('Apply')) + '</button>' +
+						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative" disabled>' + safeText(_('Clear editor content')) + '</button>' +
+						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right" disabled' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
 						'<span class="sbox-actions-spacer" aria-hidden="true"></span>' +
-						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral sbox-rulesets-action">' + safeText(_('Rulesets')) + '</button>' +
+						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral sbox-rulesets-action" disabled>' + safeText(_('Rulesets')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
 			'<div id="sbox-pane-settings" hidden></div>' +
 
 			'<div id="sbox-pane-logs" hidden>' +
-				'<pre id="sbox-log-content" class="sbox-log-content"></pre>' +
+				'<pre id="sbox-log-content" class="sbox-log-content">' +
+					view_miclash_ui_shell.loadingHtml({ kind: 'editor', lines: 7 }) +
+				'</pre>' +
 			'</div>' +
 		'</div>';
 }
@@ -2517,6 +2564,14 @@ function bindSettingsPaneEvents() {
 		syncAutoUpdateInterval();
 	}
 
+	const enableHwidEl = pane.querySelector('#sbox-enable-hwid');
+	const hwidFields = pane.querySelector('.sbox-hwid-fields');
+	if (enableHwidEl && hwidFields) {
+		const syncHwidFields = () => { hwidFields.hidden = !enableHwidEl.checked; };
+		enableHwidEl.addEventListener('change', syncHwidFields);
+		syncHwidFields();
+	}
+
 	const saveBtn = pane.querySelector('#sbox-settings-save');
 	if (saveBtn) saveBtn.addEventListener('click', () => saveAllSettings().catch(() => {}));
 }
@@ -2524,6 +2579,7 @@ function bindSettingsPaneEvents() {
 async function refreshLogs() {
 	const raw = await loadClashLogs();
 	appState.logsRaw = raw;
+	logsLoaded = true;
 
 	const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
 
@@ -3049,40 +3105,45 @@ return view.extend({
 
 	load: function() {
 		return Promise.all([
-			L.resolveDefault(readConfigFileByName(MAIN_CONFIG_NAME), ''),
-			readSubscriptionUrl(),
 			loadOperationalSettings(),
 			getNetworkInterfaces(),
-			getVersions(),
-			getMihomoStatus(),
-			L.resolveDefault(readMiClashServiceState(), null),
-			detectCurrentProxyMode()
+			typedCall((api) => api.system_info()),
+			L.resolveDefault(readMiClashServiceState(), null)
 		]);
 	},
 
-	render: async function(data) {
+	render: function(data) {
 		notificationOwner.destroy();
 		managementOwner.destroy();
 		releaseConfigRuntime();
-		await ensureConfigProfilesReady(data[0] || '');
+		const generation = ++pageGeneration;
 		appState.configProfiles = CONFIG_PROFILES.slice();
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
-		appState.configContent = await readConfigFileByName(MAIN_CONFIG_NAME);
-		appState.subscriptionUrl = await readSubscriptionUrl(MAIN_CONFIG_NAME);
-		appState.settings = data[2] || await loadOperationalSettings();
-		appState.interfaces = data[3] || [];
-		appState.versions = data[4] || { app: 'unknown', clash: 'unknown' };
-		appState.kernelStatus = data[5] || { installed: false, version: null };
-		if (data[6]) {
-			applyServiceState(data[6]);
-		} else {
-			appState.serviceRunning = await getServiceStatus();
-		}
-		appState.proxyMode = data[7] || 'tproxy';
+		appState.configContent = '';
+		appState.subscriptionUrl = '';
+		appState.configReady = false;
+		appState.settings = data[0] || {};
+		appState.interfaces = data[1] || [];
+		const system = data[2] || {};
+		appState.versions = {
+			app: normalizeAppVersion(system.app_version || 'unknown'),
+			clash: system.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : 'unknown'
+		};
+		appState.kernelStatus = {
+			installed: system.mihomo?.installed === true,
+			version: system.mihomo?.installed ? String(system.mihomo.version || '') : null
+		};
+		if (data[3]) applyServiceState(data[3]);
+		else appState.serviceRunning = false;
+		if (data[3]?.desired?.guard)
+			appState.settings.internetOnlyMiclash = data[3].desired.guard.enabled === true;
+		appState.proxyMode = appState.settings.proxyMode || 'tproxy';
 
-		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
-		appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
-		appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
+		appState.selectedInterfaces = (appState.settings.mode === 'explicit'
+			? appState.settings.includedInterfaces
+			: appState.settings.excludedInterfaces) || [];
+		appState.detectedLan = appState.settings.detectedLan || '';
+		appState.detectedWan = appState.settings.detectedWan || '';
 
 		pageRoot = E('div', { 'class': 'sbox-page' }, [
 			E('link', { 'rel': 'stylesheet', 'href': L.resource('view/miclash/style.css') }),
@@ -3091,12 +3152,6 @@ return view.extend({
 
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
 		configApi = view_miclash_api.create();
-
-		try {
-			await initializeConfigEditor(appState.configContent);
-		} catch (e) {
-			notify('error', _('Failed to initialize editor: %s').format(e.message));
-		}
 
 		bindControlAndHeaderEvents();
 		bindConfigEvents();
@@ -3124,6 +3179,7 @@ return view.extend({
 			}
 		};
 		document.addEventListener('visibilitychange', visibilityChangeHandler);
+		beginPageHydration(generation);
 
 		return pageRoot;
 	},

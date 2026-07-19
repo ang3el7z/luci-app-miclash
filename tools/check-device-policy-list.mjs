@@ -14,6 +14,14 @@ const module = new Function('baseclass', 'view_miclash_device_vendors', source)(
 assert.equal(typeof module.deviceRows, 'function', 'deviceRows model builder must be exported');
 assert.equal(typeof module.deviceDisplayName, 'function');
 assert.equal(typeof module.loadVendorDatabase, 'function');
+assert.match(source, /view\.miclash\.ui-shell/,
+	'device policies must use the shared loading surface');
+assert.match(source, /let hydrated = false/,
+	'device policies must distinguish loading from a confirmed empty response');
+assert.match(source, /loadingBlock\(\{ kind: 'table'/,
+	'device policies must shimmer before discovery completes');
+assert.match(source, /hydrated \? table\(rows\)/,
+	'the empty table state must only render after successful hydration');
 
 const neighbor = (mac, host) => ({ mac, hostname: host, addresses: [ {
 	address: '192.168.1.20', family: 'ipv4', current: true, source: 'neighbor', interfaces: [ 'br-lan' ]

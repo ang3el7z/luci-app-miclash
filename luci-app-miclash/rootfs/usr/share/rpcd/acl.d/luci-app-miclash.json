@@ -24,7 +24,7 @@
           "subscription_update", "update_miclash", "update_mihomo",
           "update_rollback_mihomo", "memory_reset_baseline", "diagnostics_create_report",
           "diagnostics_route_test",
-          "telegram_test", "devices_policy_set", "devices_policy_delete",
+          "telegram_token_reveal", "telegram_test", "devices_policy_set", "devices_policy_delete",
           "notifications_test", "ruleset_write", "ruleset_delete",
           "ruleset_apply_whitelist", "transfer_begin", "transfer_write",
           "transfer_read", "transfer_finish", "transfer_abort"

@@ -257,6 +257,7 @@ function defaultOperationalSettings() {
 		autoDetectWan: true,
 		blockQuic: true,
 		useTmpfsRules: true,
+		internetOnlyMiclash: false,
 		enableMemoryGuard: false,
 		autoHideNotifications: true,
 		autoUpdateConfig: true,
@@ -310,6 +311,7 @@ async function loadOperationalSettings() {
 		settings.enableHwid = core.hwid_enabled === true;
 		settings.hwidUserAgent = String(core.hwid_user_agent || 'MiClash');
 		settings.hwidDeviceOS = String(core.hwid_device_os || 'OpenWrt');
+		settings.internetOnlyMiclash = source?.guard?.enabled === true;
 		return settings;
 	} catch (e) {
 		return defaultOperationalSettings();

@@ -31,6 +31,7 @@ let app = {
 	diagnostics_create_report: () => ({ report_id: 'rpt_' + sprintf('%032x', 1) }),
 	diagnostics_route_test: () => ({ decision: 'proxy' }),
 	telegram_status: () => ({ running: true }), telegram_settings: () => ({ token: '123:secret' }),
+	telegram_token_reveal: () => ({ token: '123:secret' }),
 	telegram_test: () => true, devices_list: () => [], devices_timezones: () => [ 'UTC' ],
 	devices_policy_list: () => [], devices_policy_set: () => operation('devices.set'),
 	devices_policy_delete: () => operation('devices.delete'),
@@ -80,6 +81,7 @@ assert_equal(methods.config_apply.call({ args: {
 	profile: '../config.yaml', content: 'mode: rule\n', source: 'luci'
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(methods.telegram_settings.call({ args: {} }).token, '[REDACTED]');
+assert_equal(methods.telegram_token_reveal.call({ args: {} }).token, '123:secret');
 assert_equal(length(methods.notifications_list.call({ args: {
 	generation: '', cursor: 0, limit: 200
 } }).events), 0);
