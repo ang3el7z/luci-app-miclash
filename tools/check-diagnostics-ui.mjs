@@ -250,15 +250,17 @@ assert.equal(host.querySelectorAll('.sbox-loading-surface').length, 0,
 assert.deepEqual(calls.map((call) => call[0]),
 	['diagnosticsSummary'], 'summary refresh must use one cached diagnostics RPC');
 const summaryText = host.textContent;
-for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Guard', 'RSS', 'Baseline',
-	'Pressure', 'Cooldown', 'Recovery', 'Subscription', 'Telegram',
+for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Memory Guard', 'Mihomo memory (RSS)',
+	'Status', 'Baseline', 'Last action', 'Subscription', 'Telegram',
 	'Download diagnostic report'])
-	assert.match(summaryText, new RegExp(label), `summary is missing ${label}`);
+	assert.ok(summaryText.includes(label), `summary is missing ${label}`);
+for (const obsolete of ['Pressure', 'Cooldown', 'Recovery'])
+	assert.doesNotMatch(summaryText, new RegExp(obsolete), `memory overview still exposes ${obsolete}`);
 assert.doesNotMatch(summaryText, /Details|Route test/,
 	'diagnostics cards must not duplicate details or routing actions');
 assert.doesNotMatch(summaryText, /Subscription activation/,
 	'legacy subscription activation label must not remain');
-assert.equal(host.querySelectorAll('[role="status"]').length >= 5, true,
+assert.equal(host.querySelectorAll('[role="status"]').length >= 4, true,
 	'component states must expose accessible status roles');
 for (const node of host.querySelectorAll('[role="status"]'))
 	assert.ok(node.getAttribute('aria-label'), 'status icon/text needs an accessible label');
@@ -271,11 +273,12 @@ for (const action of [ 'details', 'route-test' ])
 		`${action} must not remain in the component card`);
 assert.equal(host.querySelector('a[data-action="download-report"]'), null,
 	'diagnostic actions must not remain hyperlink controls');
-assert.match(summaryText, /Guard●Enabled/, 'Guard must show desired enabled/disabled state, not only health');
-assert.match(summaryText, /RSS100\.0 MiB/);
+assert.doesNotMatch(summaryText, /Guard●(?:Enabled|Disabled)/,
+	'overview must not duplicate the Guard state already shown in the page header');
+assert.match(summaryText, /Mihomo memory \(RSS\)100\.0 MiB/);
+assert.match(summaryText, /StatusMonitoring/);
 assert.match(summaryText, /Baseline80\.0 MiB/);
-assert.match(summaryText, new RegExp(new Date(1710000200000).toLocaleString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-	'real memory cooldown_until was not rendered');
+assert.match(summaryText, /Last actionNot required/);
 assert.match(summaryText, new RegExp(new Date(1710000100000).toLocaleString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
 	'real scheduler last_activation was not rendered');
 assert.equal(host.querySelector('img'), null, 'summary created an unexpected element');
@@ -284,7 +287,6 @@ const statusFallback = panel.renderSummary({
 	health: {}, summary: { ...replies.summary, state: {}, health: {} }
 }).textContent;
 assert.match(statusFallback, /Mihomo●Ready/, 'Mihomo status must fall back to typed status state');
-assert.match(statusFallback, /Guard●Disabled/, 'Guard status must fall back to typed desired state');
 const arrayHealth = panel.renderSummary({ status: replies.status, health: {}, summary: {
 	...replies.summary, health: { components: [ { component: 'mihomo', state: 'degraded' } ] }
 } }).textContent;
@@ -316,11 +318,42 @@ const disabledMemory = panel.renderSummary({ summary: {
 		phase: 'waiting_for_mihomo', pressure_samples: 4, cooldown_until: 1710000200000 },
 	last_repair: { state: 'none' }
 } }).textContent;
-assert.match(disabledMemory, /RSS100\.0 MiB/, 'live RSS must remain visible while Memory Guard is disabled');
+assert.match(disabledMemory, /Mihomo memory \(RSS\)100\.0 MiB/,
+	'live RSS must remain visible while Memory Guard is disabled');
+assert.match(disabledMemory, /StatusDisabled/);
 assert.match(disabledMemory, /BaselineInactive/);
-assert.match(disabledMemory, /PressureInactive/);
-assert.match(disabledMemory, /CooldownInactive/);
-assert.match(disabledMemory, /RecoveryNot required/);
+assert.match(disabledMemory, /Last actionNot required/);
+
+const memoryPhases = {
+	waiting_for_mihomo: 'Waiting for Mihomo', warming_up: 'Warming up',
+	learning_baseline: 'Learning baseline', monitoring: 'Monitoring',
+	recovery_queued: 'Recovery queued', recovering: 'Recovery in progress',
+	recovery_deferred: 'Recovery postponed', failure_rearm_wait: 'Waiting to resume monitoring'
+};
+for (const [phase, label] of Object.entries(memoryPhases)) {
+	const text = panel.renderSummary({ summary: {
+		...replies.summary, memory: { enabled: true, current_rss_kb: 102400,
+			baseline_rss_kb: phase === 'learning_baseline' ? null : 81920, phase }
+	} }).textContent;
+	assert.match(text, new RegExp('Status' + label), `memory phase ${phase} is not user friendly`);
+}
+for (const [phase, label] of [
+	['cooldown', 'Cooldown until'],
+	['failure_cooldown', 'Paused after failed recovery until']
+]) {
+	const text = panel.renderSummary({ summary: {
+		...replies.summary, memory: { enabled: true, current_rss_kb: 102400,
+			baseline_rss_kb: 81920, phase, cooldown_until: 1710000200000 }
+	} }).textContent;
+	assert.match(text, new RegExp('Status' + label), `memory phase ${phase} lost its deadline`);
+}
+
+const memoryAction = panel.renderSummary({ summary: {
+	...replies.summary, memory: { enabled: true, current_rss_kb: 102400,
+		baseline_rss_kb: 81920, phase: 'monitoring', last_action: 'restart_core', last_result: 'success' }
+} }).textContent;
+assert.match(memoryAction, /Last actionRestart core · Success/,
+	'overview must show the last Memory Guard action instead of generic system repair');
 
 const originalSummary = api.diagnosticsSummary;
 const stableText = host.textContent;

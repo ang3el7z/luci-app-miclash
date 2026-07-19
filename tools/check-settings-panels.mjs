@@ -39,6 +39,12 @@ assert.match(settings, /let hydrated = false/,
 	'settings panel must distinguish loading from real defaults');
 assert.match(settings, /loadingBlock\(\{ kind: 'normal'/,
 	'settings panel must render a card-level shimmer before RPC hydration');
+assert.match(settings, /Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure/,
+	'Memory Guard toggle needs a concise explanation');
+assert.doesNotMatch(settings, /data-memory-fact|sbox-management-facts/,
+	'Memory Guard settings must not duplicate the overview telemetry');
+assert.match(settings, /desired\.enabled === true && current\.baseline_rss_kb != null/,
+	'Reset baseline must only appear when an active baseline exists');
 assert.match(settings, /if \(!hydrated\)[\s\S]*Settings panel is still loading/,
 	'settings cannot collect false defaults before hydration');
 assert.match(settings, /Automatically close LuCI notifications/,

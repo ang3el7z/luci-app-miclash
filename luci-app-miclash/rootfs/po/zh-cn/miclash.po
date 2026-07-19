@@ -2150,6 +2150,57 @@ msgstr "正在学习基线"
 msgid "Monitoring"
 msgstr "监控中"
 
+msgid "Mihomo memory (RSS)"
+msgstr "Mihomo 内存 (RSS)"
+
+msgid "Status"
+msgstr "状态"
+
+msgid "Recovery queued"
+msgstr "恢复已排队"
+
+msgid "Recovery in progress"
+msgstr "正在恢复"
+
+msgid "Recovery postponed"
+msgstr "恢复已推迟"
+
+msgid "Waiting to resume monitoring"
+msgstr "等待恢复监控"
+
+msgid "Cooldown until %s"
+msgstr "冷却至 %s"
+
+msgid "Paused after failed recovery"
+msgstr "恢复失败后暂停"
+
+msgid "Paused after failed recovery until %s"
+msgstr "恢复失败后暂停至 %s"
+
+msgid "Not learned yet"
+msgstr "尚未学习"
+
+msgid "Reload"
+msgstr "重新加载"
+
+msgid "Restart core"
+msgstr "重启 Mihomo 内核"
+
+msgid "Restart service"
+msgstr "完整重启服务"
+
+msgid "Success"
+msgstr "成功"
+
+msgid "Monitoring resumed"
+msgstr "监控已恢复"
+
+msgid "Service was busy"
+msgstr "服务正忙"
+
+msgid "Interrupted"
+msgstr "已中断"
+
 msgid "Invalid diagnostics response"
 msgstr "诊断响应无效"
 

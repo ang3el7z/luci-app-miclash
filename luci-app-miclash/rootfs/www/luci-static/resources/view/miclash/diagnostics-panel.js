@@ -68,16 +68,6 @@ function statusNode(label, value) {
 	}, [ E('span', { 'class': 'sbox-diagnostics-state-icon', 'aria-hidden': 'true' }, '●'), readable ]);
 }
 
-function enabledNode(label, value) {
-	if (typeof value !== 'boolean') return statusNode(label, 'unknown');
-	const readable = value ? _('Enabled') : _('Disabled');
-	return E('span', {
-		'class': 'sbox-diagnostics-state ' + (value ? 'sbox-diagnostics-state-ok' : 'sbox-diagnostics-state-error'),
-		'role': 'status',
-		'aria-label': label + ': ' + readable
-	}, [ E('span', { 'class': 'sbox-diagnostics-state-icon', 'aria-hidden': 'true' }, '●'), readable ]);
-}
-
 function valueRow(label, value, className) {
 	return E('div', { 'class': 'sbox-diagnostics-row ' + (className || '') }, [
 		E('span', { 'class': 'sbox-diagnostics-label' }, label),
@@ -170,23 +160,47 @@ function dateValue(value) {
 	catch (error) { return text(value); }
 }
 
-function repairValue(repair) {
-	if (!repair || typeof repair !== 'object' || !Object.keys(repair).length || repair.state === 'none')
-		return _('Not required');
-	return [ repair.component, repair.action, repair.result || repair.outcome, dateValue(repair.at || repair.finished_at) ]
-		.filter((item) => item != null && item !== '' && item !== '-').map(text).join(' · ') || _('Not required');
-}
-
 function memoryPhaseValue(memory) {
-	if (memory?.enabled !== true) return _('Inactive');
+	if (memory?.enabled !== true) return _('Disabled');
 	const labels = {
 		waiting_for_mihomo: _('Waiting for Mihomo'),
 		warming_up: _('Warming up'),
 		learning_baseline: _('Learning baseline'),
 		monitoring: _('Monitoring'),
-		cooldown: _('Cooldown')
+		recovery_queued: _('Recovery queued'),
+		recovering: _('Recovery in progress'),
+		recovery_deferred: _('Recovery postponed'),
+		failure_rearm_wait: _('Waiting to resume monitoring')
 	};
+	if (memory?.phase === 'cooldown') {
+		const deadline = dateValue(memory.cooldown_until);
+		return deadline === '-' ? _('Cooldown') : String(_('Cooldown until %s')).replace('%s', deadline);
+	}
+	if (memory?.phase === 'failure_cooldown') {
+		const deadline = dateValue(memory.cooldown_until);
+		return deadline === '-' ? _('Paused after failed recovery') :
+			String(_('Paused after failed recovery until %s')).replace('%s', deadline);
+	}
 	return labels[memory?.phase] || _('Inactive');
+}
+
+function memoryBaselineValue(memory) {
+	if (memory?.enabled !== true) return _('Inactive');
+	const baseline = memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb');
+	return baseline === '-' ? _('Not learned yet') : baseline;
+}
+
+function memoryActionValue(memory) {
+	const action = {
+		reload: _('Reload'), restart_core: _('Restart core'), restart_service: _('Restart service')
+	}[memory?.last_action];
+	if (!action) return _('Not required');
+	const result = {
+		success: _('Success'), failed: _('Failed'), rearmed: _('Monitoring resumed'),
+		service_busy: _('Service was busy'), operation_failed: _('Operation failed'),
+		interrupted: _('Interrupted')
+	}[memory?.last_result];
+	return result ? action + ' · ' + result : action;
 }
 
 function subscriptionValue(summary) {
@@ -270,7 +284,7 @@ function create(options) {
 				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 4 })
 			]),
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
-				E('h4', {}, _('Guard') + ' / ' + _('Memory Guard')),
+				E('h4', {}, _('Memory Guard')),
 				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 4 })
 			])
 		]);
@@ -284,8 +298,6 @@ function create(options) {
 		const status = state.status || {};
 		const serviceRunning = summary.state?.observed?.service?.running ??
 			status.observed?.service?.running ?? status.state?.observed?.service?.running ?? status.running;
-		const guardEnabled = summary.state?.desired?.guard?.enabled ?? status.desired?.guard?.enabled ??
-			status.state?.desired?.guard?.enabled;
 		const componentRows = COMPONENTS.filter(([ name ]) => name !== 'guard').map(([ name, label ]) => {
 			let componentState = health[name]?.state;
 			if (name === 'mihomo' && !componentState && typeof serviceRunning === 'boolean')
@@ -295,9 +307,6 @@ function create(options) {
 				statusNode(label(), componentState)
 			]);
 		});
-		const memoryEnabled = memory.enabled === true;
-		const cooldown = memoryEnabled && memory.cooldown_until ?
-			dateValue(memory.cooldown_until) : _('Inactive');
 		return E('div', { 'class': 'sbox-diagnostics-card-grid' }, [
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health' }, [
 				E('h4', {}, _('Component status')),
@@ -311,21 +320,13 @@ function create(options) {
 				])
 			]),
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
-				E('h4', {}, _('Guard') + ' / ' + _('Memory Guard')),
-				E('div', { 'class': 'sbox-diagnostics-components' }, [
-					E('div', { 'class': 'sbox-diagnostics-row' }, [
-						E('span', { 'class': 'sbox-diagnostics-label' }, _('Guard')),
-						enabledNode(_('Guard'), guardEnabled)
-					])
-				]),
+				E('h4', {}, _('Memory Guard')),
 				E('div', { 'class': 'sbox-diagnostics-facts' }, [
-					valueRow(_('RSS'), memoryBytes(memory, 'rss_bytes', 'current_rss_kb') !== '-'
+					valueRow(_('Mihomo memory (RSS)'), memoryBytes(memory, 'rss_bytes', 'current_rss_kb') !== '-'
 						? memoryBytes(memory, 'rss_bytes', 'current_rss_kb') : memoryBytes(memory, 'rss_bytes', 'rss_kb')),
-					valueRow(_('Baseline'), memoryEnabled ?
-						memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb') : _('Inactive')),
-					valueRow(_('Pressure'), memoryPhaseValue(memory)),
-					valueRow(_('Cooldown'), cooldown),
-					valueRow(_('Recovery'), repairValue(summary.last_repair), 'sbox-diagnostics-row-nowrap')
+					valueRow(_('Status'), memoryPhaseValue(memory)),
+					valueRow(_('Baseline'), memoryBaselineValue(memory)),
+					valueRow(_('Last action'), memoryActionValue(memory), 'sbox-diagnostics-row-nowrap')
 				])
 			])
 		]);

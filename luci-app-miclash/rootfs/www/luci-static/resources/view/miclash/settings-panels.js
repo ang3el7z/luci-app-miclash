@@ -49,17 +49,6 @@ function integer(value, bounds, name) {
 		throw new Error(_('%s is outside the safe range.').format(name));
 	return number;
 }
-function bytes(kb) {
-	const n = Number(kb);
-	if (!Number.isFinite(n) || n < 0) return '-';
-	return n < 1024 ? Math.round(n) + ' KiB' : (n / 1024).toFixed(1) + ' MiB';
-}
-function when(timestamp) {
-	const n = Number(timestamp);
-	if (!Number.isFinite(n) || n <= 0) return _('Inactive');
-	try { return new Date(n < 100000000000 ? n * 1000 : n).toLocaleString(); }
-	catch (error) { return '-'; }
-}
 function label(text, input) {
 	const id = input.getAttribute('id');
 	return E('label', id ? { 'for': id } : {}, text);
@@ -146,29 +135,25 @@ function create(options) {
 		const desired = state.desired.memory || {}, current = state.memory || {};
 		const settings = Object.assign({}, Object.fromEntries(Object.entries(MEMORY_FIELDS).map(([ name, bound ]) => [ name, bound[2] ])),
 			state.memorySettings || {}, desired || {});
-		const facts = E('div', { 'class': 'sbox-management-facts', 'aria-live': 'polite' }, [
-			E('span', { 'data-memory-fact': 'rss' }, [ E('strong', {}, _('RSS') + ': '), bytes(current.current_rss_kb ?? current.rss_kb) ]),
-			E('span', { 'data-memory-fact': 'baseline' }, [ E('strong', {}, _('Baseline') + ': '), bytes(current.baseline_rss_kb) ]),
-			E('span', { 'data-memory-fact': 'pressure' }, [ E('strong', {}, _('Pressure') + ': '), value(current.phase) ]),
-			E('span', { 'data-memory-fact': 'action' }, [ E('strong', {}, _('Last action') + ': '), value(current.last_action) ]),
-			E('span', { 'data-memory-fact': 'cooldown' }, [ E('strong', {}, _('Cooldown') + ': '), when(current.cooldown_until) ])
-		]);
 		const expertFields = Object.entries(MEMORY_FIELDS).map(([ name, bounds ]) => field(
 			'sbox-memory-' + name.replaceAll('_', '-'), MEMORY_LABELS[name](),
 			E('input', { 'type': 'number', 'class': 'cbi-input-text', 'min': bounds[0], 'max': bounds[1],
 				'step': '1', 'value': settings[name] })
 		));
-		return E('section', { 'class': 'sbox-integration-pane sbox-memory-pane', 'data-panel': 'memory' }, [
+		const children = [
 			E('h4', {}, _('Memory Guard')),
 			check('sbox-management-memory-enabled', _('Monitor abnormal Mihomo memory usage'), desired.enabled === true),
-			facts,
+			E('p', { 'class': 'sbox-muted sbox-settings-help' },
+				_('Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure.')),
 			E('details', { 'class': 'sbox-management-expert' }, [
 				E('summary', {}, _('Expert settings')),
 				E('p', { 'class': 'sbox-muted' }, _('Adaptive defaults are recommended. Unsafe values are rejected.')),
 				E('div', { 'class': 'sbox-management-form-grid' }, expertFields)
-			]),
-			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Reset baseline'), 'memory-reset') ])
-		]);
+			])
+		];
+		if (desired.enabled === true && current.baseline_rss_kb != null)
+			children.push(E('div', { 'class': 'sbox-management-actions' }, [ action(_('Reset baseline'), 'memory-reset') ]));
+		return E('section', { 'class': 'sbox-integration-pane sbox-memory-pane', 'data-panel': 'memory' }, children);
 	}
 
 	function telegramSection() {
@@ -279,23 +264,6 @@ function create(options) {
 		if (!host || destroyed) return;
 		host.replaceChildren(protectionIntegrationSection(), notificationSection());
 		bind();
-	}
-	function paintStatus() {
-		if (!host || destroyed) return;
-		const current = state.memory || {};
-		const facts = {
-			rss: [ _('RSS') + ': ', bytes(current.current_rss_kb ?? current.rss_kb) ],
-			baseline: [ _('Baseline') + ': ', bytes(current.baseline_rss_kb) ],
-			pressure: [ _('Pressure') + ': ', value(current.phase) ],
-			action: [ _('Last action') + ': ', value(current.last_action) ],
-			cooldown: [ _('Cooldown') + ': ', when(current.cooldown_until) ]
-		};
-		for (const [ name, parts ] of Object.entries(facts)) {
-			const node = host.querySelector('[data-memory-fact="' + name + '"]');
-			if (node) node.replaceChildren(E('strong', {}, parts[0]), parts[1]);
-		}
-		const telegram = host.querySelector('[data-telegram-status="running"]');
-		if (telegram) telegram.textContent = state.telegram?.running === true ? _('Poller is running') : _('Poller is stopped');
 	}
 	function formPatch() {
 		const memory = { enabled: !!host.querySelector('#sbox-management-memory-enabled')?.checked };
@@ -425,7 +393,7 @@ function create(options) {
 			hydrated = true;
 			publishNotificationSettings();
 			retryMs = POLL_MS;
-			if (replaceForm || (!dirty && !busy)) paint(); else paintStatus();
+			if (replaceForm || (!dirty && !busy)) paint();
 		}
 		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
 		finally { if (!destroyed && token === generation) schedule(); }

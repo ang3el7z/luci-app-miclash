@@ -2197,6 +2197,57 @@ msgstr "Определение базового уровня"
 msgid "Monitoring"
 msgstr "Мониторинг"
 
+msgid "Mihomo memory (RSS)"
+msgstr "Память Mihomo (RSS)"
+
+msgid "Status"
+msgstr "Состояние"
+
+msgid "Recovery queued"
+msgstr "Восстановление запланировано"
+
+msgid "Recovery in progress"
+msgstr "Выполняется восстановление"
+
+msgid "Recovery postponed"
+msgstr "Восстановление отложено"
+
+msgid "Waiting to resume monitoring"
+msgstr "Ожидание возобновления контроля"
+
+msgid "Cooldown until %s"
+msgstr "Пауза до %s"
+
+msgid "Paused after failed recovery"
+msgstr "Пауза после неудачного восстановления"
+
+msgid "Paused after failed recovery until %s"
+msgstr "Пауза после неудачного восстановления до %s"
+
+msgid "Not learned yet"
+msgstr "Ещё не определён"
+
+msgid "Reload"
+msgstr "Мягкая перезагрузка"
+
+msgid "Restart core"
+msgstr "Перезапуск ядра Mihomo"
+
+msgid "Restart service"
+msgstr "Полный перезапуск службы"
+
+msgid "Success"
+msgstr "Успешно"
+
+msgid "Monitoring resumed"
+msgstr "Контроль возобновлён"
+
+msgid "Service was busy"
+msgstr "Служба была занята"
+
+msgid "Interrupted"
+msgstr "Прервано"
+
 msgid "Invalid diagnostics response"
 msgstr "Некорректный ответ диагностики"
 
