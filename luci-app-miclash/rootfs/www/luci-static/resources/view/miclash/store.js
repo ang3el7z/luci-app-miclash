@@ -109,7 +109,7 @@ function settingsPatch(map) {
 			auto_detect_lan: bool(map.AUTO_DETECT_LAN, true), auto_detect_wan: bool(map.AUTO_DETECT_WAN, true),
 			detected_lan: String(map.DETECTED_LAN || ''), detected_wan: String(map.DETECTED_WAN || ''),
 			included: list(map.INCLUDED_INTERFACES), excluded: list(map.EXCLUDED_INTERFACES) },
-		memory: { enabled: bool(map.ENABLE_MEMORY_GUARD, false) },
+		memory: { enabled: bool(map.ENABLE_MEMORY_GUARD, true) },
 		updates: { auto_subscription: bool(map.AUTO_UPDATE_CONFIG, true),
 			interval_hours: Math.max(1, parseInt(map.AUTO_UPDATE_INTERVAL_HOURS, 10) || 4),
 			miclash_release_channel: String(map.MICLASH_RELEASE_CHANNEL || 'release'),

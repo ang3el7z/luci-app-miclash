@@ -90,6 +90,7 @@ const settingsModel = load('settings-model.js', {
 	}) }
 });
 const mappedSettings = await settingsModel.loadOperationalSettings();
+assert.equal(typeof settingsModel.operationalSettingsFromTyped, 'function');
 assert.equal(mappedSettings.proxyMode, 'tun');
 assert.equal(mappedSettings.tunStack, 'gvisor');
 assert.equal(mappedSettings.enableMemoryGuard, true);

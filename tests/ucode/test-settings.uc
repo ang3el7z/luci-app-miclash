@@ -6,6 +6,9 @@ import * as fakes from './fakes.uc';
 import { with_lock } from 'miclash.mutation_lock';
 
 const BOOT = '12345678-1234-1234-1234-123456789abc';
+const ALL_EVENTS = [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
+	'direct_fallback', 'memory_action', 'memory_outcome', 'subscription_outcome',
+	'update_outcome', 'internet_restored' ];
 let next_pid = 6000;
 
 function process_stat(pid, started) {
@@ -53,7 +56,7 @@ assert_equal(defaults.interfaces.auto_detect_lan, true);
 assert_equal(defaults.interfaces.auto_detect_wan, true);
 assert_equal(defaults.guard.enabled, false);
 assert_equal(defaults.guard.auto_fakeip_whitelist, true);
-assert_equal(defaults.memory.enabled, false);
+assert_equal(defaults.memory.enabled, true);
 assert_equal(defaults.memory.sample_interval_ms, 60000);
 assert_equal(defaults.memory.failure_cooldown_ms, 86400000);
 assert_equal(defaults.updates.auto_subscription, true);
@@ -62,26 +65,46 @@ assert_equal(defaults.updates.miclash_release_channel, 'release');
 assert_equal(defaults.updates.mihomo_release_channel, 'release');
 assert_equal(defaults.updates.auto_major_miclash, true);
 assert_equal(defaults.notifications.auto_hide, true);
-assert_json_equal(defaults.notifications.channels, [ 'syslog', 'luci', 'telegram' ]);
-assert_json_equal(defaults.notifications.events, [ 'guard_outage', 'failure', 'recovery',
-	'fail_closed', 'direct_fallback', 'memory_action', 'memory_outcome',
-	'subscription_outcome', 'update_outcome', 'internet_restored' ]);
+assert_equal(defaults.notifications.syslog_enabled, true);
+assert_json_equal(defaults.notifications.syslog_events, ALL_EVENTS);
+assert_equal(defaults.notifications.luci_enabled, true);
+assert_json_equal(defaults.notifications.luci_events, ALL_EVENTS);
+assert_equal(defaults.notifications.telegram_enabled, false);
+assert_json_equal(defaults.notifications.telegram_events,
+	[ 'guard_outage', 'failure', 'recovery', 'fail_closed', 'direct_fallback',
+		'memory_outcome', 'subscription_outcome', 'update_outcome', 'internet_restored' ]);
 assert_equal(defaults.telegram.enabled, false);
 assert_equal(defaults.meta.schema_version, 1);
+
+let legacy = settings.load(fake_runtime({ miclash: {
+	notifications: { '.type': 'notifications', auto_hide: '0',
+		channels: 'telegram,syslog', events: 'failure,recovery' }
+} }).rt);
+assert_equal(legacy.notifications.auto_hide, false);
+assert_equal(legacy.notifications.syslog_enabled, true);
+assert_json_equal(legacy.notifications.syslog_events, [ 'failure', 'recovery' ]);
+assert_equal(legacy.notifications.luci_enabled, false);
+assert_json_equal(legacy.notifications.luci_events, [ 'failure', 'recovery' ]);
+assert_equal(legacy.notifications.telegram_enabled, true);
+assert_json_equal(legacy.notifications.telegram_events, [ 'failure', 'recovery' ]);
 
 let normalized_env = fake_runtime();
 assert_json_equal(settings.validate_patch({
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
 	updates: { interval_hours: '24' },
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
-	notifications: { channels: [ 'telegram', 'syslog', 'telegram' ],
-		events: [ 'failure', 'internet_restored' ] }
+	notifications: { syslog_enabled: true,
+		syslog_events: [ 'failure', 'internet_restored', 'failure' ],
+		luci_enabled: false, luci_events: [ 'recovery' ],
+		telegram_enabled: true, telegram_events: [ 'internet_restored' ] }
 }), {
 	interfaces: { included: [ 'br-lan', 'wlan0' ] },
 	updates: { interval_hours: 24 },
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
-	notifications: { channels: [ 'telegram', 'syslog' ],
-		events: [ 'failure', 'internet_restored' ] }
+	notifications: { syslog_enabled: true,
+		syslog_events: [ 'failure', 'internet_restored' ],
+		luci_enabled: false, luci_events: [ 'recovery' ],
+		telegram_enabled: true, telegram_events: [ 'internet_restored' ] }
 });
 let normalized = settings.save(normalized_env.rt, {
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
@@ -111,9 +134,11 @@ assert_throws(() => settings.validate_patch(
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ memory: { sample_interval_ms: 9999 } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
-	{ notifications: { channels: [ 'shell' ] } }), 'INVALID_ARGUMENT');
+	{ notifications: { syslog_events: [ 'shell' ] } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
-	{ notifications: { events: [ 'unknown_event' ] } }), 'INVALID_ARGUMENT');
+	{ notifications: { luci_events: [ 'unknown_event' ] } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ notifications: { telegram_events: [ 'unknown_event' ] } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ memory: { reserve_min_kb: 131072, reserve_max_kb: 65536 } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,

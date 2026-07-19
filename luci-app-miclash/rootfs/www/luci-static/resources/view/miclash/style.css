@@ -387,6 +387,13 @@
 	overflow: hidden;
 	background: var(--sbox-log-bg);
 }
+.sbox-editor > .sbox-loading-editor,
+.sbox-log-content > .sbox-loading-editor {
+	width: 100%;
+	height: 100%;
+	min-height: 100%;
+	border-radius: inherit;
+}
 .sbox-native-editor {
 	display: block;
 	width: 100%;
@@ -667,8 +674,7 @@
 	margin-top: 10px;
 	padding-top: 9px;
 }
-.sbox-major-update-policy .sbox-checkbox-row,
-.sbox-runtime-switches .sbox-auto-update-row {
+.sbox-major-update-policy .sbox-checkbox-row {
 	margin-top: 0;
 	margin-bottom: 0;
 }
@@ -755,7 +761,10 @@
 }
 .sbox-runtime-switches {
 	display: grid;
-	gap: 1px;
+	gap: 7px;
+}
+.sbox-runtime-switches .sbox-checkbox-row {
+	margin: 0;
 }
 .sbox-hwid-fields {
 	margin-top: 8px;
@@ -826,14 +835,14 @@
 	min-width: 36px;
 	padding: 0 9px;
 }
-.sbox-secret-reveal svg {
-	width: 16px;
-	height: 16px;
-	fill: none;
-	stroke: currentColor;
-	stroke-width: 1.8;
-	stroke-linecap: round;
-	stroke-linejoin: round;
+.sbox-secret-reveal span {
+	font-size: 17px;
+	font-weight: 800;
+	line-height: 1;
+}
+.sbox-telegram-fields {
+	display: grid;
+	gap: 12px;
 }
 
 .sbox-management-facts {
@@ -889,21 +898,28 @@
 	grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
 	gap: .25rem .65rem;
 }
-.sbox-notification-layout {
-	display: grid;
-	grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr);
-	gap: 16px;
-	margin-top: 6px;
-	padding-top: 10px;
-	border-top: 1px solid var(--sbox-border);
+.sbox-notification-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 2px 0 12px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--sbox-border);
 }
-.sbox-notification-group {
-	min-width: 0;
+.sbox-notification-tab {
+	min-width: 86px;
 }
-.sbox-notification-channels .sbox-management-switches {
-	grid-template-columns: minmax(0, 1fr);
+.sbox-notification-tab.is-active {
+	color: var(--sbox-accent);
+	border-color: var(--sbox-accent);
 }
-.sbox-notification-events .sbox-management-switches {
+.sbox-notification-pane[hidden] {
+	display: none !important;
+}
+.sbox-notification-pane h5 {
+	margin: 12px 0 5px;
+}
+.sbox-notification-event-grid {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .sbox-device-heading {
@@ -1166,6 +1182,9 @@
 	gap: 4px 12px;
 	margin-top: auto;
 	padding-top: 3px;
+}
+.sbox-overview-components .sbox-diagnostics-actions {
+	padding-top: 12px;
 }
 .sbox-diagnostics-link {
 	color: var(--sbox-accent);

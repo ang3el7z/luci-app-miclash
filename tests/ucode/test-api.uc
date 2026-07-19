@@ -18,7 +18,10 @@ let app = {
 	config_apply: () => operation('config.apply'),
 	operational_settings_apply: () => operation('settings.apply'),
 	config_swap: () => operation('config.swap'),
-	settings_get: () => ({ telegram: { enabled: true, token: '123:secret', user_id: '42' } }),
+	settings_get: () => ({
+		telegram: { enabled: true, token: '123:secret', user_id: '42' },
+		notifications: { syslog_events: [ 'guard_outage', 'failure' ] }
+	}),
 	settings_set: () => operation('settings.set'), guard_transition: () => operation('guard.transition'),
 	set_draining: () => true,
 	config_external_adopt: () => operation('config.external_adopt'),
@@ -82,6 +85,9 @@ assert_equal(methods.config_apply.call({ args: {
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(methods.telegram_settings.call({ args: {} }).token, '[REDACTED]');
 assert_equal(methods.telegram_token_reveal.call({ args: {} }).token, '123:secret');
+let safe_settings = methods.settings_get.call({ args: {} });
+assert_equal(safe_settings.telegram.token, '[REDACTED]');
+assert_equal(safe_settings.notifications.syslog_events[0], 'guard_outage');
 assert_equal(length(methods.notifications_list.call({ args: {
 	generation: '', cursor: 0, limit: 200
 } }).events), 0);

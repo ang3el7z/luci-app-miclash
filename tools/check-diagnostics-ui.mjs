@@ -190,6 +190,7 @@ const moduleApi = new Function('baseclass', 'ui', 'E', '_', 'window', 'document'
 
 const calls = [];
 let destroyedApi = 0;
+let reportGate = null;
 const malicious = '<img src=x onerror=alert(1)>';
 const replies = {
 	status: { desired: { guard: { enabled: true } }, observed: { service: { running: true } } },
@@ -217,7 +218,11 @@ const api = {
 	async status() { calls.push(['status']); return replies.status; },
 	async health() { calls.push(['health']); return replies.health; },
 	async diagnosticsSummary() { calls.push(['diagnosticsSummary']); return replies.summary; },
-	async createDiagnosticReport() { calls.push(['createDiagnosticReport']); return { id: 'rpt_' + 'a'.repeat(32) }; },
+	async createDiagnosticReport() {
+		calls.push(['createDiagnosticReport']);
+		if (reportGate) await reportGate;
+		return { id: 'rpt_' + 'a'.repeat(32) };
+	},
 	async downloadChunks(...args) { calls.push(['downloadChunks', ...args]); return new TextEncoder().encode('{"safe":true}\n'); },
 	async routeTest(...args) {
 		calls.push(['routeTest', ...args]);
@@ -257,9 +262,10 @@ assert.equal(host.querySelectorAll('[role="status"]').length >= 5, true,
 	'component states must expose accessible status roles');
 for (const node of host.querySelectorAll('[role="status"]'))
 	assert.ok(node.getAttribute('aria-label'), 'status icon/text needs an accessible label');
-assert.equal(host.querySelector('button[data-action="download-report"]')?.textContent,
+const reportButton = host.querySelector('button[data-action="download-report"]');
+assert.equal(reportButton?.textContent,
 	'Download diagnostic report', 'report action must use the standard LuCI button');
-assert.ok(host.querySelector('button[data-action="download-report"]'));
+assert.ok(reportButton);
 for (const action of [ 'details', 'route-test' ])
 	assert.equal(host.querySelector(`button[data-action="${action}"]`), null,
 		`${action} must not remain in the component card`);
@@ -354,12 +360,36 @@ for (const [id, timer] of [...timers]) {
 await new Promise((resolve) => setImmediate(resolve));
 assert.ok(calls.length > callsBeforeEvent, 'ubus event refresh did not call typed API');
 
-await panel.downloadReport();
+let releaseReport;
+reportGate = new Promise((resolve) => { releaseReport = resolve; });
+reportButton.click();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(reportButton.disabled, true, 'report button must lock during report creation');
+assert.equal(reportButton.getAttribute('aria-busy'), 'true');
+assert.ok(reportButton.querySelector('.sbox-spinner'), 'report button must show the shared spinner');
+assert.match(reportButton.textContent, /Creating/);
+releaseReport(); reportGate = null;
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(reportButton.disabled, false, 'report button must unlock after download');
+assert.equal(reportButton.getAttribute('aria-busy'), null);
+assert.equal(reportButton.textContent, 'Download diagnostic report');
 assert.deepEqual(calls.find((call) => call[0] === 'downloadChunks')?.slice(1),
 	['report', 'rpt_' + 'a'.repeat(32), { format: 'json' }]);
 assert.equal(createdUrls.length, 1);
 assert.equal(clickedDownloads[0].download, 'miclash-diagnostic-report.json');
 assert.deepEqual(revoked, [createdUrls[0].value], 'object URL must always be revoked');
+
+const failedReportButton = E('button', {}, 'Download diagnostic report');
+const failedReportPanel = moduleApi.create({ api: { ...api,
+	async createDiagnosticReport() { throw new Error('report failed'); },
+	destroy() {}
+}, document: documentMock, window: windowMock, pollInterval: 30000 });
+await assert.rejects(failedReportPanel.downloadReport(failedReportButton), /report failed/);
+assert.equal(failedReportButton.disabled, false, 'failed report must restore the button');
+assert.equal(failedReportButton.getAttribute('aria-busy'), null);
+assert.equal(failedReportButton.textContent, 'Download diagnostic report');
+failedReportPanel.destroy();
 
 panel.openRouteTest();
 let modal = modalCalls.at(-1);

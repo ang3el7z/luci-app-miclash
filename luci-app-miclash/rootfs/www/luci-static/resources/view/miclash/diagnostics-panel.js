@@ -258,14 +258,14 @@ function create(options) {
 		const button = E('button', { 'type': 'button',
 			'class': 'cbi-button cbi-button-neutral', 'data-action': action }, label);
 		button.addEventListener('click', () => {
-			if (action === 'download-report') downloadReport().catch(showError);
+			if (action === 'download-report') downloadReport(button).catch(showError);
 		});
 		return button;
 	}
 
 	function renderLoading() {
 		return E('div', { 'class': 'sbox-diagnostics-card-grid' }, [
-			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health' }, [
+			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health sbox-overview-components' }, [
 				E('h4', {}, _('Component status')),
 				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 4 })
 			]),
@@ -371,31 +371,47 @@ function create(options) {
 		return button;
 	}
 
-	async function downloadReport() {
+	async function downloadReport(button) {
 		if (destroyed) return;
-		const created = await api.createDiagnosticReport();
-		if (destroyed) return;
-		const id = created && created.id;
-		if (typeof id !== 'string' || !/^rpt_[0-9a-f]{32}$/.test(id)) {
-			const error = new Error(_('Invalid diagnostic report response'));
-			error.code = 'INVALID_RESPONSE';
-			throw error;
+		const originalLabel = button ? button.textContent : null;
+		const originalDisabled = button ? button.disabled : false;
+		if (button) {
+			button.disabled = true;
+			button.setAttribute('aria-busy', 'true');
+			button.replaceChildren(E('span', { 'class': 'sbox-spinner', 'aria-hidden': 'true' }),
+				' ' + _('Creating...'));
 		}
-		const payload = await api.downloadChunks('report', id, { format: 'json' });
-		if (destroyed) return;
-		const blob = new Blob([ payload ], { type: 'application/json;charset=utf-8' });
-		const url = win.URL.createObjectURL(blob);
-		objectUrls.add(url);
 		try {
-			const anchor = doc.createElement('a');
-			anchor.href = url;
-			anchor.download = 'miclash-diagnostic-report.json';
-			anchor.setAttribute('aria-hidden', 'true');
-			anchor.click();
-			anchor.remove();
+			const created = await api.createDiagnosticReport();
+			if (destroyed) return;
+			const id = created && created.id;
+			if (typeof id !== 'string' || !/^rpt_[0-9a-f]{32}$/.test(id)) {
+				const error = new Error(_('Invalid diagnostic report response'));
+				error.code = 'INVALID_RESPONSE';
+				throw error;
+			}
+			const payload = await api.downloadChunks('report', id, { format: 'json' });
+			if (destroyed) return;
+			const blob = new Blob([ payload ], { type: 'application/json;charset=utf-8' });
+			const url = win.URL.createObjectURL(blob);
+			objectUrls.add(url);
+			try {
+				const anchor = doc.createElement('a');
+				anchor.href = url;
+				anchor.download = 'miclash-diagnostic-report.json';
+				anchor.setAttribute('aria-hidden', 'true');
+				anchor.click();
+				anchor.remove();
+			} finally {
+				win.URL.revokeObjectURL(url);
+				objectUrls.delete(url);
+			}
 		} finally {
-			win.URL.revokeObjectURL(url);
-			objectUrls.delete(url);
+			if (button) {
+				button.disabled = originalDisabled;
+				button.removeAttribute('aria-busy');
+				button.replaceChildren(originalLabel || _('Download diagnostic report'));
+			}
 		}
 	}
 

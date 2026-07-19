@@ -15,10 +15,17 @@ if (/readConfigFileByName|readSubscriptionUrl/.test(loadBody))
 	throw new Error('YAML and subscription reads must not block the initial LuCI page load.');
 if (/getVersions|getMihomoStatus|detectCurrentProxyMode/.test(loadBody))
 	throw new Error('Initial runtime hydration must not duplicate system or settings RPC calls.');
+if (/loadOperationalSettings|system_info/.test(loadBody))
+	throw new Error('The initial LuCI shell must derive settings from status and defer system metadata.');
+if (!/readMiClashServiceState/.test(loadBody) || !/getNetworkInterfaces/.test(loadBody) ||
+	!/operationalSettingsFromTyped/.test(loadBody))
+	throw new Error('Initial LuCI load must use one status snapshot plus the interface inventory.');
 
 requirePattern(/render:\s*function\(data\)/, 'render() must return the page synchronously.');
 requirePattern(/async function hydrateConfigWorkspace\(/, 'Missing progressive config hydration.');
 requirePattern(/beginPageHydration\(/, 'Missing page hydration scheduler.');
+requirePattern(/hydrateSystemMetadata\(generation\)/,
+	'System versions must hydrate after the initial page shell is rendered.');
 requirePattern(/function beginPageHydration\(generation\)\s*\{\s*return Promise\.resolve\(\)/,
 	'Page hydration must return its readiness promise.');
 const renderBody = source.match(/render:\s*function\(data\)\s*\{([\s\S]*?)\n\t\treturn pageRoot;/)?.[1] || '';

@@ -43,10 +43,20 @@ assert.match(settings, /if \(!hydrated\)[\s\S]*Settings panel is still loading/,
 	'settings cannot collect false defaults before hydration');
 assert.match(settings, /Automatically close LuCI notifications/,
 	'notification auto-close wording is not user friendly');
-assert.match(settings, /Delivery channels/,
-	'notification delivery channels must be named explicitly');
 assert.match(settings, /Notification events/,
 	'notification event selection must be named explicitly');
+assert.match(settings, /'data-notification-tab': name/,
+	'notification tab buttons are missing');
+assert.match(settings, /'data-notification-pane': name/,
+	'notification tab panes are missing');
+assert.match(settings, /name \+ '_enabled'/,
+	'channel enabled state is not independently persisted');
+assert.match(settings, /name \+ '_events'/,
+	'channel events are not independently persisted');
+assert.doesNotMatch(settings, /sbox-notification-test-channel/,
+	'notification test still uses a global channel selector');
+assert.match(settings, /E\('span', \{ 'aria-hidden': 'true' \}, '\*'\)/,
+	'Telegram token reveal must have a visible star fallback');
 assert.doesNotMatch(settings, /Save management settings|data-action[^\n]*save/,
 	'management panel still owns a separate save button');
 assert.doesNotMatch(settings, /backup_outcome|Backup result/,
@@ -79,6 +89,12 @@ assert.match(css, /@media\s*\(max-width:\s*760px\)[\s\S]*\.sbox-settings-pair-gr
 	'settings cards lack the compact single-column layout');
 assert.match(config, /class="sbox-form-grid sbox-hwid-fields"[\s\S]{0,120}s\.enableHwid \? '' : ' hidden'/,
 	'HWID detail fields must stay hidden until the option is enabled');
+assert.match(css, /\.sbox-telegram-fields\s*\{[^}]*gap:\s*(?:10|11|12)px/s,
+	'Telegram credential fields need a consistent vertical gap');
+assert.match(css, /\.sbox-notification-tabs\s*\{/,
+	'notification channel tabs need an explicit layout');
+assert.doesNotMatch(settings, /(^|[^.\w])push\(children,/m,
+	'notification panel must append actions through the children array');
 
 const identity = (value) => String(value);
 const baseclass = { extend: (value) => value };

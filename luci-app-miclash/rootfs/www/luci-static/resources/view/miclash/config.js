@@ -1543,6 +1543,20 @@ function beginPageHydration(generation) {
 	});
 }
 
+async function hydrateSystemMetadata(generation) {
+	const system = await typedCall((api) => api.system_info());
+	if (generation !== pageGeneration || !pageRoot) return;
+	appState.versions = {
+		app: normalizeAppVersion(system?.app_version || 'unknown'),
+		clash: system?.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : 'unknown'
+	};
+	appState.kernelStatus = {
+		installed: system?.mihomo?.installed === true,
+		version: system?.mihomo?.installed ? String(system.mihomo.version || '') : null
+	};
+	updateHeaderAndControlDom();
+}
+
 function releaseConfigRuntime() {
 	pageGeneration++;
 	appState.configReady = false;
@@ -3115,10 +3129,13 @@ return view.extend({
 
 	load: function() {
 		return Promise.all([
-			loadOperationalSettings(),
-			getNetworkInterfaces(),
-			typedCall((api) => api.system_info()),
-			L.resolveDefault(readMiClashServiceState(), null)
+			L.resolveDefault(readMiClashServiceState(), null),
+			L.resolveDefault(getNetworkInterfaces(), [])
+		]).then(([ serviceState, interfaces ]) => [
+			view_miclash_settings_model.operationalSettingsFromTyped(serviceState?.desired || {}),
+			interfaces,
+			null,
+			serviceState
 		]);
 	},
 
@@ -3191,6 +3208,9 @@ return view.extend({
 		beginPageHydration(generation).finally(() => {
 			if (generation === pageGeneration && pageRoot && !document.hidden)
 				refreshReleaseMeta({ force: true }).catch(() => {});
+		});
+		hydrateSystemMetadata(generation).catch((error) => {
+			if (generation === pageGeneration) console.error('[MiClash] Failed to hydrate system metadata:', error);
 		});
 
 		return pageRoot;

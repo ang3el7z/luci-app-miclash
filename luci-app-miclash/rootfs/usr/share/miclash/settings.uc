@@ -61,8 +61,12 @@ const FIELDS = {
 	},
 	notifications: {
 		auto_hide: 'bool',
-		channels: 'notification_channels',
-		events: 'notification_events'
+		syslog_enabled: 'bool',
+		syslog_events: 'notification_events',
+		luci_enabled: 'bool',
+		luci_events: 'notification_events',
+		telegram_enabled: 'bool',
+		telegram_events: 'notification_events'
 	},
 	meta: { schema_version: 'schema_version' }
 };
@@ -93,7 +97,7 @@ function defaults() {
 		},
 		guard: { enabled: false, auto_fakeip_whitelist: true },
 		memory: {
-			enabled: false, sample_interval_ms: 60000, sustained_samples: 5,
+			enabled: true, sample_interval_ms: 60000, sustained_samples: 5,
 			warmup_ms: 900000, baseline_samples: 6, anomaly_percent: 150,
 			anomaly_growth_kb: 16384, reserve_percent: 10, reserve_min_kb: 16384,
 			reserve_max_kb: 65536, drop_percent: 10, drop_min_kb: 8192,
@@ -110,10 +114,18 @@ function defaults() {
 		telegram: { enabled: false, token: '', user_id: '' },
 		notifications: {
 			auto_hide: true,
-			channels: [ 'syslog', 'luci', 'telegram' ],
-			events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
+			syslog_enabled: true,
+			syslog_events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 				'direct_fallback', 'memory_action', 'memory_outcome',
-				'subscription_outcome', 'update_outcome', 'internet_restored' ]
+				'subscription_outcome', 'update_outcome', 'internet_restored' ],
+			luci_enabled: true,
+			luci_events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
+				'direct_fallback', 'memory_action', 'memory_outcome',
+				'subscription_outcome', 'update_outcome', 'internet_restored' ],
+			telegram_enabled: false,
+			telegram_events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
+				'direct_fallback', 'memory_outcome', 'subscription_outcome',
+				'update_outcome', 'internet_restored' ]
 		},
 		meta: { schema_version: 1 }
 	};
@@ -303,6 +315,26 @@ function load_cursor(uci) {
 				continue;
 			result[section][option] = normalize(kind, stored, result[section][option], false);
 		}
+	let profile_options = [ 'syslog_enabled', 'syslog_events', 'luci_enabled',
+		'luci_events', 'telegram_enabled', 'telegram_events' ];
+	let has_profiles = false;
+	for (let option in profile_options)
+		if (uci.get(CONFIG, 'notifications', option) != null) {
+			has_profiles = true;
+			break;
+		}
+	if (!has_profiles) {
+		let stored_channels = uci.get(CONFIG, 'notifications', 'channels');
+		let stored_events = uci.get(CONFIG, 'notifications', 'events');
+		if (stored_channels != null || stored_events != null) {
+			let channels = normalize('notification_channels', stored_channels ?? '', [], false);
+			let events = normalize('notification_events', stored_events ?? '', [], false);
+			for (let channel in [ 'syslog', 'luci', 'telegram' ]) {
+				result.notifications[channel + '_enabled'] = index(channels, channel) >= 0;
+				result.notifications[channel + '_events'] = [ ...events ];
+			}
+		}
+	}
 	return result;
 };
 

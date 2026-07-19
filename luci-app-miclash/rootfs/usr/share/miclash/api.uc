@@ -626,7 +626,7 @@ export function method_table(app, transfers) {
 		}),
 		settings_get: method(empty, (arguments) => {
 			exact(arguments, {});
-			return redact.value('settings', app.settings_get());
+			return redact.sanitize(app.settings_get());
 		}),
 		settings_set: method({ settings: {}, source: '' }, (arguments) => {
 			exact(arguments, {

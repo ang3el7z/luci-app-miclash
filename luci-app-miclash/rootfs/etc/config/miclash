@@ -23,7 +23,7 @@ config guard 'guard'
 	option auto_fakeip_whitelist '1'
 
 config memory 'memory'
-	option enabled '0'
+	option enabled '1'
 
 config updates 'updates'
 	option auto_subscription '1'

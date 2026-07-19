@@ -24,10 +24,16 @@ let service = {
 		return { ok: true };
 	}
 };
+function notification_value(auto_hide) {
+	return { auto_hide,
+		syslog_enabled: true, syslog_events: [ 'failure' ],
+		luci_enabled: false, luci_events: [ 'recovery' ],
+		telegram_enabled: false, telegram_events: [ 'internet_restored' ] };
+};
 let settings_value = {
 	core: { proxy_mode: 'tproxy' },
 	memory: { enabled: false, sample_interval_ms: 60000 },
-	notifications: { channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: true },
+	notifications: notification_value(true),
 	telegram: { enabled: false, token: '', user_id: '' }
 };
 let validated = 0, saved = 0, fail_save = false;
@@ -82,7 +88,7 @@ let devices = {
 	timezones: () => [ 'UTC', 'Europe/Berlin' ]
 };
 let notifications = {
-	settings: () => ({ channels: [ 'syslog' ], events: [ 'failure' ] }),
+	settings: () => notification_value(true),
 	test: (channel) => channel == 'syslog',
 	list: (arguments) => ({ generation: 'ng_00000000000000000000000000000001',
 		cursor: arguments.cursor, stale: false, events: [], has_more: false }),
@@ -114,7 +120,7 @@ assert_equal(app.notifications_list({ generation: null, cursor: 0, limit: 10 }).
 assert_equal(app.devices_list()[0].mac, 'aa:bb:cc:dd:ee:ff');
 assert_equal(app.devices_policy_list()[0].revision, 1);
 assert_equal(app.devices_timezones()[1], 'Europe/Berlin');
-assert_equal(app.notifications_settings().channels[0], 'syslog');
+assert_equal(app.notifications_settings().syslog_enabled, true);
 assert_equal(app.notifications_test({ channel: 'syslog' }).sent, true);
 assert_equal(app.notifications_test({ channel: 'telegram' }).sent, false);
 
@@ -173,7 +179,9 @@ assert_equal(memory_setting.id, submitted[length(submitted) - 1].record.id);
 assert_equal(management_calls[length(management_calls) - 1][0], 'memory.configure');
 
 let notification_setting = app.settings_set({ notifications: {
-	channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: false
+	syslog_enabled: true, syslog_events: [ 'failure' ],
+	luci_enabled: false, luci_events: [ 'recovery' ],
+	telegram_enabled: false, telegram_events: [ 'internet_restored' ], auto_hide: false
 } }, 'luci');
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(notification_setting.id, submitted[length(submitted) - 1].record.id);
@@ -189,7 +197,7 @@ fail_save = false;
 let atomic_value = {
 	core: { proxy_mode: 'tproxy' },
 	memory: { enabled: false, sample_interval_ms: 60000 },
-	notifications: { channels: [ 'syslog' ], events: [ 'failure' ], auto_hide: true },
+	notifications: notification_value(true),
 	telegram: { enabled: false, token: '', user_id: '' }
 };
 let atomic_set_calls = 0, fail_memory_prepare = false, fail_notify_prepare = false;

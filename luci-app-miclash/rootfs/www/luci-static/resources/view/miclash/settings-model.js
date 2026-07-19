@@ -282,9 +282,7 @@ function normalizeAutoUpdateIntervalHours(value) {
 	return parsed > 0 ? String(parsed) : '4';
 }
 
-async function loadOperationalSettings() {
-	try {
-		const source = await withApi((api) => api.settings_get());
+function operationalSettingsFromTyped(source) {
 		const settings = defaultOperationalSettings();
 		const core = source?.core || {}, interfaces = source?.interfaces || {};
 		const updates = source?.updates || {}, memory = source?.memory || {};
@@ -313,6 +311,11 @@ async function loadOperationalSettings() {
 		settings.hwidDeviceOS = String(core.hwid_device_os || 'OpenWrt');
 		settings.internetOnlyMiclash = source?.guard?.enabled === true;
 		return settings;
+	}
+
+async function loadOperationalSettings() {
+	try {
+		return operationalSettingsFromTyped(await withApi((api) => api.settings_get()));
 	} catch (e) {
 		return defaultOperationalSettings();
 	}
@@ -424,6 +427,7 @@ return L.Class.extend({
 	getNetworkInterfaces: getNetworkInterfaces,
 	transformProxyMode: transformProxyMode,
 	detectCurrentProxyMode: detectCurrentProxyMode,
+	operationalSettingsFromTyped: operationalSettingsFromTyped,
 	loadOperationalSettings: loadOperationalSettings,
 	loadInterfacesByMode: loadInterfacesByMode,
 	detectLanBridge: detectLanBridge,

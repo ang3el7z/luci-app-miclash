@@ -97,6 +97,7 @@ function create(options) {
 	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
 		dirty = false, retryMs = POLL_MS;
 	let hydrated = false;
+	let notificationTab = 'syslog';
 	let state = { desired: {}, memory: {}, memorySettings: {}, telegram: {}, telegramSettings: {}, notifications: {} };
 	const cancels = new Set();
 
@@ -179,24 +180,20 @@ function create(options) {
 		const tokenInput = E('input', { 'id': 'sbox-telegram-token', 'type': 'password', 'class': 'cbi-input-text',
 			'value': configured ? MASK : '', 'autocomplete': 'new-password' });
 		const reveal = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral sbox-secret-reveal',
-			'data-action': 'telegram-token-reveal', 'aria-label': _('Show token'), 'aria-pressed': 'false' }, [
-			E('svg', { 'viewBox': '0 0 24 24', 'aria-hidden': 'true', 'focusable': 'false' }, [
-				E('path', { 'd': 'M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6' }),
-				E('circle', { 'cx': '12', 'cy': '12', 'r': '2.6' })
-			])
-		]);
+			'data-action': 'telegram-token-reveal', 'aria-label': _('Show token'), 'aria-pressed': 'false' },
+			[ E('span', { 'aria-hidden': 'true' }, '*') ]);
 		const tokenField = E('div', { 'class': 'sbox-management-field' }, [
 			E('label', { 'for': 'sbox-telegram-token' }, _('BotFather token')),
 			E('div', { 'class': 'sbox-secret-input' }, [ tokenInput, reveal ])
 		]);
+		const userField = field('sbox-telegram-user-id', _('Allowed Telegram user ID'), E('input', { 'type': 'text',
+			'class': 'cbi-input-text', 'value': userId, 'inputmode': 'numeric', 'autocomplete': 'off' }));
 		return E('section', { 'class': 'sbox-integration-pane sbox-telegram-pane', 'data-panel': 'telegram' }, [
 			E('h4', {}, _('Telegram')),
 			check('sbox-telegram-enabled', _('Enable Telegram control'), desired.enabled === true),
 			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
 				status.running === true ? _('Poller is running') : _('Poller is stopped')),
-			tokenField,
-			field('sbox-telegram-user-id', _('Allowed Telegram user ID'), E('input', { 'type': 'text',
-				'class': 'cbi-input-text', 'value': userId, 'inputmode': 'numeric', 'autocomplete': 'off' })),
+			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField ]),
 			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Send test'), 'telegram-test') ])
 		]);
 	}
@@ -209,32 +206,54 @@ function create(options) {
 
 	function notificationSection() {
 		const desired = state.desired.notifications || {}, runtime = state.notifications || {};
-		const channels = Array.isArray(desired.channels) ? desired.channels :
-			(Array.isArray(runtime.channels) ? runtime.channels : KNOWN_CHANNELS);
-		const events = Array.isArray(desired.events) ? desired.events :
-			(Array.isArray(runtime.events) ? runtime.events : KNOWN_EVENTS);
-		const channelNodes = KNOWN_CHANNELS.map((name) => check('sbox-notify-channel-' + name, name,
-			channels.includes(name), 'channel', name));
-		const eventNodes = KNOWN_EVENTS.map((name) => check('sbox-notify-event-' + name, EVENT_LABELS[name](),
-			events.includes(name), 'event', name));
-		const select = E('select', { 'id': 'sbox-notification-test-channel', 'class': 'cbi-input-select',
-			'aria-label': _('Delivery channels') },
-			KNOWN_CHANNELS.map((name) => E('option', { 'value': name }, name)));
+		const channelLabel = (name) => name === 'luci' ? _('LuCI') : name === 'telegram' ? _('Telegram') : 'syslog';
+		const tabs = KNOWN_CHANNELS.map((name) => E('button', {
+			'type': 'button',
+			'class': 'cbi-button sbox-notification-tab' + (notificationTab === name ? ' is-active' : ''),
+			'role': 'tab',
+			'id': 'sbox-notification-tab-' + name,
+			'data-notification-tab': name,
+			'aria-controls': 'sbox-notification-pane-' + name,
+			'aria-selected': notificationTab === name ? 'true' : 'false'
+		}, channelLabel(name)));
+		const panes = KNOWN_CHANNELS.map((name) => {
+			const configured = desired[name + '_enabled'] ?? runtime[name + '_enabled'];
+			const selected = Array.isArray(desired[name + '_events']) ? desired[name + '_events'] :
+				(Array.isArray(runtime[name + '_events']) ? runtime[name + '_events'] : []);
+			const enabled = check('sbox-notify-enabled-' + name, _('Enabled'), configured === true,
+				'notification-enabled', name);
+			const events = KNOWN_EVENTS.map((event) => {
+				const node = check('sbox-notify-' + name + '-' + event, EVENT_LABELS[event](),
+					selected.includes(event), 'notification-event', event);
+				const input = node.querySelector('input');
+				if (input) input.setAttribute('data-notification-channel', name);
+				return node;
+			});
+			const test = action(_('Send test'), 'notification-test');
+			test.setAttribute('data-notification-test', name);
+			const children = [
+				enabled,
+				E('h5', {}, _('Notification events')),
+				E('div', { 'class': 'sbox-management-switches sbox-notification-event-grid' }, events)
+			];
+			if (name === 'luci')
+				children.splice(1, 0, check('sbox-notification-auto-hide',
+					_('Automatically close LuCI notifications'), desired.auto_hide !== false));
+			children.push(E('div', { 'class': 'sbox-management-actions' }, [ test ]));
+			return E('section', {
+				'class': 'sbox-notification-pane',
+				'role': 'tabpanel',
+				'id': 'sbox-notification-pane-' + name,
+				'data-notification-pane': name,
+				'aria-labelledby': 'sbox-notification-tab-' + name,
+				'hidden': notificationTab === name ? null : 'hidden'
+			}, children);
+		});
 		return E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-notifications-card sbox-management-card sbox-management-wide',
 			'data-panel': 'notifications' }, [
 			E('h4', {}, _('Notifications')),
-			check('sbox-notification-auto-hide', _('Automatically close LuCI notifications'), desired.auto_hide !== false),
-			E('div', { 'class': 'sbox-notification-layout' }, [
-				E('div', { 'class': 'sbox-notification-group sbox-notification-channels' }, [
-					E('h5', {}, _('Delivery channels')),
-					E('div', { 'class': 'sbox-management-switches' }, channelNodes),
-					E('div', { 'class': 'sbox-management-actions' }, [ select, action(_('Send test'), 'notification-test') ])
-				]),
-				E('div', { 'class': 'sbox-notification-group sbox-notification-events' }, [
-					E('h5', {}, _('Notification events')),
-					E('div', { 'class': 'sbox-management-switches' }, eventNodes)
-				])
-			])
+			E('div', { 'class': 'sbox-notification-tabs', 'role': 'tablist' }, tabs),
+			...panes
 		]);
 	}
 	function loadingPane(title) {
@@ -278,11 +297,6 @@ function create(options) {
 		const telegram = host.querySelector('[data-telegram-status="running"]');
 		if (telegram) telegram.textContent = state.telegram?.running === true ? _('Poller is running') : _('Poller is stopped');
 	}
-	function checked(group) {
-		return Array.from(host.querySelectorAll('[data-' + group + ']')).filter((input) => input.checked)
-			.map((input) => input.getAttribute('data-' + group)).filter((item) =>
-				(group === 'event' ? KNOWN_EVENTS : KNOWN_CHANNELS).includes(item));
-	}
 	function formPatch() {
 		const memory = { enabled: !!host.querySelector('#sbox-management-memory-enabled')?.checked };
 		for (const [ name, bounds ] of Object.entries(MEMORY_FIELDS)) {
@@ -304,10 +318,19 @@ function create(options) {
 			throw new Error(_('Enabling Telegram requires a BotFather token and exact user ID.'));
 		const telegram = { enabled, user_id: userId };
 		if (token !== MASK) telegram.token = token;
-		return { memory, telegram, notifications: {
-			auto_hide: !!host.querySelector('#sbox-notification-auto-hide')?.checked,
-			channels: checked('channel'), events: checked('event')
-		} };
+		const notifications = {
+			auto_hide: !!host.querySelector('#sbox-notification-auto-hide')?.checked
+		};
+		for (const channel of KNOWN_CHANNELS) {
+			notifications[channel + '_enabled'] =
+				!!host.querySelector('[data-notification-enabled="' + channel + '"]')?.checked;
+			notifications[channel + '_events'] = Array.from(host.querySelectorAll(
+				'[data-notification-channel="' + channel + '"][data-notification-event]'))
+				.filter((input) => input.checked)
+				.map((input) => input.getAttribute('data-notification-event'))
+				.filter((event) => KNOWN_EVENTS.includes(event));
+		}
+		return { memory, telegram, notifications };
 	}
 	function collectPatch() {
 		if (!host || destroyed) throw new Error(_('Settings panel is not available.'));
@@ -335,6 +358,19 @@ function create(options) {
 			input.addEventListener('input', markDirty);
 			input.addEventListener('change', markDirty);
 		}
+		for (const tab of host.querySelectorAll('[data-notification-tab]'))
+			tab.addEventListener('click', () => {
+				const selected = tab.getAttribute('data-notification-tab');
+				if (!KNOWN_CHANNELS.includes(selected)) return;
+				notificationTab = selected;
+				for (const button of host.querySelectorAll('[data-notification-tab]')) {
+					const active = button.getAttribute('data-notification-tab') === selected;
+					button.classList.toggle('is-active', active);
+					button.setAttribute('aria-selected', active ? 'true' : 'false');
+				}
+				for (const pane of host.querySelectorAll('[data-notification-pane]'))
+					pane.hidden = pane.getAttribute('data-notification-pane') !== selected;
+			});
 		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () =>
 			withBusy(button, async () => {
 				const actionName = button.getAttribute('data-action');
@@ -366,7 +402,7 @@ function create(options) {
 					if (reply?.sent !== true) throw new Error(_('Telegram test message was not sent.'));
 				}
 				else if (actionName === 'notification-test') {
-					const channel = host.querySelector('#sbox-notification-test-channel')?.value;
+					const channel = button.getAttribute('data-notification-test');
 					if (!KNOWN_CHANNELS.includes(channel)) throw new Error(_('Invalid notification channel.'));
 					await saveBeforeTest();
 					const reply = await api.testNotification(channel);

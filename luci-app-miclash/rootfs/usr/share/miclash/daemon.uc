@@ -10,6 +10,7 @@ import * as api from 'miclash.api';
 import * as memory from 'miclash.memory';
 import * as devices from 'miclash.devices';
 import * as notify from 'miclash.notify';
+import * as notification_settings from 'miclash.notification-settings';
 import * as telegram from 'miclash.telegram';
 import * as mutation_lock from 'miclash.mutation_lock';
 import * as reconcile_adapter from 'miclash.reconcile-adapter';
@@ -68,20 +69,6 @@ function utc_timezones(injected) {
 			name: 'UTC', from: 0, until: 4102444800,
 			initial_offset: 0, transitions: []
 		} : null
-	};
-};
-
-function notification_config(settings) {
-	if (type(settings) != 'object' || type(settings.channels) != 'array' ||
-	    type(settings.events) != 'array') errors.fail('INVALID_ARGUMENT');
-	let syslog = index(settings.channels, 'syslog') >= 0;
-	let luci = index(settings.channels, 'luci') >= 0;
-	return {
-		dedupe_window_ms: 60000,
-		syslog: { enabled: syslog, minimum_severity: 'info',
-			types: clone(settings.events), components: [] },
-		luci: { enabled: luci, channel: 'miclash.notification', minimum_severity: 'info',
-			types: clone(settings.events), components: [] }
 	};
 };
 
@@ -400,7 +387,7 @@ export function compose(runtime, overrides) {
 
 	let modules = {
 		operations, settings, storage, service, config, state, application,
-		api, memory, devices, notify, telegram, mutation_lock,
+		api, memory, devices, notify, notification_settings, telegram, mutation_lock,
 		reconcile_adapter, network, subscription, updates, http, diagnostics, route_test, routing,
 		mihomo_api, app_update_scheduler, device_vendor_update,
 		...(overrides ?? {})
@@ -457,7 +444,8 @@ export function compose(runtime, overrides) {
 				clock: runtime.clock, events: runtime.events
 			});
 		let notification_settings = clone(desired.notifications);
-		let notifier = modules.notify.create(runtime, notification_config(notification_settings));
+		let notifier = modules.notify.create(runtime,
+			modules.notification_settings.notifier_config(notification_settings));
 		let producer = modules.notify.producer(runtime);
 		let telegram_controller = null, telegram_channel_unsubscribe = null;
 		let lifecycle_unsubscribe = null;
@@ -482,18 +470,18 @@ export function compose(runtime, overrides) {
 				try { telegram_channel_unsubscribe(); } catch (error) {}
 				telegram_channel_unsubscribe = null;
 			}
-			if (notifications_closed || telegram_controller == null ||
-			    index(notification_settings.channels, 'telegram') < 0)
+			let configured = modules.notification_settings.telegram_config(notification_settings);
+			if (notifications_closed || telegram_controller == null || !configured.enabled)
 				return false;
 			let channel = modules.notify.telegram_channel(telegram_controller);
-			channel.types = clone(notification_settings.events);
+			channel.types = clone(configured.types);
 			telegram_channel_unsubscribe = notifier.subscribe(channel);
 			return true;
 		};
 		function prepare_notification_settings(next) {
 			if (notifications_closed) errors.fail('HEALTH_FAILED');
 			let configured = clone(next);
-			let notifier_settings = notification_config(configured);
+			let notifier_settings = modules.notification_settings.notifier_config(configured);
 			if (type(notifier.prepare) == 'function')
 				notifier_settings = notifier.prepare(notifier_settings);
 			return { settings: configured, notifier: notifier_settings };
