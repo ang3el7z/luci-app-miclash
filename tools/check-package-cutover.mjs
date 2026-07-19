@@ -73,8 +73,8 @@ requireMatch(runtime, /logger_adapter\(\)[\s\S]*\/usr\/bin\/logger[\s\S]*-t[\s\S
 requireMatch(runtime, /capture\('\/sbin\/ip -j '/,
 	'device observation must use the OpenWrt 24/25 ip-full path');
 forbid(runtime, /\/usr\/sbin\/ip/, 'device observation still uses a missing OpenWrt 25 path');
-requireMatch(daemon, /\/sbin\/logread -l 1000[\s\S]*\/bin\/grep -E/,
-	'LuCI logs must read a bounded, source-filtered syslog tail');
+requireMatch(daemon, /\/sbin\/logread 2>\/dev\/null[\s\S]*miclash\|mihomo\|clash/,
+	'LuCI logs must scan the complete ring through the source allowlist');
 const observeStart = nft.indexOf('export function observe(runtime)');
 const observeEnd = nft.indexOf('function write_all', observeStart);
 forbid(nft.slice(observeStart, observeEnd), /runtime\.process\.run/,

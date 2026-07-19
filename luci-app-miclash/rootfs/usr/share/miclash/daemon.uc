@@ -83,12 +83,12 @@ function memory_options(settings) {
 	return result;
 };
 
-function bounded_logs(runtime) {
+export function bounded_logs(runtime) {
 	let popen = runtime.fs?.popen ?? require('fs').popen;
 	if (type(popen) != 'function') return '';
 	let pipe = null, output = '';
 	try {
-		pipe = popen("/sbin/logread -l 1000 2>/dev/null | /bin/grep -E '(^|[[:space:]])(miclash|clash(-rules|-hotplug)?)(\\[[0-9]+\\])?:[[:space:]]'", 'r');
+		pipe = popen("/sbin/logread 2>/dev/null | /bin/grep -E '(^|[[:space:]])(miclash|mihomo|clash(-rules|-hotplug)?)(\\[[0-9]+\\])?:[[:space:]]'", 'r');
 		if (pipe == null) return '';
 		while (true) {
 			let chunk = pipe.read(4096);
@@ -102,10 +102,10 @@ function bounded_logs(runtime) {
 	if (pipe != null) try { pipe.close(); } catch (error) { output = ''; }
 	let selected = [];
 	for (let line in split(output, '\n'))
-		if (match(lc(line), /(^|[ \t])(clash(-rules|-hotplug)?|miclash)(\[[0-9]+\])?:[ \t]/))
+		if (match(lc(line), /(^|[ \t])(clash(-rules|-hotplug)?|miclash|mihomo)(\[[0-9]+\])?:[ \t]/))
 			push(selected, substr(redact.sanitize(line), 0, 2048));
-	if (length(selected) > 200)
-		selected = slice(selected, length(selected) - 200);
+	if (length(selected) > 1000)
+		selected = slice(selected, length(selected) - 1000);
 	return join('\n', selected);
 };
 

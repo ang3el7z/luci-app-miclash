@@ -56,11 +56,12 @@ function offset_identity(runtime, authority) {
 	let identity = runtime.fs.lstat(path);
 	if (identity == null)
 		return null;
+	// OpenWrt overlayfs may expose the parent directory and regular files on
+	// different st_dev values. Authenticate the fixed path and the file itself;
+	// same_file() below still detects replacement during reads and writes.
 	if (identity.type != 'file' || identity.mode != 0o600 || identity.nlink != 1 ||
 	    (identity.uid != null && identity.uid != 0) ||
-	    runtime.fs.realpath(path) != path ||
-	    identity.dev?.major != authority.dev?.major ||
-	    identity.dev?.minor != authority.dev?.minor)
+	    runtime.fs.realpath(path) != path)
 		corrupt();
 	return identity;
 };

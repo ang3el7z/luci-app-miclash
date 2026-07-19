@@ -41,6 +41,9 @@ assert.equal(critLog.levelClass, 'sbox-log-level-crit');
 const fatalLog = logs.formatLine('daemon.fatal miclash[123]: fatal failure');
 assert.equal(fatalLog.level, 'FATAL', 'critical aliases must retain their original labels');
 assert.equal(fatalLog.levelClass, 'sbox-log-level-fatal');
+const mihomoLog = logs.formatLine('daemon.info mihomo[456]: core ready');
+assert.equal(mihomoLog.daemon, 'mihomo', 'Mihomo syslog source must remain visible');
+assert.equal(mihomoLog.message, 'core ready');
 
 const styleSource = fs.readFileSync(`${root}/style.css`, 'utf8');
 assert.match(styleSource,

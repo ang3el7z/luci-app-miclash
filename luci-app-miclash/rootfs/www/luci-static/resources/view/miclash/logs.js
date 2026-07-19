@@ -3,8 +3,8 @@
 'require view.miclash.utils';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const SYSLOG_APP_RE = /\w+\.(\w+)\s+((?:clash(?:-rules|-hotplug)?)|miclash)(?:\[\d+\])?:\s*(.*)$/;
-const LOG_FILTER_RE = /\b(?:clash(?:-rules|-hotplug)?|miclash)(?:\[\d+\])?:/i;
+const SYSLOG_APP_RE = /\w+\.(\w+)\s+((?:clash(?:-rules|-hotplug)?)|miclash|mihomo)(?:\[\d+\])?:\s*(.*)$/;
+const LOG_FILTER_RE = /\b(?:clash(?:-rules|-hotplug)?|miclash|mihomo)(?:\[\d+\])?:/i;
 
 async function readRaw() {
 	const api = view_miclash_api.create();

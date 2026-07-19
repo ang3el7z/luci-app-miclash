@@ -317,6 +317,18 @@ let recreated_controller = telegram.create(recreated.app);
 assert_equal(recreated_controller.poll_once(), true);
 assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=0/);
 
+// OpenWrt overlayfs may report the private directory and a regular file inside it
+// on different st_dev values. The fixed path and file identity remain authoritative.
+let overlay = environment();
+overlay.filesystem.set_device('/etc/miclash', 20);
+overlay.filesystem.on_rename = (from, to) => {
+	if (to == offset_path) overlay.filesystem.set_device(to, 21);
+};
+let overlay_controller = telegram.create(overlay.app);
+assert_equal(overlay_controller.handle_update(update(703, '/status')), true);
+assert_equal(overlay_controller.status().last_update_id, 703);
+assert_equal(json(overlay.filesystem.readfile(offset_path)).last_update_id, 703);
+
 // Simulated reboot clears /var/run but preserves flash state; an approved reboot update
 // is still at-most-once and cannot submit a second system operation after boot.
 let before_reboot = environment();
