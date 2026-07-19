@@ -680,7 +680,9 @@ function install_kernel(app, candidate, resolved, ctx, transaction) {
 			verify_binary(runtime, authority, candidate.hash);
 		}
 		prune_previous(runtime, previous_id, authority);
-		return { previous_id, sha256: candidate.hash };
+		return { previous_id, sha256: candidate.hash,
+			service_was_running: observed.running,
+			postcheck: observed.running ? 'ready' : 'stopped' };
 	}
 	catch (error) {
 		let original = errors.normalize(error).code;
@@ -733,7 +735,8 @@ function prepare_installer(runtime, resolved) {
 };
 
 
-function consume_handoff(runtime, authority, path, token, expected_version, started_at) {
+function consume_handoff(runtime, authority, path, token, expected_version,
+    service_was_running, started_at) {
 	verify_authority(runtime, authority);
 	let before = runtime.fs.lstat(path);
 	if (before?.type != 'file' || before.nlink != 1 ||
@@ -746,12 +749,14 @@ function consume_handoff(runtime, authority, path, token, expected_version, star
 	    runtime.fs.realpath(path) != path)
 		errors.fail('INTERNAL');
 	let lines = split(body, '\n');
-	if (length(lines) != 7 || lines[6] != '' ||
+	if (length(lines) != 9 || lines[8] != '' ||
 	    lines[0] != 'protocol=miclash-update-status-v1' ||
 	    lines[1] != 'token=' + token || lines[2] != 'state=success' ||
-	    lines[3] != 'phase=done' || lines[4] != 'target_version=' + expected_version)
+	    lines[3] != 'phase=done' || lines[4] != 'target_version=' + expected_version ||
+	    lines[5] != 'service_was_running=' + (service_was_running ? '1' : '0') ||
+	    lines[6] != 'postcheck=pending')
 		errors.fail('INTERNAL');
-	let found = match(lines[5], /^updated_at=([0-9]+)$/);
+	let found = match(lines[7], /^updated_at=([0-9]+)$/);
 	let updated = found == null ? null : int(found[1]);
 	let now = int(runtime.clock.now() / 1000);
 	if (updated == null || updated < started_at || updated > now + 300)
@@ -759,6 +764,29 @@ function consume_handoff(runtime, authority, path, token, expected_version, star
 	verify_authority(runtime, authority);
 	return { path, identity: after, authority, mode: 0o600,
 		hash: runtime.digest.sha256(body) };
+};
+
+function restore_service_intent(app, was_running) {
+	let observed = observed_service(app);
+	if (was_running) {
+		if (!observed.running)
+			app.service.start('config.yaml');
+		if (app.service.wait_ready(app.runtime.clock.now() + 15000,
+		    'config.yaml', {})?.ok !== true)
+			errors.fail('HEALTH_FAILED');
+		if (!observed_service(app).running)
+			errors.fail('HEALTH_FAILED');
+		return 'ready';
+	}
+	if (observed.running) {
+		app.service.stop('config.yaml');
+		if (app.service.wait_ready(app.runtime.clock.now() + 5000,
+		    'config.yaml', { stopped: true })?.ok !== true)
+			errors.fail('HEALTH_FAILED');
+	}
+	if (observed_service(app).running)
+		errors.fail('HEALTH_FAILED');
+	return 'stopped';
 };
 
 export function create(app) {
@@ -771,6 +799,7 @@ export function create(app) {
 	let last = { state: 'idle', kind: null, stage: 'idle', operation_id: null,
 		version: null, sha256: null, published_checksum_verified: null,
 		previous_id: null, error_code: null, applied: null, recovery_state: null,
+		expected_version: null, service_was_running: null, postcheck: null,
 		updated_at: app.runtime.clock.now() };
 	function set_status(value) { last = value; };
 	function configured_channel(kind, requested) {
@@ -818,11 +847,14 @@ export function create(app) {
 				candidate = null;
 				set_status({ state: 'success', kind: 'mihomo', stage: 'done',
 					operation_id: ctx.id, version: resolved.version,
+					expected_version: resolved.version,
 					sha256: installed.sha256,
 					published_checksum_verified: candidate?.published_checksum_verified ??
 						(resolved.checksum_url != null),
 					previous_id: installed.previous_id, error_code: null,
 					applied: true, recovery_state: 'not_needed',
+					service_was_running: installed.service_was_running,
+					postcheck: installed.postcheck,
 					updated_at: app.runtime.clock.now() });
 			}
 			catch (error) {
@@ -837,11 +869,13 @@ export function create(app) {
 				}
 				set_status({ state: 'failure', kind: 'mihomo', stage: transaction.stage,
 					operation_id: ctx.id, version: resolved?.version ?? requested,
+					expected_version: resolved?.version ?? requested,
 					sha256: transaction.sha256,
 					published_checksum_verified: null,
 					previous_id: installed?.previous_id ?? null,
 					error_code: normalized.code, applied: transaction.applied,
 					recovery_state: transaction.recovery_state,
+					service_was_running: null, postcheck: 'failed',
 					updated_at: app.runtime.clock.now() });
 				ctx.complete(normalized);
 				return false;
@@ -869,19 +903,24 @@ export function create(app) {
 				installed = install_kernel(app, candidate, { version: null }, ctx, transaction);
 				set_status({ state: 'success', kind: 'mihomo', stage: 'done',
 					operation_id: ctx.id, version: null, sha256: installed.sha256,
+					expected_version: null,
 					published_checksum_verified: null,
 					previous_id: installed.previous_id, error_code: null,
 					applied: true, recovery_state: 'not_needed',
+					service_was_running: installed.service_was_running,
+					postcheck: installed.postcheck,
 					updated_at: app.runtime.clock.now() });
 			}
 			catch (error) {
 				let normalized = errors.normalize(error);
 				set_status({ state: 'failure', kind: 'mihomo', stage: transaction.stage,
 					operation_id: ctx.id, version: null,
+					expected_version: null,
 					sha256: transaction.sha256,
 					published_checksum_verified: null, previous_id: id,
 					error_code: normalized.code, applied: transaction.applied,
 					recovery_state: transaction.recovery_state,
+					service_was_running: null, postcheck: 'failed',
 					updated_at: app.runtime.clock.now() });
 				ctx.complete(normalized);
 				return false;
@@ -898,6 +937,7 @@ export function create(app) {
 		return app.operations.submit('updates.miclash', source, {}, (ctx) => {
 			let candidate = null, handoff = null, resolved = null;
 			let applied_hash = null, published = null;
+			let service_was_running = null, postcheck = null;
 			let transaction = { applied: false, recovery_state: 'not_started',
 				stage: 'verification' };
 			try {
@@ -907,6 +947,7 @@ export function create(app) {
 					errors.fail('NOT_FOUND');
 				ctx.stage('verification', 45, 'verification');
 				candidate = prepare_installer(app.runtime, resolved);
+				service_was_running = observed_service(app).running;
 				let token = app.runtime.random.hex(16);
 				if (type(token) != 'string' || !match(token, /^[0-9a-f]{32}$/))
 					errors.fail('INTERNAL');
@@ -922,14 +963,18 @@ export function create(app) {
 				let reply = run_checked(app.runtime, candidate.shell,
 					{ command: BUSYBOX, args: [
 					'ash', candidate.path, 'app', '--target-tag', resolved.version,
-					'--mode', 'update', '--status-file', handoff_path, '--token', token
+					'--mode', 'update', '--status-file', handoff_path, '--token', token,
+					'--service-was-running', service_was_running ? '1' : '0'
 				], timeout_ms: 600000 }, [ candidate ]);
 				if (!response_ok(reply))
 					errors.fail('HEALTH_FAILED');
 				handoff = consume_handoff(app.runtime, candidate.authority,
 					handoff_path, token,
-					resolved.version, handoff_started);
+					resolved.version, service_was_running, handoff_started);
 				transaction.applied = true;
+				transaction.stage = 'postcheck';
+				ctx.stage('postcheck', 90, 'postcheck');
+				postcheck = restore_service_intent(app, service_was_running);
 				transaction.stage = 'cleanup';
 				applied_hash = candidate.hash;
 				published = candidate.published_checksum_verified;
@@ -939,9 +984,11 @@ export function create(app) {
 				candidate = null;
 				set_status({ state: 'success', kind: 'miclash', stage: 'done',
 					operation_id: ctx.id, version: resolved.version, sha256: applied_hash,
+					expected_version: resolved.version,
 					published_checksum_verified: published,
 					previous_id: null, error_code: null, applied: true,
 					recovery_state: 'unavailable',
+					service_was_running, postcheck,
 					updated_at: app.runtime.clock.now() });
 			}
 			catch (error) {
@@ -968,12 +1015,14 @@ export function create(app) {
 						}
 				set_status({ state: 'failure', kind: 'miclash', stage: transaction.stage,
 					operation_id: ctx.id, version: resolved?.version ?? requested,
+					expected_version: resolved?.version ?? requested,
 					sha256: candidate?.hash ?? null,
 					published_checksum_verified:
 						candidate?.published_checksum_verified ?? null,
 					previous_id: null, error_code: normalized.code,
 					applied: transaction.applied,
 					recovery_state: transaction.recovery_state,
+					service_was_running, postcheck: 'failed',
 					updated_at: app.runtime.clock.now() });
 				ctx.complete(normalized);
 				return false;

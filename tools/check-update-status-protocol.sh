@@ -17,26 +17,29 @@ chmod 0700 "$root"
 cleanup
 
 "$installer" status-protocol-test --status-file "$status" --token "$token" \
-	--target-tag v9.9.9
+	--target-tag v9.9.9 --service-was-running 1
 [ "$(stat -c '%u:%a' "$status")" = 0:600 ]
-[ "$(wc -l < "$status" | tr -d ' ')" = 6 ]
+[ "$(wc -l < "$status" | tr -d ' ')" = 8 ]
 grep -Fxq 'protocol=miclash-update-status-v1' "$status"
 grep -Fxq "token=$token" "$status"
 grep -Fxq 'state=success' "$status"
 grep -Fxq 'phase=done' "$status"
 grep -Fxq 'target_version=v9.9.9' "$status"
+grep -Fxq 'service_was_running=1' "$status"
+grep -Fxq 'postcheck=pending' "$status"
 grep -Eq '^updated_at=[0-9]+$' "$status"
 
 printf '%s\n' stale > "$status"
 chmod 0600 "$status"
 "$installer" status-protocol-test --status-file "$status" --token "$token2" \
-	--target-tag v9.9.10
+	--target-tag v9.9.10 --service-was-running 0
 grep -Fxq "token=$token2" "$status"
 grep -Fxq 'target_version=v9.9.10' "$status"
+grep -Fxq 'service_was_running=0' "$status"
 ! grep -Fq stale "$status"
 
 if "$installer" status-protocol-test --status-file /tmp/foreign.status \
-	--token "$token" --target-tag v9.9.9 >/dev/null 2>&1; then
+	--token "$token" --target-tag v9.9.9 --service-was-running 1 >/dev/null 2>&1; then
 	exit 1
 fi
 

@@ -81,6 +81,8 @@ write_status() {
         printf 'state=%s\n' "$state" >&3
         printf 'phase=%s\n' "$phase" >&3
         printf 'target_version=%s\n' "$STATUS_TARGET_VERSION" >&3
+        printf 'service_was_running=%s\n' "$STATUS_SERVICE_WAS_RUNNING" >&3
+        printf 'postcheck=pending\n' >&3
         printf 'updated_at=%s\n' "$updated_at" >&3
         exec 3>&-
         chmod 0600 "$tmp"
@@ -92,7 +94,7 @@ write_status() {
 
 validate_status_authority() {
     [ -n "$STATUS_FILE" ] && [ -n "$CURRENT_TOKEN" ] &&
-        [ -n "$STATUS_TARGET_VERSION" ] || return 1
+    [ -n "$STATUS_TARGET_VERSION" ] || return 1
     case "$STATUS_FILE" in /tmp/miclash/updates/handoff-*.status) ;; *) return 1 ;; esac
     status_dir="${STATUS_FILE%/*}"
     [ "$status_dir" = /tmp/miclash/updates ] || return 1
@@ -106,6 +108,7 @@ validate_status_authority() {
     printf '%s\n' "$CURRENT_TOKEN" | grep -Eq '^[0-9a-f]{32}$' || return 1
     printf '%s\n' "$STATUS_TARGET_VERSION" |
         grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+    case "$STATUS_SERVICE_WAS_RUNNING" in 0|1) ;; *) return 1 ;; esac
     if [ -e "$STATUS_FILE" ] || [ -L "$STATUS_FILE" ]; then
         [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] || return 1
         owned_file_0600 "$STATUS_FILE" || return 1
@@ -847,6 +850,7 @@ schedule_backend_reload() {
 
 run_app_mode() {
     INSTALL_ACTION="update"
+    STATUS_SERVICE_WAS_RUNNING=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -868,6 +872,11 @@ run_app_mode() {
             --token)
                 [ $# -gt 1 ] || die "missing value for --token"
                 CURRENT_TOKEN="$(status_text "$2")"
+                shift 2
+                ;;
+            --service-was-running)
+                [ $# -gt 1 ] || die "missing value for --service-was-running"
+                STATUS_SERVICE_WAS_RUNNING="$2"
                 shift 2
                 ;;
             *)
@@ -906,11 +915,17 @@ run_status_protocol_test() {
     MICLASH_TARGET_TAG=""
     STATUS_FILE=""
     CURRENT_TOKEN=""
+    STATUS_SERVICE_WAS_RUNNING=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --target-tag) [ $# -gt 1 ] || return 64; MICLASH_TARGET_TAG="$2"; shift 2 ;;
             --status-file) [ $# -gt 1 ] || return 64; STATUS_FILE="$2"; shift 2 ;;
             --token) [ $# -gt 1 ] || return 64; CURRENT_TOKEN="$2"; shift 2 ;;
+            --service-was-running)
+                [ $# -gt 1 ] || return 64
+                STATUS_SERVICE_WAS_RUNNING="$2"
+                shift 2
+                ;;
             *) return 64 ;;
         esac
     done

@@ -1027,6 +1027,21 @@ export function compose(runtime, overrides) {
 					if (record?.state != 'success') return false;
 					if (record.kind == 'settings.set' || record.kind == 'subscription.set_url')
 						return true;
+					if (record.kind == 'updates.miclash' || record.kind == 'updates.mihomo' ||
+					    record.kind == 'updates.mihomo.rollback') {
+						let update = updates_domain.status();
+						if (update.operation_id == record.id && update.postcheck == 'stopped')
+							return service_adapter.observe('config.yaml').running === false;
+						if (update.operation_id == record.id && update.postcheck != 'ready')
+							return false;
+						// After a miclashd restart the volatile update status is gone, but a
+						// successful journal record already proves that the updater completed
+						// its explicit ready/stopped postcheck. Re-observe the current state so
+						// Telegram never reports success for an ambiguous service transition.
+						let observed = service_adapter.observe('config.yaml');
+						if (observed.running === false)
+							return update.operation_id != record.id;
+					}
 					if (record.kind == 'service.stop')
 						return service_adapter.observe('config.yaml').running === false;
 					if (record.kind == 'guard.transition') {

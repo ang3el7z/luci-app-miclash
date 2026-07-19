@@ -59,6 +59,14 @@ function environment(options) {
 		filesystem.throw_after_rename_once_to = '/opt/clash/bin/clash';
 	let clock = fakes.clock(1700000000000);
 	let manager = options.manager ?? 'opkg';
+	if (manager == 'apk') {
+		filesystem.writefile('/usr/bin/apk', 'trusted apk');
+		filesystem.chmod('/usr/bin/apk', 0o755);
+	}
+	else if (manager == 'opkg') {
+		filesystem.writefile('/bin/opkg', 'trusted opkg');
+		filesystem.chmod('/bin/opkg', 0o755);
+	}
 	let process = fakes.process({
 		'/usr/bin/apk:--version': { code: manager == 'apk' ? 0 : 127 },
 		'/bin/apk:--version': { code: 127 },
@@ -99,7 +107,7 @@ function environment(options) {
 	responses[checksum_url] = options.checksum ??
 		require('digest').sha256(gzip_body) +
 		'  mihomo-linux-arm64-v1.2.3.gz\n';
-	let service_calls = [], running = options.running === true, start_count = 0;
+	let service_calls = [], wait_calls = [], running = options.running === true, start_count = 0;
 	let stop_count = 0, stopped_wait_failed = false;
 	let readiness = [ ...(options.readiness ?? []) ], wait_count = 0;
 	let service = {
@@ -114,6 +122,7 @@ function environment(options) {
 			if (options.old_start_throw && start_count == 2) die('HEALTH_FAILED');
 		},
 		wait_ready: (deadline, profile, wait_options) => {
+			push(wait_calls, { deadline, profile, options: wait_options ?? {} });
 			wait_count++;
 			if (options.wait_stopped_fail_once && wait_options?.stopped === true &&
 			    !stopped_wait_failed) {
@@ -180,14 +189,19 @@ function environment(options) {
 				if (options.replace_ash_during_syntax) filesystem.bump_inode('/bin/busybox');
 			}
 			else {
+				if (options.installer_starts_service) running = true;
 				let status_path = request.args[index(request.args, '--status-file') + 1];
 				let token = request.args[index(request.args, '--token') + 1];
+				let service_was_running =
+					request.args[index(request.args, '--service-was-running') + 1];
 				filesystem.writefile(status_path,
 					'protocol=miclash-update-status-v1\n' +
 					'token=' + (options.forged_handoff ?
 						'fedcba9876543210fedcba9876543210' : token) + '\n' +
 					'state=success\nphase=done\n' +
-					'target_version=v9.9.9\nupdated_at=' +
+					'target_version=v9.9.9\n' +
+					'service_was_running=' + service_was_running + '\n' +
+					'postcheck=pending\nupdated_at=' +
 					(options.stale_timestamp ? '1' : '1700000000') + '\n' +
 					(options.extra_handoff_field ? 'unexpected=value\n' : ''));
 				if (options.weak_handoff) filesystem.chmod(status_path, 0o644);
@@ -213,7 +227,7 @@ function environment(options) {
 			miclash_release_channel: 'release'
 		} }) }
 	};
-	return { filesystem, clock, process, ops, service_calls,
+	return { filesystem, clock, process, ops, service_calls, wait_calls,
 		updater: updates.create(app) };
 };
 
@@ -481,6 +495,9 @@ let app_op = app_update.updater.update_miclash({ version: 'v9.9.9' }, 'luci');
 app_update.clock.advance(0);
 assert_equal(app_update.ops.get(app_op.id).state, 'success');
 assert_equal(app_update.updater.status().kind, 'miclash');
+assert_equal(app_update.updater.status().expected_version, 'v9.9.9');
+assert_equal(app_update.updater.status().service_was_running, false);
+assert_equal(app_update.updater.status().postcheck, 'stopped');
 assert_true(match(app_update.updater.status().sha256, /^[0-9a-f]{64}$/));
 assert_true(index(sprintf('%J', app_update.updater.status()), 'github') < 0);
 assert_true(index(sprintf('%J', app_update.ops.get(app_op.id)), '--token') < 0);
@@ -490,8 +507,27 @@ for (let call in app_update.process.calls)
 assert_equal(length(ash_calls), 2);
 assert_equal(ash_calls[0].args[1], '-n');
 assert_true(index(ash_calls[1].args, '--target-tag') >= 0);
+assert_true(index(ash_calls[1].args, '--service-was-running') >= 0);
 for (let name in app_update.filesystem.lsdir('/tmp/miclash/updates'))
 	assert_true(index(name, 'handoff') < 0, 'handoff is consumed and removed');
+
+let running_app_update = environment({ running: true });
+let running_app_op = running_app_update.updater.update_miclash(
+	{ version: 'v9.9.9' }, 'telegram');
+running_app_update.clock.advance(0);
+assert_equal(running_app_update.ops.get(running_app_op.id).state, 'success');
+assert_equal(running_app_update.updater.status().service_was_running, true);
+assert_equal(running_app_update.updater.status().postcheck, 'ready');
+assert_true(length(running_app_update.wait_calls) > 0,
+	'running app update requires a fresh readiness check');
+
+let stopped_app_started = environment({ installer_starts_service: true });
+let stopped_app_op = stopped_app_started.updater.update_miclash(
+	{ version: 'v9.9.9' }, 'telegram');
+stopped_app_started.clock.advance(0);
+assert_equal(stopped_app_started.ops.get(stopped_app_op.id).state, 'success');
+assert_equal(stopped_app_started.service_calls[0], 'stop');
+assert_equal(stopped_app_started.updater.status().postcheck, 'stopped');
 
 let syntax_failed = environment({ fail_installer_syntax: true });
 let syntax_op = syntax_failed.updater.update_miclash({ version: 'v9.9.9' }, 'luci');
