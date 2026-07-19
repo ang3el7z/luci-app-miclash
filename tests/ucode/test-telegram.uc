@@ -195,7 +195,7 @@ assert_equal(json(authorized.filesystem.readfile(offset_path)).last_update_id, 1
 assert_equal(authorized_controller.status().last_update_id, 108);
 assert_equal(authorized_controller.poll_once(), true);
 assert_match(authorized.requests[length(authorized.requests) - 1].url,
-	/\/getUpdates\?offset=109&timeout=20/);
+	/\/getUpdates\?offset=109&timeout=0/);
 
 // A handled update is consumed once, including rejected/unsupported updates.
 let duplicate = fixture_json('private-authorized-reboot.json');
@@ -257,8 +257,9 @@ let poll_env = environment({ poll_replies: [ {
 } ] });
 let poll_controller = telegram.create(poll_env.app);
 assert_equal(poll_controller.poll_once(), true);
-assert_match(poll_env.requests[0].url, /\/getUpdates\?offset=0&timeout=20/);
-assert_equal(poll_env.requests[0].timeout_ms, 30000);
+assert_match(poll_env.requests[0].url, /\/getUpdates\?offset=0&timeout=0/);
+assert_true(poll_env.requests[0].timeout_ms <= 5000,
+	'Telegram polling must not monopolize the miclashd RPC loop');
 assert_equal(poll_controller.status().last_update_id, 702);
 let persisted_bytes = poll_env.filesystem.readfile(offset_path);
 assert_true(type(persisted_bytes) == 'string', 'durable Telegram offset was not persisted');
@@ -272,7 +273,7 @@ assert_equal(poll_env.filesystem.readfile('/var/run/miclash/telegram-offset.json
 let recreated = environment({ filesystem: poll_env.filesystem });
 let recreated_controller = telegram.create(recreated.app);
 assert_equal(recreated_controller.poll_once(), true);
-assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=20/);
+assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=0/);
 
 // Simulated reboot clears /var/run but preserves flash state; an approved reboot update
 // is still at-most-once and cannot submit a second system operation after boot.
@@ -366,13 +367,13 @@ assert_equal(length(barrier.audit), 0, 'later update crossed persistence barrier
 assert_equal(barrier_controller.status().last_error, 'INTERNAL');
 assert_equal(barrier_controller.status().retry_after_ms, 1000);
 assert_equal(active_timers(barrier.clock), 1);
-assert_match(barrier.requests[0].url, /\/getUpdates\?offset=800&timeout=20/);
+assert_match(barrier.requests[0].url, /\/getUpdates\?offset=800&timeout=0/);
 barrier.filesystem.fail_on = null;
 barrier.clock.advance(999);
 assert_equal(length(barrier.requests), 1);
 assert_equal(active_timers(barrier.clock), 1);
 barrier.clock.advance(1);
-assert_match(barrier.requests[1].url, /\/getUpdates\?offset=800&timeout=20/);
+assert_match(barrier.requests[1].url, /\/getUpdates\?offset=800&timeout=0/);
 assert_equal(json(barrier.filesystem.readfile(offset_path)).last_update_id, 800);
 assert_equal(barrier_controller.status().last_update_id, 801);
 assert_equal(length(barrier.submitted), 1);
@@ -395,7 +396,7 @@ assert_equal(network_controller.status().retry_after_ms, 1000);
 assert_equal(network_controller.poll_once(), false);
 assert_equal(network_controller.status().retry_after_ms, 2000);
 
-// Start/stop controls one timer; the process timeout stays above long-poll timeout.
+// Start/stop controls one timer while bounded short polling keeps ubus responsive.
 let lifecycle = environment();
 let lifecycle_controller = telegram.create(lifecycle.app);
 assert_equal(lifecycle_controller.start(), true);
@@ -427,7 +428,7 @@ assert_equal(snapshot_reads, 2, 'poll handler reread validated settings');
 assert_equal(length(snapshot.submitted), 1);
 assert_equal(active_timers(snapshot.clock), 1);
 let snapshot_requests = length(snapshot.requests);
-snapshot.clock.advance(10);
+snapshot.clock.advance(3000);
 assert_equal(snapshot_controller.status().last_error, 'SETTINGS_UNAVAILABLE');
 assert_equal(snapshot_controller.status().retry_after_ms, 1000);
 assert_equal(length(snapshot.requests), snapshot_requests);
@@ -587,9 +588,12 @@ let methods = api.method_table(minimal_app);
 assert_true(methods.telegram_status != null);
 assert_true(methods.telegram_settings != null);
 assert_true(methods.telegram_test != null);
-assert_equal(length(keys(methods.telegram_status.args)), 0);
-assert_equal(length(keys(methods.telegram_settings.args)), 0);
-assert_equal(length(keys(methods.telegram_test.args)), 0);
+assert_equal(length(keys(methods.telegram_status.args)), 1);
+assert_equal(methods.telegram_status.args.ubus_rpc_session, '');
+assert_equal(length(keys(methods.telegram_settings.args)), 1);
+assert_equal(methods.telegram_settings.args.ubus_rpc_session, '');
+assert_equal(length(keys(methods.telegram_test.args)), 1);
+assert_equal(methods.telegram_test.args.ubus_rpc_session, '');
 let telegram_settings = methods.telegram_settings.call({ args: {} });
 assert_equal(telegram_settings.token, '[REDACTED]');
 assert_equal(telegram_settings.user_id, api_env.settings.telegram.user_id);

@@ -4,15 +4,18 @@ import * as schema from 'miclash.schema';
 import * as storage from 'miclash.storage';
 
 const OFFSET_NAME = 'telegram-offset.json';
-const POLL_TIMEOUT_SECONDS = 20;
-const REQUEST_TIMEOUT_MS = 30000;
-const CONNECT_TIMEOUT_MS = 5000;
+// miclashd serves ubus and timers on one event loop. Telegram long polling would
+// monopolize that loop and make unrelated LuCI RPC calls time out, so use a
+// bounded short poll and leave an explicit gap before the next request.
+const POLL_TIMEOUT_SECONDS = 0;
+const REQUEST_TIMEOUT_MS = 5000;
+const CONNECT_TIMEOUT_MS = 2000;
 const RESPONSE_LIMIT = 65536;
 const MAX_MESSAGE_BYTES = 480;
 const MAX_COMMANDS = 5;
 const RATE_WINDOW_MS = 60000;
 const MAX_BACKOFF_MS = 60000;
-const SUCCESS_DELAY_MS = 10;
+const SUCCESS_DELAY_MS = 3000;
 const HELP = '/status /health /memory /diagnostics /logs /help /start /stop ' +
 	'/restart /reload /reboot /subscription URL /update_subscription ' +
 	'/update_miclash /update_mihomo /guard_on /guard_off';
