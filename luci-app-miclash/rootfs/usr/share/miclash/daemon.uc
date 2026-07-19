@@ -1012,6 +1012,33 @@ export function compose(runtime, overrides) {
 			let telegram_app = {
 				runtime, http: modules.http, operations: operation_manager,
 				logger: runtime.logger, audit: runtime.audit,
+				boot_id: () => {
+					let value = runtime.fs.readfile('/proc/sys/kernel/random/boot_id');
+					if (type(value) != 'string') errors.fail('INTERNAL');
+					value = trim(value);
+					if (!match(value, /^[A-Za-z0-9._-]{1,128}$/)) errors.fail('INTERNAL');
+					return value;
+				},
+				daemon_ready: () => {
+					try { return type(state_model.snapshot()) == 'object'; }
+					catch (error) { return false; }
+				},
+				operation_postcheck: (record) => {
+					if (record?.state != 'success') return false;
+					if (record.kind == 'settings.set' || record.kind == 'subscription.set_url')
+						return true;
+					if (record.kind == 'service.stop')
+						return service_adapter.observe('config.yaml').running === false;
+					if (record.kind == 'guard.transition') {
+						let enabled = settings_domain.get()?.guard?.enabled === true;
+						try { return runtime.guard_control?.verify?.(enabled) === true; }
+						catch (error) { return false; }
+					}
+					let fresh;
+					try { fresh = state_model.observe('config.yaml'); }
+					catch (error) { return false; }
+					return fresh?.service?.running === true && fresh?.readiness?.ok === true;
+				},
 				settings_get: app.settings_get,
 				status: app.status, health: app.health,
 				system_info: app.system_info,

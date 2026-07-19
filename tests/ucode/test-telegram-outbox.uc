@@ -64,6 +64,11 @@ let resumed = environment({ filesystem: restarted.filesystem });
 assert_equal(resumed.outbox.pending()[0].id, 'user-2');
 assert_equal(resumed.outbox.enqueue(receipt('user-2')), false,
 	'duplicate receipt IDs must be idempotent');
+assert_equal(resumed.outbox.update('user-2', {
+	state: 'running', payload: { message: 'Running', progress: 50 }
+}), true);
+assert_equal(resumed.outbox.pending()[0].state, 'running');
+assert_equal(resumed.outbox.pending()[0].payload.progress, 50);
 
 let panel = environment({ results: [ {
 	delivered: true, panel: { chat_id: '42', message_id: 99, generation: 3 }
@@ -90,6 +95,13 @@ second.payload = { message: 'Internet restored again' };
 assert_equal(automatic.outbox.coalesce(second), false);
 assert_equal(length(automatic.outbox.pending()), 1);
 assert_equal(automatic.outbox.pending()[0].payload.count, 2);
+
+let nonterminal = environment();
+let waiting = receipt('waiting-1'); waiting.state = 'verifying';
+nonterminal.outbox.enqueue(waiting);
+assert_equal(nonterminal.outbox.attempt(), false);
+assert_equal(length(nonterminal.deliveries), 0,
+	'non-terminal operation receipts must not be delivered');
 
 let capacity = environment();
 for (let index = 0; index < 64; index++)

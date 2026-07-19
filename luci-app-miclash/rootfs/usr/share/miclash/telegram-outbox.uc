@@ -170,11 +170,29 @@ export function create(runtime, deliver) {
 			return commit(candidate);
 		},
 		pending: () => { active(); return clone(state.entries); },
+		update: (id, patch) => {
+			active();
+			if (type(id) != 'string' || type(patch) != 'object' || type(patch) == 'array' ||
+			    length(keys(patch)) != 2 || type(patch.state) != 'string' ||
+			    !match(patch.state, /^[a-z0-9][a-z0-9_.-]{0,31}$/)) invalid();
+			let payload = safe_payload(patch.payload), candidate = clone(state), found = false;
+			for (let entry in candidate.entries)
+				if (entry.id == id) {
+					entry.state = patch.state; entry.payload = payload;
+					entry.attempts = 0; entry.next_attempt_at = runtime.clock.now();
+					found = true; break;
+				}
+			if (!found) errors.fail('NOT_FOUND');
+			return commit(candidate);
+		},
 		attempt: () => {
 			active();
 			let index = -1, now = runtime.clock.now();
 			for (let offset = 0; offset < length(state.entries); offset++)
-				if (state.entries[offset].next_attempt_at <= now) { index = offset; break; }
+				if (state.entries[offset].next_attempt_at <= now &&
+				    state.entries[offset].state != 'queued' &&
+				    state.entries[offset].state != 'running' &&
+				    state.entries[offset].state != 'verifying') { index = offset; break; }
 			if (index < 0) return false;
 			let entry = clone(state.entries[index]), outcome = false;
 			try { outcome = deliver(entry, clone(state.panel)); }

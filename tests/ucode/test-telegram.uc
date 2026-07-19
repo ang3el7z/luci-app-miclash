@@ -94,15 +94,25 @@ function environment(changes) {
 			}) };
 		}
 	};
-	let submitted = [], domain_calls = [], audit = [], logs = [];
+	let submitted = [], domain_calls = [], audit = [], logs = [], operation_subscribers = [];
 	let operations = {
 		submit: (kind, source, context, worker) => {
 			let record = {
 				id: sprintf('0000000001000-%08d-0123456789abcdef', length(submitted) + 1),
-				kind, source, state: 'queued'
+				kind, source, state: 'queued', stage: 'queued', progress: 0,
+				error: null, created_at: clock.now()
 			};
 			push(submitted, { ...record, context: clone(context), worker });
 			return record;
+		},
+		get: (id) => {
+			for (let record in submitted) if (record.id == id) return clone(record);
+			return null;
+		},
+		list: () => clone(submitted),
+		subscribe: (callback) => {
+			push(operation_subscribers, callback);
+			return () => { operation_subscribers = []; return true; };
 		}
 	};
 	function record_call(method, args) {
@@ -116,6 +126,9 @@ function environment(changes) {
 		runtime,
 		http,
 		operations,
+		boot_id: () => 'boot-test',
+		daemon_ready: () => true,
+		operation_postcheck: () => true,
 		settings_get: () => clone(settings),
 		status: () => {
 			record_call('status', []);
