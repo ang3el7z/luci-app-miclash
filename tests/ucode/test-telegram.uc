@@ -679,7 +679,8 @@ command_env.clock.advance(0);
 assert_equal(request_method(command_env.requests[0]), 'getUpdates');
 assert_equal(request_method(command_env.requests[1]), 'setMyCommands');
 assert_equal(request_method(command_env.requests[2]), 'setMyCommands');
-assert_true(index(command_env.requests[2].url, 'language_code=ru') >= 0);
+assert_equal(command_env.requests[2].method, 'POST');
+assert_true(index(command_env.requests[2].body, 'language_code=ru') >= 0);
 
 // API exposes only redacted Telegram reads and an isolated channel test.
 let api_env = environment();

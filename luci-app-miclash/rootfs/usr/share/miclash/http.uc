@@ -7,7 +7,7 @@ const HEADER_LIMIT = 65536;
 const OPTION_FIELDS = {
 	url: true, headers: true, connect_timeout_ms: true, timeout_ms: true,
 	max_redirects: true, max_bytes: true, managed: true, allow_insecure_http: true,
-	accept_statuses: true
+	accept_statuses: true, method: true, body: true
 };
 const GITHUB_PROXY = 'https://gh-proxy.com/';
 const RETRYABLE_CURL_CODES = { '5': true, '6': true, '7': true, '28': true,
@@ -143,6 +143,10 @@ function curl_config(clean, header_path, output_path) {
 	];
 	for (let name, value in clean.headers)
 		push(lines, 'header = ' + curl_quote(name + ': ' + value));
+	if (clean.method == 'POST') {
+		push(lines, 'request = "POST"');
+		push(lines, 'data = ' + curl_quote(clean.body));
+	}
 	push(lines, 'url = ' + curl_quote(clean.url));
 	return join('\n', lines) + '\n';
 };
@@ -284,6 +288,12 @@ function clean_options(runtime, options) {
 			invalid();
 		seen_headers[normalized] = true;
 	}
+	let method = options.method ?? 'GET', body = options.body ?? null;
+	if ((method != 'GET' && method != 'POST') ||
+	    (method == 'GET' && body != null) ||
+	    (method == 'POST' && (type(body) != 'string' || length(body) > 65536 ||
+	     match(body, /[[:cntrl:]]/))))
+		invalid();
 	let accepted_statuses = options.accept_statuses ?? [];
 	if (type(accepted_statuses) != 'array' || length(accepted_statuses) > 1 ||
 	    length(accepted_statuses) && options.managed !== true)
@@ -295,7 +305,7 @@ function clean_options(runtime, options) {
 			invalid();
 		seen_statuses[status] = true;
 	}
-	return { url, connect, total, redirects, maximum, headers, insecure,
+	return { url, connect, total, redirects, maximum, headers, insecure, method, body,
 		accepted_statuses };
 };
 

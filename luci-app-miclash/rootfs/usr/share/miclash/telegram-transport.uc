@@ -100,15 +100,22 @@ export function create(app) {
 	if (type(app) != 'object' || type(app.runtime) != 'object' ||
 	    type(app.http?.request) != 'function') invalid();
 
-	function call(settings, method, fields) {
-		let safe = configuration(settings), response;
+	function call(settings, method, fields, post) {
+		let safe = configuration(settings), response, encoded = query(fields);
 		try {
-			response = app.http.request(app.runtime, {
-				url: 'https://api.telegram.org/bot' + safe.token + '/' + method + '?' + query(fields),
+			let request = {
+				url: 'https://api.telegram.org/bot' + safe.token + '/' + method +
+					(post ? '' : '?' + encoded),
 				connect_timeout_ms: CONNECT_TIMEOUT_MS, timeout_ms: REQUEST_TIMEOUT_MS,
 				max_redirects: 0, max_bytes: RESPONSE_LIMIT, managed: true,
 				accept_statuses: [ 429 ]
-			});
+			};
+			if (post) {
+				request.method = 'POST';
+				request.body = encoded;
+				request.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+			}
+			response = app.http.request(app.runtime, request);
 		}
 		catch (error) { errors.fail('DOWNLOAD_FAILED'); }
 		let parsed = document(response);
@@ -195,7 +202,7 @@ export function create(app) {
 					invalid();
 			let fields = { commands };
 			if (length(language)) fields.language_code = language;
-			let reply = call(settings, 'setMyCommands', fields);
+			let reply = call(settings, 'setMyCommands', fields, true);
 			if (reply.limited) return false;
 			if (reply.document.result !== true) errors.fail('INVALID_RESPONSE');
 			return true;

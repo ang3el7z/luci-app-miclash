@@ -176,16 +176,14 @@ Keep `/etc/config/miclash` readable only by root because it may contain subscrip
 
 Enable Telegram under **Settings → Telegram**, then enter the token from **BotFather** and your numeric user ID. The token is stored as a secret and never returned to LuCI; an empty field keeps the saved token.
 
-The bot uses outbound HTTPS long polling only, accepts private chat from exactly one user ID, verifies sender/chat IDs, and rejects groups, channels, edits and duplicates. Logs and diagnostics are bounded, redacted and protected by rate limits and backoff.
+The bot uses outbound HTTPS long polling only, accepts private chat from exactly one user ID, verifies sender/chat IDs, and rejects groups, channels, edits and duplicates. `/start` and `/menu` open a localized single-message control panel; its buttons edit that message instead of filling the chat. Dangerous buttons ask for confirmation, while direct slash commands execute immediately. Operation results and automatic notifications are queued durably until Telegram confirms delivery. Logs and diagnostics are bounded, redacted and protected by rate limits and backoff.
 
 ```text
-/status /health /memory /diagnostics /logs /help
-/start /stop /restart /reload /reboot
+/start /menu /status /health /memory /diagnostics /logs /help
+/start_service /stop_service /reload_service /restart_service /reboot_router
 /subscription URL /update_subscription /update_miclash /update_mihomo
 /guard_on /guard_off
 ```
-
-`/reboot` reboots the router immediately after authorization, without another confirmation.
 
 ## Diagnostics
 

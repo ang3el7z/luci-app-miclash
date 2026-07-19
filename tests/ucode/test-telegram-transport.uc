@@ -59,8 +59,10 @@ assert_match(env.requests[1].url, /reply_markup=/);
 assert_match(env.requests[2].url, /editMessageText\?/);
 assert_match(env.requests[3].url, /answerCallbackQuery\?/);
 assert_match(env.requests[4].url, /deleteMessage\?/);
-assert_match(env.requests[5].url, /setMyCommands\?/);
-assert_match(env.requests[5].url, /language_code=ru/);
+assert_match(env.requests[5].url, /setMyCommands$/);
+assert_equal(env.requests[5].method, 'POST');
+assert_match(env.requests[5].body, /language_code=ru/);
+assert_true(length(env.requests[5].url) < 2048);
 
 for (let invalid in [
 	null, {}, { token: '', user_id: '42' },

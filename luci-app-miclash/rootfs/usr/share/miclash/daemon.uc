@@ -556,6 +556,8 @@ export function compose(runtime, overrides) {
 					if (!stopped) errors.fail(failure ?? 'HEALTH_FAILED');
 				}
 				telegram_settings = clone(next);
+				if (next.enabled)
+					try { telegram_controller.configure(); } catch (error) {}
 				return clone(telegram_settings);
 			}
 		};

@@ -24,9 +24,10 @@ function http_environment(response) {
 	let filesystem = fakes.fs();
 	filesystem.mkdir('/tmp');
 	filesystem.mkdir('/tmp/miclash');
-	let process = fakes.process();
+	let process = fakes.process(), configs = [];
 	process.on_run = (request) => {
 		let paths = curl_config_paths(filesystem, request.args);
+		push(configs, paths.config);
 		filesystem.writefile(paths.header_path, response?.headers ??
 			'HTTP/1.1 200 OK\r\nContent-Type: application/yaml\r\n\r\n');
 		filesystem.writefile(paths.output_path, response?.body ??
@@ -39,7 +40,7 @@ function http_environment(response) {
 		process,
 		paths: { tmp: '/tmp/miclash' }
 	};
-	return { filesystem, process, runtime };
+	return { filesystem, process, runtime, configs };
 };
 
 assert_equal(type(http.request), 'function', 'HTTP module exports request()');
@@ -70,6 +71,15 @@ assert_true(index(direct.process.calls[0].args, 'Accept: application/yaml') < 0)
 assert_equal(length(direct.filesystem.lsdir('/tmp/miclash/http')), 0);
 assert_equal(direct.filesystem.mode('/tmp/miclash'), 0o700);
 assert_equal(direct.filesystem.mode('/tmp/miclash/http'), 0o700);
+let posted = http_environment({ body: '{"ok":true,"result":true}' });
+assert_equal(http.request(posted.runtime, {
+	url: 'https://api.telegram.org/bot123456:test/setMyCommands',
+	method: 'POST', body: 'commands=%5B%5D',
+	headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+	managed: true, max_redirects: 0, max_bytes: 65536
+}).status, 200);
+assert_match(posted.configs[0], /request = "POST"/);
+assert_match(posted.configs[0], /data = "commands=%5B%5D"/);
 let existing_secure = http_environment();
 existing_secure.filesystem.set_mode('/tmp/miclash', 0o700);
 existing_secure.filesystem.mkdir('/tmp/miclash/http');

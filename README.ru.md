@@ -176,16 +176,14 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 
 В **Настройки → Telegram** включите интеграцию, укажите token от **BotFather** и свой числовой user ID. Token хранится как секрет и не возвращается в LuCI; пустое поле не заменяет уже сохранённый token.
 
-Бот использует только исходящий HTTPS long polling, принимает private chat ровно от одного user ID, проверяет sender/chat ID, отклоняет группы, каналы, изменения и дубликаты. Логи и диагностика ограничены, очищены и защищены rate limit/backoff.
+Бот использует только исходящий HTTPS long polling, принимает private chat ровно от одного user ID, проверяет sender/chat ID, отклоняет группы, каналы, изменения и дубликаты. `/start` и `/menu` открывают локализованную панель управления в одном сообщении; кнопки обновляют его и не засоряют чат. Опасные действия с кнопок требуют подтверждения, а прямые slash-команды выполняются сразу. Результаты операций и автоматические уведомления сохраняются до подтверждённой доставки Telegram. Логи и диагностика ограничены, очищены и защищены rate limit/backoff.
 
 ```text
-/status /health /memory /diagnostics /logs /help
-/start /stop /restart /reload /reboot
+/start /menu /status /health /memory /diagnostics /logs /help
+/start_service /stop_service /reload_service /restart_service /reboot_router
 /subscription URL /update_subscription /update_miclash /update_mihomo
 /guard_on /guard_off
 ```
-
-`/reboot` перезагружает роутер сразу после проверки пользователя, без дополнительного подтверждения.
 
 ## Диагностика
 
