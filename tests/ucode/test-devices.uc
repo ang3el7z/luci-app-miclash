@@ -115,6 +115,32 @@ let duplicate_host = filter(found, (item) => item.hostname == 'kitchen');
 assert_equal(length(duplicate_host), 2, 'duplicate hostname never merges MACs');
 assert_true(length(duplicate_host[0].conflicts) > 0, 'duplicate hostname conflict is explicit');
 
+// A real observer can cross a wall-clock second while ip -j is running. The
+// completed observation must be validated against the end of the snapshot,
+// not against a timestamp sampled before collection began.
+let boundary_clock_calls = 0;
+let boundary_observed = runtime({ observers: {
+	dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+	neighbors: () => ({ observed_at: 1710000001, data: '[]' })
+} });
+boundary_observed.clock = { now: () => boundary_clock_calls++ == 0 ? NOW : NOW + 1000 };
+assert_equal(length(devices.discover(boundary_observed)), 0,
+	'discovery accepts observers completed in the next wall-clock second');
+assert_true(boundary_clock_calls >= 2, 'discovery brackets observer collection with clock samples');
+
+let guarded_discovery = devices.discover_effective(runtime({ guard: true, core_available: true,
+	observers: {
+		dhcp_leases: () => fixture('dhcp'),
+		neighbors: (family) => fixture(family == 'ipv4' ? 'neighbors4' : 'neighbors6')
+	}
+}));
+let guarded_kitchen = filter(guarded_discovery,
+	(item) => item.mac == 'ac:bb:cc:dd:ee:10')[0];
+assert_equal(guarded_kitchen.effective.action, 'proxy',
+	'discovery exposes the action currently enforced for the device');
+assert_equal(guarded_kitchen.effective.safety, 'guard_default',
+	'discovery preserves Guard provenance for the UI');
+
 let client_only = devices.discover(runtime({
 	external_interfaces: () => [ 'wan' ],
 	observers: {
@@ -584,8 +610,19 @@ journal_bound.fs.writefile('/etc/miclash/device-policies.json', stable_empty +
 	sprintf('%' + (524289 - length(stable_empty)) + 's', ''));
 assert_throws(() => devices.policy_list(journal_bound), 'RESPONSE_TOO_LARGE');
 assert_equal(journal_bound.uci_fake.commit_calls, 0, 'oversized journal cannot mutate UCI');
-assert_throws(() => set_policy(runtime({ guard: true }), { scope: 'device',
-	mac: 'ac:bb:cc:dd:ee:10', action: 'direct', schedule: null }), 'VALIDATION_FAILED');
+let guarded_policy_runtime = runtime({ guard: true, core_available: true });
+let guarded_direct = set_policy(guarded_policy_runtime, { scope: 'device',
+	mac: 'ac:bb:cc:dd:ee:10', action: 'direct', schedule: null });
+assert_equal(guarded_direct.action, 'direct', 'Guard stores the user-selected direct intent');
+let guarded_direct_effective = devices.effective(guarded_policy_runtime, {
+	mac: guarded_direct.mac, interface: 'br-lan', timestamp: 1710000000
+});
+assert_equal(guarded_direct_effective.action, 'direct',
+	'Direct bypasses Guard while Mihomo is available');
+assert_equal(guarded_direct_effective.safety, 'direct_exception',
+	'Direct Guard exception provenance is explicit');
+assert_equal(enc(devices.direct_macs(guarded_policy_runtime, 1710000000)),
+	enc([ guarded_direct.mac ]), 'active Direct device MAC is exported for early Guard');
 
 // Device > interface > global, inactive schedules inherit, and block is explicit.
 let precedence = runtime({ guard: false });
@@ -637,7 +674,7 @@ for (let device_action in [ 'block', 'proxy', 'direct', 'inherit' ])
 		}
 let guard_lower_block = devices.effective(precedence_runtime('direct', 'inherit', 'block', true),
 	{ mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan', timestamp: 1710000000 });
-assert_equal(guard_lower_block.action, 'block', 'Guard-safe DIRECT override cannot mask lower BLOCK');
+assert_equal(guard_lower_block.action, 'block', 'BLOCK remains higher priority than Direct');
 assert_equal(guard_lower_block.policy_id, 'dp_1_0000000000000003', 'BLOCK provenance is explicit');
 let all_blocks = devices.effective(precedence_runtime('block', 'block', 'block', false),
 	{ mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan', timestamp: 1710000000 });
@@ -661,14 +698,14 @@ let restarted = runtime({ uci: precedence.uci_fake.values, guard: false });
 assert_throws(() => set_policy(restarted, { scope: 'device', mac: device_policy.mac,
 	action: 'proxy', schedule: null }), 'VALIDATION_FAILED');
 
-// Tampered persisted DIRECT never bypasses Guard; unavailable core becomes BLOCK.
+// A validated persisted DIRECT remains a Guard exception even when the core is unavailable.
 let guarded = runtime({ guard: true, core_available: false, uci: { miclash: {
 	guard: { '.type': 'guard', enabled: '1' },
 	'dp_1_0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
 		mac: 'ac:bb:cc:dd:ee:10', action: 'direct', schedule: '' }
 } } });
 assert_equal(devices.effective(guarded, { mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan',
-	timestamp: 1710000000 }).action, 'block', 'tampered direct fails closed');
+	timestamp: 1710000000 }).action, 'direct', 'Direct remains available without Mihomo');
 let extra_uci = runtime({ uci: { miclash: {
 	guard: { '.type': 'guard', enabled: '0' },
 	'dp_1_0000000000000001': { '.type': 'device_policy', revision: '1', scope: 'device',
@@ -682,10 +719,12 @@ let unknown_guard = runtime({ core_available: true, uci: { miclash: {
 } } });
 let unknown_decision = devices.effective(unknown_guard, { mac: 'ac:bb:cc:dd:ee:10',
 	interface: 'br-lan', timestamp: 1710000000 });
-assert_equal(unknown_decision.action, 'proxy', 'unknown Guard cannot compile direct');
-assert_equal(unknown_decision.safety, 'guard_safe_override', 'Guard-safe override provenance explicit');
-assert_throws(() => set_policy(unknown_guard, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
-	action: 'direct', schedule: null }), 'VALIDATION_FAILED');
+assert_equal(unknown_decision.action, 'direct', 'Direct bypasses an independently fail-closed Guard');
+assert_equal(unknown_decision.safety, 'direct_exception', 'Direct exception provenance explicit');
+let unknown_saved = set_policy(unknown_guard, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
+	action: 'direct', schedule: null });
+assert_equal(devices.effective(unknown_guard, { mac: unknown_saved.mac, interface: 'br-lan',
+	timestamp: 1710000000 }).action, 'direct', 'unknown Guard preserves an explicit Direct exception');
 // Durable latch is effective Guard ON even while canonical UCI is still OFF.
 // It must close both policy mutation and persisted DIRECT evaluation windows.
 let latched_guard = runtime({ guard: false, core_available: true, uci: { miclash: {
@@ -697,22 +736,28 @@ latched_guard.fs.writefile('/etc/miclash/guard-safety-latch', 'corrupt');
 let latched_decision = devices.effective(latched_guard, {
 	mac: 'ac:bb:cc:dd:ee:10', interface: 'br-lan', timestamp: 1710000000
 });
-assert_equal(latched_decision.action, 'proxy');
-assert_equal(latched_decision.safety, 'guard_safe_override');
-assert_throws(() => set_policy(latched_guard, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
-	action: 'direct', schedule: null }), 'VALIDATION_FAILED');
+assert_equal(latched_decision.action, 'direct');
+assert_equal(latched_decision.safety, 'direct_exception');
+let latched_saved = set_policy(latched_guard, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
+	action: 'direct', schedule: null });
+assert_equal(devices.effective(latched_guard, { mac: latched_saved.mac, interface: 'br-lan',
+	timestamp: 1710000000 }).action, 'direct', 'latched Guard retains the explicit Direct exception');
 let latch_race = runtime({ guard: false });
 latch_race.uci_fake.on_cursor = (calls) => {
 	if (calls == 2) latch_race.fs.writefile('/etc/miclash/guard-safety-latch', 'corrupt');
 };
-assert_throws(() => set_policy(latch_race, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
-	action: 'direct', schedule: null }), 'VALIDATION_FAILED');
+let latch_race_saved = set_policy(latch_race, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
+	action: 'direct', schedule: null });
+assert_equal(devices.effective(latch_race, { mac: latch_race_saved.mac, interface: 'br-lan',
+	timestamp: 1710000000 }).action, 'direct', 'latch race preserves the explicit Direct exception');
 let guard_race = runtime({ guard: false });
 guard_race.uci_fake.on_cursor = (calls) => {
 	if (calls == 2) guard_race.uci_fake.values.miclash.guard.enabled = '1';
 };
-assert_throws(() => set_policy(guard_race, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
-	action: 'direct', schedule: null }), 'VALIDATION_FAILED');
+let guard_race_saved = set_policy(guard_race, { scope: 'device', mac: 'ac:bb:cc:dd:ee:12',
+	action: 'direct', schedule: null });
+assert_equal(devices.effective(guard_race, { mac: guard_race_saved.mac, interface: 'br-lan',
+	timestamp: 1710000000 }).action, 'direct', 'Guard transition race preserves the explicit Direct exception');
 // The mutation lock consumes entropy call 1; generated policy suffix starts at 2.
 let collision_id = 'dp_' + NOW + '_0000000000000002';
 let collision = runtime({ guard: false, uci: { miclash: {

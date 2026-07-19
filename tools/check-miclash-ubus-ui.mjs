@@ -167,6 +167,11 @@ const moduleApi = new Function('baseclass', 'rpc', 'window', 'TextEncoder', 'Uin
 	'btoa', 'atob', ui)({ extend: (value) => value }, rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
 	(value) => Buffer.from(value, 'binary').toString('base64'),
 	(value) => Buffer.from(value, 'base64').toString('binary'));
+assert.equal(typeof moduleApi.isSessionExpired, 'function',
+	'api.js must export the LuCI session-expiry classifier');
+assert.equal(moduleApi.isSessionExpired(new Error('Login session is expired at notifySessionExpiry')), true);
+assert.equal(moduleApi.isSessionExpired({ code: 'RPC_ERROR', message: 'Login session is expired' }), true);
+assert.equal(moduleApi.isSessionExpired({ code: 'RPC_ERROR', message: 'Request timed out' }), false);
 
 replies.set('service_start', { error: { code: 'BUSY', message: 'Busy' } });
 const errorClient = moduleApi.create();
@@ -258,6 +263,15 @@ const downloadedBytes = await transferClient.downloadChunks('report', 'rpt_' + '
 assert.equal(Buffer.from(downloadedBytes).toString(), 'diagnostic');
 assert.equal(calls.filter((call) => call.method === 'transfer_read').length, 3,
 	'download must use exactly ceil(size/chunk_size) reads');
+
+readOffset = 0;
+replies.set('transfer_begin', { transfer_id: '7'.repeat(64), chunk_size: 4,
+	size: downloadBytes.length, sha256: downloadHash, expires_at: 1 });
+const insecureHttpClient = moduleApi.create({ crypto: {} });
+const fallbackBytes = await insecureHttpClient.downloadChunks('report', 'rpt_' + '7'.repeat(32),
+	{ format: 'json' });
+assert.equal(Buffer.from(fallbackBytes).toString(), 'diagnostic',
+	'HTTP LuCI must verify downloads with the local SHA-256 fallback');
 
 let readsBeforeTinyDownload = calls.filter((call) => call.method === 'transfer_read').length;
 let abortsBeforeTinyDownload = calls.filter((call) => call.method === 'transfer_abort').length;

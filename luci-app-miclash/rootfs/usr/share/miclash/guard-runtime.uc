@@ -4,6 +4,7 @@ import * as guard from 'miclash.guard';
 import * as runtime_guard from 'miclash.guard_runtime';
 import * as runtime_module from 'miclash.runtime';
 import * as guard_latch from 'miclash.guard-latch';
+import * as devices from 'miclash.devices';
 import { acquire, assert_held, release } from 'miclash.mutation_lock';
 import { atomic_write } from 'miclash.storage';
 import { fail } from 'miclash.errors';
@@ -33,8 +34,8 @@ function capture(command) {
 	return pipe.close() == 0 ? output : null;
 };
 function inventory(nft) { return guard.owned_nft_tables(capture(nft + ' -j list tables')); };
-function verified(nft, table) {
-	return guard.verify_nft_table(capture(nft + ' -j list table inet ' + table), table);
+function verified(nft, table, direct_macs) {
+	return guard.verify_nft_table(capture(nft + ' -j list table inet ' + table), table, direct_macs);
 };
 function mutate(runtime, lease, nft, batch) {
 	assert_held(runtime, lease);
@@ -57,22 +58,24 @@ function mutate_terminal(runtime, lease, nft, batch) {
 	assert_held(runtime, lease);
 	return runtime.process.run({ command: nft, args: [ '-f', BATCH ] }).code == 0;
 };
-function ensure_table(runtime, lease, nft, table) {
+function ensure_table(runtime, lease, nft, table, direct_macs) {
 	let present = inventory(nft);
 	if (present == null) return false;
 	let occupied = false;
 	for (let item in present) if (item == table) occupied = true;
-	if (!verified(nft, table) &&
-	    !mutate(runtime, lease, nft, guard.nft_ruleset(table, occupied)))
+	if (!verified(nft, table, direct_macs) &&
+	    !mutate(runtime, lease, nft, guard.nft_ruleset(table, occupied, direct_macs)))
 		return false;
 	assert_held(runtime, lease);
-	return verified(nft, table);
+	return verified(nft, table, direct_macs);
 };
-function protect(runtime, lease, nft) { return ensure_table(runtime, lease, nft, EMERGENCY); };
-function release_emergency(runtime, lease, nft) {
+function protect(runtime, lease, nft, direct_macs) {
+	return ensure_table(runtime, lease, nft, EMERGENCY, direct_macs);
+};
+function release_emergency(runtime, lease, nft, direct_macs) {
 	// Enabled runtime release must never consume the independent crash owner.
 	// Prove/repair primary while emergency still protects direct traffic.
-	if (!ensure_table(runtime, lease, nft, PRIMARY)) return false;
+	if (!ensure_table(runtime, lease, nft, PRIMARY, direct_macs)) return false;
 	let present = inventory(nft);
 	if (present == null) return false;
 	let occupied = false;
@@ -82,7 +85,7 @@ function release_emergency(runtime, lease, nft) {
 	present = inventory(nft);
 	if (present == null) return false;
 	for (let table in present) if (table == EMERGENCY) return false;
-	return verified(nft, PRIMARY);
+	return verified(nft, PRIMARY, direct_macs);
 };
 function disable_bootstrap(runtime, lease, nft) {
 	let present = inventory(nft);
@@ -99,14 +102,19 @@ function disable_bootstrap(runtime, lease, nft) {
 };
 function stdin() { return require('fs').readfile('/dev/stdin'); };
 
+function current_direct_macs(runtime) {
+	try { return devices.direct_macs(runtime, int(runtime.clock.now() / 1000)); }
+	catch (error) { return []; }
+};
+
 function main() {
 	if (length(ARGV) < 1 || length(ARGV) > 2 ||
-	    (ARGV[0] != 'protect' && ARGV[0] != 'release' && ARGV[0] != 'disable' &&
+	    (ARGV[0] != 'protect' && ARGV[0] != 'protect-strict' && ARGV[0] != 'release' && ARGV[0] != 'disable' &&
 	     ARGV[0] != 'latch-set' && ARGV[0] != 'latch-clear' && ARGV[0] != 'latch-status' &&
 	     ARGV[0] != 'verify-protected' &&
 	     ARGV[0] != 'verify-bootstrap-on' && ARGV[0] != 'verify-bootstrap-off' && ARGV[0] != 'verify-nft' &&
 	     ARGV[0] != 'verify-iptables4' && ARGV[0] != 'verify-iptables6'))
-		die('usage: guard-runtime.uc {protect|release|disable|latch-set|latch-clear|latch-status|verify-protected|verify-bootstrap-on|verify-bootstrap-off|verify-nft|verify-iptables4|verify-iptables6} [interfaces]\n');
+		die('usage: guard-runtime.uc {protect|protect-strict|release|disable|latch-set|latch-clear|latch-status|verify-protected|verify-bootstrap-on|verify-bootstrap-off|verify-nft|verify-iptables4|verify-iptables6} [interfaces]\n');
 	let runtime = runtime_module.create();
 	runtime.mutation_lock_token = getenv('MICLASH_MUTATION_LOCK_TOKEN');
 	if (runtime.mutation_lock_token == null || !length(runtime.mutation_lock_token)) die('BUSY\n');
@@ -119,13 +127,15 @@ function main() {
 		if (ARGV[0] == 'latch-set') ok = guard_latch.set(runtime);
 		else if (ARGV[0] == 'latch-clear') ok = guard_latch.clear(runtime);
 		else if (ARGV[0] == 'latch-status') ok = guard_latch.is_set(runtime);
-		else if (ARGV[0] == 'protect' || ARGV[0] == 'release' || ARGV[0] == 'disable' ||
+		else if (ARGV[0] == 'protect' || ARGV[0] == 'protect-strict' || ARGV[0] == 'release' || ARGV[0] == 'disable' ||
 		    ARGV[0] == 'verify-protected' ||
 		    ARGV[0] == 'verify-bootstrap-on' || ARGV[0] == 'verify-bootstrap-off') {
 			let nft = nft_binary(runtime);
 			if (nft == null) fail('INTERNAL');
-			if (ARGV[0] == 'protect') ok = protect(runtime, lease, nft);
-			else if (ARGV[0] == 'release') ok = release_emergency(runtime, lease, nft);
+			let direct_macs = ARGV[0] == 'protect-strict' ? [] : current_direct_macs(runtime);
+			if (ARGV[0] == 'protect' || ARGV[0] == 'protect-strict')
+				ok = protect(runtime, lease, nft, direct_macs);
+			else if (ARGV[0] == 'release') ok = release_emergency(runtime, lease, nft, direct_macs);
 			else if (ARGV[0] == 'disable') {
 				ok = disable_bootstrap(runtime, lease, nft);
 				terminal_success = ok;
@@ -135,11 +145,12 @@ function main() {
 				if (present != null && ARGV[0] == 'verify-protected') {
 					ok = length(present) > 0;
 					for (let table in present)
-						if (!verified(nft, table)) ok = false;
+						if (!verified(nft, table, direct_macs)) ok = false;
 				}
 				else if (present != null && ARGV[0] == 'verify-bootstrap-off') ok = !length(present);
 				else if (present != null) {
-					ok = length(present) == 1 && present[0] == PRIMARY && verified(nft, PRIMARY);
+					ok = length(present) == 1 && present[0] == PRIMARY &&
+						verified(nft, PRIMARY, direct_macs);
 				}
 			}
 		}

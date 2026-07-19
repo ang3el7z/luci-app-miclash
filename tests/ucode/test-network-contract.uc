@@ -117,6 +117,16 @@ for (let scenario in document.scenarios) {
 				index(iptables, ipt_dhcp_request) >= 0 && index(iptables, ipt_dhcp_request) < ipt_drop_at,
 				scenario.name + ': iptables Guard missing ordered DHCP parity');
 		}
+		for (let policy in scenario.device_policies) if (policy.action == 'direct') {
+			let nft_direct = 'miclash_guard forward ether saddr "' + policy.mac + '" accept';
+			let nft_drop = 'miclash_guard forward meta nfproto ipv4 drop';
+			review(index(nft, nft_direct) >= 0 && index(nft, nft_direct) < index(nft, nft_drop),
+				scenario.name + ': nft Guard must exempt Direct MAC before terminal drops');
+			let ipt_direct = 'MICLASH_GUARD_FORWARD -m mac --mac-source ' + policy.mac + ' -j RETURN';
+			let ipt_drop = 'MICLASH_GUARD_FORWARD -j DROP';
+			review(index(iptables, ipt_direct) >= 0 && index(iptables, ipt_direct) < index(iptables, ipt_drop),
+				scenario.name + ': iptables Guard must exempt Direct MAC before terminal drop');
+		}
 		review(!match(nft, /miclash_guard forward oifname [^\n]* drop/),
 			scenario.name + ': nft Guard must cover unknown WAN interfaces');
 		review(!match(iptables, /MICLASH_GUARD_FORWARD -o [^\n]* -j DROP/),
@@ -225,10 +235,12 @@ for (let scenario in document.scenarios) {
 			let at = index(content, policy.mac);
 			review(at >= 0 || policy.action == 'inherit',
 				scenario.name + ': ' + backend + ' missing device policy ' + policy.id);
-			if (at >= 0 && (first_policy[backend] == null || at < first_policy[backend]))
-				first_policy[backend] = at;
-			if (policy.action == 'block')
-				block_policy[backend] = at;
+			let compiler_at = backend == 'nft' ?
+				index(content, 'miclash prerouting meta nfproto ipv4 ether saddr "' + policy.mac + '"') :
+				index(content, 'MICLASH_PREROUTING -m mac --mac-source ' + policy.mac);
+			if (compiler_at >= 0 && (first_policy[backend] == null || compiler_at < first_policy[backend]))
+				first_policy[backend] = compiler_at;
+			if (policy.action == 'block') block_policy[backend] = compiler_at;
 		}
 	}
 	if (block_policy.nft != null)

@@ -1,15 +1,18 @@
 import { assert_equal, assert_throws } from 'testlib';
 import * as platform from 'miclash.platform';
-import * as fakes from './fakes.uc';
 
-let process = fakes.process({
-	'/usr/bin/apk:--version': { code: 127 },
-	'/bin/apk:--version': { code: 1 },
-	'/bin/opkg:--version': { code: 0 }
-});
-assert_equal(platform.detect_package_manager({ process }), 'opkg');
-assert_equal(length(process.calls), 3,
-	'package manager detection accepted a failed probe');
+let probes = 0;
+let filesystem = {
+	stat: (path) => path == '/bin/opkg'
+		? { type: 'file', mode: 0o755 }
+		: (path == '/usr/bin/apk' ? { type: 'file', mode: 0o644 } : null)
+};
+assert_equal(platform.detect_package_manager({ fs: filesystem,
+	process: { run: () => { probes++; return { code: 0 }; } } }), 'opkg');
+assert_equal(probes, 0, 'package manager detection executed a noisy version probe');
+assert_equal(platform.detect_package_manager({ fs: {
+	stat: (path) => path == '/usr/bin/apk' ? { type: 'file', mode: 0o755 } : null
+} }), 'apk');
 
 let opkg = platform.miclash_assets('opkg', '2.0.0');
 assert_equal(opkg.package_name, 'luci-app-miclash_2.0.0_all.ipk');

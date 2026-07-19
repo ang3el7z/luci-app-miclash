@@ -30,6 +30,13 @@ function normalized(desired) {
 		add(l, 'add set inet miclash ' + item[0] + ' { type ' + item[1] + ';' + (index(item[0], 'fake') == 0 ? ' flags interval;' : '') + ' }');
 		add(l, 'add element inet miclash ' + item[0] + ' { ' + join(', ', item[2]) + ' }');
 	}
+	for (let action in [ 'block', 'direct' ]) for (let policy in desired.device_policies) {
+		if (policy.action != action) continue;
+		for (let family in desired.ip_families)
+			add(l, 'add rule inet miclash prerouting meta nfproto ' + family + ' ether saddr "' +
+				policy.mac + '" ' + (action == 'block' ? 'drop' : 'return') +
+				' comment "device-policy:' + action + ':' + policy.id + '"');
+	}
 	let interfaces = desired.interface_mode == 'explicit' ? desired.lan : desired.wan;
 	if (!length(interfaces) && desired.interface_mode == 'explicit') add(l, '# explicit interface selection empty: no client-ingress jump');
 	else {
@@ -38,11 +45,10 @@ function normalized(desired) {
 	}
 	for (let policy in desired.device_policies) {
 		if (policy.action == 'inherit') { add(l, '# device-policy inherit ' + policy.id + ' ' + policy.mac); continue; }
+		if (policy.action == 'block' || policy.action == 'direct') continue;
 		for (let family in desired.ip_families) {
 			let p = 'add rule inet miclash proxy meta nfproto ' + family + ' ether saddr "' + policy.mac + '" ';
-			if (policy.action == 'block') add(l, p + 'drop comment "device-policy:block:' + policy.id + '"');
-			else if (policy.action == 'direct') add(l, p + 'return comment "device-policy:direct:' + policy.id + '"');
-			else for (let rule in mark_rule(desired.proxy_mode, family, policy.mac)) add(l, rule);
+			for (let rule in mark_rule(desired.proxy_mode, family, policy.mac)) add(l, rule);
 		}
 	}
 	add(l, 'add rule inet miclash proxy ip daddr @local4 return');
@@ -107,7 +113,18 @@ function transactional(model, id, previous) {
 		'add set inet miclash proxy_servers4' + suffix + ' { type ipv4_addr; }',
 		'add set inet miclash proxy_servers6' + suffix + ' { type ipv6_addr; }',
 		'add set inet miclash fakeip_whitelist4' + suffix + ' { type ipv4_addr; flags interval; }',
-		'add set inet miclash fakeip_whitelist6' + suffix + ' { type ipv6_addr; flags interval; }' ];
+		'add set inet miclash fakeip_whitelist6' + suffix + ' { type ipv6_addr; flags interval; }',
+		'flush chain inet miclash prerouting' + suffix,
+		'flush chain inet miclash output' + suffix,
+		'flush chain inet miclash proxy' + suffix,
+		'flush chain inet miclash tun_input' + suffix,
+		'flush chain inet miclash tun_forward' + suffix,
+		'flush set inet miclash local4' + suffix,
+		'flush set inet miclash local6' + suffix,
+		'flush set inet miclash proxy_servers4' + suffix,
+		'flush set inet miclash proxy_servers6' + suffix,
+		'flush set inet miclash fakeip_whitelist4' + suffix,
+		'flush set inet miclash fakeip_whitelist6' + suffix ];
 	let tun = index(model, 'add chain inet miclash tun_input') >= 0;
 	for (let line in split(model, '\n')) {
 		if (!match(line, /^add (element|chain|rule) inet miclash /)) continue;

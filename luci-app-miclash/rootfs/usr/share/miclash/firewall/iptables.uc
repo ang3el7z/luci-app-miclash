@@ -137,6 +137,12 @@ function normalized(desired) {
 			add(commands, executable, [ '-t', 'mangle', '-N', chain ]);
 		add(commands, executable, [ '-t', 'mangle', '-A', 'PREROUTING', '-j', 'MICLASH_PREROUTING' ]);
 		add(commands, executable, [ '-t', 'mangle', '-A', 'OUTPUT', '-j', 'MICLASH_OUTPUT' ]);
+		for (let action in [ 'block', 'direct' ]) for (let policy in desired.device_policies) {
+			if (policy.action != action) continue;
+			add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_PREROUTING',
+				'-m', 'mac', '--mac-source', policy.mac,
+				'-j', action == 'block' ? 'DROP' : 'RETURN' ]);
+		}
 
 		let interfaces = desired.interface_mode == 'explicit' ? desired.lan : desired.wan;
 		for (let interface in interfaces)
@@ -147,11 +153,9 @@ function normalized(desired) {
 
 		for (let policy in desired.device_policies) {
 			if (policy.action == 'inherit') continue;
+			if (policy.action == 'block' || policy.action == 'direct') continue;
 			let prefix = [ '-m', 'mac', '--mac-source', policy.mac ];
-			if (policy.action == 'block' || policy.action == 'direct')
-				add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_PROXY', ...prefix,
-					'-j', policy.action == 'block' ? 'DROP' : 'RETURN' ]);
-			else mark(commands, executable, 'MICLASH_PROXY', desired.proxy_mode, ipv6, prefix);
+			mark(commands, executable, 'MICLASH_PROXY', desired.proxy_mode, ipv6, prefix);
 		}
 
 		add(commands, executable, [ '-t', 'mangle', '-A', 'MICLASH_PROXY', '-m', 'set',

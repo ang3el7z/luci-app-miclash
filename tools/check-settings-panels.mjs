@@ -49,6 +49,16 @@ assert.match(settings, /'data-notification-tab': name/,
 	'notification tab buttons are missing');
 assert.match(settings, /'data-notification-pane': name/,
 	'notification tab panes are missing');
+assert.match(settings, /const KNOWN_CHANNELS = \[ 'luci', 'syslog', 'telegram' \]/,
+	'notification channels must be ordered LuCI, Logs, Telegram');
+assert.match(settings, /let notificationTab = 'luci'/,
+	'LuCI must be the initial notification channel');
+assert.match(settings, /name === 'syslog' \? _\('Logs'\)/,
+	'syslog must use the user-facing Logs label');
+assert.match(settings, /'class': 'cbi-tabmenu sbox-tabs sbox-notification-tabs'/,
+	'notification channels must reuse the primary MiClash tab pattern');
+assert.match(settings, /'class': \(notificationTab === name \? 'cbi-tab' : 'cbi-tab-disabled'\) \+ ' sbox-tab'/,
+	'notification channel buttons must reuse primary active and inactive tab states');
 assert.match(settings, /name \+ '_enabled'/,
 	'channel enabled state is not independently persisted');
 assert.match(settings, /name \+ '_events'/,
@@ -70,7 +80,7 @@ assert.doesNotMatch(settings, /Number\([^\n]*user[_-]?id|parseInt\([^\n]*user[_-
 
 for (const token of [
 	'devicesList', 'deviceTimezones', 'devicePolicies', 'setDevicePolicy', 'deleteDevicePolicy',
-	'AA:BB:CC:DD:EE:FF', 'inherit', 'proxy', 'direct', 'block', 'timezone',
+	'AA:BB:CC:DD:EE:FF', 'inherit', 'direct', 'block', 'timezone',
 	'expected_revision', 'Guard', 'visibilitychange', 'destroy'
 ]) assert.match(devices, new RegExp(token), `devices panel missing ${token}`);
 

@@ -9,12 +9,12 @@ assert_equal(daemon.parse_openwrt_version("DISTRIB_RELEASE='SNAPSHOT'\n",
 assert_equal(daemon.parse_openwrt_version('',
 	'PRETTY_NAME="OpenWrt 26.01.1 development"\n'), '26.01.1');
 
-let manager_probe = fakes.process({
-	'/usr/bin/apk:--version': { code: 127 }, '/bin/apk:--version': { code: 1 },
-	'/bin/opkg:--version': { code: 0 }
-});
-assert_equal(platform.detect_package_manager({ process: manager_probe }), 'opkg');
-assert_equal(length(manager_probe.calls), 3);
+let manager_probe_calls = 0;
+assert_equal(platform.detect_package_manager({
+	fs: { stat: (path) => path == '/bin/opkg' ? { type: 'file', mode: 0o755 } : null },
+	process: { run: () => { manager_probe_calls++; return { code: 0 }; } }
+}), 'opkg');
+assert_equal(manager_probe_calls, 0);
 
 let binary_output = 'Mihomo Meta v1.19.10 linux arm64 with go1.24.6\n';
 let binary_reads = 0;

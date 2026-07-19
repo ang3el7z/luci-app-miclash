@@ -1386,8 +1386,8 @@ msgstr "Очистить URL подписки"
 msgid "Clearing subscription URL..."
 msgstr "Очистка URL подписки..."
 
-msgid "Client devices only through MiClash (Protection)"
-msgstr "Устройства только через MiClash (Защита)"
+msgid "Direct connection protection"
+msgstr "Защита от прямого соединения"
 
 msgid "Failed to clear subscription URL: %s"
 msgstr "Не удалось очистить URL подписки: %s"
@@ -1798,11 +1798,11 @@ msgstr "События"
 msgid "Expert settings"
 msgstr "Экспертные настройки"
 
-msgid "Guard has highest precedence. A direct policy never disables or bypasses Guard protection."
-msgstr "Guard имеет высший приоритет. Политика direct никогда не отключает и не обходит защиту Guard."
+msgid "Priority: Block → Direct → Inherit"
+msgstr "Приоритет: Блок → Напрямую → Наследование"
 
-msgid "Guard precedence: fail-closed protection is evaluated before device direct/proxy policy."
-msgstr "Приоритет Guard: защита fail-closed применяется раньше политики direct/proxy устройства."
+msgid "Direct devices use the router shared DNS. If Mihomo fails unexpectedly, access by domain name may be temporarily unavailable."
+msgstr "Устройства с политикой «Напрямую» используют общий DNS роутера. При аварийном сбое Mihomo доступ по доменным именам может быть временно недоступен."
 
 msgid "Hostname"
 msgstr "Имя хоста"
@@ -1974,7 +1974,7 @@ msgid "Failure cooldown (ms)"
 msgstr "Пауза после ошибки (мс)"
 
 msgid "Guard outage"
-msgstr "Сбой Guard"
+msgstr "Сбой защиты"
 
 msgid "Internet restored"
 msgstr "Доступ в Интернет восстановлен"
@@ -2199,3 +2199,15 @@ msgstr "Мониторинг"
 
 msgid "Invalid diagnostics response"
 msgstr "Некорректный ответ диагностики"
+
+msgid "Now: %s"
+msgstr "Сейчас: %s"
+
+msgid "Saving…"
+msgstr "Сохранение…"
+
+msgid "This device uses a private MAC address. The policy remains linked to this address and may stop applying if it changes."
+msgstr "Это устройство использует частный MAC-адрес. Политика привязана к этому адресу и может перестать применяться, если он изменится."
+
+msgid "No MiClash or Mihomo records match the current log level yet. Current level: %s"
+msgstr "Пока нет записей MiClash или Mihomo для текущего уровня журнала. Текущий уровень: %s"

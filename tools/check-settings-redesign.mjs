@@ -51,6 +51,8 @@ for (const token of [
 expect(/\.sbox-management-table-wrap\s*\{[^}]*max-height:/s.test(files.css), 'device table is height-bounded');
 expect(/\.sbox-settings-save-wrap\s*\{[^}]*position:\s*sticky/s.test(files.css), 'save action is sticky');
 expect(/\.sbox-settings-save-wrap\s*\{[^}]*justify-self:\s*stretch/s.test(files.css), 'save action spans the settings page');
+expect(/\.sbox-settings-save-btn\s*\{[^}]*min-height:\s*38px[^}]*font-size:\s*12px/s.test(files.css),
+  'save action is slightly larger without becoming visually dominant');
 expect(!files.config.includes('<fieldset class="sbox-settings-subgroup">'), 'traffic scope does not use a cut-in legend');
 expect(files.config.indexOf('id="sbox-auto-update-config"') > files.config.indexOf('class="sbox-runtime-switches"'),
   'config auto-update lives in Additional');

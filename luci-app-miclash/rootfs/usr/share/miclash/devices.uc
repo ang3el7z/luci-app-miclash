@@ -417,11 +417,20 @@ export function discover(app) {
 	if (type(app?.clock?.now) != 'function' || type(app?.observers?.dhcp_leases) != 'function' ||
 	    type(app?.observers?.neighbors) != 'function' ||
 	    type(app?.external_interfaces) != 'function') invalid();
-	let now_ms = app.clock.now();
-	if (type(now_ms) != 'int' || now_ms < 0) invalid('CORRUPT_STATE');
-	let now = int(now_ms / 1000), original = app.device_cache;
+	let started_ms = app.clock.now();
+	if (type(started_ms) != 'int' || started_ms < 0 || int(started_ms / 1000) > MAX_TIMESTAMP)
+		invalid('CORRUPT_STATE');
+	let original = app.device_cache;
+	let cache = validate_cache_state(original, int(started_ms / 1000));
+	let external = external_interfaces(app);
+	let dhcp_observation = app.observers.dhcp_leases();
+	let ipv4_observation = app.observers.neighbors('ipv4');
+	let ipv6_observation = app.observers.neighbors('ipv6');
+	let completed_ms = app.clock.now();
+	if (type(completed_ms) != 'int' || completed_ms < started_ms)
+		invalid('CORRUPT_STATE');
+	let now = int(completed_ms / 1000);
 	if (now > MAX_TIMESTAMP) invalid('CORRUPT_STATE');
-	let cache = validate_cache_state(original, now), external = external_interfaces(app);
 	if (cache.last_now != null && now < cache.last_now) invalid('CORRUPT_STATE');
 	cache.last_now = now; cache.ephemeral_sequence = 0;
 	for (let key, item in cache.devices) {
@@ -429,9 +438,9 @@ export function discover(app) {
 		item.conflicts = [];
 		for (let item_address in item.addresses) item_address.current = false;
 	}
-	parse_dhcp(cache, response(app.observers.dhcp_leases(), now), now);
-	parse_neighbors(cache, response(app.observers.neighbors('ipv4'), now), 'ipv4', external);
-	parse_neighbors(cache, response(app.observers.neighbors('ipv6'), now), 'ipv6', external);
+	parse_dhcp(cache, response(dhcp_observation, now), now);
+	parse_neighbors(cache, response(ipv4_observation, now), 'ipv4', external);
+	parse_neighbors(cache, response(ipv6_observation, now), 'ipv6', external);
 	for (let key, item in cache.devices) {
 		let retained = [];
 		for (let item_address in item.addresses)
@@ -609,14 +618,6 @@ function guard(app) {
 		return null;
 	}
 };
-function guard_cursor(app, uci) {
-	try { if (guard_latch.is_set(app)) return true; }
-	catch (error) { return null; }
-	let value = uci.get(CONFIG, 'guard', 'enabled');
-	if (value == null || value == '0' || value == 'false' || value == 'no' || value == 'off') return false;
-	if (value == '1' || value == 'true' || value == 'yes' || value == 'on') return true;
-	return null;
-};
 function write_section(uci, item) {
 	if (uci.set(CONFIG, item.id, POLICY_TYPE) !== true) invalid('INTERNAL');
 	let values = { revision: sprintf('%d', item.revision), scope: item.scope,
@@ -669,11 +670,9 @@ function validate_policy_timezone(app, policy) {
 export function policy_set(app, policy) {
 	let wanted = normalized_policy(policy);
 	validate_policy_timezone(app, wanted);
-	if (wanted.action == 'direct' && guard(app) !== false) invalid('VALIDATION_FAILED');
 	return with_lock(app, { barrier: 'normal', wait_ms: 0 }, () => {
 		let uci = cursor(app);
 		for (let name in uci.changes(CONFIG) ?? {}) invalid('BUSY');
-		if (wanted.action == 'direct' && guard_cursor(app, uci) !== false) invalid('VALIDATION_FAILED');
 		let before = list_from(uci); journal_state(app, before, true);
 		let existing = null;
 		for (let item in before) if (item.id == wanted.id) existing = item;
@@ -751,9 +750,11 @@ function policy_active(app, policy, timestamp) {
 	let capability = app.timezones.resolve(policy.schedule.timezone, timestamp);
 	return schedule.active(policy.schedule, timestamp, capability);
 };
-function safe_action(app, action, policy_id) {
+function safe_action(app, action, policy_id, scope) {
 	let guarded = guard(app), available = app.core_available === true;
 	if (action == 'block') return { action, safety: 'block' };
+	if (action == 'direct' && scope == 'device')
+		return { action, safety: 'direct_exception' };
 	if (action == 'direct' && guarded !== false)
 		return available ? { action: 'proxy', safety: 'guard_safe_override' } :
 			{ action: 'block', safety: 'guard_core_unavailable' };
@@ -793,10 +794,47 @@ export function effective(app, input) {
 			}
 			if (selected != null) break;
 		}
-	let safety = safe_action(app, selected?.action ?? 'inherit', selected?.id);
+	let safety = safe_action(app, selected?.action ?? 'inherit', selected?.id, selected?.scope);
 	return { action: safety.action, policy_id: selected?.id ?? null,
 		scope: selected?.scope ?? null, safety: safety.safety,
 		reason: redact.text(selected == null ? 'no active policy' : 'active ' + selected.scope + ' policy') };
+};
+
+export function active_device_policies(app, timestamp) {
+	timestamp = integer(timestamp, 0, MAX_TIMESTAMP);
+	let result = [];
+	for (let policy in policy_list(app)) {
+		if (policy.scope != 'device' || policy.action == 'inherit' ||
+		    !policy_active(app, policy, timestamp)) continue;
+		push(result, { id: policy.id, mac: policy.mac, action: policy.action });
+	}
+	return sort(result, (left, right) => left.mac < right.mac ? -1 :
+		(left.mac > right.mac ? 1 : (left.id < right.id ? -1 : (left.id > right.id ? 1 : 0))));
+};
+
+export function direct_macs(app, timestamp) {
+	let result = [];
+	for (let policy in active_device_policies(app, timestamp))
+		if (policy.action == 'direct') push(result, policy.mac);
+	return result;
+};
+
+export function discover_effective(app) {
+	let discovered = discover(app);
+	let now = app?.clock?.now();
+	if (type(now) != 'int' || now < 0) invalid('INTERNAL');
+	let timestamp = int(now / 1000), output = [];
+	for (let item in discovered) {
+		let enforced = effective(app, {
+			mac: item.mac,
+			interfaces: item.interfaces,
+			interface_total: item.interface_total,
+			interfaces_truncated: item.interfaces_truncated,
+			timestamp
+		});
+		push(output, { ...item, effective: enforced });
+	}
+	return output;
 };
 
 function identity_id(value) {

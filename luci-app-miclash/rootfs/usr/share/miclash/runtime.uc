@@ -657,6 +657,7 @@ function guard_control_adapter(runtime) {
 	return {
 		protect: () => action('protect') && action('release') &&
 			action('verify-bootstrap-on'),
+		protect_strict: () => action('protect-strict'),
 		verify_protected: () => action('verify-protected'),
 		disable: () => action('disable') && action('latch-clear') &&
 			action('verify-bootstrap-off'),

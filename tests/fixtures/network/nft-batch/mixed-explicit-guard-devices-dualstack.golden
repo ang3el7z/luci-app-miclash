@@ -19,13 +19,24 @@ add set inet miclash proxy_servers4_g_111111111111 { type ipv4_addr; }
 add set inet miclash proxy_servers6_g_111111111111 { type ipv6_addr; }
 add set inet miclash fakeip_whitelist4_g_111111111111 { type ipv4_addr; flags interval; }
 add set inet miclash fakeip_whitelist6_g_111111111111 { type ipv6_addr; flags interval; }
+flush chain inet miclash prerouting_g_111111111111
+flush chain inet miclash output_g_111111111111
+flush chain inet miclash proxy_g_111111111111
+flush chain inet miclash tun_input_g_111111111111
+flush chain inet miclash tun_forward_g_111111111111
+flush set inet miclash local4_g_111111111111
+flush set inet miclash local6_g_111111111111
+flush set inet miclash proxy_servers4_g_111111111111
+flush set inet miclash proxy_servers6_g_111111111111
+flush set inet miclash fakeip_whitelist4_g_111111111111
+flush set inet miclash fakeip_whitelist6_g_111111111111
 add element inet miclash local4_g_111111111111 { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.2.0/24, 192.88.99.0/24, 192.168.0.0/16, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4 }
 add element inet miclash local6_g_111111111111 { ::/128, ::1/128, fc00::/7, fe80::/10, ff00::/8 }
+add rule inet miclash prerouting_g_111111111111 meta nfproto ipv4 ether saddr "02:00:00:00:00:40" drop comment "device-policy:block:quarantined-camera"
+add rule inet miclash prerouting_g_111111111111 meta nfproto ipv6 ether saddr "02:00:00:00:00:40" drop comment "device-policy:block:quarantined-camera"
+add rule inet miclash prerouting_g_111111111111 meta nfproto ipv4 ether saddr "02:00:00:00:00:41" return comment "device-policy:direct:work-laptop"
+add rule inet miclash prerouting_g_111111111111 meta nfproto ipv6 ether saddr "02:00:00:00:00:41" return comment "device-policy:direct:work-laptop"
 add rule inet miclash prerouting_g_111111111111 iifname { "br-lan", "wlan0" } jump proxy_g_111111111111
-add rule inet miclash proxy_g_111111111111 meta nfproto ipv4 ether saddr "02:00:00:00:00:40" drop comment "device-policy:block:quarantined-camera"
-add rule inet miclash proxy_g_111111111111 meta nfproto ipv6 ether saddr "02:00:00:00:00:40" drop comment "device-policy:block:quarantined-camera"
-add rule inet miclash proxy_g_111111111111 meta nfproto ipv4 ether saddr "02:00:00:00:00:41" return comment "device-policy:direct:work-laptop"
-add rule inet miclash proxy_g_111111111111 meta nfproto ipv6 ether saddr "02:00:00:00:00:41" return comment "device-policy:direct:work-laptop"
 add rule inet miclash proxy_g_111111111111 meta nfproto ipv4 ether saddr "02:00:00:00:00:42" meta l4proto tcp tproxy ip to 127.0.0.1:7894 meta mark set 0x1
 add rule inet miclash proxy_g_111111111111 meta nfproto ipv4 ether saddr "02:00:00:00:00:42" meta l4proto udp meta mark set 0x3
 add rule inet miclash proxy_g_111111111111 meta nfproto ipv6 ether saddr "02:00:00:00:00:42" meta l4proto tcp tproxy ip6 to [::1]:7894 meta mark set 0x1

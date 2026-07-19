@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const path = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/devices-panel.js';
 const source = readFileSync(path, 'utf8');
 const css = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css', 'utf8');
+const daemonSource = readFileSync('luci-app-miclash/rootfs/usr/share/miclash/daemon.uc', 'utf8');
 const vendorSource = readFileSync(
 	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/device-vendors.js', 'utf8');
 const vendorModule = new Function('baseclass', vendorSource)({ extend: (value) => value });
@@ -14,6 +15,7 @@ const module = new Function('baseclass', 'view_miclash_device_vendors', source)(
 assert.equal(typeof module.deviceRows, 'function', 'deviceRows model builder must be exported');
 assert.equal(typeof module.deviceDisplayName, 'function');
 assert.equal(typeof module.loadVendorDatabase, 'function');
+assert.equal(typeof module.policyPresentation, 'function');
 assert.match(source, /view\.miclash\.ui-shell/,
 	'device policies must use the shared loading surface');
 assert.match(source, /let hydrated = false/,
@@ -37,7 +39,7 @@ const rows = module.deviceRows([
 	lease('aa:bb:cc:dd:ee:40', 'managed', '192.168.1.20')
 ], [
 	{ id: 'dp-block', scope: 'device', mac: 'aa:bb:cc:dd:ee:10', action: 'block', revision: 1 },
-	{ id: 'dp-proxy', scope: 'device', mac: 'aa:bb:cc:dd:ee:40', action: 'proxy', revision: 1 }
+	{ id: 'dp-direct', scope: 'device', mac: 'aa:bb:cc:dd:ee:40', action: 'direct', revision: 1 }
 ]);
 
 assert.deepEqual(rows.map((row) => row.mac), [
@@ -75,8 +77,39 @@ assert.equal((await module.loadVendorDatabase(async () => readFileSync(
 	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/device-vendors.db', 'utf8'))).snapshot,
 	'2026-07-19');
 
+assert.deepEqual(module.policyPresentation({ action: 'direct' }, {
+	action: 'direct', safety: 'direct_exception'
+}), { configured: 'direct', effective: 'direct', safety: 'direct_exception', overridden: false },
+	'Direct remains the enforced action while Guard is enabled');
+
 assert.match(source, /_\('Set policy'\)/, 'inherited rows need the Set policy action');
 assert.match(source, /_\('Change policy'\)/, 'explicit rows need the Change policy action');
+assert.doesNotMatch(source, /proxy:\s*\(\)\s*=>\s*_\('Proxy'\)/,
+	'Proxy must not remain a selectable device policy');
+assert.match(source, /_\('Priority: Block → Direct → Inherit'\)/,
+	'the list and modal need the agreed policy precedence');
+assert.doesNotMatch(source, /Guard has highest precedence|Guard precedence:/,
+	'obsolete Guard-first explanations must be removed');
+assert.match(source, /_\('Direct devices use the router shared DNS\./,
+	'Direct must explain the intentionally shared DNS behavior');
+assert.match(source, /wanted\.action === 'inherit'[\s\S]*deleteDevicePolicy/,
+	'saving Inherit must remove an existing policy instead of persisting one');
+assert.match(source, /_\('Saving…'\)/, 'the affected device row needs an in-place saving state');
+assert.match(source, /pendingMac === mac/, 'only the affected device row may become busy');
+assert.match(source, /persistent_policy_eligible/,
+	'private MAC policies need an explicit stability warning instead of silent contradiction');
+assert.match(source, /ui\.hideModal\(\);[\s\S]*pendingMac = mac/,
+	'a valid save closes the modal before the row-level operation runs');
+assert.match(source, /async function refreshAfterMutation\(\)[\s\S]*try \{ await refresh\(true\); \} catch \(error\) \{\}/,
+	'a transient discovery refresh must not turn a successful policy mutation into a false failure');
+assert.match(daemonSource, /modules\.devices\.discover_effective/,
+	'device discovery must expose the backend-enforced action');
+assert.match(daemonSource, /runtime\.reconcile\?\.apply\?\.\('device-policy'/,
+	'device policy mutations must reconcile routing immediately');
+assert.match(daemonSource, /guard_on[\s\S]*protect_strict\(\)[\s\S]*callback\(\)[\s\S]*apply_device_policy/,
+	'Guard must become strictly fail-closed before a device policy mutation and remain protected until reconcile');
+assert.match(daemonSource, /modules\.devices\.active_device_policies[\s\S]*native_network\.apply\(settings, \{ device_policies \}\)/,
+	'the native firewall compiler must receive the active persisted device policies');
 assert.match(source, /\/cgi-bin\/miclash-device-vendors/,
 	'the panel must load the local offline database without a large RPC response');
 assert.ok((source.match(/deviceDisplayName\(/g) || []).length >= 3,

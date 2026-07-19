@@ -21,6 +21,24 @@ function includes(values, wanted) {
 	return false;
 };
 
+function normalize_mac(value) {
+	if (type(value) != 'string') return null;
+	value = lc(value);
+	return match(value, /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/) ? value : null;
+};
+
+function direct_macs(values) {
+	if (values == null) return [];
+	if (type(values) != 'array' || length(values) > 512) fail('INVALID_ARGUMENT');
+	let result = [], seen = {};
+	for (let value in values) {
+		let normalized = normalize_mac(value);
+		if (normalized == null) fail('INVALID_ARGUMENT');
+		if (!seen[normalized]) { seen[normalized] = true; push(result, normalized); }
+	}
+	return sort(result);
+};
+
 function reserved_table(table) {
 	return type(table) == 'string' && includes(BOOTSTRAP_TABLES, table);
 };
@@ -134,6 +152,18 @@ function safe_accept(rule) {
 	return null;
 };
 
+function direct_accept(rule) {
+	let expr = rule?.expr;
+	if (type(expr) != 'array' || length(expr) != 2 || !verdict(expr[1], 'accept'))
+		return null;
+	let matched = match_expression(expr[0]);
+	if (matched?.op != '==' || matched.left?.payload?.protocol != 'ether' ||
+	    matched.left.payload.field != 'saddr' || length(keys(matched.left)) != 1 ||
+	    length(keys(matched.left.payload)) != 2)
+		return null;
+	return normalize_mac(matched.right);
+};
+
 function terminal_drop(rule, family) {
 	let expr = rule?.expr;
 	return type(expr) == 'array' && length(expr) == 2 &&
@@ -144,9 +174,12 @@ export function bootstrap_tables() {
 	return [ ...BOOTSTRAP_TABLES ];
 };
 
-export function verify_nft_table(text, table) {
+export function verify_nft_table(text, table, expected_direct_macs) {
 	if (!reserved_table(table))
 		return false;
+	let wanted;
+	try { wanted = direct_macs(expected_direct_macs); }
+	catch (error) { return false; }
 	let document = parse_json(text);
 	if (type(document) != 'object' || type(document.nftables) != 'array')
 		return false;
@@ -176,7 +209,7 @@ export function verify_nft_table(text, table) {
 		else
 			return false;
 	}
-	if (table_count != 1 || chain_count != 1 || length(rules) != 9)
+	if (table_count != 1 || chain_count != 1 || length(rules) != 9 + length(wanted))
 		return false;
 	let categories = {};
 	for (let i = 0; i < 7; i++) {
@@ -185,8 +218,17 @@ export function verify_nft_table(text, table) {
 			return false;
 		categories[category] = true;
 	}
-	if (length(keys(categories)) != 7 || !terminal_drop(rules[7], 'ipv4') ||
-	    !terminal_drop(rules[8], 'ipv6'))
+	if (length(keys(categories)) != 7) return false;
+	let accepted = {};
+	for (let i = 0; i < length(wanted); i++) {
+		let mac = direct_accept(rules[7 + i]);
+		if (mac == null || accepted[mac]) return false;
+		accepted[mac] = true;
+	}
+	for (let mac in wanted) if (!accepted[mac]) return false;
+	let drop_at = 7 + length(wanted);
+	if (!terminal_drop(rules[drop_at], 'ipv4') ||
+	    !terminal_drop(rules[drop_at + 1], 'ipv6'))
 		return false;
 	return true;
 };
@@ -211,9 +253,10 @@ export function owned_nft_tables(text) {
 	return found;
 };
 
-export function nft_ruleset(table, replace_existing) {
+export function nft_ruleset(table, replace_existing, expected_direct_macs) {
 	if (!reserved_table(table) || type(replace_existing) != 'bool')
 		fail('INVALID_ARGUMENT');
+	let wanted = direct_macs(expected_direct_macs);
 	let lines = [];
 	if (replace_existing)
 		push(lines, 'delete table inet ' + table);
@@ -226,7 +269,11 @@ export function nft_ruleset(table, replace_existing) {
 		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' udp sport 67 udp dport 68 accept',
 		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' udp sport 68 udp dport 67 accept',
 		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } accept',
-		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' ip6 daddr { ::/128, ::1/128, fc00::/7, fe80::/10, ff00::/8 } accept',
+		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' ip6 daddr { ::/128, ::1/128, fc00::/7, fe80::/10, ff00::/8 } accept');
+	for (let mac in wanted)
+		push(lines, 'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' ether saddr "' + mac +
+			'" accept comment "miclash-guard-direct"');
+	push(lines,
 		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' meta nfproto ipv4 drop comment "miclash-guard-bootstrap"',
 		'add rule inet ' + table + ' ' + BOOTSTRAP_CHAIN + ' meta nfproto ipv6 drop comment "miclash-guard-bootstrap"',
 		'');
@@ -249,32 +296,38 @@ export function create_nft_backend(io) {
 	    type(io?.apply) != 'function' || type(io?.remove) != 'function')
 		fail('INVALID_ARGUMENT');
 
-	function snapshot() {
+	function snapshot(expected_direct_macs) {
+		let wanted;
+		try { wanted = direct_macs(expected_direct_macs); }
+		catch (error) { return null; }
 		let present = owned_nft_tables(io.list_tables());
 		if (present == null)
 			return null;
 		let verified = [];
 		for (let table in present)
-			if (verify_nft_table(io.list_table(table), table))
+			if (verify_nft_table(io.list_table(table), table, wanted))
 				push(verified, table);
 		return { present, verified };
 	};
 
-	function installed() {
-		let state = snapshot();
+	function installed(expected_direct_macs) {
+		let state = snapshot(expected_direct_macs);
 		return state != null && length(state.present) > 0 &&
 			length(state.verified) == length(state.present);
 	};
 	function absent() {
-		let state = snapshot();
+		let state = snapshot([]);
 		return state != null && length(state.present) == 0;
 	};
 	function occupied() {
-		let state = snapshot();
+		let state = snapshot([]);
 		return state != null && length(state.present) > 0;
 	};
-	function install() {
-		let state = snapshot();
+	function install(expected_direct_macs) {
+		let wanted;
+		try { wanted = direct_macs(expected_direct_macs); }
+		catch (error) { return false; }
+		let state = snapshot(wanted);
 		if (state == null)
 			return false;
 		if (length(state.present) && length(state.verified) == length(state.present))
@@ -282,9 +335,9 @@ export function create_nft_backend(io) {
 		let targets = length(state.present) ? state.present : [ BOOTSTRAP_TABLES[0] ];
 		for (let table in targets)
 			if (!includes(state.verified, table) &&
-			    io.apply(table, nft_ruleset(table, includes(state.present, table))) !== true)
+			    io.apply(table, nft_ruleset(table, includes(state.present, table), wanted)) !== true)
 				continue;
-		return installed();
+		return installed(wanted);
 	};
 	function remove() {
 		let state = snapshot();
@@ -302,7 +355,7 @@ export function create_nft_backend(io) {
 function valid_desired(value) {
 	if (type(value) != 'object' || type(value.enabled) != 'bool')
 		fail('INVALID_ARGUMENT');
-	return value;
+	return { ...value, direct_macs: direct_macs(value.direct_macs) };
 };
 
 function valid_transition_state(value, next) {
@@ -325,29 +378,32 @@ function adapter(runtime) {
 
 export function desired(settings, observations) {
 	let setting = settings?.guard?.enabled;
+	let exceptions = direct_macs(observations?.direct_macs);
 
 	if (setting === true)
 		return {
 			enabled: true,
 			source: 'settings',
-			explicit_disable: false
+			explicit_disable: false,
+			direct_macs: exceptions
 		};
 
 	if (setting === false)
-		return { enabled: false, source: 'settings', explicit_disable: true };
+		return { enabled: false, source: 'settings', explicit_disable: true, direct_macs: [] };
 
 	// An unreadable canonical source can only fail closed; observed or persisted
 	// runtime state is diagnostic evidence, never a competing desired setting.
-	return { enabled: true, source: 'fail_closed', explicit_disable: false };
+	return { enabled: true, source: 'fail_closed', explicit_disable: false,
+		direct_macs: exceptions };
 };
 
 export function verify(runtime, wanted) {
-	valid_desired(wanted);
+	wanted = valid_desired(wanted);
 	return adapter(runtime).verify(wanted) === true;
 };
 
 export function install_bootstrap(runtime, wanted) {
-	valid_desired(wanted);
+	wanted = valid_desired(wanted);
 	let guard = adapter(runtime);
 	let verified = guard.verify(wanted) === true;
 

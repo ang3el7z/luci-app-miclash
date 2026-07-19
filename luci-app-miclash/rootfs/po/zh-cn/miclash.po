@@ -1330,8 +1330,8 @@ msgstr "清除订阅 URL"
 msgid "Clearing subscription URL..."
 msgstr "正在清除订阅 URL..."
 
-msgid "Client devices only through MiClash (Protection)"
-msgstr "设备仅通过 MiClash（保护）"
+msgid "Direct connection protection"
+msgstr "直连保护"
 
 msgid "Failed to clear subscription URL: %s"
 msgstr "清除订阅 URL 失败：%s"
@@ -1742,11 +1742,11 @@ msgstr "事件"
 msgid "Expert settings"
 msgstr "专家设置"
 
-msgid "Guard has highest precedence. A direct policy never disables or bypasses Guard protection."
-msgstr "Guard 具有最高优先级。直连策略绝不会禁用或绕过 Guard 保护。"
+msgid "Priority: Block → Direct → Inherit"
+msgstr "优先级：阻止 → 直连 → 继承"
 
-msgid "Guard precedence: fail-closed protection is evaluated before device direct/proxy policy."
-msgstr "Guard 优先级：先执行故障关闭保护，再执行设备直连/代理策略。"
+msgid "Direct devices use the router shared DNS. If Mihomo fails unexpectedly, access by domain name may be temporarily unavailable."
+msgstr "直连设备仍使用路由器的共享 DNS。若 Mihomo 意外故障，通过域名访问可能会暂时不可用。"
 
 msgid "Hostname"
 msgstr "主机名"
@@ -1918,7 +1918,7 @@ msgid "Failure cooldown (ms)"
 msgstr "失败冷却时间 (ms)"
 
 msgid "Guard outage"
-msgstr "Guard 故障"
+msgstr "保护故障"
 
 msgid "Internet restored"
 msgstr "互联网已恢复"
@@ -2152,3 +2152,15 @@ msgstr "监控中"
 
 msgid "Invalid diagnostics response"
 msgstr "诊断响应无效"
+
+msgid "Now: %s"
+msgstr "当前：%s"
+
+msgid "Saving…"
+msgstr "正在保存…"
+
+msgid "This device uses a private MAC address. The policy remains linked to this address and may stop applying if it changes."
+msgstr "此设备使用私有 MAC 地址。策略仍绑定到此地址，如果地址发生变化，策略可能不再生效。"
+
+msgid "No MiClash or Mihomo records match the current log level yet. Current level: %s"
+msgstr "当前日志级别下尚无 MiClash 或 Mihomo 记录。当前级别：%s"

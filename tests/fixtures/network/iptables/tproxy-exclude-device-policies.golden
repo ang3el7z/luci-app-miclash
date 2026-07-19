@@ -29,9 +29,9 @@ iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 67 --dport 68 -j RETU
 iptables -t filter -A MICLASH_GUARD_FORWARD -p udp --sport 68 --dport 67 -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -m set --match-set miclash_local4 dst -j RETURN
 iptables -t filter -A MICLASH_GUARD_FORWARD -j DROP
+iptables -t mangle -A MICLASH_PREROUTING -m mac --mac-source 02:00:00:00:00:50 -j DROP
 iptables -t mangle -A MICLASH_PREROUTING -i eth1 -j RETURN
 iptables -t mangle -A MICLASH_PREROUTING -j MICLASH_PROXY
-iptables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:50 -j DROP
 iptables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:51 -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -m mac --mac-source 02:00:00:00:00:51 -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 7894 --tproxy-mark 0x1
 iptables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local4 dst -j RETURN

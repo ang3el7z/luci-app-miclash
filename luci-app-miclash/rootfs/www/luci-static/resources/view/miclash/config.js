@@ -47,6 +47,7 @@ let visibilityChangeHandler = null;
 let subscriptionUpdateBusy = false;
 let logsLoaded = false;
 let pageGeneration = 0;
+let sessionExpired = false;
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
@@ -173,6 +174,10 @@ const appState = {
 };
 
 function notify(type, message) {
+	if (type === 'error' && view_miclash_api.isSessionExpired(message)) {
+		suspendForSessionExpiry();
+		return null;
+	}
 	const node = ui.addNotification(null, E('p', String(message || '')), type);
 	// "Auto-hide notifications" defaults to true; the toast disappears after a
 	// short timeout (longer for errors so the user has time to read them).
@@ -267,6 +272,10 @@ function clearOperationStatus() {
 }
 
 function setOperationError(error, options) {
+	if (view_miclash_api.isSessionExpired(error)) {
+		suspendForSessionExpiry();
+		return;
+	}
 	const opts = options || {};
 	const detail = getOperationDetail(error);
 	const message = getOperationMessage(error);
@@ -275,6 +284,18 @@ function setOperationError(error, options) {
 		dismissible: true,
 		autoClearMs: opts.autoClearMs == null ? 0 : Number(opts.autoClearMs)
 	}, opts));
+}
+
+function suspendForSessionExpiry() {
+	if (sessionExpired) return;
+	sessionExpired = true;
+	controlPollTimer = view_miclash_ui_shell.stopInterval(controlPollTimer);
+	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
+	updatePollTimer = view_miclash_ui_shell.stopInterval(updatePollTimer);
+	diagnosticsOwner.destroy();
+	notificationOwner.destroy();
+	managementOwner.destroy();
+	if (configApi) configApi.destroy();
 }
 
 function operationStageOptions(initialMessage) {
@@ -1456,7 +1477,7 @@ async function loadClashLogs() {
 }
 
 function formatLogHtml(raw) {
-	if (!raw) return '<span class="sbox-log-muted">No logs yet.</span>';
+	if (!raw) return emptyLogsHtml();
 
 	const rows = String(raw || '').split('\n')
 		.map((line) => view_miclash_logs.formatLine(line))
@@ -1479,7 +1500,7 @@ function formatLogHtml(raw) {
 		})
 		.filter((item) => !!item && !!item.message);
 
-	if (!rows.length) return '<span class="sbox-log-muted">No logs yet.</span>';
+	if (!rows.length) return emptyLogsHtml();
 	return rows.map((item) => {
 		return '<span class="sbox-log-line ' + safeText(item.levelClass || '') + ' ' + safeText(item.daemonClass || '') + '">' +
 			'<span class="sbox-log-time">' + safeText(item.time || '--:--:--') + '</span>' +
@@ -1488,6 +1509,18 @@ function formatLogHtml(raw) {
 			'<span class="sbox-log-message">' + safeText(item.message || item.text) + '</span>' +
 		'</span>';
 	}).join('\n');
+}
+
+function configuredLogLevel() {
+	const match = String(appState.configContent || '').match(/^\s*log-level\s*:\s*([^\s#]+)/mi);
+	return match ? String(match[1] || '').trim() : _('unknown');
+}
+
+function emptyLogsHtml() {
+	return '<span class="sbox-log-muted">' + safeText(
+		_('No MiClash or Mihomo records match the current log level yet. Current level: %s')
+			.format(configuredLogLevel())
+	) + '</span>';
 }
 
 async function initializeConfigEditor(content) {
@@ -1569,6 +1602,9 @@ function releaseConfigRuntime() {
 	if (editor) { try { editor.destroy(); } catch (error) {} editor = null; }
 	if (configApi) configApi.destroy();
 	configApi = null;
+	controlPollTimer = view_miclash_ui_shell.stopInterval(controlPollTimer);
+	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
+	updatePollTimer = view_miclash_ui_shell.stopInterval(updatePollTimer);
 }
 
 function resizeConfigEditor() {
@@ -2093,7 +2129,7 @@ function buildSettingsPaneHtml() {
 						'</div>' +
 						'<div class="sbox-runtime-switches">' +
 							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' /><span>' + safeText(_('Block QUIC (UDP/443)')) + '</span></label>' +
-							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' /><span>' + safeText(_('Client devices only through MiClash (Protection)')) + '</span></label>' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' /><span>' + safeText(_('Direct connection protection')) + '</span></label>' +
 							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' /><span>' + safeText(_('Store rules/providers on tmpfs')) + '</span></label>' +
 							'<label class="sbox-checkbox-row sbox-auto-update-row">' +
 								'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
@@ -2168,7 +2204,7 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Client devices only through MiClash (Protection)')) + '">' +
+			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Direct connection protection')) + '">' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
 			'</span>' +
@@ -2354,7 +2390,7 @@ function updateHeaderAndControlDom() {
 		guardPill.classList.remove('cbi-button', 'cbi-button-apply', 'cbi-button-neutral', 'cbi-button-positive', 'cbi-button-negative');
 		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
 		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
-		guardPill.title = _('Client devices only through MiClash (Protection)');
+		guardPill.title = _('Direct connection protection');
 	}
 	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
 }
@@ -3158,6 +3194,7 @@ return view.extend({
 	},
 
 	render: function(data) {
+		sessionExpired = false;
 		notificationOwner.destroy();
 		managementOwner.destroy();
 		releaseConfigRuntime();

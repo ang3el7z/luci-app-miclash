@@ -59,6 +59,10 @@ for (let transition in transitions) {
 
 assert_equal(guard.desired({ guard: { enabled: true } }, {}).enabled, true,
 	'valid settings enable Guard');
+assert_equal(sprintf('%J', guard.desired({ guard: { enabled: true } }, {
+	direct_macs: [ 'AC:BB:CC:DD:EE:10', 'ac:bb:cc:dd:ee:10' ]
+}).direct_macs), sprintf('%J', [ 'ac:bb:cc:dd:ee:10' ]),
+	'Guard desired state normalizes an exact unique Direct MAC set');
 assert_equal(guard.desired({ guard: { enabled: false } }, {}).enabled, false,
 	'valid settings allow explicit disable');
 assert_equal(guard.desired({ guard: { enabled: false } }, {
@@ -182,8 +186,38 @@ function with_duplicate_chain(text) {
 	return sprintf('%J', document);
 };
 
+function with_direct_accept(text, mac) {
+	let document = cloned_document(text), entries = [], inserted = false;
+	for (let entry in document.nftables) {
+		if (!inserted && entry.rule != null && type(entry.rule.expr?.[1]) == 'object' &&
+		    exists(entry.rule.expr[1], 'drop')) {
+			push(entries, { rule: {
+				family: 'inet', table: PRIMARY_TABLE, chain: 'protected_direct_drop_v1',
+				expr: [ { match: { op: '==', left: {
+					payload: { protocol: 'ether', field: 'saddr' }
+				}, right: mac } }, { accept: null } ]
+			} });
+			inserted = true;
+		}
+		push(entries, entry);
+	}
+	document.nftables = entries;
+	return sprintf('%J', document);
+};
+
 assert_equal(guard.verify_nft_table(valid_nft, PRIMARY_TABLE), true,
 	'real nft JSON topology verifies');
+let direct_mac = 'ac:bb:cc:dd:ee:10';
+let direct_nft = with_direct_accept(valid_nft, direct_mac);
+assert_equal(guard.verify_nft_table(direct_nft, PRIMARY_TABLE, [ direct_mac ]), true,
+	'exact Direct MAC accept verifies before terminal drops');
+assert_equal(guard.verify_nft_table(direct_nft, PRIMARY_TABLE, []), false,
+	'unexpected Direct MAC accept cannot weaken Guard');
+assert_equal(guard.verify_nft_table(valid_nft, PRIMARY_TABLE, [ direct_mac ]), false,
+	'a missing expected Direct MAC accept cannot verify');
+assert_true(index(guard.nft_ruleset(PRIMARY_TABLE, false, [ direct_mac ]),
+	'ether saddr "' + direct_mac + '" accept comment "miclash-guard-direct"') >= 0,
+	'generated early Guard rules include the explicit Direct MAC exception');
 assert_equal(guard.verify_nft_table(changed_chain(valid_nft, { hook: null }), PRIMARY_TABLE), false,
 	'unhooked chain must fail verification');
 assert_equal(guard.verify_nft_table(changed_chain(valid_nft, { prio: -309 }), PRIMARY_TABLE), false,

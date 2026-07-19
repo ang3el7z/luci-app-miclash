@@ -231,6 +231,7 @@ export function create(app) {
 		restart: (trigger) => reconcile_now(reason(trigger), null, 'restart')?.ready?.ok === true,
 		reload: (trigger) => reconcile_now(reason(trigger), null, 'repair')?.ready?.ok === true,
 		external: (trigger) => reconcile_now(reason(trigger), null, 'repair')?.ready?.ok === true,
+		apply: (trigger, stage) => reconcile_now(reason(trigger), stage, 'observe')?.ready?.ok === true,
 		run: (trigger) => {
 			trigger = reason(trigger);
 			return app.operations.submit('system.reconcile', 'system', { trigger }, (ctx) => {

@@ -5,13 +5,13 @@ function invalid() { errors.fail('INVALID_ARGUMENT'); };
 export function detect_package_manager(runtime) {
 	for (let candidate in [ [ 'apk', '/usr/bin/apk' ], [ 'apk', '/bin/apk' ],
 	    [ 'opkg', '/bin/opkg' ], [ 'opkg', '/usr/bin/opkg' ] ]) {
-		let result = null;
+		let metadata = null;
 		try {
-			result = runtime?.process?.run({ command: candidate[1], args: [ '--version' ],
-				timeout_ms: 5000 });
+			metadata = runtime?.fs?.stat(candidate[1]);
 		}
-		catch (error) { result = null; }
-		if (result?.code === 0) return candidate[0];
+		catch (error) { metadata = null; }
+		if (metadata?.type == 'file' && type(metadata.mode) == 'int' &&
+		    (metadata.mode & 0o111) != 0) return candidate[0];
 	}
 	return '';
 };

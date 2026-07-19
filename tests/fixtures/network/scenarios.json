@@ -212,7 +212,7 @@
         "ipv6"
       ],
       "existing_clash_tun": false,
-      "rationale": "Dual-stack MIXED split with MAC-stable device identity, block precedence, all four actions, and a scheduled direct policy resolved at the fixture snapshot.",
+      "rationale": "Dual-stack MIXED split with MAC-stable device identity, block precedence, a Guard-bypassing Direct exception, and legacy compiler coverage for proxy/inherit records.",
       "expected": {
         "nft": "mixed-explicit-guard-devices-dualstack.golden",
         "iptables": "mixed-explicit-guard-devices-dualstack.golden",

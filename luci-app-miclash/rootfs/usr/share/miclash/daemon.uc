@@ -427,6 +427,17 @@ export function compose(runtime, overrides) {
 			set: (patch) => modules.settings.save(runtime, patch)
 		};
 		let desired = settings_domain.get();
+		let device_app = null;
+		let native_network = modules.network.create(runtime);
+		let policy_network = {
+			apply: (settings) => {
+				if (device_app == null) errors.fail('HEALTH_FAILED');
+				let timestamp = int(runtime.clock.now() / 1000);
+				let device_policies = modules.devices.active_device_policies(device_app, timestamp);
+				return native_network.apply(settings, { device_policies });
+			},
+			cleanup: (settings) => native_network.cleanup(settings)
+		};
 		let reconcile_settings = {
 			get: settings_domain.get,
 			set: (patch) => {
@@ -440,7 +451,7 @@ export function compose(runtime, overrides) {
 			runtime.reconcile = modules.reconcile_adapter.create({
 				operations: operation_manager, service: service_adapter,
 				settings: reconcile_settings, guard: runtime.guard_control,
-				network: modules.network.create(runtime),
+				network: policy_network,
 				clock: runtime.clock, events: runtime.events
 			});
 		let notification_settings = clone(desired.notifications);
@@ -670,16 +681,47 @@ export function compose(runtime, overrides) {
 		push(close_domains, memory_domain);
 
 		let timezone_adapter = utc_timezones(runtime.timezones);
-		let device_app = { ...runtime, timezones: timezone_adapter, device_cache: {},
+		device_app = { ...runtime, timezones: timezone_adapter, device_cache: {},
 			external_interfaces: () => device_external_interfaces(
 				bounded_network_interfaces(runtime, settings_domain)) };
 		let devices_closed = false;
+		function apply_device_policy(stage) {
+			if (runtime.reconcile?.apply?.('device-policy', stage) !== true)
+				errors.fail('HEALTH_FAILED');
+			return true;
+		};
+		function mutate_device_policy(callback, stage) {
+			let strict = false;
+			try {
+				let guard_on = settings_domain.get()?.guard?.enabled === true ||
+					runtime.guard_control?.is_latched?.() === true;
+				if (guard_on) {
+					if (type(runtime.guard_control?.protect_strict) != 'function' ||
+					    runtime.guard_control.protect_strict() !== true)
+						errors.fail('HEALTH_FAILED');
+					strict = true;
+				}
+				let result = callback();
+				apply_device_policy(stage);
+				return result;
+			}
+			catch (error) {
+				if (strict) try { runtime.guard_control.protect(); } catch (restore_error) {}
+				errors.fail(errors.normalize(error).code);
+			}
+		};
 		let devices_domain = {
-			list: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.discover(device_app); },
+			list: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.discover_effective(device_app); },
 			timezones: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.timezones(device_app); },
 			policy_list: () => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.policy_list(device_app); },
-			policy_set: (policy) => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.policy_set(device_app, policy); },
-			policy_delete: (id, revision) => { if (devices_closed) errors.fail('HEALTH_FAILED'); return modules.devices.policy_delete(device_app, id, revision); },
+			policy_set: (policy, stage) => {
+				if (devices_closed) errors.fail('HEALTH_FAILED');
+				return mutate_device_policy(() => modules.devices.policy_set(device_app, policy), stage);
+			},
+			policy_delete: (id, revision, stage) => {
+				if (devices_closed) errors.fail('HEALTH_FAILED');
+				return mutate_device_policy(() => modules.devices.policy_delete(device_app, id, revision), stage);
+			},
 			close: () => { if (devices_closed) return false; devices_closed = true; return true; }
 		};
 		push(close_domains, devices_domain);

@@ -9,7 +9,7 @@ const SOURCE = 'luci';
 const POLL_MS = 30000;
 const MAX_POLL_MS = 300000;
 const MAC = /^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$/;
-const ACTIONS = [ 'inherit', 'proxy', 'direct', 'block' ];
+const ACTIONS = [ 'inherit', 'direct', 'block' ];
 
 function text(value, fallback) { return String(value == null || value === '' ? (fallback || '-') : value); }
 function normalizedMac(value) {
@@ -33,7 +33,13 @@ function deviceOnline(device) {
 		.some((item) => item?.current === true && item?.source === 'neighbor');
 }
 function explicitPolicy(policy) {
-	return !!policy && [ 'proxy', 'direct', 'block' ].includes(policy.action);
+	return !!policy && [ 'direct', 'block' ].includes(policy.action);
+}
+function policyPresentation(policy, effective) {
+	const configured = ACTIONS.includes(policy?.action) ? policy.action : 'inherit';
+	const enforced = ACTIONS.includes(effective?.action) ? effective.action : configured;
+	const safety = String(effective?.safety || 'ordinary');
+	return { configured, effective: enforced, safety, overridden: enforced !== configured };
 }
 function deviceDisplayName(label, unknownLabel) {
 	const unknown = String(unknownLabel || 'Unknown device');
@@ -80,7 +86,8 @@ function deviceRows(discovered, savedPolicies, vendorDatabase) {
 	const rows = [];
 	for (const [ mac, device ] of devices) {
 		const policy = policies.get(mac) || null;
-		rows.push({ mac, device, policy, explicit: explicitPolicy(policy), online: deviceOnline(device),
+		rows.push({ mac, device, policy, effective: device?.effective || null,
+			explicit: explicitPolicy(policy), online: deviceOnline(device),
 			label: view_miclash_device_vendors.resolveDeviceLabel(device, vendorDatabase) });
 	}
 	return rows.sort((left, right) => {
@@ -105,7 +112,7 @@ function create(options) {
 		typeof api.setDevicePolicy !== 'function' || typeof api.deleteDevicePolicy !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed devices API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, modalGeneration = 0;
-	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, retryMs = POLL_MS;
+	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, pendingMac = '', retryMs = POLL_MS;
 	let hydrated = false;
 	let vendorDatabase = null, vendorLoadState = 'idle';
 	const cancels = new Set();
@@ -151,10 +158,27 @@ function create(options) {
 			if (!finished && typeof cancel === 'function') cancels.add(cancel);
 		});
 	}
+	async function refreshAfterMutation() {
+		// The operation result is authoritative. Discovery is a separate live
+		// snapshot and may transiently fail while neighbor data changes; its
+		// scheduled retry must not turn a successful policy mutation into an
+		// error shown to the user.
+		try { await refresh(true); } catch (error) {}
+	}
 	const actionLabels = {
-		inherit: () => _('Inherit'), proxy: () => _('Proxy'),
-		direct: () => _('Direct'), block: () => _('Block')
+		inherit: () => _('Inherit'), direct: () => _('Direct'), block: () => _('Block')
 	};
+	function policyCell(row) {
+		const view = policyPresentation(row.policy, row.effective);
+		const children = [ E('strong', {}, (actionLabels[view.configured] || actionLabels.inherit)()) ];
+		if (row.explicit && view.overridden) {
+			const effective = (actionLabels[view.effective] || actionLabels.inherit)();
+			const guard = /^guard_/.test(view.safety) ? ' · ' + _('Guard') : '';
+			children.push(E('small', { 'class': 'sbox-device-effective' },
+				_('Now: %s').format(effective) + guard));
+		}
+		return E('span', { 'class': 'sbox-device-policy-value' }, children);
+	}
 	const dayLabels = [
 		() => _('Monday'), () => _('Tuesday'), () => _('Wednesday'),
 		() => _('Thursday'), () => _('Friday'), () => _('Saturday'), () => _('Sunday')
@@ -162,15 +186,19 @@ function create(options) {
 	function table(models) {
 		const rows = models.slice(0, 512).map((row) => {
 			const { device, mac, policy, explicit, online, label } = row;
+			const pending = pendingMac === mac;
 			const edit = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral',
-				'data-device-mac': mac }, explicit ? _('Change policy') : _('Set policy'));
+				'data-device-mac': mac, 'disabled': pending ? 'disabled' : null,
+				'aria-busy': pending ? 'true' : null }, pending
+				? [ E('span', { 'class': 'sbox-spinner' }), ' ', _('Saving…') ]
+				: (explicit ? _('Change policy') : _('Set policy')));
 			edit.addEventListener('click', () => openEditor(mac, device, policy));
 			return E('tr', {}, [
 				E('td', {}, deviceDisplayName(label, _('Unknown device'))),
 				E('td', {}, E('span', { 'class': online ? 'sbox-device-online' : 'sbox-device-offline' },
 					online ? _('Online') : _('Offline'))),
 				E('td', {}, currentAddresses(device).join(', ') || '-'), E('td', {}, text(mac)),
-				E('td', {}, (actionLabels[policy?.action || 'inherit'] || actionLabels.inherit)()), E('td', {}, edit)
+				E('td', {}, policyCell(row)), E('td', {}, edit)
 			]);
 		});
 		if (!rows.length) rows.push(E('tr', { 'class': 'sbox-device-empty' }, [ E('td', { 'colspan': '6', 'class': 'sbox-muted' }, _('No devices discovered.')) ]));
@@ -191,7 +219,7 @@ function create(options) {
 				E('span', { 'class': 'sbox-device-count', 'aria-live': 'polite' },
 					String(rows.length))
 			]),
-			E('p', { 'class': 'sbox-muted' }, _('Guard has highest precedence. A direct policy never disables or bypasses Guard protection.')),
+			E('p', { 'class': 'sbox-muted' }, _('Priority: Block → Direct → Inherit')),
 			content);
 	}
 	function needsVendorDatabase() {
@@ -221,7 +249,8 @@ function create(options) {
 			])));
 	}
 	function openEditor(mac, device, policy) {
-		const token = ++modalGeneration, schedule = policy?.schedule || null;
+		modalGeneration++;
+		const schedule = policy?.schedule || null;
 		const selectedZone = timezones.includes(schedule?.timezone) ? schedule.timezone : 'UTC';
 		const scheduleEnabled = E('input', { 'id': 'sbox-device-schedule-enabled', 'type': 'checkbox',
 			'checked': schedule ? 'checked' : null });
@@ -244,10 +273,15 @@ function create(options) {
 		const label = view_miclash_device_vendors.resolveDeviceLabel(device, vendorDatabase);
 		const body = E('div', { 'class': 'sbox-device-policy-editor sbox-modal-responsive' }, [
 			E('p', {}, [ E('strong', {}, deviceDisplayName(label, _('Unknown device'))), ' · ', text(mac) ]),
+			...(device?.identity?.persistent_policy_eligible === false
+				? [ E('p', { 'class': 'sbox-device-identity-warning' },
+					_('This device uses a private MAC address. The policy remains linked to this address and may stop applying if it changes.')) ]
+				: []),
 			E('label', { 'for': 'sbox-device-policy-action' }, _('Policy')), optionSelect(policy),
 			E('label', { 'class': 'sbox-checkbox-row', 'for': 'sbox-device-schedule-enabled' }, [ scheduleEnabled, _('Use schedule') ]),
 			scheduleFields,
-			E('p', { 'class': 'sbox-muted' }, _('Guard precedence: fail-closed protection is evaluated before device direct/proxy policy.')),
+			E('p', { 'class': 'sbox-muted' }, _('Priority: Block → Direct → Inherit')),
+			E('p', { 'class': 'sbox-muted' }, _('Direct devices use the router shared DNS. If Mihomo fails unexpectedly, access by domain name may be temporarily unavailable.')),
 			E('div', { 'class': 'right sbox-management-actions' }, [
 				...(policy ? [ E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-negative', 'data-action': 'delete' }, _('Delete')) ] : []),
 				E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-apply', 'data-action': 'save' }, _('Save')),
@@ -258,18 +292,30 @@ function create(options) {
 		scheduleEnabled.addEventListener('change', syncScheduleVisibility);
 		syncScheduleVisibility();
 		body.querySelector('[data-action="close"]').addEventListener('click', () => { modalGeneration++; ui.hideModal(); });
-		body.querySelector('[data-action="save"]').addEventListener('click', () => mutate(async () => {
-			const wanted = policyFromEditor(body, mac, policy);
-			await wait(await api.setDevicePolicy(wanted, SOURCE), _('Saving device policy…'));
-			if (!destroyed && token === modalGeneration) ui.hideModal();
-			await refresh(true);
-		}));
+		body.querySelector('[data-action="save"]').addEventListener('click', () => {
+			let wanted;
+			try { wanted = policyFromEditor(body, mac, policy); }
+			catch (error) { report(error); return; }
+			modalGeneration++; ui.hideModal();
+			if (wanted.action === 'inherit' && !policy) return;
+			pendingMac = mac; paint();
+			mutate(mac, async () => {
+				if (wanted.action === 'inherit')
+					await wait(await api.deleteDevicePolicy(policy.id, policy.revision, SOURCE),
+						_('Deleting device policy…'));
+				else
+					await wait(await api.setDevicePolicy(wanted, SOURCE), _('Saving device policy…'));
+				await refreshAfterMutation();
+			});
+		});
 		const remove = body.querySelector('[data-action="delete"]');
-		if (remove) remove.addEventListener('click', () => mutate(async () => {
-			await wait(await api.deleteDevicePolicy(policy.id, policy.revision, SOURCE), _('Deleting device policy…'));
-			if (!destroyed && token === modalGeneration) ui.hideModal();
-			await refresh(true);
-		}));
+		if (remove) remove.addEventListener('click', () => {
+			modalGeneration++; ui.hideModal(); pendingMac = mac; paint();
+			mutate(mac, async () => {
+				await wait(await api.deleteDevicePolicy(policy.id, policy.revision, SOURCE), _('Deleting device policy…'));
+				await refreshAfterMutation();
+			});
+		});
 		ui.showModal(_('Device policy'), body);
 		return body;
 	}
@@ -292,9 +338,14 @@ function create(options) {
 		}
 		return policy;
 	}
-	async function mutate(callback) {
-		if (busy || destroyed) return; busy = true;
-		try { await callback(); } catch (error) { report(error); } finally { busy = false; }
+	async function mutate(mac, callback) {
+		if (busy || destroyed) return; busy = true; pendingMac = mac; paint();
+		try { await callback(); }
+		catch (error) {
+			try { await refresh(true); } catch (refreshError) {}
+			report(error);
+		}
+		finally { busy = false; pendingMac = ''; paint(); }
 	}
 	async function refresh(force) {
 		if (destroyed || doc.hidden && !force) return;
@@ -326,5 +377,6 @@ function create(options) {
 }
 
 return baseclass.extend({
-	create, normalizedMac, currentAddresses, deviceRows, deviceDisplayName, loadVendorDatabase
+	create, normalizedMac, currentAddresses, deviceRows, deviceDisplayName, loadVendorDatabase,
+	policyPresentation
 });

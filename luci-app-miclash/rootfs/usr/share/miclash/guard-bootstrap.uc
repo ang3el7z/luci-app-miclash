@@ -5,6 +5,7 @@ import * as guard_latch from 'miclash.guard-latch';
 import * as boot_policy from 'miclash.guard-boot-policy';
 import * as runtime_module from 'miclash.runtime';
 import * as settings_module from 'miclash.settings';
+import * as devices from 'miclash.devices';
 import { atomic_write } from 'miclash.storage';
 
 const STATE_PATH = '/etc/miclash/guard-bootstrap.json';
@@ -66,12 +67,13 @@ function write_json(runtime, path, value, mode) {
 
 function production_adapter(runtime, backend) {
 	return {
-		verify: (wanted) => wanted.enabled ? backend.installed() : backend.absent(),
-		install: () => backend.install(),
+		verify: (wanted) => wanted.enabled ? backend.installed(wanted.direct_macs) : backend.absent(),
+		install: (wanted) => backend.install(wanted.direct_macs),
 		remove: () => backend.remove(),
 		persist: (wanted) => write_json(runtime, STATE_PATH, {
 			schema_version: 1,
-			enabled: wanted.enabled
+			enabled: wanted.enabled,
+			direct_macs: wanted.direct_macs
 		}, 0o600),
 		record_status: (status) => write_json(runtime, STATUS_PATH, {
 			...status,
@@ -90,9 +92,12 @@ function main() {
 	let settings = null;
 	try { settings = settings_module.load(runtime); }
 	catch (error) {}
+	let direct_macs = [];
+	try { direct_macs = devices.direct_macs(runtime, int(runtime.clock.now() / 1000)); }
+	catch (error) { direct_macs = []; }
 	// Any latch object, including corrupt files and symlinks, is an ON intent.
 	// Early boot and init remove are never authorized to weaken that barrier.
-	boot_policy.apply(runtime, settings, guard_latch.is_set(runtime), ARGV[0]);
+	boot_policy.apply(runtime, settings, guard_latch.is_set(runtime), ARGV[0], direct_macs);
 };
 
 main();

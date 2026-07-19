@@ -62,7 +62,9 @@ const checks = [
 		pass: /sbox-mode-select[^>]*aria-label/.test(config) &&
 			/sbox-config-select[^>]*aria-label/.test(config) &&
 			/sbox-subscription-url[^>]*aria-label/.test(config) &&
-			/sbox-notification-test-channel[\s\S]{0,180}aria-label/.test(settingsPanels) &&
+			settingsPanels.includes("'role': 'tablist'") &&
+			settingsPanels.includes("'aria-controls': 'sbox-notification-pane-' + name") &&
+			settingsPanels.includes("'aria-selected': notificationTab === name ? 'true' : 'false'") &&
 			uiShell.includes("const tabName = tab.getAttribute('data-' + tabAttr)") &&
 			uiShell.includes("const pane = paneNodes[tabName]") &&
 			uiShell.includes("setAttribute('aria-pressed'") && uiShell.includes("setAttribute('aria-controls'")

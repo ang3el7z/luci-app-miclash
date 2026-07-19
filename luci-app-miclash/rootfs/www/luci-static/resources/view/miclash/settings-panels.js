@@ -8,7 +8,7 @@ const MASK = '[REDACTED]';
 const SOURCE = 'luci';
 const POLL_MS = 30000;
 const MAX_POLL_MS = 300000;
-const KNOWN_CHANNELS = [ 'syslog', 'luci', 'telegram' ];
+const KNOWN_CHANNELS = [ 'luci', 'syslog', 'telegram' ];
 const KNOWN_EVENTS = [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 	'direct_fallback', 'memory_action', 'memory_outcome', 'subscription_outcome',
 	'update_outcome', 'internet_restored' ];
@@ -97,7 +97,7 @@ function create(options) {
 	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
 		dirty = false, retryMs = POLL_MS;
 	let hydrated = false;
-	let notificationTab = 'syslog';
+	let notificationTab = 'luci';
 	let state = { desired: {}, memory: {}, memorySettings: {}, telegram: {}, telegramSettings: {}, notifications: {} };
 	const cancels = new Set();
 
@@ -206,10 +206,10 @@ function create(options) {
 
 	function notificationSection() {
 		const desired = state.desired.notifications || {}, runtime = state.notifications || {};
-		const channelLabel = (name) => name === 'luci' ? _('LuCI') : name === 'telegram' ? _('Telegram') : 'syslog';
+		const channelLabel = (name) => name === 'syslog' ? _('Logs') : name === 'telegram' ? _('Telegram') : _('LuCI');
 		const tabs = KNOWN_CHANNELS.map((name) => E('button', {
 			'type': 'button',
-			'class': 'cbi-button sbox-notification-tab' + (notificationTab === name ? ' is-active' : ''),
+			'class': (notificationTab === name ? 'cbi-tab' : 'cbi-tab-disabled') + ' sbox-tab',
 			'role': 'tab',
 			'id': 'sbox-notification-tab-' + name,
 			'data-notification-tab': name,
@@ -252,7 +252,7 @@ function create(options) {
 		return E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-notifications-card sbox-management-card sbox-management-wide',
 			'data-panel': 'notifications' }, [
 			E('h4', {}, _('Notifications')),
-			E('div', { 'class': 'sbox-notification-tabs', 'role': 'tablist' }, tabs),
+			E('div', { 'class': 'cbi-tabmenu sbox-tabs sbox-notification-tabs', 'role': 'tablist' }, tabs),
 			...panes
 		]);
 	}
@@ -365,7 +365,8 @@ function create(options) {
 				notificationTab = selected;
 				for (const button of host.querySelectorAll('[data-notification-tab]')) {
 					const active = button.getAttribute('data-notification-tab') === selected;
-					button.classList.toggle('is-active', active);
+					button.classList.toggle('cbi-tab', active);
+					button.classList.toggle('cbi-tab-disabled', !active);
 					button.setAttribute('aria-selected', active ? 'true' : 'false');
 				}
 				for (const pane of host.querySelectorAll('[data-notification-pane]'))

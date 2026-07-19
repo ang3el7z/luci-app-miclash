@@ -917,19 +917,7 @@
 	gap: .25rem .65rem;
 }
 .sbox-notification-tabs {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	margin: 2px 0 12px;
-	padding-bottom: 10px;
-	border-bottom: 1px solid var(--sbox-border);
-}
-.sbox-notification-tab {
-	min-width: 86px;
-}
-.sbox-notification-tab.is-active {
-	color: var(--sbox-accent);
-	border-color: var(--sbox-accent);
+	margin-top: 2px;
 }
 .sbox-notification-pane[hidden] {
 	display: none !important;
@@ -1039,6 +1027,23 @@
 }
 .sbox-device-offline {
 	color: var(--sbox-muted);
+}
+.sbox-device-policy-value {
+	display: inline-flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.sbox-device-effective {
+	color: var(--sbox-muted);
+	font-size: 10.5px;
+	font-weight: 500;
+}
+.sbox-device-identity-warning {
+	padding: 8px 10px;
+	color: var(--sbox-warning);
+	background: color-mix(in srgb, var(--sbox-warning) 8%, transparent);
+	border: 1px solid color-mix(in srgb, var(--sbox-warning) 34%, var(--sbox-border));
+	border-radius: 7px;
 }
 
 .sbox-management-warning {
@@ -1308,10 +1313,10 @@
 }
 .sbox-settings-save-btn {
 	width: 100%;
-	min-height: 32px;
+	min-height: 38px;
 	padding-top: 5px;
 	padding-bottom: 5px;
-	font-size: 11px;
+	font-size: 12px;
 }
 @media (max-width: 560px) {
 	.sbox-settings-save-wrap {

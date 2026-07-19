@@ -204,6 +204,21 @@
           "mangle",
           "-A",
           "MICLASH_PREROUTING",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:50",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PREROUTING",
           "-i",
           "eth1",
           "-j",
@@ -219,21 +234,6 @@
           "MICLASH_PREROUTING",
           "-j",
           "MICLASH_PROXY"
-        ]
-      },
-      {
-        "command": "iptables",
-        "args": [
-          "-t",
-          "mangle",
-          "-A",
-          "MICLASH_PROXY",
-          "-m",
-          "mac",
-          "--mac-source",
-          "02:00:00:00:00:50",
-          "-j",
-          "DROP"
         ]
       },
       {
@@ -757,6 +757,21 @@
           "mangle",
           "-A",
           "MCL_PR_111111111111",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:50",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PR_111111111111",
           "-i",
           "eth1",
           "-j",
@@ -772,21 +787,6 @@
           "MCL_PR_111111111111",
           "-j",
           "MCL_PX_111111111111"
-        ]
-      },
-      {
-        "command": "iptables",
-        "args": [
-          "-t",
-          "mangle",
-          "-A",
-          "MCL_PX_111111111111",
-          "-m",
-          "mac",
-          "--mac-source",
-          "02:00:00:00:00:50",
-          "-j",
-          "DROP"
         ]
       },
       {
@@ -1168,6 +1168,21 @@
           "mangle",
           "-C",
           "MCL_PR_111111111111",
+          "-m",
+          "mac",
+          "--mac-source",
+          "02:00:00:00:00:50",
+          "-j",
+          "DROP"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PR_111111111111",
           "-i",
           "eth1",
           "-j",
@@ -1183,21 +1198,6 @@
           "MCL_PR_111111111111",
           "-j",
           "MCL_PX_111111111111"
-        ]
-      },
-      {
-        "command": "iptables",
-        "args": [
-          "-t",
-          "mangle",
-          "-C",
-          "MCL_PX_111111111111",
-          "-m",
-          "mac",
-          "--mac-source",
-          "02:00:00:00:00:50",
-          "-j",
-          "DROP"
         ]
       },
       {
@@ -2134,6 +2134,21 @@
         "mangle",
         "-A",
         "MCL_PR_111111111111",
+        "-m",
+        "mac",
+        "--mac-source",
+        "02:00:00:00:00:50",
+        "-j",
+        "DROP"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PR_111111111111",
         "-i",
         "eth1",
         "-j",
@@ -2149,21 +2164,6 @@
         "MCL_PR_111111111111",
         "-j",
         "MCL_PX_111111111111"
-      ]
-    },
-    {
-      "command": "iptables",
-      "args": [
-        "-t",
-        "mangle",
-        "-A",
-        "MCL_PX_111111111111",
-        "-m",
-        "mac",
-        "--mac-source",
-        "02:00:00:00:00:50",
-        "-j",
-        "DROP"
       ]
     },
     {
@@ -2377,8 +2377,10 @@
     ],
     "guard": true,
     "quic": true,
-    "server_ips": [],
-    "fakeip_cidrs": [],
+    "server_ips": [
+    ],
+    "fakeip_cidrs": [
+    ],
     "device_policies": [
       {
         "id": "blocked-console",
