@@ -2,6 +2,9 @@ import * as errors from 'miclash.errors';
 import * as redact from 'miclash.redact';
 import * as schema from 'miclash.schema';
 import * as storage from 'miclash.storage';
+import * as telegram_i18n from 'miclash.telegram-i18n';
+import * as telegram_menu from 'miclash.telegram-menu';
+import * as telegram_outbox from 'miclash.telegram-outbox';
 import * as telegram_transport from 'miclash.telegram-transport';
 
 const OFFSET_NAME = 'telegram-offset.json';
@@ -180,6 +183,11 @@ export function create(app) {
 	let timer = null;
 	let command_times = [];
 	let transport = telegram_transport.create(app);
+	let outbox = telegram_outbox.create(app.runtime, () => false);
+	let session = {
+		generation: 0, screen: 'main', awaiting: null,
+		command_locale: null, command_sync_error: null
+	};
 
 	state.last_update_id = read_offset(app.runtime);
 
@@ -230,6 +238,103 @@ export function create(app) {
 		}
 	};
 
+	function safe_call(callback, fallback) {
+		try { return callback(); }
+		catch (error) { return fallback; }
+	};
+
+	function component_state(health, name) {
+		let value = health?.[name]?.state ?? health?.components?.[name]?.state;
+		if (value == 'ok' || value == 'healthy') return 'ready';
+		return value ?? 'unknown';
+	};
+
+	function panel_model(screen) {
+		let wanted = safe_call(() => app.settings_get(), {});
+		let status = safe_call(() => app.status(), {});
+		let health = safe_call(() => app.health(), {});
+		let info = type(app.system_info) == 'function' ? safe_call(() => app.system_info(), {}) : {};
+		let observed_service = status?.observed?.service ?? status?.service ?? {};
+		let running = observed_service.running === true || observed_service.state == 'running' ||
+			status?.service_running === true;
+		let memory = screen == 'memory' || screen == 'main' ?
+			safe_call(() => app.memory_status(), {}) : {};
+		let update_status = type(app.updates_status) == 'function' ?
+			safe_call(() => app.updates_status(), {}) : {};
+		let configured_url = wanted?.core?.subscription_url_config_yaml;
+		if (type(configured_url) != 'string' || !length(configured_url))
+			configured_url = wanted?.core?.subscription_url;
+		return {
+			miclash_version: info.app_version ?? status?.versions?.miclash ?? 'unknown',
+			miclash_state: running ? 'running' : 'stopped',
+			mihomo_version: info.mihomo?.version ?? status?.versions?.mihomo ?? 'unknown',
+			mihomo_state: component_state(health, 'mihomo'),
+			proxy_mode: wanted?.core?.proxy_mode ?? 'unknown',
+			guard_enabled: wanted?.guard?.enabled === true,
+			guard_observed: status?.observed?.guard?.state ??
+				(wanted?.guard?.enabled === true ? 'enabled' : 'disabled'),
+			internet_state: status?.observed?.internet?.state ?? 'unknown',
+			service_running: running,
+			dns_state: component_state(health, 'dns'),
+			firewall_state: component_state(health, 'firewall'),
+			routing_state: component_state(health, 'routing'),
+			config_update_state: update_status.automatic_config?.state ??
+				(wanted?.updates?.auto_subscription === true ? 'running' : 'disabled'),
+			miclash_update_state: update_status.automatic_miclash?.state ??
+				(wanted?.updates?.auto_major === true ? 'running' : 'disabled'),
+			subscription_url: configured_url ?? '',
+			last_subscription_update: update_status.automatic_config?.last_success_at ?? '',
+			last_subscription_result: update_status.automatic_config?.last_result ?? '',
+			memory_rss: memory.rss_human ?? memory.rss ?? memory.used ?? '',
+			memory_baseline: memory.baseline_human ?? memory.baseline ?? '',
+			memory_state: memory.state ?? memory.phase ?? '',
+			last_memory_action: memory.last_action ?? memory.last_recovery ?? '',
+			logs: screen == 'logs' ? safe_call(() => app.logs_read(), '') : '',
+			diagnostics: screen == 'diagnostics' ?
+				sprintf('%J', safe_call(() => app.diagnostics_summary(), {})) : '',
+			updates: {
+				miclash_installed: info.app_version ?? update_status.miclash?.installed ?? '',
+				miclash_available: update_status.miclash?.available ?? update_status.available_miclash ?? '',
+				mihomo_installed: info.mihomo?.version ?? update_status.mihomo?.installed ?? '',
+				mihomo_available: update_status.mihomo?.available ?? update_status.available_mihomo ?? ''
+			}
+		};
+	};
+
+	function show_panel(screen, settings, target) {
+		let locale = telegram_i18n.locale(app.runtime);
+		session.generation++;
+		if (session.generation > 999999999) session.generation = 1;
+		let rendered = telegram_menu.render(screen, panel_model(screen), locale,
+			session.generation);
+		let identity = target ?? outbox.panel(), result = null;
+		if (identity != null)
+			try {
+				result = transport.edit(settings, identity.chat_id, identity.message_id,
+					rendered.text, rendered.reply_markup);
+			}
+			catch (error) { result = null; }
+		if (result == null)
+			result = transport.send(settings, settings.user_id, rendered.text,
+				rendered.reply_markup);
+		if (result == null) return false;
+		outbox.panel({ chat_id: settings.user_id, message_id: result.message_id,
+			generation: session.generation });
+		session.screen = screen;
+		return true;
+	};
+
+	function sync_commands(settings) {
+		let locale = telegram_i18n.locale(app.runtime), commands = telegram_menu.commands(locale);
+		if (transport.set_commands(settings, '', commands) !== true) return false;
+		let language = telegram_i18n.telegram_language(locale);
+		if (length(language) && transport.set_commands(settings, language, commands) !== true)
+			return false;
+		session.command_locale = locale;
+		session.command_sync_error = null;
+		return true;
+	};
+
 	function rate_allowed(now) {
 		let retained = [];
 		for (let timestamp in command_times)
@@ -243,28 +348,11 @@ export function create(app) {
 	};
 
 	function parse_command(text) {
-		if (type(text) != 'string' || !length(text) || length(text) > 4096 ||
-		    match(text, /[[:cntrl:]]/))
-			return null;
-		let simple = {
-			'/status': 'status', '/health': 'health', '/memory': 'memory',
-			'/diagnostics': 'diagnostics', '/logs': 'logs', '/help': 'help',
-			'/start': 'menu', '/menu': 'menu',
-			'/start_service': 'start_service', '/stop_service': 'stop_service',
-			'/restart_service': 'restart_service', '/reload_service': 'reload_service',
-			'/reboot_router': 'reboot_router',
-			'/update_subscription': 'update_subscription',
-			'/update_miclash': 'update_miclash', '/update_mihomo': 'update_mihomo',
-			'/guard_on': 'guard_on', '/guard_off': 'guard_off'
-		};
-		if (simple[text] != null)
-			return { name: simple[text], argument: null };
-		let found = match(text, /^\/subscription ([^[:space:]]+)$/);
-		if (found == null)
-			return null;
-		try { schema.url(found[1]); }
-		catch (error) { return null; }
-		return { name: 'subscription', argument: found[1] };
+		let command = telegram_menu.parse_command(text);
+		if (command?.name == 'subscription')
+			try { schema.url(command.argument); }
+			catch (error) { return null; }
+		return command;
 	};
 
 	function dispatch(command) {
@@ -312,12 +400,130 @@ export function create(app) {
 		invalid();
 	};
 
+	function callback_identity(query) {
+		return { chat_id: normalized_id(query?.message?.chat?.id),
+			message_id: query?.message?.message_id };
+	};
+
+	function execute_callback(target) {
+		if (target == 'start') return dispatch({ name: 'start_service', argument: null });
+		if (target == 'stop') return dispatch({ name: 'stop_service', argument: null });
+		if (target == 'reload') return dispatch({ name: 'reload_service', argument: null });
+		if (target == 'restart') return dispatch({ name: 'restart_service', argument: null });
+		if (target == 'reboot') return dispatch({ name: 'reboot_router', argument: null });
+		if (target == 'update_subscription')
+			return dispatch({ name: 'update_subscription', argument: null });
+		if (target == 'update_miclash') return dispatch({ name: 'update_miclash', argument: null });
+		if (target == 'update_mihomo') return dispatch({ name: 'update_mihomo', argument: null });
+		if (target == 'guard_on') return dispatch({ name: 'guard_on', argument: null });
+		if (target == 'guard_off') return dispatch({ name: 'guard_off', argument: null });
+		if (target == 'route_check') {
+			if (type(app.diagnostics_route_test) != 'function') errors.fail('NOT_FOUND');
+			return app.diagnostics_route_test({ target: 'one.one.one.one', interface: null,
+				device: null });
+		}
+		if (target == 'check_updates') return true;
+		invalid();
+	};
+
+	function handle_callback(update, settings) {
+		let query = update.callback_query, sender = normalized_id(query?.from?.id),
+			chat = normalized_id(query?.message?.chat?.id);
+		if (type(query) != 'object' || query.message?.chat?.type != 'private' ||
+		    query.from?.is_bot === true || sender != settings.user_id || chat != settings.user_id ||
+		    type(query.id) != 'string' || type(query.data) != 'string' ||
+		    type(query.message?.message_id) != 'int' || query.message.message_id < 1) {
+			state.last_update_id = update.update_id;
+			audit('callback', 'rejected', update.update_id);
+			return { handled: false, retryable: false };
+		}
+		try { transport.answer(settings, query.id, ''); }
+		catch (error) { log_failure('Telegram callback acknowledgement failed'); }
+		try { persist_offset(update.update_id); }
+		catch (error) {
+			log_failure('Telegram offset persistence failed');
+			return { handled: false, retryable: true, error: 'INTERNAL' };
+		}
+		let identity = callback_identity(query);
+		let action = telegram_menu.parse_callback(query.data, session.generation);
+		if (action == null) {
+			audit('callback', 'stale', update.update_id);
+			show_panel('main', settings, identity);
+			return { handled: true, retryable: false };
+		}
+		try {
+			if (action.name == 'open' || action.name == 'refresh')
+				show_panel(action.target, settings, identity);
+			else if (action.name == 'back') {
+				session.awaiting = null;
+				show_panel('main', settings, identity);
+			}
+			else if (action.name == 'cancel') {
+				session.awaiting = null;
+				show_panel('subscription', settings, identity);
+			}
+			else if (action.name == 'confirm')
+				show_panel('confirm_' + action.target, settings, identity);
+			else if (action.name == 'execute' && action.target == 'replace_subscription') {
+				session.awaiting = { kind: 'subscription_url', chat_id: chat,
+					expires_at: app.runtime.clock.now() + 600000 };
+				show_panel('subscription_input', settings, identity);
+			}
+			else if (action.name == 'execute') {
+				execute_callback(action.target);
+				show_panel(action.target == 'check_updates' ? 'updates' : 'main', settings, identity);
+			}
+			else invalid();
+		}
+		catch (error) {
+			audit(action.name + '.' + action.target, 'failed', update.update_id);
+			show_panel('main', settings, identity);
+			return { handled: false, retryable: false };
+		}
+		audit(action.name + '.' + action.target, 'accepted', update.update_id);
+		return { handled: true, retryable: false };
+	};
+
+	function handle_subscription_input(update, message, settings) {
+		if (session.awaiting?.kind != 'subscription_url') return null;
+		if (session.awaiting.chat_id != normalized_id(message.chat?.id) ||
+		    app.runtime.clock.now() > session.awaiting.expires_at) {
+			session.awaiting = null;
+			return { handled: false, retryable: false };
+		}
+		let url;
+		try { url = schema.url(message.text); }
+		catch (error) {
+			state.last_update_id = update.update_id;
+			show_panel('subscription_input', settings, outbox.panel());
+			return { handled: false, retryable: false };
+		}
+		try { persist_offset(update.update_id); }
+		catch (error) {
+			return { handled: false, retryable: true, error: 'INTERNAL' };
+		}
+		try { transport.delete(settings, settings.user_id, message.message_id); }
+		catch (error) { log_failure('Telegram accepted message deletion failed'); }
+		session.awaiting = null;
+		try { app.subscription_update(url, 'telegram'); }
+		catch (error) {
+			audit('subscription.replace', 'failed', update.update_id);
+			show_panel('subscription', settings, outbox.panel());
+			return { handled: false, retryable: false };
+		}
+		audit('subscription.replace', 'accepted', update.update_id);
+		show_panel('subscription', settings, outbox.panel());
+		return { handled: true, retryable: false };
+	};
+
 	function handle_update(update, settings) {
 		if (!settings.available || !settings.enabled || !settings.configured ||
 		    type(update) != 'object' ||
 		    type(update.update_id) != 'int' || update.update_id < 0 ||
 		    update.update_id <= state.last_update_id)
 			return { handled: false, retryable: false };
+		if (update.callback_query != null)
+			return handle_callback(update, settings);
 		let message = update.message;
 		let sender = normalized_id(message?.from?.id);
 		let chat = normalized_id(message?.chat?.id);
@@ -327,6 +533,8 @@ export function create(app) {
 			audit('message', 'rejected', update.update_id);
 			return { handled: false, retryable: false };
 		}
+		let input = handle_subscription_input(update, message, settings);
+		if (input != null) return input;
 		let command = parse_command(message.text);
 		if (command == null) {
 			state.last_update_id = update.update_id;
@@ -342,6 +550,11 @@ export function create(app) {
 			audit(command.name, 'rate_limited', update.update_id);
 			send_message('Rate limit exceeded', settings);
 			return { handled: false, retryable: false };
+		}
+		if (command.name == 'menu') {
+			audit(command.name, 'accepted', update.update_id);
+			show_panel('main', settings, null);
+			return { handled: true, retryable: false };
 		}
 		let response;
 		try { response = dispatch(command); }
@@ -367,8 +580,22 @@ export function create(app) {
 			last_success_at: state.last_success_at,
 			last_error: state.last_error,
 			retry_after_ms: state.retry_after_ms,
-			failures: state.failures
+			failures: state.failures,
+			panel_generation: session.generation,
+			panel_screen: session.screen,
+			awaiting: session.awaiting?.kind ?? null,
+			command_locale: session.command_locale,
+			command_sync_error: session.command_sync_error
 		};
+	};
+	controller.configure = () => {
+		let settings = configuration(app);
+		if (!settings.available || !settings.enabled || !settings.configured) return false;
+		try { return sync_commands(settings); }
+		catch (error) {
+			session.command_sync_error = errors.normalize(error).code;
+			return false;
+		}
 	};
 	controller.handle_update = (update) =>
 		handle_update(update, configuration(app)).handled;

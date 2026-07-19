@@ -283,6 +283,28 @@ export function create(app) {
 				// the worker so earlier serialized mutations are never rolled back.
 				let value = current();
 				let url = profile_url(profile, supplied_url, value);
+				if (replace_url === true) {
+					let key = URL_OPTIONS[profile], previous_url = value.core[key];
+					let next_patch = app.settings.validate({ core: { [key]: url } });
+					let rollback_patch = app.settings.validate({ core: { [key]: previous_url } });
+					ctx.stage('settings', 5, 'Saving replacement URL');
+					try {
+						let saved = app.settings.set(next_patch);
+						if (saved?.core?.[key] != url) errors.fail('INTERNAL');
+						value = saved;
+					}
+					catch (error) {
+						// Roll back only an incomplete URL write. Once the URL save is
+						// confirmed, later download/validation/activation failures retain it
+						// for the user's next retry while Active remains unchanged.
+						try {
+							if (current()?.core?.[key] == url)
+								app.settings.set(rollback_patch);
+						}
+						catch (rollback_error) {}
+						errors.fail('INTERNAL');
+					}
+				}
 				ctx.stage('attempt', 10, 'Subscription attempt started');
 				let candidate = fetch({ url });
 				ctx.stage('download', 35, 'Subscription downloaded');
@@ -302,34 +324,7 @@ export function create(app) {
 					validation_result: 'success', activation_result: 'pending',
 					reload_result: 'pending', interval_hours: candidate.interval_hours
 				};
-				let applied;
-				if (replace_url === true) {
-					let key = URL_OPTIONS[profile], rollback_state = null;
-					applied = app.config.apply_transaction_in_operation(ctx, profile, content, source,
-						metadata, {
-							prepare: () => {
-								ctx.stage('settings-prepare', 79, 'Durably preparing replacement URL');
-								let before = current(), previous_url = before.core[key];
-								let next_patch = app.settings.validate({ core: { [key]: url } });
-								let rollback_patch = app.settings.validate({ core: { [key]: previous_url } });
-								rollback_state = { previous_url, url, rollback_patch };
-								let saved = app.settings.set(next_patch);
-								if (saved?.core?.[key] != url) errors.fail('INTERNAL');
-								return rollback_state;
-							},
-							commit: (prepared) => {
-								let saved = app.settings.get();
-								return prepared?.url == url && saved?.core?.[key] == url;
-							},
-							rollback: (prepared) => {
-								let state = prepared ?? rollback_state;
-								if (state == null) return true;
-								let restored = app.settings.set(state.rollback_patch);
-								return restored?.core?.[key] == state.previous_url;
-							}
-						});
-				}
-				else applied = app.config.apply_in_operation(ctx, profile, content, source, metadata);
+				let applied = app.config.apply_in_operation(ctx, profile, content, source, metadata);
 				if (applied?.ok !== true) {
 					let failure = applied?.error ?? errors.new('HEALTH_FAILED');
 					if (applied?.activated === true && applied?.reload_ok !== true &&

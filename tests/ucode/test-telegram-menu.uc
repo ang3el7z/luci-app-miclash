@@ -88,7 +88,7 @@ for (let language in [ 'en', 'ru', 'zh-cn' ]) {
 }
 
 for (let screen in [ 'status', 'management', 'subscription', 'updates', 'guard',
-	'memory', 'logs', 'diagnostics', 'confirm_stop', 'confirm_guard_off',
+	'memory', 'logs', 'diagnostics', 'subscription_input', 'confirm_stop', 'confirm_guard_off',
 	'confirm_reboot', 'confirm_update_miclash', 'confirm_update_mihomo' ]) {
 	let rendered = menu.render(screen, model, 'en', 7);
 	assert_true(type(rendered.text) == 'string' && length(rendered.text));

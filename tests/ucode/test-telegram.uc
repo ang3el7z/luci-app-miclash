@@ -26,6 +26,25 @@ function update(id, text, sender, chat_type) {
 	};
 };
 
+function callback(id, data, message_id, sender) {
+	return {
+		update_id: id,
+		callback_query: {
+			id: 'callback-' + id,
+			from: { id: sender ?? 42, is_bot: false, first_name: 'Owner' },
+			message: {
+				message_id: message_id ?? 50,
+				chat: { id: sender ?? 42, type: 'private' }
+			},
+			data
+		}
+	};
+};
+
+function request_method(request) {
+	return match(request.url, /\/([A-Za-z]+)(\?|$)/)?.[1];
+};
+
 function active_timers(clock) {
 	let count = 0;
 	for (let timer in clock.timers)
@@ -47,10 +66,12 @@ function environment(changes) {
 		digest: fakes.digest(filesystem),
 		clock,
 		random: fakes.entropy(),
+		uci: fakes.uci({ luci: { main: { '.type': 'core', lang: options.locale ?? 'ru' } } }),
 		paths: { etc: '/etc/miclash', run: '/var/run/miclash', tmp: '/tmp/miclash' }
 	};
 	let settings = options.settings ?? {
-		telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42' }
+		telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42' },
+		core: { subscription_url: 'https://example.test/current', proxy_mode: 'tproxy' }
 	};
 	let requests = [], poll_replies = options.poll_replies ?? [];
 	let http = {
@@ -65,9 +86,11 @@ function environment(changes) {
 			}
 			if (options.send_failure)
 				die('DOWNLOAD_FAILED');
+			let method = request_method(request);
 			return { status: 200, headers: {}, body: sprintf('%J', {
 				ok: true,
-				result: index(request.url, '/sendMessage?') >= 0 ? { message_id: 1 } : true
+				result: method == 'sendMessage' ? { message_id: 50 } :
+					(method == 'editMessageText' ? { message_id: 50 } : true)
 			}) };
 		}
 	};
@@ -239,7 +262,8 @@ for (let command in commands) {
 	if (command.text == '/reboot_router')
 		env.submitted[0].worker({ stage: () => null });
 	let expected_calls = command.call == null ? [] : [ command.call ];
-	assert_equal(sprintf('%J', env.domain_calls), sprintf('%J', expected_calls), command.text);
+	if (command.text != '/start' && command.text != '/menu')
+		assert_equal(sprintf('%J', env.domain_calls), sprintf('%J', expected_calls), command.text);
 	let output = sprintf('%J', env.requests);
 	for (let secret in [ 'status-secret', 'memory-secret', 'diag-secret',
 		'log-secret', 'url-secret' ])
@@ -249,10 +273,12 @@ for (let command in commands) {
 // Commands are exact; /subscription alone, extra args, aliases, and bot suffixes reject.
 let exact_env = environment();
 let exact_controller = telegram.create(exact_env.app);
-for (let text in [ '/status now', '/status@miclash_bot', '/subscription',
+for (let text in [ '/status now', '/subscription',
 	'/subscription https://one.test/a https://two.test/b', '/unknown', ' /status' ])
 	assert_equal(exact_controller.handle_update(update(++command_id, text)), false, text);
 assert_equal(length(exact_env.submitted), 0);
+assert_equal(exact_controller.handle_update(update(++command_id, '/status@miclash_bot')), true,
+	'Telegram bot suffix should address the configured bot command');
 
 // Offset advances atomically under the persistent private authority and survives reboot.
 let poll_env = environment({ poll_replies: [ {
@@ -566,11 +592,71 @@ assert_equal(center.emit({
 }), true);
 assert_equal(healthy_deliveries, 1);
 
+// The interactive panel edits one message, acknowledges callbacks first, and
+// confirms dangerous button actions without slowing down direct slash commands.
+let panel_env = environment(), panel_controller = telegram.create(panel_env.app);
+assert_equal(panel_controller.handle_update(update(2000, '/start')), true);
+assert_equal(request_method(panel_env.requests[0]), 'sendMessage');
+assert_true(index(panel_env.requests[0].url, 'reply_markup=') >= 0);
+assert_equal(panel_controller.handle_update(callback(2001, 'g1:open:management')), true);
+assert_equal(request_method(panel_env.requests[1]), 'answerCallbackQuery');
+assert_equal(request_method(panel_env.requests[2]), 'editMessageText');
+assert_equal(panel_controller.handle_update(callback(2002, 'g2:confirm:stop')), true);
+assert_equal(length(panel_env.submitted), 0, 'confirmation screen executed stop');
+assert_equal(panel_controller.handle_update(callback(2003, 'g3:execute:stop')), true);
+assert_equal(panel_env.submitted[0].kind, 'service.stop');
+assert_equal(panel_controller.handle_update(callback(2003, 'g3:execute:stop')), false,
+	'duplicate callback executed twice');
+
+let direct_env = environment(), direct_controller = telegram.create(direct_env.app);
+assert_equal(direct_controller.handle_update(update(2100, '/stop_service')), true);
+assert_equal(direct_env.submitted[0].kind, 'service.stop');
+assert_equal(direct_controller.handle_update(update(2101, '/stop')), false);
+
+// Subscription replacement is a bounded conversation. Accepted URL messages
+// are deleted, while invalid input remains available for correction.
+let subscription_env = environment(), subscription_controller = telegram.create(subscription_env.app);
+assert_equal(subscription_controller.handle_update(update(3000, '/start')), true);
+assert_equal(subscription_controller.handle_update(
+	callback(3001, 'g1:open:subscription')), true);
+assert_equal(subscription_controller.handle_update(
+	callback(3002, 'g2:execute:replace_subscription')), true);
+let before_invalid = length(subscription_env.requests);
+assert_equal(subscription_controller.handle_update(update(3003, 'not-a-url')), false);
+assert_equal(length(subscription_env.submitted), 0);
+for (let index = before_invalid; index < length(subscription_env.requests); index++)
+	assert_true(request_method(subscription_env.requests[index]) != 'deleteMessage');
+assert_equal(subscription_controller.handle_update(
+	update(3004, 'https://subscriptions.example.test/new.yaml?token=user-secret')), true);
+assert_equal(subscription_env.submitted[0].kind, 'subscription.update');
+let subscription_call = null;
+for (let call in subscription_env.domain_calls)
+	if (call.method == 'subscription_update') subscription_call = call;
+assert_equal(subscription_call.args[0], 'https://subscriptions.example.test/new.yaml?token=user-secret');
+assert_true(index(join(',', map(subscription_env.requests, request_method)), 'deleteMessage') >= 0);
+
+let expired_env = environment(), expired_controller = telegram.create(expired_env.app);
+expired_controller.handle_update(update(3100, '/start'));
+expired_controller.handle_update(callback(3101, 'g1:open:subscription'));
+expired_controller.handle_update(callback(3102, 'g2:execute:replace_subscription'));
+expired_env.clock.advance(600001);
+assert_equal(expired_controller.handle_update(update(3103,
+	'https://subscriptions.example.test/expired')), false);
+assert_equal(length(expired_env.submitted), 0);
+
+// BotFather commands follow the active MiClash locale; synchronization failure
+// is reported but does not disable polling.
+let command_env = environment(), command_controller = telegram.create(command_env.app);
+assert_equal(command_controller.configure(), true);
+assert_equal(request_method(command_env.requests[0]), 'setMyCommands');
+assert_equal(request_method(command_env.requests[1]), 'setMyCommands');
+assert_true(index(command_env.requests[1].url, 'language_code=ru') >= 0);
+
 // API exposes only redacted Telegram reads and an isolated channel test.
 let api_env = environment();
 let controller = telegram.create(api_env.app);
 assert_equal(sprintf('%J', sort(keys(controller))), sprintf('%J', sort([
-	'start', 'stop', 'status', 'test', 'poll_once', 'handle_update', 'send_event'
+	'configure', 'start', 'stop', 'status', 'test', 'poll_once', 'handle_update', 'send_event'
 ])));
 let minimal_app = {
 	status: () => ({}), health: () => ({}), operation_get: () => null,

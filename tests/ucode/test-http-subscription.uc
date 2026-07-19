@@ -509,10 +509,10 @@ let replacement_health_op = replacement_health.client.replace({
 }, 'telegram');
 assert_equal(finish_subscription(replacement_health, replacement_health_op).error.code,
 	'HEALTH_FAILED');
-assert_equal(replacement_health.settings.get().core.subscription_url_config_yaml, '',
-	'failed activation did not roll back replacement URL');
-assert_equal(length(replacement_health.calls.settings), 2,
-	'failed activation did not run durable URL rollback');
+assert_equal(replacement_health.settings.get().core.subscription_url_config_yaml,
+	replacement_url, 'failed activation must retain the newly selected URL');
+assert_equal(length(replacement_health.calls.settings), 1,
+	'failed activation must not roll back the selected URL');
 
 // Queue admission is not a rollback snapshot. An earlier serialized settings
 // mutation may complete before this worker starts; a failed activation must
@@ -530,7 +530,7 @@ queued_replacement.settings.set({ core: {
 assert_equal(finish_subscription(queued_replacement, queued_replacement_op).error.code,
 	'HEALTH_FAILED');
 assert_equal(queued_replacement.settings.get().core.subscription_url_config_yaml,
-	queued_previous_url, 'failed queued replacement restored a stale admission-time URL');
+	replacement_url, 'worker must persist the user-selected replacement URL');
 
 // Admission metadata may be stale for a dynamically resolved saved URL. The
 // immutable worker result records the actual transport that was downloaded.
@@ -564,8 +564,10 @@ let failed_replacement_op = failed_replacement.client.replace({
 }, 'telegram');
 assert_equal(finish_subscription(failed_replacement, failed_replacement_op).error.code,
 	'DOWNLOAD_FAILED');
-assert_equal(length(failed_replacement.calls.settings), 0,
-	'failed replacement must not overwrite the saved URL');
+assert_equal(length(failed_replacement.calls.settings), 1,
+	'accepted replacement URL must be saved before download');
+assert_equal(failed_replacement.settings.get().core.subscription_url_config_yaml,
+	replacement_url, 'failed download must retain the selected URL for retry');
 assert_equal(direct_sub.calls.apply[0].extra.validation_result, 'success');
 assert_equal(direct_sub.ops.get(updated.id).result.interval_hours, 12);
 assert_true(index(sprintf('%J', direct_sub.ops.get(updated.id)),
