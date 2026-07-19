@@ -107,6 +107,7 @@ function fs_adapter() {
 	return {
 		readfile: (path) => fs.readfile(path),
 		writefile: (path, data) => fs.writefile(path, data),
+		popen: (command, mode) => fs.popen(command, mode),
 		open: (path, mode, perm) => fs.open(path, mode, perm),
 		read: (handle, amount) => handle.read(amount),
 		fstat: (handle) => fs.stat('/proc/self/fd/' + handle.fileno()),
@@ -446,6 +447,32 @@ function event_adapter() {
 
 function installed_timezones(filesystem) {
 	let cached = null;
+	function offset_record(name, timestamp, timezone) {
+		let popen = filesystem.popen ?? require('fs').popen;
+		if (type(popen) != 'function') return null;
+		let process = popen("/usr/bin/env TZ='" + timezone +
+			"' /bin/date -d @" + timestamp + ' +%z', 'r');
+		if (process == null) return null;
+		let output = '', chunk;
+		while ((chunk = process.read(32)) != null && length(chunk)) {
+			output += chunk;
+			if (length(output) > 16) { process.close(); return null; }
+		}
+		let status = process.close(), value = trim(output);
+		if (status != 0 || !match(value, /^[+-][0-9]{4}$/)) return null;
+		let hours = int(substr(value, 1, 2)), minutes = int(substr(value, 3, 2));
+		if (hours > 14 || minutes > 59) return null;
+		let sign = substr(value, 0, 1) == '-' ? -1 : 1;
+		return { name, from: timestamp, until: timestamp + 1,
+			initial_offset: sign * (hours * 3600 + minutes * 60), transitions: [] };
+	};
+	function local_timezone() {
+		let value = trim(filesystem.readfile('/etc/TZ') ?? '');
+		if (!length(value) || length(value) > 128 ||
+		    !match(value, /^[A-Za-z0-9_<>+,:.\/-]+$/) || index(value, '..') >= 0)
+			return null;
+		return value;
+	};
 	function list_zones() {
 		if (cached != null) return [ ...cached ];
 		let zones = [ 'UTC' ], seen = { UTC: true };
@@ -470,20 +497,13 @@ function installed_timezones(filesystem) {
 			    index(list_zones(), name) < 0) return null;
 			if (name == 'UTC') return { name, from: timestamp, until: timestamp + 1,
 				initial_offset: 0, transitions: [] };
-			let process = require('fs').popen('/usr/bin/env TZ=' + name +
-				' /bin/date -d @' + timestamp + ' +%z', 'r');
-			if (process == null) return null;
-			let output = '', chunk;
-			while ((chunk = process.read(32)) != null && length(chunk)) {
-				output += chunk;
-				if (length(output) > 16) { process.close(); return null; }
-			}
-			let status = process.close(), value = trim(output);
-			if (status != 0 || !match(value, /^[+-][0-9]{4}$/)) return null;
-			let sign = substr(value, 0, 1) == '-' ? -1 : 1;
-			let offset = sign * (int(substr(value, 1, 2)) * 3600 + int(substr(value, 3, 2)) * 60);
-			return { name, from: timestamp, until: timestamp + 1,
-				initial_offset: offset, transitions: [] };
+			return offset_record(name, timestamp, name);
+		},
+		resolve_local: (name, timestamp) => {
+			if (type(name) != 'string' || type(timestamp) != 'int' || timestamp < 0)
+				return null;
+			let timezone = local_timezone();
+			return timezone == null ? null : offset_record(name, timestamp, timezone);
 		}
 	};
 };

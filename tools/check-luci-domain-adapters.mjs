@@ -114,6 +114,14 @@ assert.equal(settingsModel.operationalSettingsChanged(mappedSettings, {
 	...unchangedOperationalForm,
 	selected: [ 'lan2', 'br-lan' ]
 }), true, 'an interface policy change must apply Mihomo settings');
+assert.equal(settingsModel.operationalSettingsChanged({
+	...mappedSettings,
+	mode: 'exclude', autoDetectWan: true, detectedWan: '', excludedInterfaces: []
+}, {
+	...unchangedOperationalForm,
+	mode: 'exclude', autoDetectWan: true, selected: [ 'wan' ]
+}, { detectedLan: 'br-lan', detectedWan: 'wan' }), false,
+	'a runtime-detected WAN checkbox must not create a false operational change');
 assert.deepEqual((await settingsModel.getNetworkInterfaces()).map((item) => item.name),
 	[ 'wan', 'br-lan', 'wlan0' ]);
 const networkSnapshot = await settingsModel.getNetworkSnapshot();

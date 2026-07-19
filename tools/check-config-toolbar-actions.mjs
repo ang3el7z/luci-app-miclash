@@ -92,7 +92,7 @@ check(config.includes("_('Validate')") && !config.includes("_('Validate YAML')")
 	'Draft action must use the approved concise Validate label.');
 check(config.includes("_('Clear editor content')") && !config.includes("_('Clear Editor')"),
 	'Clear Editor button must use the MiClash-specific clear action label.');
-check(config.includes('Direct connection protection') &&
+check(config.includes('Direct connection guard') &&
 	!config.includes('Client devices only through MiClash'),
 	'Guard text must use the consistent full label.');
 
@@ -115,7 +115,7 @@ check(config.includes('sbox-rulesets-action') && style.includes('.sbox-rulesets-
 	'Clearing subscription URL...',
 	'Subscription URL saved.',
 	'Subscription URL cleared.',
-	'Direct connection protection'
+	'Direct connection guard'
 ].forEach((msgid) => {
 	for (const [path, po] of locales) {
 		check(po.includes(`msgid "${msgid}"`) && !po.includes(`msgid "${msgid}"\nmsgstr ""`),

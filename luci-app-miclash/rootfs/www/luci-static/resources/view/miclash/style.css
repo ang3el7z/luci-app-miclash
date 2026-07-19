@@ -538,21 +538,6 @@
 	gap: 10px;
 	min-width: 0;
 }
-.sbox-zone-heading {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	min-width: 0;
-	padding: 0 2px 7px;
-	border-bottom: 1px solid var(--sbox-border);
-}
-.sbox-zone-heading h3 {
-	margin: 0;
-	color: var(--sbox-text);
-	font-size: 13px;
-	font-weight: 800;
-	line-height: 1.3;
-}
 .sbox-settings-card,
 .sbox-settings-block {
 	display: flex;
@@ -597,7 +582,7 @@
 }
 @supports (background: color-mix(in srgb, CanvasText 10%, transparent)) {
 	.sbox-overview-card {
-		background: color-mix(in srgb, var(--sbox-panel) 96%, var(--sbox-text) 4%);
+		background: color-mix(in srgb, var(--sbox-panel) 92%, var(--sbox-text) 8%);
 	}
 }
 .sbox-settings-summary-current {
@@ -928,11 +913,20 @@
 .sbox-notification-event-grid {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.sbox-device-heading {
+.sbox-device-scope-row {
 	display: flex;
 	align-items: center;
-	justify-content: flex-end;
+	justify-content: space-between;
 	gap: 12px;
+}
+.sbox-device-scope-copy {
+	display: grid;
+	min-width: 0;
+	gap: 3px;
+}
+.sbox-device-scope-copy p {
+	min-width: 0;
+	margin: 0;
 }
 .sbox-device-count {
 	flex: 0 0 auto;
@@ -1069,7 +1063,7 @@
 		grid-column: 1 / -1;
 	}
 	.sbox-overview-protection .sbox-diagnostics-facts {
-		grid-template-columns: repeat(3, minmax(0, 1fr));
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 5px 16px;
 	}
 }

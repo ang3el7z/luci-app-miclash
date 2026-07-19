@@ -17,6 +17,7 @@ import * as reconcile_adapter from 'miclash.reconcile-adapter';
 import * as network from 'miclash.network';
 import * as interface_scope from 'miclash.interface-scope';
 import * as subscription from 'miclash.subscription';
+import * as scheduler from 'miclash.scheduler';
 import * as updates from 'miclash.updates';
 import * as http from 'miclash.http';
 import * as redact from 'miclash.redact';
@@ -365,7 +366,7 @@ export function compose(runtime, overrides) {
 	let modules = {
 		operations, settings, storage, service, config, state, application,
 		api, memory, devices, notify, notification_settings, telegram, mutation_lock,
-		reconcile_adapter, network, interface_scope, subscription, updates, http, diagnostics, route_test, routing,
+		reconcile_adapter, network, interface_scope, subscription, scheduler, updates, http, diagnostics, route_test, routing,
 		mihomo_api, app_update_scheduler, device_vendor_update,
 		...(overrides ?? {})
 	};
@@ -842,6 +843,13 @@ export function compose(runtime, overrides) {
 			runtime, http: modules.http, operations: operation_manager,
 			config: configuration, settings: domain_settings
 		});
+		let subscription_scheduler_domain = modules.scheduler.create({
+			runtime, operations: operation_manager, settings: domain_settings,
+			subscription: subscription_domain
+		});
+		push(close_domains, { close: () => subscription_scheduler_domain.stop() });
+		if (subscription_scheduler_domain.start() !== true)
+			errors.fail('INTERNAL');
 		// Profile bytes and their subscription URL share one transaction. The
 		// configuration domain invokes rollback after any failed activation.
 		app.config_swap = (profile, source) => configuration.swap(profile, source, {
@@ -927,6 +935,7 @@ export function compose(runtime, overrides) {
 			architecture: () => bounded_system_info(runtime).architecture,
 			state: app.status, health: app.health, memory: app.memory_status,
 			updates: () => ({ ...updates_domain.status(),
+				automatic_config: subscription_scheduler_domain.status(),
 				automatic_miclash: app_update_domain.status(),
 				device_vendors: device_vendor_domain.status() }),
 			settings: settings_domain.get,
@@ -1060,6 +1069,7 @@ export function compose(runtime, overrides) {
 			transfers,
 			domains: { memory: memory_domain,
 				devices: devices_domain, notifications: notifications_domain,
+				subscription_scheduler: subscription_scheduler_domain,
 				app_update: app_update_domain, device_vendors: device_vendor_domain },
 			drain: () => app.set_draining(true),
 			// NORMAL_CLOSE_BEGIN

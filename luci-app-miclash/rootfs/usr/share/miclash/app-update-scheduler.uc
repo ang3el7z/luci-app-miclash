@@ -213,8 +213,9 @@ export function create(dependencies) {
 		if (state.next_check != null) {
 			let remaining = max(0, state.next_check - current);
 			let local = local_for(current);
-			delay = local.valid === true && local.in_window === true
-				? min(MINUTE, remaining) : remaining;
+			delay = state.last_error_code == 'CLOCK_INVALID' && local.valid === true
+				? 0 : (local.valid === true && local.in_window === true
+					? min(MINUTE, remaining) : remaining);
 		}
 		timer = runtime.clock.set_timeout(delay, () => { timer = null; api.tick(); });
 		if (timer == null || type(timer.cancel) != 'function') errors.fail('INTERNAL');
@@ -375,6 +376,7 @@ export function create(dependencies) {
 			state.last_error_code = 'CLOCK_INVALID'; state.next_check = current + 30 * MINUTE;
 			persist(); schedule_timer(); return api.status();
 		}
+		if (state.last_error_code == 'CLOCK_INVALID') state.last_error_code = null;
 		try { traffic = wan_activity.sample(current); }
 		catch (error) { traffic = { valid: false, quiet: false, samples: 0,
 			bytes_per_second: null, packets_per_second: null, reason: 'sample_failed' }; }

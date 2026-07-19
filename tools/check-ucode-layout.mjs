@@ -60,6 +60,17 @@ assert.match(makefile, /chmod 0700 \$\(1\)\/etc\/miclash/,
 assert.match(daemon, /^#!\/usr\/bin\/ucode\n/);
 assert.match(composition, /recover_interrupted\(\)/);
 assert.match(composition, /modules\.api\.register\(connection, app, transfers\)/);
+assert.match(composition, /import \* as scheduler from 'miclash\.scheduler';/,
+	'the daemon must import the config auto-update scheduler');
+assert.match(composition, /modules\.scheduler\.create\(\{[\s\S]*?subscription: subscription_domain[\s\S]*?\}\)/,
+	'the daemon must construct the config scheduler with the canonical subscription domain');
+assert.match(composition, /automatic_config: subscription_scheduler_domain\.status\(\)/,
+	'diagnostics must expose config auto-update scheduler status');
+assert.match(composition, /subscription_scheduler: subscription_scheduler_domain/,
+	'the composed daemon must expose ownership of the config scheduler domain');
+assert.ok(composition.indexOf('let subscription_domain = modules.subscription.create') <
+	composition.indexOf('let subscription_scheduler_domain = modules.scheduler.create'),
+	'the config scheduler must be created only after its subscription dependency');
 assert.match(daemon, /signal\(['"]SIGTERM['"]/);
 assert.match(daemon, /\.cancel\(\)/);
 assert.match(daemon, /uloop\.done\(\)/);

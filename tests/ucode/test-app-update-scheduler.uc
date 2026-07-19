@@ -194,6 +194,26 @@ let already_installed = environment([
 assert_equal(already_installed.machine.status().pending_operation_id, null);
 assert_equal(already_installed.machine.status().pending_target, null);
 
+// A router that gains a usable local timezone after an upgrade must not retain
+// the old CLOCK_INVALID state until its former retry deadline.
+let invalid_clock = environment([], { local_time: { observe: () => ({
+	valid: false, local_date: null, minute: null, in_window: false,
+	before_cutoff: false, next_window: null
+}) } });
+invalid_clock.machine.tick();
+assert_equal(invalid_clock.machine.status().last_error_code, 'CLOCK_INVALID');
+invalid_clock.machine.stop();
+let repaired_clock = environment([], {
+	filesystem: invalid_clock.filesystem,
+	local_time: { observe: () => ({ valid: true, local_date: '2026-07-17',
+		minute: 600, in_window: false, before_cutoff: false,
+		next_window: 1784340000000 }) }
+});
+repaired_clock.machine.start();
+repaired_clock.clock.advance(0);
+assert_equal(repaired_clock.machine.status().last_error_code, null);
+assert_equal(repaired_clock.machine.status().next_check, 1784340000000);
+
 let disabled = environment([ { version: 'v2.0.0', ready: true, readiness: 'ready' } ]);
 disabled.settings_value.updates.auto_major_miclash = false;
 disabled.machine.tick();

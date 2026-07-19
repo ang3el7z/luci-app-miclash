@@ -21,6 +21,9 @@ function offset_at(runtime, name, timestamp) {
 	let value;
 	try { value = runtime.timezones.resolve(name, timestamp); }
 	catch (error) { return null; }
+	if (value == null && type(runtime.timezones.resolve_local) == 'function')
+		try { value = runtime.timezones.resolve_local(name, timestamp); }
+		catch (error) { return null; }
 	if (type(value) != 'object' || value.name != name || type(value.from) != 'int' ||
 	    type(value.until) != 'int' || timestamp < value.from || timestamp >= value.until ||
 	    type(value.initial_offset) != 'int' || value.initial_offset < -50400 ||

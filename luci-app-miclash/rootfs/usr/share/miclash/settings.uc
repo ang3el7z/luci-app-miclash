@@ -391,7 +391,14 @@ export function save(runtime, patch) {
 		for (let section, values in normalized_patch)
 			for (let option, value in values) {
 				let kind = FIELDS[section][option];
-				if (uci.set(CONFIG, section, option, encoded(kind, value)) !== true)
+				let stored = encoded(kind, value);
+				if (kind == 'interfaces' && type(stored) == 'array' && !length(stored)) {
+					if (uci.get(CONFIG, section, option) != null &&
+					    uci.delete(CONFIG, section, option) !== true)
+						fail('INTERNAL');
+					continue;
+				}
+				if (uci.set(CONFIG, section, option, stored) !== true)
 					fail('INTERNAL');
 			}
 

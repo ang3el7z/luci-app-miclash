@@ -217,6 +217,27 @@ let timezone_runtime = runtime.create({
 assert_true(index(timezone_runtime.timezones.list(), 'Europe/Moscow') >= 0);
 assert_true(timezone_runtime.timezones.resolve('Europe/Moscow', 1700000000) != null);
 
+let minimal_timezone_fs = fakes.fs({ '/etc/TZ': 'MSK-3\n' });
+minimal_timezone_fs.popen = (command, mode) => {
+	assert_equal(command, "/usr/bin/env TZ='MSK-3' /bin/date -d @1784502000 +%z");
+	assert_equal(mode, 'r');
+	let read = false;
+	return {
+		read: () => { if (read) return null; read = true; return '+0300\n'; },
+		close: () => 0
+	};
+};
+let minimal_timezone_runtime = runtime.create({
+	fs: minimal_timezone_fs, digest: fakes.digest(minimal_timezone_fs),
+	random: fakes.entropy(), clock: fakes.clock(0), process: fakes.process(),
+	uci: fakes.uci({}), ubus: { connect: () => null }, http: { request: () => null }
+});
+assert_true(type(minimal_timezone_runtime.timezones.resolve_local) == 'function');
+let local_timezone = minimal_timezone_runtime.timezones.resolve_local(
+	'Europe/Moscow', 1784502000);
+assert_equal(local_timezone.name, 'Europe/Moscow');
+assert_equal(local_timezone.initial_offset, 10800);
+
 let fake_result = validation_fake.run({ command: '/bin/true' });
 assert_equal(fake_result.code, 0);
 assert_equal(fake_result.stdout, null);

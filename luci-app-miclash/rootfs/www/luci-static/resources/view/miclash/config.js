@@ -1895,12 +1895,11 @@ function buildSettingsSummary() {
 
 	const s = appState.settings;
 	const lines = [];
+	lines.push([ _('Operating mode'), s.mode === 'explicit' ? _('Selected interfaces') : _('Exclusions') ]);
 
 	if (s.mode === 'explicit') {
-		lines.push([ _('Mode'), _('Explicit mode: proxy only selected interfaces') ]);
 		if (s.autoDetectLan && appState.detectedLan) lines.push([ _('Interfaces'), appState.detectedLan ]);
 	} else {
-		lines.push([ _('Mode'), _('Exclude mode: proxy all interfaces except selected ones') ]);
 		if (s.autoDetectWan && appState.detectedWan) lines.push([ _('WAN'), appState.detectedWan ]);
 	}
 
@@ -2071,8 +2070,7 @@ function buildSettingsPaneHtml() {
 				'</div>' +
 			'</section>' +
 
-			'<section class="sbox-settings-zone sbox-settings-zone-routing" aria-labelledby="sbox-routing-title">' +
-				'<div class="sbox-zone-heading"><h3 id="sbox-routing-title">' + safeText(_('Routing')) + ' / ' + safeText(_('Interfaces')) + '</h3></div>' +
+			'<section class="sbox-settings-zone sbox-settings-zone-routing">' +
 				'<div class="sbox-settings-card sbox-routing-composite">' +
 					'<div class="sbox-routing-config-grid">' +
 						'<div class="sbox-settings-subgroup sbox-traffic-scope">' +
@@ -2113,8 +2111,7 @@ function buildSettingsPaneHtml() {
 				'</div>' +
 			'</section>' +
 
-			'<section class="sbox-settings-zone sbox-settings-zone-updates" aria-labelledby="sbox-updates-title">' +
-				'<div class="sbox-zone-heading"><h3 id="sbox-updates-title">' + safeText(_('Release channels')) + ' / ' + safeText(_('Additional')) + '</h3></div>' +
+			'<section class="sbox-settings-zone sbox-settings-zone-updates">' +
 				'<div class="sbox-settings-pair-grid">' +
 					buildReleaseChannelSectionHtml(s) +
 					'<article class="sbox-settings-card sbox-runtime-card">' +
@@ -2129,7 +2126,7 @@ function buildSettingsPaneHtml() {
 						'</div>' +
 						'<div class="sbox-runtime-switches">' +
 							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' /><span>' + safeText(_('Block QUIC (UDP/443)')) + '</span></label>' +
-							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' /><span>' + safeText(_('Direct connection protection')) + '</span></label>' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' /><span>' + safeText(_('Direct connection guard')) + '</span></label>' +
 							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' /><span>' + safeText(_('Store rules/providers on tmpfs')) + '</span></label>' +
 							'<label class="sbox-checkbox-row sbox-auto-update-row">' +
 								'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
@@ -2146,15 +2143,13 @@ function buildSettingsPaneHtml() {
 				'</div>' +
 			'</section>' +
 
-			'<section class="sbox-settings-zone sbox-settings-zone-integrations" aria-labelledby="sbox-integrations-title">' +
-				'<div class="sbox-zone-heading"><h3 id="sbox-integrations-title">' + safeText(_('Memory Guard')) + ' / Telegram / ' + safeText(_('Notifications')) + '</h3></div>' +
+			'<section class="sbox-settings-zone sbox-settings-zone-integrations">' +
 				'<div id="sbox-management-panels" class="sbox-management-grid">' +
 					'<section id="sbox-management-settings" class="sbox-management-module sbox-management-settings"></section>' +
 				'</div>' +
 			'</section>' +
 
-			'<section class="sbox-settings-zone sbox-settings-zone-devices" aria-labelledby="sbox-devices-title">' +
-				'<div class="sbox-zone-heading"><h3 id="sbox-devices-title">' + safeText(_('Device policies')) + '</h3></div>' +
+			'<section class="sbox-settings-zone sbox-settings-zone-devices">' +
 				'<section id="sbox-management-devices" class="sbox-settings-card sbox-management-module sbox-management-wide"></section>' +
 			'</section>' +
 
@@ -2204,7 +2199,7 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Direct connection protection')) + '">' +
+			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Direct connection guard')) + '">' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
 			'</span>' +
@@ -2390,7 +2385,7 @@ function updateHeaderAndControlDom() {
 		guardPill.classList.remove('cbi-button', 'cbi-button-apply', 'cbi-button-neutral', 'cbi-button-positive', 'cbi-button-negative');
 		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
 		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
-		guardPill.title = _('Direct connection protection');
+		guardPill.title = _('Direct connection guard');
 	}
 	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
 }
@@ -2523,7 +2518,10 @@ async function saveAllSettings() {
 			before?.updates?.miclash_release_channel);
 		const previousMihomoReleaseChannel = normalizeReleaseChannel(
 			before?.updates?.mihomo_release_channel);
-		const runtimeChanged = operationalSettingsChanged(appState.settings, formState);
+		const runtimeChanged = operationalSettingsChanged(appState.settings, formState, {
+			detectedLan: appState.detectedLan,
+			detectedWan: appState.detectedWan
+		});
 		setOperationStatus('running', _('Saving settings...'));
 
 		await awaitTypedOperation(await configApi.settings_set({
@@ -3230,7 +3228,11 @@ return view.extend({
 		appState.detectedWan = appState.settings.detectedWan || networkSnapshot.detectedWan || '';
 
 		pageRoot = E('div', { 'class': 'sbox-page' }, [
-			E('link', { 'rel': 'stylesheet', 'href': L.resource('view/miclash/style.css') }),
+			E('link', {
+				'rel': 'stylesheet',
+				'href': L.resource('view/miclash/style.css') + '?v=' +
+					encodeURIComponent(String(appState.versions?.app || 'unknown')) + '-ui2'
+			}),
 			E('div', { 'id': 'sbox-root' })
 		]);
 

@@ -473,6 +473,7 @@ export function uci(initial) {
 		commit_calls: 0,
 		cursor_calls: 0,
 		fail_set_at: null,
+		reject_empty_lists: false,
 		fail_commit: false,
 		on_cursor: null,
 		pending_changes: {},
@@ -499,6 +500,7 @@ export function uci(initial) {
 			fake.set_calls++;
 			push(fake.calls, { operation: 'set', config, section, option, value: clone(value) });
 			if (fake.fail_set_at == fake.set_calls) return null;
+			if (fake.reject_empty_lists && type(value) == 'array' && !length(value)) return null;
 			values[config] ??= {};
 			if (value == null) {
 				if (type(option) != 'string' || !length(option) ||

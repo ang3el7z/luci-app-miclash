@@ -18,6 +18,9 @@ assert.match(configSource, /Explicit mode: proxy only selected interfaces/);
 assert.match(configSource, /Exclude mode: proxy all interfaces except selected ones/);
 assert.match(configSource, /_\('Proxy Mode'\)/);
 assert.match(configSource, /_\('Tun stack'\)/);
+assert.match(configSource,
+	/lines\.push\(\[ _\('Operating mode'\), s\.mode === 'explicit' \? _\('Selected interfaces'\) : _\('Exclusions'\) \]\)/,
+	'routing overview must use one concise operating-mode row');
 assert.match(configSource, /view\.miclash\.api/);
 assert.match(configSource, /view\.miclash\.diagnostics-panel/);
 assert.match(configSource, /sbox-diagnostics-summary/);
@@ -37,6 +40,15 @@ assert.match(css, /\.sbox-overview-card\s*\{[^}]*background:\s*var\(--sbox-panel
 	'overview cards must be brighter than ordinary settings surfaces');
 assert.match(css, /@supports[^}]*color-mix[\s\S]*\.sbox-overview-card[^}]*color-mix/s,
 	'overview brightness should use a supported theme-aware color mix');
+assert.match(css,
+	/color-mix\(in srgb, var\(--sbox-panel\) 92%, var\(--sbox-text\) 8%\)/,
+	'overview cards must remain theme-aware while using the approved brighter surface');
+assert.match(css,
+	/@media \(max-width: 1050px\)[\s\S]*?\.sbox-overview-protection \.sbox-diagnostics-facts\s*\{[^}]*grid-template-columns:\s*repeat\(2,/,
+	'medium-width Memory Guard facts must form a balanced two-column grid');
+assert.match(panelSource,
+	/sbox-overview-health sbox-overview-components[\s\S]*?_\('Components'\)/,
+	'the loaded Components card must use its spacing class and concise title');
 
 class MiniNode {
 	constructor(tag, attrs = {}) {
@@ -207,9 +219,13 @@ const replies = {
 		memory: { enabled: true, current_rss_kb: 102400, baseline_rss_kb: 81920,
 			phase: 'monitoring', cooldown_until: 1710000200000 },
 		last_repair: { component: 'firewall', action: 'reconcile', result: 'success', at: 1710000000 },
-		updates: { running: true, enabled: true, last_activation: 1710000100000,
-			automatic_miclash: { enabled: true, readiness: 'assets_pending',
-				publication_retry_count: 1, next_check: 1710000300000 } },
+		updates: {
+			automatic_config: { running: true, enabled: true, reason: null,
+				next_attempt: 1710000300000, failure_count: 0, last_failure_code: null },
+			automatic_miclash: { running: true, enabled: true, local_time_valid: true,
+				readiness: 'assets_pending', publication_retry_count: 1,
+				next_check: 1710000300000, last_error_code: 'ASSETS_PENDING' }
+		},
 		subscription: { configured: true, transport: 'https', insecure: false },
 		telegram: { enabled: true, configured: true }
 	}
@@ -250,10 +266,12 @@ assert.equal(host.querySelectorAll('.sbox-loading-surface').length, 0,
 assert.deepEqual(calls.map((call) => call[0]),
 	['diagnosticsSummary'], 'summary refresh must use one cached diagnostics RPC');
 const summaryText = host.textContent;
-for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Memory Guard', 'Mihomo memory (RSS)',
-	'Status', 'Baseline', 'Last action', 'Subscription', 'Telegram',
+for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Memory monitoring', 'Mihomo memory (RSS)',
+	'Status', 'Baseline', 'Last action', 'Config auto-update', 'MiClash auto-update',
 	'Download diagnostic report'])
 	assert.ok(summaryText.includes(label), `summary is missing ${label}`);
+assert.doesNotMatch(summaryText, /Subscription|Telegram/,
+	'configuration and optional integrations must not be presented as components');
 for (const obsolete of ['Pressure', 'Cooldown', 'Recovery'])
 	assert.doesNotMatch(summaryText, new RegExp(obsolete), `memory overview still exposes ${obsolete}`);
 assert.doesNotMatch(summaryText, /Details|Route test/,
@@ -279,8 +297,14 @@ assert.match(summaryText, /Mihomo memory \(RSS\)100\.0 MiB/);
 assert.match(summaryText, /StatusMonitoring/);
 assert.match(summaryText, /Baseline80\.0 MiB/);
 assert.match(summaryText, /Last actionNot required/);
-assert.match(summaryText, new RegExp(new Date(1710000100000).toLocaleString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-	'real scheduler last_activation was not rendered');
+assert.ok(summaryText.indexOf('Status') < summaryText.indexOf('Mihomo memory (RSS)'),
+	'Memory Guard status must be its first fact');
+assert.match(summaryText, /Config auto-update●Scheduled/,
+	'healthy config scheduler must expose its scheduled wait');
+assert.match(summaryText, /MiClash auto-update●Waiting/,
+	'publication wait must not be presented as a failure');
+assert.equal(host.querySelectorAll('.sbox-diagnostics-state-warning').length >= 3, true,
+	'scheduled update rows must use the warning/waiting color without becoming errors');
 assert.equal(host.querySelector('img'), null, 'summary created an unexpected element');
 const statusFallback = panel.renderSummary({
 	status: { desired: { guard: { enabled: false } }, observed: { service: { running: true } } },
@@ -311,6 +335,32 @@ const readinessHealth = panel.renderSummary({ summary: {
 for (const label of [ 'Mihomo', 'DNS', 'Firewall', 'Routing' ])
 	assert.match(readinessHealth, new RegExp(label + '●Ready'),
 		`${label} must derive from cached readiness components`);
+
+const schedulerStates = [
+	[{ automatic_config: { running: true, enabled: false, reason: 'disabled' },
+		automatic_miclash: { running: true, enabled: false } },
+		/Config auto-update●Disabled[\s\S]*MiClash auto-update●Disabled/],
+	[{ automatic_config: { running: true, enabled: false, reason: 'no_url' },
+		automatic_miclash: { running: true, enabled: true, local_time_valid: true,
+			next_check: 1710000300000 } },
+		/Config auto-update●Not configured[\s\S]*MiClash auto-update●Scheduled/],
+	[{ automatic_config: { running: true, enabled: true, last_failure_code: 'DOWNLOAD_FAILED' },
+		automatic_miclash: { running: true, enabled: true, local_time_valid: false,
+			last_error_code: 'CLOCK_INVALID' } },
+		/Config auto-update●Failed[\s\S]*MiClash auto-update●Clock unavailable/],
+	[{ automatic_config: { running: true, enabled: true, pending_operation_id: 'op_1' },
+		automatic_miclash: { running: true, enabled: true, local_time_valid: true,
+			pending_operation_id: 'op_2' } },
+		/Config auto-update●Updating[\s\S]*MiClash auto-update●Updating/]
+];
+for (const [updates, expected] of schedulerStates) {
+	const rendered = panel.renderSummary({ summary: { ...replies.summary, updates } });
+	assert.match(rendered.textContent, expected);
+}
+const schedulerFailure = panel.renderSummary({ summary: { ...replies.summary,
+	updates: schedulerStates[2][0] } });
+assert.equal(schedulerFailure.querySelectorAll('.sbox-diagnostics-state-error').length >= 2, true,
+	'real scheduler failures must use the error color');
 
 const disabledMemory = panel.renderSummary({ summary: {
 	...replies.summary,

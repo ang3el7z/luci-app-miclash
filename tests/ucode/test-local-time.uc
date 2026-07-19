@@ -49,3 +49,23 @@ let transition = local_time.create({
 });
 assert_equal(transition.observe(1774744200000).minute, 90);
 assert_equal(transition.observe(1774747800000).minute, 210);
+
+// Minimal OpenWrt images may keep a valid POSIX /etc/TZ value without the
+// optional IANA zoneinfo database. The local router zone remains usable for
+// the nightly scheduler through the bounded runtime fallback.
+let posix_fallback = local_time.create({
+	uci: fakes.uci({ system: { main: { '.type': 'system', zonename: 'Europe/Moscow' } } }),
+	timezones: {
+		resolve: () => null,
+		resolve_local: (name, timestamp) => ({
+			name, from: timestamp, until: timestamp + 1,
+			initial_offset: 3 * 3600, transitions: []
+		})
+	}
+});
+let moscow_night = posix_fallback.observe(1784503800000); // 2026-07-20 02:30 MSK
+assert_true(moscow_night.valid, 'POSIX local timezone fallback is accepted');
+assert_equal(moscow_night.local_date, '2026-07-20');
+assert_equal(moscow_night.minute, 150);
+assert_equal(moscow_night.in_window, true);
+assert_equal(moscow_night.next_window, 1784588400000);

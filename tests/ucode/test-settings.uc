@@ -117,6 +117,29 @@ assert_equal(normalized.telegram.enabled, true);
 assert_equal(normalized_env.cursor.commit_calls, 1);
 assert_true(normalized_env.cursor.set_calls > 0);
 
+let empty_lists_env = fake_runtime({ miclash: {
+	interfaces: { '.type': 'interfaces', included: [ 'br-lan' ], excluded: [ 'wan' ] },
+	notifications: { '.type': 'notifications', syslog_events: 'failure' }
+} });
+empty_lists_env.cursor.reject_empty_lists = true;
+let empty_lists = settings.save(empty_lists_env.rt, {
+	interfaces: { included: [], excluded: [] },
+	notifications: { syslog_events: [] }
+});
+assert_json_equal(empty_lists.interfaces.included, []);
+assert_json_equal(empty_lists.interfaces.excluded, []);
+assert_json_equal(empty_lists.notifications.syslog_events, []);
+assert_equal(length(filter(empty_lists_env.cursor.calls,
+	(call) => call.operation == 'set' && type(call.value) == 'array' && !length(call.value))), 0,
+	'empty UCI lists must be represented by absent options');
+assert_equal(length(filter(empty_lists_env.cursor.calls,
+	(call) => call.operation == 'delete')), 2,
+	'existing interface options must be deleted when their effective value becomes empty');
+assert_equal(length(filter(empty_lists_env.cursor.calls,
+	(call) => call.operation == 'set' && call.section == 'notifications' &&
+		call.option == 'syslog_events' && call.value == '')), 1,
+	'an empty notification event selection must remain an explicit empty value');
+
 let auto_major_env = fake_runtime();
 assert_equal(settings.save(auto_major_env.rt,
 	{ updates: { auto_major_miclash: false } }).updates.auto_major_miclash, false);

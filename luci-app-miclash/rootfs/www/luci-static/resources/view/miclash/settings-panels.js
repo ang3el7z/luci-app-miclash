@@ -141,7 +141,7 @@ function create(options) {
 				'step': '1', 'value': settings[name] })
 		));
 		const children = [
-			E('h4', {}, _('Memory Guard')),
+			E('h4', {}, _('Memory monitoring')),
 			check('sbox-management-memory-enabled', _('Monitor abnormal Mihomo memory usage'), desired.enabled === true),
 			E('p', { 'class': 'sbox-muted sbox-settings-help' },
 				_('Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure.')),
@@ -251,7 +251,7 @@ function create(options) {
 		if (!host || destroyed) return;
 		host.replaceChildren(
 			E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-protection-integration-card sbox-management-card sbox-management-wide' }, [
-				loadingPane(_('Memory Guard')), loadingPane(_('Telegram'))
+				loadingPane(_('Memory monitoring')), loadingPane(_('Telegram'))
 			]),
 			E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-notifications-card sbox-management-card sbox-management-wide' }, [
 				E('h4', {}, _('Notifications')),

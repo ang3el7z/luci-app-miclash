@@ -363,9 +363,10 @@ function sameStringSet(left, right) {
 	return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function operationalSettingsChanged(current, next) {
+function operationalSettingsChanged(current, next, detected) {
 	current = current || {};
 	next = next || {};
+	detected = detected || {};
 	const scalarPairs = [
 		[ current.mode || 'exclude', next.mode || 'exclude' ],
 		[ normalizeProxyMode(current.proxyMode), normalizeProxyMode(next.proxyMode) ],
@@ -384,10 +385,12 @@ function operationalSettingsChanged(current, next) {
 	const selected = currentMode === 'explicit'
 		? (current.includedInterfaces || []).slice()
 		: (current.excludedInterfaces || []).slice();
-	if (currentMode === 'explicit' && current.autoDetectLan !== false && current.detectedLan)
-		selected.push(current.detectedLan);
-	if (currentMode !== 'explicit' && current.autoDetectWan !== false && current.detectedWan)
-		selected.push(current.detectedWan);
+	const detectedLan = current.detectedLan || detected.detectedLan || '';
+	const detectedWan = current.detectedWan || detected.detectedWan || '';
+	if (currentMode === 'explicit' && current.autoDetectLan !== false && detectedLan)
+		selected.push(detectedLan);
+	if (currentMode !== 'explicit' && current.autoDetectWan !== false && detectedWan)
+		selected.push(detectedWan);
 	return !sameStringSet(selected, next.selected || []);
 }
 

@@ -213,14 +213,18 @@ function create(options) {
 		const rows = deviceRows(devices, policies, vendorDatabase);
 		const content = hydrated ? table(rows) :
 			view_miclash_ui_shell.loadingBlock({ kind: 'table', lines: 6 });
-		if (!hydrated) { host.replaceChildren(content); return; }
+		const heading = E('h4', {}, _('Device policies'));
+		if (!hydrated) { host.replaceChildren(heading, content); return; }
 		host.replaceChildren(
-			E('div', { 'class': 'sbox-device-heading' }, [
+			heading,
+			E('div', { 'class': 'sbox-device-scope-row' }, [
+				E('div', { 'class': 'sbox-device-scope-copy' }, [
+					E('p', { 'class': 'sbox-muted' }, _('Priority: Block → Direct → Inherit')),
+					E('p', { 'class': 'sbox-muted' }, _('Online devices are shown only for interfaces in the current traffic scope. Saved policies remain visible while devices are offline.'))
+				]),
 				E('span', { 'class': 'sbox-device-count', 'aria-live': 'polite' },
 					String(rows.length))
 			]),
-			E('p', { 'class': 'sbox-muted' }, _('Priority: Block → Direct → Inherit')),
-			E('p', { 'class': 'sbox-muted' }, _('Online devices are shown only for interfaces in the current traffic scope. Saved policies remain visible while devices are offline.')),
 			content);
 	}
 	function needsVendorDatabase() {

@@ -59,13 +59,43 @@ function stateClass(value) {
 	return 'sbox-diagnostics-state-unknown';
 }
 
-function statusNode(label, value) {
-	const readable = stateName(value);
+function statusNode(label, value, displayName) {
+	const readable = displayName || stateName(value);
 	return E('span', {
 		'class': 'sbox-diagnostics-state ' + stateClass(value),
 		'role': 'status',
 		'aria-label': label + ': ' + readable
 	}, [ E('span', { 'class': 'sbox-diagnostics-state-icon', 'aria-hidden': 'true' }, '●'), readable ]);
+}
+
+function configSchedulerState(value) {
+	if (!value || typeof value !== 'object') return { state: 'unknown', label: _('Unknown') };
+	if (value.enabled !== true) {
+		if (value.reason === 'no_url') return { state: 'unknown', label: _('Not configured') };
+		if (value.reason === 'invalid_settings') return { state: 'error', label: _('Configuration error') };
+		return { state: 'unknown', label: _('Disabled') };
+	}
+	if (value.running !== true) return { state: 'error', label: _('Failed') };
+	if (value.pending_operation_id) return { state: 'warning', label: _('Updating') };
+	if (value.last_failure_code) return { state: 'error', label: _('Failed') };
+	if (value.next_attempt != null) return { state: 'warning', label: _('Scheduled') };
+	return { state: 'ready', label: _('Ready') };
+}
+
+function miclashSchedulerState(value) {
+	if (!value || typeof value !== 'object') return { state: 'unknown', label: _('Unknown') };
+	if (value.enabled !== true) return { state: 'unknown', label: _('Disabled') };
+	if (value.running !== true) return { state: 'error', label: _('Failed') };
+	if (value.local_time_valid !== true || value.last_error_code === 'CLOCK_INVALID')
+		return { state: 'error', label: _('Clock unavailable') };
+	if (value.pending_operation_id) return { state: 'warning', label: _('Updating') };
+	if ([ 'ASSETS_PENDING', 'BUSY', 'TRAFFIC_BUSY', 'TRAFFIC_UNAVAILABLE' ]
+		.includes(value.last_error_code) || value.readiness === 'assets_pending' || value.pending_target)
+		return { state: 'warning', label: _('Waiting') };
+	if (value.last_error_code || value.readiness === 'error')
+		return { state: 'error', label: _('Failed') };
+	if (value.next_check != null) return { state: 'warning', label: _('Scheduled') };
+	return { state: 'ready', label: _('Ready') };
 }
 
 function valueRow(label, value, className) {
@@ -203,25 +233,6 @@ function memoryActionValue(memory) {
 	return result ? action + ' · ' + result : action;
 }
 
-function subscriptionValue(summary) {
-	const update = summary?.updates?.subscription || summary?.updates?.last_subscription || summary?.last_subscription;
-	if (update && typeof update === 'object') {
-		const state = update.state || update.result || update.outcome || '-';
-		const at = dateValue(update.activated_at || update.finished_at || update.at);
-		return at === '-' ? text(state) : text(state) + ' · ' + at;
-	}
-	if (summary?.updates?.last_activation != null)
-		return dateValue(summary.updates.last_activation);
-	if (summary?.subscription?.configured === true) return _('Configured');
-	return _('Not configured');
-}
-
-function telegramValue(summary) {
-	const telegram = summary?.telegram || {};
-	if (telegram.enabled !== true) return _('Disabled');
-	return telegram.configured === true ? _('Enabled and configured') : _('Enabled, not configured');
-}
-
 function targetValid(value) {
 	if (typeof value !== 'string' || !value.length || value.length > 253 || /[\s\x00-\x1f\x7f]/.test(value)) return false;
 	const parts = value.split('.');
@@ -280,11 +291,11 @@ function create(options) {
 	function renderLoading() {
 		return E('div', { 'class': 'sbox-diagnostics-card-grid' }, [
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health sbox-overview-components' }, [
-				E('h4', {}, _('Component status')),
-				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 4 })
+				E('h4', {}, _('Components')),
+				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 6 })
 			]),
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
-				E('h4', {}, _('Memory Guard')),
+				E('h4', {}, _('Memory monitoring')),
 				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 4 })
 			])
 		]);
@@ -307,24 +318,27 @@ function create(options) {
 				statusNode(label(), componentState)
 			]);
 		});
+		for (const [ label, presentation ] of [
+			[ _('Config auto-update'), configSchedulerState(summary.updates?.automatic_config) ],
+			[ _('MiClash auto-update'), miclashSchedulerState(summary.updates?.automatic_miclash) ]
+		]) componentRows.push(E('div', { 'class': 'sbox-diagnostics-row' }, [
+			E('span', { 'class': 'sbox-diagnostics-label' }, label),
+			statusNode(label, presentation.state, presentation.label)
+		]));
 		return E('div', { 'class': 'sbox-diagnostics-card-grid' }, [
-			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health' }, [
-				E('h4', {}, _('Component status')),
+			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health sbox-overview-components' }, [
+				E('h4', {}, _('Components')),
 				E('div', { 'class': 'sbox-diagnostics-components', 'aria-label': _('Component status') }, componentRows),
-				E('div', { 'class': 'sbox-diagnostics-facts' }, [
-					valueRow(_('Subscription'), subscriptionValue(summary)),
-					valueRow(_('Telegram'), telegramValue(summary))
-				]),
 				E('div', { 'class': 'sbox-diagnostics-actions', 'aria-label': _('Diagnostic actions') }, [
 					actionButton(_('Download diagnostic report'), 'download-report')
 				])
 			]),
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
-				E('h4', {}, _('Memory Guard')),
+				E('h4', {}, _('Memory monitoring')),
 				E('div', { 'class': 'sbox-diagnostics-facts' }, [
+					valueRow(_('Status'), memoryPhaseValue(memory)),
 					valueRow(_('Mihomo memory (RSS)'), memoryBytes(memory, 'rss_bytes', 'current_rss_kb') !== '-'
 						? memoryBytes(memory, 'rss_bytes', 'current_rss_kb') : memoryBytes(memory, 'rss_bytes', 'rss_kb')),
-					valueRow(_('Status'), memoryPhaseValue(memory)),
 					valueRow(_('Baseline'), memoryBaselineValue(memory)),
 					valueRow(_('Last action'), memoryActionValue(memory), 'sbox-diagnostics-row-nowrap')
 				])

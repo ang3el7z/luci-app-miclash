@@ -931,6 +931,15 @@ msgstr "请先安装 Mihomo 内核。"
 msgid "Mode"
 msgstr "模式"
 
+msgid "Operating mode"
+msgstr "运行模式"
+
+msgid "Exclusions"
+msgstr "排除"
+
+msgid "Selected interfaces"
+msgstr "已选接口"
+
 msgid "Mode: Exclude (proxy all except selected interfaces)"
 msgstr "模式：排除（代理除所选接口以外的所有接口）"
 
@@ -1330,8 +1339,8 @@ msgstr "清除订阅 URL"
 msgid "Clearing subscription URL..."
 msgstr "正在清除订阅 URL..."
 
-msgid "Direct connection protection"
-msgstr "直连保护"
+msgid "Direct connection guard"
+msgstr "直连防护"
 
 msgid "Failed to clear subscription URL: %s"
 msgstr "清除订阅 URL 失败：%s"
@@ -1418,6 +1427,9 @@ msgstr "已启用但未配置"
 
 msgid "Component status"
 msgstr "组件状态"
+
+msgid "Components"
+msgstr "组件"
 
 msgid "Mihomo"
 msgstr "Mihomo"
@@ -1796,8 +1808,8 @@ msgstr "MAC"
 msgid "Memory expert settings are internally inconsistent."
 msgstr "内存专家设置相互冲突。"
 
-msgid "Memory Guard"
-msgstr "内存守护"
+msgid "Memory monitoring"
+msgstr "内存监控"
 
 msgid "No backups yet."
 msgstr "暂无备份。"
@@ -2218,3 +2230,24 @@ msgstr "当前日志级别下尚无 MiClash 或 Mihomo 记录。当前级别：%
 
 msgid "Online devices are shown only for interfaces in the current traffic scope. Saved policies remain visible while devices are offline."
 msgstr "仅显示当前流量范围内接口上的在线设备。设备离线时，已保存的策略仍会显示。"
+
+msgid "Clock unavailable"
+msgstr "无法确定时间"
+
+msgid "Config auto-update"
+msgstr "配置自动更新"
+
+msgid "Configuration error"
+msgstr "配置错误"
+
+msgid "MiClash auto-update"
+msgstr "MiClash 自动更新"
+
+msgid "Scheduled"
+msgstr "已计划"
+
+msgid "Updating"
+msgstr "正在更新"
+
+msgid "Waiting"
+msgstr "等待中"
