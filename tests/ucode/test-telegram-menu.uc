@@ -1,0 +1,114 @@
+import { assert_equal, assert_match, assert_throws, assert_true } from 'testlib';
+import * as i18n from 'miclash.telegram-i18n';
+import * as menu from 'miclash.telegram-menu';
+import * as fakes from 'fakes';
+
+function locale(value) {
+	return i18n.locale({ uci: fakes.uci({ luci: { main: {
+		'.type': 'core', lang: value
+	} } }) });
+};
+
+function repeated(value, count) {
+	let output = '';
+	for (let index = 0; index < count; index++) output += value;
+	return output;
+};
+
+assert_equal(locale('en'), 'en');
+assert_equal(locale('en-us'), 'en');
+assert_equal(locale('ru'), 'ru');
+assert_equal(locale('ru_RU'), 'ru');
+assert_equal(locale('zh-cn'), 'zh-cn');
+assert_equal(locale('zh_CN'), 'zh-cn');
+assert_equal(locale('de'), 'en');
+assert_equal(i18n.locale({ uci: { cursor: () => die('unavailable') } }), 'en');
+assert_equal(i18n.telegram_language('zh-cn'), 'zh');
+assert_equal(i18n.telegram_language('ru'), 'ru');
+assert_equal(i18n.telegram_language('en'), '');
+
+assert_equal(i18n.text('ru', 'operation_accepted', { operation: 'MiClash' }),
+	'Операция MiClash принята');
+assert_equal(i18n.text('unknown', 'back'), 'Back');
+assert_throws(() => i18n.text('en', 'operation_accepted', { unknown: 'value' }),
+	'INVALID_ARGUMENT');
+assert_throws(() => i18n.text('en', 'missing_key'), 'INVALID_ARGUMENT');
+
+assert_equal(menu.parse_command('/start').name, 'menu');
+assert_equal(menu.parse_command('/menu').name, 'menu');
+assert_equal(menu.parse_command('/start_service').name, 'start_service');
+assert_equal(menu.parse_command('/stop_service').name, 'stop_service');
+assert_equal(menu.parse_command('/reload_service').name, 'reload_service');
+assert_equal(menu.parse_command('/restart_service').name, 'restart_service');
+assert_equal(menu.parse_command('/reboot_router').name, 'reboot_router');
+assert_equal(menu.parse_command('/subscription https://example.test/config').argument,
+	'https://example.test/config');
+assert_equal(menu.parse_command('/start@MiClashBot').name, 'menu');
+for (let removed in [ '/start-service', '/stop', '/reload', '/restart', '/reboot' ])
+	assert_equal(menu.parse_command(removed), null, removed + ' must not be accepted');
+assert_equal(menu.parse_command('/unknown'), null);
+assert_equal(menu.parse_command('not a command'), null);
+
+let commands = menu.commands('ru');
+assert_true(length(commands) >= 18);
+assert_equal(commands[0].command, 'start');
+assert_equal(commands[1].command, 'menu');
+for (let command in commands) {
+	assert_match(command.command, /^[a-z0-9_]{1,32}$/);
+	assert_true(type(command.description) == 'string' &&
+		length(command.description) >= 1 && length(command.description) <= 256);
+}
+
+let model = {
+	miclash_version: '2.0.4', miclash_state: 'running',
+	mihomo_version: '1.19.29', mihomo_state: 'ready',
+	proxy_mode: 'tproxy', guard_enabled: true, internet_state: 'ready',
+	service_running: true, subscription_url: 'https://example.test/subscription',
+	last_subscription_update: '2026-07-20 02:00', last_subscription_result: 'success',
+	memory_rss: '52.1 MiB', memory_baseline: '48.0 MiB', memory_state: 'monitoring',
+	last_memory_action: 'not_required', logs: 'line one\nline two',
+	diagnostics: 'All required components are ready',
+	updates: {
+		miclash_installed: '2.0.4', miclash_available: '2.1.0',
+		mihomo_installed: '1.19.29', mihomo_available: '1.19.30'
+	}
+};
+
+for (let language in [ 'en', 'ru', 'zh-cn' ]) {
+	let rendered = menu.render('main', model, language, 7);
+	assert_match(rendered.text, /MiClash/);
+	assert_true(type(rendered.reply_markup.inline_keyboard) == 'array');
+	assert_true(length(sprintf('%J', rendered)) <= 8192);
+	for (let row in rendered.reply_markup.inline_keyboard)
+		for (let button in row) {
+			assert_true(type(button.text) == 'string' && length(button.text));
+			assert_true(type(button.callback_data) == 'string');
+			assert_true(length(button.callback_data) <= 64);
+		}
+}
+
+for (let screen in [ 'status', 'management', 'subscription', 'updates', 'guard',
+	'memory', 'logs', 'diagnostics', 'confirm_stop', 'confirm_guard_off',
+	'confirm_reboot', 'confirm_update_miclash', 'confirm_update_mihomo' ]) {
+	let rendered = menu.render(screen, model, 'en', 7);
+	assert_true(type(rendered.text) == 'string' && length(rendered.text));
+	assert_true(type(rendered.reply_markup.inline_keyboard) == 'array');
+}
+
+let opened = menu.parse_callback('g7:open:status', 7);
+assert_equal(opened.name, 'open'); assert_equal(opened.target, 'status');
+let confirmed = menu.parse_callback('g7:confirm:stop', 7);
+assert_equal(confirmed.name, 'confirm'); assert_equal(confirmed.target, 'stop');
+let executed = menu.parse_callback('g7:execute:reboot', 7);
+assert_equal(executed.name, 'execute'); assert_equal(executed.target, 'reboot');
+let backed = menu.parse_callback('g7:back:main', 7);
+assert_equal(backed.name, 'back'); assert_equal(backed.target, 'main');
+assert_equal(menu.parse_callback('g6:execute:reboot', 7), null,
+	'stale callbacks must not execute');
+assert_equal(menu.parse_callback('g7:execute:unknown', 7), null);
+assert_equal(menu.parse_callback('g7:execute:reboot:extra', 7), null);
+assert_equal(menu.parse_callback('g7:' + repeated('x', 64), 7), null);
+assert_equal(menu.parse_callback('not-a-callback', 7), null);
+assert_throws(() => menu.render('unknown', model, 'en', 7), 'INVALID_ARGUMENT');
+
+print('telegram menu tests passed\n');
