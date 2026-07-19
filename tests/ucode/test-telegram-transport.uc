@@ -54,11 +54,15 @@ assert_match(env.requests[0].url, /getUpdates\?/);
 assert_match(env.requests[0].url, /offset=13/);
 assert_match(env.requests[0].url, /timeout=0/);
 assert_match(env.requests[0].url, /allowed_updates=/);
-assert_match(env.requests[1].url, /sendMessage\?/);
-assert_match(env.requests[1].url, /reply_markup=/);
-assert_match(env.requests[2].url, /editMessageText\?/);
-assert_match(env.requests[3].url, /answerCallbackQuery\?/);
-assert_match(env.requests[4].url, /deleteMessage\?/);
+for (let index in [ 1, 2, 3, 4 ]) {
+	assert_equal(env.requests[index].method, 'POST');
+	assert_true(length(env.requests[index].url) < 2048);
+}
+assert_match(env.requests[1].url, /sendMessage$/);
+assert_match(env.requests[1].body, /reply_markup=/);
+assert_match(env.requests[2].url, /editMessageText$/);
+assert_match(env.requests[3].url, /answerCallbackQuery$/);
+assert_match(env.requests[4].url, /deleteMessage$/);
 assert_match(env.requests[5].url, /setMyCommands$/);
 assert_equal(env.requests[5].method, 'POST');
 assert_match(env.requests[5].body, /language_code=ru/);

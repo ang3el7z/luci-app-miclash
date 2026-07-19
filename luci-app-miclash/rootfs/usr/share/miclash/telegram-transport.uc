@@ -156,7 +156,7 @@ export function create(app) {
 		},
 		send: (settings, chat, text, reply_markup) => {
 			let reply = call(settings, 'sendMessage',
-				message_fields(settings, chat, text, reply_markup));
+				message_fields(settings, chat, text, reply_markup), true);
 			if (reply.limited) return null;
 			let result = reply.document.result;
 			if (type(result) != 'object' || type(result.message_id) != 'int' || result.message_id < 1)
@@ -166,7 +166,7 @@ export function create(app) {
 		edit: (settings, chat, id, text, reply_markup) => {
 			let fields = message_fields(settings, chat, text, reply_markup);
 			fields.message_id = message_id(id);
-			let reply = call(settings, 'editMessageText', fields);
+			let reply = call(settings, 'editMessageText', fields, true);
 			if (reply.limited) return null;
 			let result = reply.document.result;
 			if (type(result) != 'object' || type(result.message_id) != 'int' || result.message_id < 1)
@@ -179,7 +179,7 @@ export function create(app) {
 			if (type(text) != 'string' || length(text) > 200 || has_forbidden_control(text, true)) invalid();
 			let reply = call(settings, 'answerCallbackQuery', {
 				callback_query_id: callback_id, text
-			});
+			}, true);
 			if (reply.limited) return { ok: false, retry_after_ms: reply.retry_after_ms };
 			if (reply.document.result !== true) errors.fail('INVALID_RESPONSE');
 			return reply.document;
@@ -187,7 +187,7 @@ export function create(app) {
 		delete: (settings, chat, id) => {
 			let reply = call(settings, 'deleteMessage', {
 				chat_id: normalized_id(chat), message_id: message_id(id)
-			});
+			}, true);
 			if (reply.limited) return false;
 			if (reply.document.result !== true) errors.fail('INVALID_RESPONSE');
 			return true;
