@@ -1062,6 +1062,15 @@ export function compose(runtime, overrides) {
 				updates_status: () => ({ ...updates_domain.status(),
 					automatic_config: subscription_scheduler_domain.status(),
 					automatic_miclash: app_update_domain.status() }),
+				subscription_status: () => subscription_domain.get_redacted('config.yaml'),
+				guard_status: () => {
+					let enabled = settings_domain.get()?.guard?.enabled === true;
+					try {
+						return runtime.guard_control?.verify?.(enabled) === true ?
+							(enabled ? 'enabled' : 'disabled') : 'failed';
+					}
+					catch (error) { return 'failed'; }
+				},
 				memory_status: app.memory_status,
 				diagnostics_summary: () => ({ status: app.status(), health: app.health(),
 					memory: app.memory_status() }),

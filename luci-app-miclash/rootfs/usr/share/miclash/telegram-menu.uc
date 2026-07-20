@@ -44,7 +44,13 @@ function state(value, locale) {
 	let keys = {
 		enabled: 'enabled', disabled: 'disabled', ready: 'ready', ok: 'ready',
 		running: 'running', stopped: 'stopped', unknown: 'unknown',
-		not_configured: 'not_configured'
+		not_configured: 'not_configured', scheduled: 'scheduled', waiting: 'waiting',
+		updating: 'updating', failed: 'failed', configuration_error: 'configuration_error',
+		clock_unavailable: 'clock_unavailable', warming_up: 'warming_up',
+		waiting_for_mihomo: 'waiting_for_mihomo', learning_baseline: 'learning_baseline',
+		monitoring: 'monitoring', cooldown: 'cooldown', not_learned: 'not_learned',
+		not_required: 'not_required', reload: 'reload', restart_core: 'restart_core',
+		restart_service: 'restart_service', success: 'ready'
 	};
 	return keys[value] == null ? (value == null ? unavailable(locale) : sprintf('%s', value)) :
 		i18n.text(locale, keys[value]);
@@ -109,8 +115,7 @@ export function render(screen, model, locale, generation_value) {
 			mihomo_state: state(model.mihomo_state, locale),
 			proxy_mode: value(model, 'proxy_mode', locale),
 			guard_state: model.guard_enabled === true ? i18n.text(locale, 'enabled') :
-				i18n.text(locale, 'disabled'),
-			internet_state: state(model.internet_state, locale)
+				i18n.text(locale, 'disabled')
 		});
 		rows = [
 			[ button(locale, 'status', generation_value, 'open', 'status'),
@@ -151,7 +156,7 @@ export function render(screen, model, locale, generation_value) {
 		text = i18n.text(locale, 'subscription_body', {
 			subscription_url: value(model, 'subscription_url', locale),
 			last_update: value(model, 'last_subscription_update', locale),
-			last_result: value(model, 'last_subscription_result', locale)
+			last_result: state(model.last_subscription_result, locale)
 		});
 		rows = [
 			[ button(locale, 'update_configuration', generation_value, 'execute', 'update_subscription') ],
@@ -186,8 +191,8 @@ export function render(screen, model, locale, generation_value) {
 	}
 	else if (screen == 'memory') {
 		text = i18n.text(locale, 'memory_body', {
-			memory_rss: value(model, 'memory_rss', locale), memory_baseline: value(model, 'memory_baseline', locale),
-			memory_state: value(model, 'memory_state', locale), last_memory_action: value(model, 'last_memory_action', locale)
+			memory_rss: value(model, 'memory_rss', locale), memory_baseline: state(model.memory_baseline, locale),
+			memory_state: state(model.memory_state, locale), last_memory_action: state(model.last_memory_action, locale)
 		});
 		rows = [ [ button(locale, 'refresh', generation_value, 'refresh', 'memory') ], back(locale, generation_value) ];
 	}

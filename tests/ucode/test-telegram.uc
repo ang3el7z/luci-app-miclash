@@ -179,6 +179,57 @@ function environment(changes) {
 
 assert_equal(type(telegram.create), 'function');
 
+// Telegram consumes the same production snapshot shapes as the LuCI overview.
+// Keep this contract explicit so bot labels cannot silently drift from the UI.
+assert_equal(type(telegram.panel_model), 'function');
+let production_panel = telegram.panel_model({
+	settings_get: () => ({
+		core: { proxy_mode: 'tproxy' }, guard: { enabled: true },
+		updates: { auto_subscription: true, auto_major_miclash: true }
+	}),
+	status: () => ({ observed: {
+		service: { state: 'running', running: true },
+		readiness: { ok: true, components: [
+			{ component: 'process', state: 'ready' },
+			{ component: 'api', state: 'ready' },
+			{ component: 'dns', state: 'ready' },
+			{ component: 'policy', state: 'ready' },
+			{ component: 'forward', state: 'ready' }
+		] }
+	} }),
+	health: () => ({ observed: { readiness: { ok: true, components: [
+		{ component: 'process', state: 'ready' },
+		{ component: 'api', state: 'ready' },
+		{ component: 'dns', state: 'ready' },
+		{ component: 'policy', state: 'ready' },
+		{ component: 'forward', state: 'ready' }
+	] } } }),
+	system_info: () => ({ app_version: '2.0.4', mihomo: { version: '1.19.29' } }),
+	updates_status: () => ({
+		automatic_config: { running: true, enabled: false, reason: 'no_url' },
+		automatic_miclash: { running: true, enabled: true, local_time_valid: true,
+			next_check: 1710003600000, latest_version: 'v2.0.4' }
+	}),
+	subscription_status: () => ({ configured: false, url: null }),
+	memory_status: () => ({ enabled: true, phase: 'warming_up',
+		current_rss_kb: 58540, baseline_rss_kb: null, last_action: null }),
+	guard_status: () => 'enabled', logs_read: () => '', diagnostics_summary: () => ({})
+}, 'memory');
+assert_equal(production_panel.miclash_state, 'running');
+assert_equal(production_panel.mihomo_state, 'ready');
+assert_equal(production_panel.dns_state, 'ready');
+assert_equal(production_panel.firewall_state, 'ready');
+assert_equal(production_panel.routing_state, 'ready');
+assert_equal(production_panel.config_update_state, 'not_configured');
+assert_equal(production_panel.miclash_update_state, 'scheduled');
+assert_equal(production_panel.subscription_url, '');
+assert_equal(production_panel.memory_rss, '57.2 MiB');
+assert_equal(production_panel.memory_baseline, 'not_learned');
+assert_equal(production_panel.memory_state, 'warming_up');
+assert_equal(production_panel.last_memory_action, 'not_required');
+assert_equal(production_panel.guard_observed, 'enabled');
+assert_equal(production_panel.updates.miclash_available, 'v2.0.4');
+
 let offset_path = '/etc/miclash/telegram-offset.json';
 
 // The command test double must preserve caller arguments instead of manufacturing telegram.
@@ -591,12 +642,13 @@ for (let item in notification_cases) {
 		dedupe_key: 'family/test', occurred_at: 1710000000000,
 		recovery_of: null, context: { authorization: 'Bearer context-secret' }
 	}), true, item[0]);
-	let request_url = family.requests[0].url;
-	assert_true(index(request_url, 'text=' + item[1] + '%3A%20') >= 0,
-		item[0] + ': ' + request_url);
-	assert_true(length(request_url) <= 2048, item[0] + ' was not bounded');
+	let request_url = family.requests[0].url, request_body = family.requests[0].body ?? '';
+	assert_true(index(request_body, 'text=' + item[1] + '%3A%20') >= 0,
+		item[0] + ': ' + request_body);
+	assert_true(length(request_url) <= 2048, item[0] + ' URL was not bounded');
+	assert_true(length(request_body) <= 8192, item[0] + ' body was not bounded');
 	for (let secret in [ 'family-secret', 'context-secret', 'user:pass' ])
-		assert_equal(index(request_url, secret), -1, item[0] + ' leaked ' + secret);
+		assert_equal(index(request_url + request_body, secret), -1, item[0] + ' leaked ' + secret);
 }
 
 // Notification subscription formats supported events and isolates Telegram failure.

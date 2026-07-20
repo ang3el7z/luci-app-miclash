@@ -157,6 +157,143 @@ function event_text(event) {
 	return label + ': ' + details;
 };
 
+function safe_call(callback, fallback) {
+	try { return callback(); }
+	catch (error) { return fallback; }
+};
+
+function readiness_components(health) {
+	let values = health?.observed?.readiness?.components ??
+		health?.readiness?.components ?? health?.components;
+	let output = {};
+	if (type(values) == 'array')
+		for (let value in values) {
+			let name = value?.component ?? value?.name;
+			if (type(name) == 'string' && type(value) == 'object')
+				output[name] = value;
+		}
+	else if (type(values) == 'object')
+		output = values;
+	return output;
+};
+
+function worse_state(left, right) {
+	let rank = { failed: 5, error: 5, stopped: 5, degraded: 4, warning: 4,
+		unknown: 3, ready: 1, ok: 1, running: 1, success: 1 };
+	if (left == null) return right;
+	if (right == null) return left;
+	return (rank[right] ?? 3) > (rank[left] ?? 3) ? right : left;
+};
+
+function component_state(health, name) {
+	let direct = health?.[name]?.state;
+	if (direct == null && type(health?.components) == 'object' &&
+	    type(health.components) != 'array')
+		direct = health.components?.[name]?.state;
+	if (direct != null)
+		return direct == 'healthy' ? 'ready' : direct;
+	let readiness = readiness_components(health), value;
+	if (name == 'mihomo')
+		value = worse_state(readiness.process?.state, readiness.api?.state);
+	else if (name == 'routing') value = readiness.policy?.state;
+	else if (name == 'firewall') value = readiness.forward?.state;
+	else value = readiness?.[name]?.state;
+	return value == 'healthy' ? 'ready' : (value ?? 'unknown');
+};
+
+function config_scheduler_state(value) {
+	if (type(value) != 'object') return 'unknown';
+	if (value.enabled !== true) {
+		if (value.reason == 'no_url') return 'not_configured';
+		if (value.reason == 'invalid_settings') return 'configuration_error';
+		return 'disabled';
+	}
+	if (value.running !== true || value.last_failure_code) return 'failed';
+	if (value.pending_operation_id) return 'updating';
+	return value.next_attempt != null ? 'scheduled' : 'ready';
+};
+
+function miclash_scheduler_state(value) {
+	if (type(value) != 'object') return 'unknown';
+	if (value.enabled !== true) return 'disabled';
+	if (value.running !== true) return 'failed';
+	if (value.local_time_valid !== true || value.last_error_code == 'CLOCK_INVALID')
+		return 'clock_unavailable';
+	if (value.pending_operation_id) return 'updating';
+	if (index([ 'ASSETS_PENDING', 'BUSY', 'TRAFFIC_BUSY', 'TRAFFIC_UNAVAILABLE' ],
+	    value.last_error_code) >= 0 || value.readiness == 'assets_pending' ||
+	    value.pending_target) return 'waiting';
+	if (value.last_error_code || value.readiness == 'error') return 'failed';
+	return value.next_check != null ? 'scheduled' : 'ready';
+};
+
+function kibibytes(value) {
+	if (type(value) != 'int' && type(value) != 'double') return '';
+	if (value < 1024) return sprintf('%d KiB', value);
+	return sprintf('%.1f MiB', value * 1.0 / 1024);
+};
+
+export function panel_model(app, screen) {
+	let wanted = safe_call(() => app.settings_get(), {});
+	let status = safe_call(() => app.status(), {});
+	let health = safe_call(() => app.health(), {});
+	let info = type(app.system_info) == 'function' ? safe_call(() => app.system_info(), {}) : {};
+	let observed_service = status?.observed?.service ?? status?.service ?? {};
+	let running = observed_service.running === true || observed_service.state == 'running' ||
+		status?.service_running === true;
+	let memory = screen == 'memory' || screen == 'main' ?
+		safe_call(() => app.memory_status(), {}) : {};
+	let update_status = type(app.updates_status) == 'function' ?
+		safe_call(() => app.updates_status(), {}) : {};
+	let subscription = type(app.subscription_status) == 'function' ?
+		safe_call(() => app.subscription_status(), {}) : {};
+	let configured_url = subscription?.url;
+	if (type(configured_url) != 'string') configured_url = '';
+	let config_update_state = config_scheduler_state(update_status.automatic_config);
+	if (config_update_state == 'unknown')
+		config_update_state = wanted?.updates?.auto_subscription === true ?
+			(length(configured_url) ? 'enabled' : 'not_configured') : 'disabled';
+	let miclash_update_state = miclash_scheduler_state(update_status.automatic_miclash);
+	if (miclash_update_state == 'unknown')
+		miclash_update_state = wanted?.updates?.auto_major_miclash === true ? 'enabled' : 'disabled';
+	let baseline = memory.baseline_rss_kb == null ? '' : kibibytes(memory.baseline_rss_kb);
+	return {
+		miclash_version: info.app_version ?? status?.versions?.miclash ?? 'unknown',
+		miclash_state: running ? 'running' : 'stopped',
+		mihomo_version: info.mihomo?.version ?? status?.versions?.mihomo ?? 'unknown',
+		mihomo_state: component_state(health, 'mihomo'),
+		proxy_mode: wanted?.core?.proxy_mode ?? 'unknown',
+		guard_enabled: wanted?.guard?.enabled === true,
+		guard_observed: type(app.guard_status) == 'function' ?
+			safe_call(() => app.guard_status(), 'unknown') :
+			(wanted?.guard?.enabled === true ? 'enabled' : 'disabled'),
+		service_running: running,
+		dns_state: component_state(health, 'dns'),
+		firewall_state: component_state(health, 'firewall'),
+		routing_state: component_state(health, 'routing'),
+		config_update_state,
+		miclash_update_state,
+		subscription_url: configured_url,
+		last_subscription_update: update_status.automatic_config?.last_success ?? '',
+		last_subscription_result: update_status.automatic_config?.last_failure_code ??
+			(update_status.automatic_config?.last_success != null ? 'success' : 'not_required'),
+		memory_rss: kibibytes(memory.current_rss_kb) || memory.rss_human ?? '',
+		memory_baseline: baseline || (memory.enabled === true ? 'not_learned' : 'disabled'),
+		memory_state: memory.enabled === false ? 'disabled' : (memory.phase ?? 'unknown'),
+		last_memory_action: memory.last_action ?? 'not_required',
+		logs: screen == 'logs' ? safe_call(() => app.logs_read(), '') : '',
+		diagnostics: screen == 'diagnostics' ?
+			sprintf('%J', safe_call(() => app.diagnostics_summary(), {})) : '',
+		updates: {
+			miclash_installed: info.app_version ?? update_status.miclash?.installed ?? '',
+			miclash_available: update_status.automatic_miclash?.latest_version ??
+				update_status.miclash?.available ?? update_status.available_miclash ?? '',
+			mihomo_installed: info.mihomo?.version ?? update_status.mihomo?.installed ?? '',
+			mihomo_available: update_status.mihomo?.available ?? update_status.available_mihomo ?? ''
+		}
+	};
+};
+
 export function create(app) {
 	if (type(app) != 'object' || type(app.runtime?.fs) != 'object' ||
 	    type(app.runtime?.digest) != 'object' || type(app.runtime?.clock?.now) != 'function' ||
@@ -241,74 +378,11 @@ export function create(app) {
 		}
 	};
 
-	function safe_call(callback, fallback) {
-		try { return callback(); }
-		catch (error) { return fallback; }
-	};
-
-	function component_state(health, name) {
-		let value = health?.[name]?.state ?? health?.components?.[name]?.state;
-		if (value == 'ok' || value == 'healthy') return 'ready';
-		return value ?? 'unknown';
-	};
-
-	function panel_model(screen) {
-		let wanted = safe_call(() => app.settings_get(), {});
-		let status = safe_call(() => app.status(), {});
-		let health = safe_call(() => app.health(), {});
-		let info = type(app.system_info) == 'function' ? safe_call(() => app.system_info(), {}) : {};
-		let observed_service = status?.observed?.service ?? status?.service ?? {};
-		let running = observed_service.running === true || observed_service.state == 'running' ||
-			status?.service_running === true;
-		let memory = screen == 'memory' || screen == 'main' ?
-			safe_call(() => app.memory_status(), {}) : {};
-		let update_status = type(app.updates_status) == 'function' ?
-			safe_call(() => app.updates_status(), {}) : {};
-		let configured_url = wanted?.core?.subscription_url_config_yaml;
-		if (type(configured_url) != 'string' || !length(configured_url))
-			configured_url = wanted?.core?.subscription_url;
-		return {
-			miclash_version: info.app_version ?? status?.versions?.miclash ?? 'unknown',
-			miclash_state: running ? 'running' : 'stopped',
-			mihomo_version: info.mihomo?.version ?? status?.versions?.mihomo ?? 'unknown',
-			mihomo_state: component_state(health, 'mihomo'),
-			proxy_mode: wanted?.core?.proxy_mode ?? 'unknown',
-			guard_enabled: wanted?.guard?.enabled === true,
-			guard_observed: status?.observed?.guard?.state ??
-				(wanted?.guard?.enabled === true ? 'enabled' : 'disabled'),
-			internet_state: status?.observed?.internet?.state ?? 'unknown',
-			service_running: running,
-			dns_state: component_state(health, 'dns'),
-			firewall_state: component_state(health, 'firewall'),
-			routing_state: component_state(health, 'routing'),
-			config_update_state: update_status.automatic_config?.state ??
-				(wanted?.updates?.auto_subscription === true ? 'running' : 'disabled'),
-			miclash_update_state: update_status.automatic_miclash?.state ??
-				(wanted?.updates?.auto_major === true ? 'running' : 'disabled'),
-			subscription_url: configured_url ?? '',
-			last_subscription_update: update_status.automatic_config?.last_success_at ?? '',
-			last_subscription_result: update_status.automatic_config?.last_result ?? '',
-			memory_rss: memory.rss_human ?? memory.rss ?? memory.used ?? '',
-			memory_baseline: memory.baseline_human ?? memory.baseline ?? '',
-			memory_state: memory.state ?? memory.phase ?? '',
-			last_memory_action: memory.last_action ?? memory.last_recovery ?? '',
-			logs: screen == 'logs' ? safe_call(() => app.logs_read(), '') : '',
-			diagnostics: screen == 'diagnostics' ?
-				sprintf('%J', safe_call(() => app.diagnostics_summary(), {})) : '',
-			updates: {
-				miclash_installed: info.app_version ?? update_status.miclash?.installed ?? '',
-				miclash_available: update_status.miclash?.available ?? update_status.available_miclash ?? '',
-				mihomo_installed: info.mihomo?.version ?? update_status.mihomo?.installed ?? '',
-				mihomo_available: update_status.mihomo?.available ?? update_status.available_mihomo ?? ''
-			}
-		};
-	};
-
 	function show_panel(screen, settings, target) {
 		let locale = telegram_i18n.locale(app.runtime);
 		session.generation++;
 		if (session.generation > 999999999) session.generation = 1;
-		let rendered = telegram_menu.render(screen, panel_model(screen), locale,
+		let rendered = telegram_menu.render(screen, panel_model(app, screen), locale,
 			session.generation);
 		let identity = target ?? outbox.panel(), result = null;
 		if (identity != null)
@@ -366,7 +440,7 @@ export function create(app) {
 		if (entry.payload?.error != null) prefix += ' (' + entry.payload.error + ')';
 		session.generation++;
 		if (session.generation > 999999999) session.generation = 1;
-		let rendered = telegram_menu.render('main', panel_model('main'), entry.locale,
+		let rendered = telegram_menu.render('main', panel_model(app, 'main'), entry.locale,
 			session.generation);
 		let text = prefix + '\n\n' + rendered.text;
 		let identity = entry.message_id != null ?
