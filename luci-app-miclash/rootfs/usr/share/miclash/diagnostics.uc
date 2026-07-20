@@ -205,7 +205,9 @@ function call(source, name) {
 };
 function public_status(settings) {
 	let telegram = settings?.telegram;
-	let url = settings?.core?.subscription_url;
+	let url = settings?.core?.subscription_url_config_yaml;
+	if (type(url) != 'string' || !length(url))
+		url = settings?.core?.subscription_url;
 	let transport = type(url) == 'string' && match(lc(url), /^https:\/\//) ? 'https' :
 		(type(url) == 'string' && match(lc(url), /^http:\/\//) ? 'http' : 'none');
 	return {

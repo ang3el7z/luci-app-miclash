@@ -184,7 +184,9 @@ assert_equal(type(telegram.create), 'function');
 assert_equal(type(telegram.panel_model), 'function');
 let production_panel = telegram.panel_model({
 	settings_get: () => ({
-		core: { proxy_mode: 'tproxy' }, guard: { enabled: true },
+		core: { proxy_mode: 'tproxy',
+			subscription_url_config_yaml: 'https://example.test/full/path?token=owner-visible' },
+		guard: { enabled: true },
 		updates: { auto_subscription: true, auto_major_miclash: true }
 	}),
 	status: () => ({ observed: {
@@ -211,6 +213,8 @@ let production_panel = telegram.panel_model({
 			next_check: 1710003600000, latest_version: 'v2.0.4' }
 	}),
 	subscription_status: () => ({ configured: false, url: null }),
+	subscription_operation: () => ({ state: 'success', updated_at: 1710000100000,
+		finished_at: 1710000100000 }),
 	memory_status: () => ({ enabled: true, phase: 'warming_up',
 		current_rss_kb: 58540, baseline_rss_kb: null, last_action: null }),
 	guard_status: () => 'enabled', logs_read: () => '', diagnostics_summary: () => ({})
@@ -222,7 +226,10 @@ assert_equal(production_panel.firewall_state, 'ready');
 assert_equal(production_panel.routing_state, 'ready');
 assert_equal(production_panel.config_update_state, 'not_configured');
 assert_equal(production_panel.miclash_update_state, 'scheduled');
-assert_equal(production_panel.subscription_url, '');
+assert_equal(production_panel.subscription_url,
+	'https://example.test/full/path?token=owner-visible');
+assert_equal(production_panel.last_subscription_update, '2024-03-09 19:01');
+assert_equal(production_panel.last_subscription_result, 'success');
 assert_equal(production_panel.memory_rss, '57.2 MiB');
 assert_equal(production_panel.memory_baseline, 'not_learned');
 assert_equal(production_panel.memory_state, 'warming_up');
@@ -725,6 +732,8 @@ for (let call in subscription_env.domain_calls)
 	if (call.method == 'subscription_update') subscription_call = call;
 assert_equal(subscription_call.args[0], 'https://subscriptions.example.test/new.yaml?token=user-secret');
 assert_true(index(join(',', map(subscription_env.requests, request_method)), 'deleteMessage') >= 0);
+assert_equal(subscription_controller.status().panel_screen, 'subscription_loading',
+	'subscription replacement did not remain on its loading screen');
 
 let expired_env = environment(), expired_controller = telegram.create(expired_env.app);
 expired_controller.handle_update(update(3100, '/start'));

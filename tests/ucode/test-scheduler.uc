@@ -64,6 +64,7 @@ function environment(options) {
 					ctx.complete(errors.new('HEALTH_FAILED'));
 					return false;
 				}
+				ctx.stage('complete', 99, 'complete');
 				return true;
 			}, before_run);
 	};

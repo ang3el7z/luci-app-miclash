@@ -169,6 +169,14 @@ export function render(screen, model, locale, generation_value) {
 		rows = [ [ button(locale, 'cancel', generation_value, 'cancel', 'subscription_input') ],
 			back(locale, generation_value) ];
 	}
+	else if (screen == 'subscription_loading') {
+		text = i18n.text(locale, 'subscription_loading_body');
+		rows = [];
+	}
+	else if (screen == 'operation_loading') {
+		text = i18n.text(locale, 'operation_loading_body');
+		rows = [];
+	}
 	else if (screen == 'updates') {
 		text = i18n.text(locale, 'updates_body', {
 			miclash_installed: nested(model, 'updates', 'miclash_installed', locale),

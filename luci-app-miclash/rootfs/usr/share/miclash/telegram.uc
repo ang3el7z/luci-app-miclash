@@ -12,7 +12,7 @@ const OFFSET_NAME = 'telegram-offset.json';
 // miclashd serves ubus and timers on one event loop. Telegram long polling would
 // monopolize that loop and make unrelated LuCI RPC calls time out, so use a
 // bounded short poll and leave an explicit gap before the next request.
-const MAX_MESSAGE_BYTES = 480;
+const MAX_MESSAGE_BYTES = 3500;
 const MAX_COMMANDS = 5;
 const RATE_WINDOW_MS = 60000;
 const MAX_BACKOFF_MS = 60000;
@@ -233,6 +233,14 @@ function kibibytes(value) {
 	return sprintf('%.1f MiB', value * 1.0 / 1024);
 };
 
+function date_time(value) {
+	if (type(value) != 'int' || value < 0) return '';
+	let stamp = localtime(int(value / 1000));
+	if (type(stamp) != 'object') return '';
+	return sprintf('%04d-%02d-%02d %02d:%02d', stamp.year, stamp.mon,
+		stamp.mday, stamp.hour, stamp.min);
+};
+
 export function panel_model(app, screen) {
 	let wanted = safe_call(() => app.settings_get(), {});
 	let status = safe_call(() => app.status(), {});
@@ -245,10 +253,12 @@ export function panel_model(app, screen) {
 		safe_call(() => app.memory_status(), {}) : {};
 	let update_status = type(app.updates_status) == 'function' ?
 		safe_call(() => app.updates_status(), {}) : {};
-	let subscription = type(app.subscription_status) == 'function' ?
-		safe_call(() => app.subscription_status(), {}) : {};
-	let configured_url = subscription?.url;
+	let configured_url = wanted?.core?.subscription_url_config_yaml;
+	if (type(configured_url) != 'string' || !length(configured_url))
+		configured_url = wanted?.core?.subscription_url;
 	if (type(configured_url) != 'string') configured_url = '';
+	let last_subscription = type(app.subscription_operation) == 'function' ?
+		safe_call(() => app.subscription_operation(), null) : null;
 	let config_update_state = config_scheduler_state(update_status.automatic_config);
 	if (config_update_state == 'unknown')
 		config_update_state = wanted?.updates?.auto_subscription === true ?
@@ -274,8 +284,10 @@ export function panel_model(app, screen) {
 		config_update_state,
 		miclash_update_state,
 		subscription_url: configured_url,
-		last_subscription_update: update_status.automatic_config?.last_success ?? '',
-		last_subscription_result: update_status.automatic_config?.last_failure_code ??
+		last_subscription_update: date_time(last_subscription?.finished_at ??
+			last_subscription?.updated_at ?? update_status.automatic_config?.last_success),
+		last_subscription_result: last_subscription?.state ??
+			update_status.automatic_config?.last_failure_code ??
 			(update_status.automatic_config?.last_success != null ? 'success' : 'not_required'),
 		memory_rss: kibibytes(memory.current_rss_kb) || memory.rss_human ?? '',
 		memory_baseline: baseline || (memory.enabled === true ? 'not_learned' : 'disabled'),
@@ -436,13 +448,26 @@ export function create(app) {
 			return false;
 		let state_key = entry.state == 'success' ? 'operation_success' :
 			(entry.state == 'interrupted' ? 'operation_interrupted' : 'operation_failure');
+		let labels = {
+			'subscription.update': 'operation_subscription_update',
+			'service.start': 'operation_service_start', 'service.stop': 'operation_service_stop',
+			'service.reload': 'operation_service_reload', 'service.restart': 'operation_service_restart',
+			'updates.miclash': 'operation_updates_miclash', 'updates.mihomo': 'operation_updates_mihomo',
+			'guard.transition': 'operation_guard_transition'
+		};
+		let operation_label = labels[entry.kind] == null ? entry.kind :
+			telegram_i18n.text(entry.locale, labels[entry.kind]);
 		let prefix = telegram_i18n.text(entry.locale, 'operation_result', {
-			operation: entry.kind, state: telegram_i18n.text(entry.locale, state_key)
+			operation: operation_label, state: telegram_i18n.text(entry.locale, state_key)
 		});
 		if (entry.payload?.error != null) prefix += ' (' + entry.payload.error + ')';
 		session.generation++;
 		if (session.generation > 999999999) session.generation = 1;
-		let rendered = telegram_menu.render('main', panel_model(app, 'main'), entry.locale,
+		let return_screen = entry.kind == 'subscription.update' ? 'subscription' :
+			(match(entry.kind, /^updates\./) ? 'updates' :
+			(match(entry.kind, /^service\./) ? 'management' :
+			(entry.kind == 'guard.transition' ? 'guard' : 'main')));
+		let rendered = telegram_menu.render(return_screen, panel_model(app, return_screen), entry.locale,
 			session.generation);
 		let text = prefix + '\n\n' + rendered.text;
 		let identity = entry.message_id != null ?
@@ -455,7 +480,7 @@ export function create(app) {
 		if (result == null)
 			result = transport.send(settings, entry.chat_id, text, rendered.reply_markup);
 		if (result == null) return false;
-		session.screen = 'main';
+		session.screen = return_screen;
 		return { delivered: true, panel: { chat_id: entry.chat_id,
 			message_id: result.message_id, generation: session.generation } };
 	};
@@ -606,9 +631,13 @@ export function create(app) {
 				show_panel('subscription_input', settings, identity);
 			}
 			else if (action.name == 'execute') {
-				execute_callback(action.target, { ...identity,
+				let outcome = execute_callback(action.target, { ...identity,
 					locale: telegram_i18n.locale(app.runtime) });
-				show_panel(action.target == 'check_updates' ? 'updates' : 'main', settings, identity);
+				show_panel(outcome.record != null ?
+					(action.target == 'update_subscription' ? 'subscription_loading' : 'operation_loading') :
+					(action.target == 'check_updates' ? 'updates' :
+					(action.target == 'route_check' ? 'diagnostics' : 'main')),
+					settings, identity);
 			}
 			else invalid();
 		}
@@ -657,7 +686,7 @@ export function create(app) {
 			return { handled: false, retryable: false };
 		}
 		audit('subscription.replace', 'accepted', update.update_id);
-		show_panel('subscription', settings, outbox.panel());
+		show_panel('subscription_loading', settings, outbox.panel());
 		return { handled: true, retryable: false };
 	};
 

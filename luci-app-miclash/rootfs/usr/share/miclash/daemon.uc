@@ -1063,6 +1063,12 @@ export function compose(runtime, overrides) {
 					automatic_config: subscription_scheduler_domain.status(),
 					automatic_miclash: app_update_domain.status() }),
 				subscription_status: () => subscription_domain.get_redacted('config.yaml'),
+				subscription_operation: () => {
+					let records = operation_manager.list();
+					for (let index = length(records) - 1; index >= 0; index--)
+						if (records[index]?.kind == 'subscription.update') return records[index];
+					return null;
+				},
 				guard_status: () => {
 					let enabled = settings_domain.get()?.guard?.enabled === true;
 					try {

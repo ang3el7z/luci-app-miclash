@@ -26,7 +26,7 @@ const STATE_FIELDS = {
 };
 const STAGE_INDEX = {
 	queued: 0, attempt: 1, download: 2, validation: 3,
-	activation: 4, reload: 5, interrupted: 6
+	activation: 4, reload: 5, complete: 6, interrupted: 7
 };
 
 function invalid() {
@@ -330,7 +330,10 @@ export function create(app) {
 		state.last_download = stages.download ?? null;
 		state.last_validation = stages.validation ?? null;
 		state.last_activation = stages.activation ?? null;
-		state.last_reload = stages.reload ?? null;
+		// Current subscription operations finish with `complete` after the
+		// service reload and readiness postcheck. Older journals used `reload`
+		// as their terminal success stage, so accept both representations.
+		state.last_reload = stages.complete ?? stages.reload ?? null;
 		for (let name in [ 'attempt', 'download', 'validation', 'activation', 'reload' ])
 			if (stages[name] != null && stages[name] > state.clock_ceiling)
 				state.clock_ceiling = stages[name];
@@ -348,7 +351,8 @@ export function create(app) {
 		if (record.state == 'success') {
 			if (stages.attempt == null || stages.download == null ||
 			    stages.validation == null || stages.activation == null ||
-			    stages.reload == null || record.stage != 'reload' ||
+			    (stages.reload == null && stages.complete == null) ||
+			    (record.stage != 'reload' && record.stage != 'complete') ||
 			    type(record.result) != 'object' ||
 			    (record.result.interval_hours != null &&
 			     !interval(record.result.interval_hours)))
