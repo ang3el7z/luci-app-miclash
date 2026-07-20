@@ -687,14 +687,16 @@ assert_equal(panel_controller.handle_update(update(2000, '/start')), true);
 assert_equal(request_method(panel_env.requests[0]), 'sendMessage');
 assert_equal(panel_env.requests[0].method, 'POST');
 assert_true(index(panel_env.requests[0].body, 'reply_markup=') >= 0);
-assert_equal(panel_controller.handle_update(callback(2001, 'g1:open:management')), true);
-assert_equal(request_method(panel_env.requests[1]), 'answerCallbackQuery');
-assert_equal(request_method(panel_env.requests[2]), 'editMessageText');
-assert_equal(panel_controller.handle_update(callback(2002, 'g2:confirm:stop')), true);
-assert_equal(length(panel_env.submitted), 0, 'confirmation screen executed stop');
-assert_equal(panel_controller.handle_update(callback(2003, 'g3:execute:stop')), true);
-assert_equal(panel_env.submitted[0].kind, 'service.stop');
-assert_equal(panel_controller.handle_update(callback(2003, 'g3:execute:stop')), false,
+assert_equal(panel_controller.handle_update(update(2001, '/start')), true);
+assert_equal(request_method(panel_env.requests[1]), 'sendMessage');
+assert_equal(panel_controller.handle_update(callback(2002, 'g2:open:management')), true);
+assert_equal(request_method(panel_env.requests[2]), 'answerCallbackQuery');
+assert_equal(request_method(panel_env.requests[3]), 'editMessageText');
+assert_equal(panel_controller.handle_update(callback(2003, 'g3:confirm:stop')), true);
+	assert_equal(length(panel_env.submitted), 0, 'confirmation screen executed stop');
+assert_equal(panel_controller.handle_update(callback(2004, 'g4:execute:stop')), true);
+	assert_equal(panel_env.submitted[0].kind, 'service.stop');
+assert_equal(panel_controller.handle_update(callback(2004, 'g4:execute:stop')), false,
 	'duplicate callback executed twice');
 
 let direct_env = environment(), direct_controller = telegram.create(direct_env.app);

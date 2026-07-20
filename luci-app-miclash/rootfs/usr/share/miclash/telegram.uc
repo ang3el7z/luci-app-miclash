@@ -384,7 +384,9 @@ export function create(app) {
 		if (session.generation > 999999999) session.generation = 1;
 		let rendered = telegram_menu.render(screen, panel_model(app, screen), locale,
 			session.generation);
-		let identity = target ?? outbox.panel(), result = null;
+		// Slash commands pass null and must produce a visible fresh reply. Button
+		// callbacks pass an explicit message identity and continue editing in place.
+		let identity = target, result = null;
 		if (identity != null)
 			try {
 				result = transport.edit(settings, identity.chat_id, identity.message_id,
