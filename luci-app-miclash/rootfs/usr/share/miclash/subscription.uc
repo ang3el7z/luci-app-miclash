@@ -388,5 +388,15 @@ export function create(app) {
 				interval_hours: value.updates.interval_hours };
 		}
 	};
+	api.get = (profile) => {
+		profile = schema.profile_name(profile);
+		let value = current(), url = value.core[URL_OPTIONS[profile]];
+		if (profile == 'config.yaml' && !length(url ?? '')) url = value.core.subscription_url;
+		if (!length(url ?? '')) return { configured: false, url: null,
+			insecure: false, interval_hours: value.updates.interval_hours };
+		url = schema.url(url);
+		return { configured: true, url, insecure: match(url, /^http:\/\//) != null,
+			interval_hours: value.updates.interval_hours };
+	};
 	return api;
 };

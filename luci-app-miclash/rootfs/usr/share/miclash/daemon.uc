@@ -898,7 +898,7 @@ export function compose(runtime, overrides) {
 		app.ruleset_write = (arguments) => ruleset_write(runtime, operation_manager, arguments, false);
 		app.ruleset_delete = (arguments) => ruleset_delete(runtime, operation_manager, arguments);
 		app.ruleset_apply_whitelist = (arguments) => ruleset_write(runtime, operation_manager, arguments, true);
-		app.subscription_get = (arguments) => subscription_domain.get_redacted(arguments.profile);
+		app.subscription_get = (arguments) => subscription_domain.get(arguments.profile);
 		app.subscription_set = (arguments) => subscription_domain.set_url({
 			profile: arguments.profile, url: arguments.url,
 			interval_hours: reconcile_settings.get().updates.interval_hours

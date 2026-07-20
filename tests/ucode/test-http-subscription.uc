@@ -618,6 +618,8 @@ let redacted = subscription_environment({}, secret_settings).client.get_redacted
 assert_equal(redacted.insecure, true);
 assert_true(index(sprintf('%J', redacted), 'super-secret') < 0);
 assert_true(index(sprintf('%J', redacted), '/path') < 0);
+let revealed = subscription_environment({}, secret_settings).client.get('config.yaml');
+assert_equal(revealed.url, 'http://secret.example.test/path?token=super-secret');
 
 // A decoded base64 YAML payload is valid directly. URI/base64 providers use
 // the Remnawave /mihomo candidate, and GitHub raw/jsDelivr candidates work in

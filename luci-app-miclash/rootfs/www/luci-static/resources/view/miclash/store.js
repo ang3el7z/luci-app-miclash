@@ -162,7 +162,7 @@ async function ensureConfigProfilesReady(seedMainContent) {
 async function readSubscriptionUrl(configName) {
 	const profile = normalizeConfigProfileName(configName || MAIN_CONFIG_NAME);
 	const info = await withApi((api) => api.subscription_get(profile));
-	return info?.configured ? '' : '';
+	return info?.configured && typeof info.url === 'string' ? info.url : '';
 }
 async function saveSubscriptionUrl(url, configName) {
 	const profile = normalizeConfigProfileName(configName || MAIN_CONFIG_NAME);
