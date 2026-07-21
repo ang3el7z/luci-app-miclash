@@ -5,6 +5,8 @@ import { basename } from 'node:path';
 
 for (const path of [
 	'tools/run-ucode-tests.sh',
+	'tools/run-ucode-tests-docker.ps1',
+	'tools/docker/ucode-tests.Dockerfile',
 	'tests/ucode/testlib.uc',
 	'tests/ucode/test-testlib.uc',
 	'tests/ucode/test-api.uc',
@@ -25,6 +27,17 @@ const api = readFileSync('luci-app-miclash/rootfs/usr/share/miclash/api.uc', 'ut
 const init = readFileSync('luci-app-miclash/rootfs/etc/init.d/miclashd', 'utf8');
 const makefile = readFileSync('luci-app-miclash/Makefile', 'utf8');
 const checksWorkflow = readFileSync('.github/workflows/checks.yml', 'utf8');
+const dockerRunner = readFileSync('tools/run-ucode-tests-docker.ps1', 'utf8');
+const dockerfile = readFileSync('tools/docker/ucode-tests.Dockerfile', 'utf8');
+
+const workflowRevision = checksWorkflow.match(/UCODE_REVISION:\s*([0-9a-f]{40})/);
+const dockerRevision = dockerfile.match(/ARG UCODE_REVISION=([0-9a-f]{40})/);
+assert.ok(workflowRevision, 'CI must pin a host ucode revision');
+assert.ok(dockerRevision, 'Docker host tests must pin a ucode revision');
+assert.equal(dockerRevision[1], workflowRevision[1],
+	'Docker and CI host tests must use the same ucode revision');
+assert.match(dockerRunner, /tools\/run-ucode-tests\.sh/,
+	'the Docker runner must use the canonical host test entry point');
 
 function makeAssignment(name) {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

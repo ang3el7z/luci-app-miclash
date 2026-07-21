@@ -7,6 +7,7 @@ MiClash is a LuCI package for OpenWrt 24.10+. Sources are under `luci-app-miclas
 ## Development Commands
 
 - `tools/run-ucode-tests.sh` runs host ucode tests; pass a test path for a focused run.
+- On Windows, `pwsh -File tools/run-ucode-tests-docker.ps1 [test path]` runs the same tests in Docker and builds the pinned OpenWrt 24.10 host-ucode image when absent. Missing native `ucode` is not a reason to skip tests. If Docker is unavailable, use the `ci-approved` PR checks and report the environment limitation explicitly.
 - `for check in tools/check-*.mjs; do node "$check"; done` runs JavaScript contracts.
 - `sh -n install-miclash*.sh tools/*.sh` checks shell syntax.
 - In an OpenWrt SDK, use `make package/luci-app-miclash/compile V=s`.
