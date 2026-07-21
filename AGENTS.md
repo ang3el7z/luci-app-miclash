@@ -25,6 +25,8 @@ Use the smallest verification that proves the change:
 
 Avoid unrelated full suites, lengthy plans, or brainstorming/TDD for mechanical low-risk work. Use systematic debugging and stronger tests when the cause is uncertain or networking is at risk.
 
+Complete every accepted requirement end-to-end. “Smallest verification” limits test scope, never implementation scope; do not stop at artificial iteration boundaries.
+
 ## Model and Agent Budget
 
 Use the lowest-cost reliable setting. Default to Terra Medium for implementation, focused exploration, tests, and approved plans. Use Terra Low for mechanical edits and Terra High for broad bounded analysis. Use Sol Medium for architecture, ambiguous bugs, risky networking, major plans, and independent review. Use Sol High only after lower settings or repeated fixes fail, or for a critical migration. Extra High, Max, Ultra, and subagents require clear justification or an explicit request. Escalate one step at a time, then return implementation to Terra Medium.
