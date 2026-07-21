@@ -1673,6 +1673,12 @@ msgstr "建议使用自适应默认值；不安全的数值会被拒绝。"
 msgid "Allowed Telegram user ID"
 msgstr "允许的 Telegram 用户 ID"
 
+msgid "Allowed Telegram user IDs"
+msgstr "允许的 Telegram 用户 ID"
+
+msgid "List IDs separated by commas, for example: 5818132224, 5818132223."
+msgstr "请用逗号分隔 ID，例如：5818132224, 5818132223。"
+
 msgid "Backup and restore"
 msgstr "备份与恢复"
 

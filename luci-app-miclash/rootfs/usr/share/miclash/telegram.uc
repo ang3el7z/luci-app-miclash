@@ -115,11 +115,20 @@ function configuration(app) {
 	let enabled = type(value?.enabled) == 'bool' && value.enabled;
 	let token = type(value?.token) == 'string' &&
 		match(value.token, /^[1-9][0-9]{0,19}:[A-Za-z0-9_-]{8,128}$/) ? value.token : null;
-	let user_id = normalized_id(value?.user_id);
+	let user_ids = [];
+	if (type(value?.user_id) == 'string') for (let item in split(value.user_id, ',')) {
+		let user_id = normalized_id(trim(item));
+		if (user_id != null && index(user_ids, user_id) < 0) push(user_ids, user_id);
+	}
+	let user_id = user_ids[0] ?? null;
 	return {
-		available: true, enabled, configured: token != null && user_id != null,
-		token, user_id
+		available: true, enabled, configured: token != null && length(user_ids),
+		token, user_id, user_ids
 	};
+};
+
+function authorized(settings, user_id) {
+	return user_id != null && index(settings?.user_ids ?? [], user_id) >= 0;
 };
 
 function bounded_text(value) {
@@ -394,7 +403,10 @@ export function create(app) {
 		let locale = telegram_i18n.locale(app.runtime);
 		session.generation++;
 		if (session.generation > 999999999) session.generation = 1;
-		let rendered = telegram_menu.render(screen, panel_model(app, screen), locale,
+		let model = panel_model(app, screen);
+		if (screen == 'settings') model.administrators = join('\n', settings.user_ids ?? []);
+		if (screen == 'confirm_admin_remove') model.administrator = session.awaiting?.admin_id ?? '';
+		let rendered = telegram_menu.render(screen, model, locale,
 			session.generation);
 		// Slash commands pass null and must produce a visible fresh reply. Button
 		// callbacks pass an explicit message identity and continue editing in place.
@@ -433,6 +445,36 @@ export function create(app) {
 		};
 	};
 
+	function return_screen(kind) {
+		if (kind == 'subscription.update') return 'subscription';
+		if (match(kind, /^updates\./)) return 'updates';
+		if (match(kind, /^service\./)) return 'management';
+		if (kind == 'guard.transition') return 'guard';
+		return 'main';
+	};
+
+	function operation_label(locale, kind) {
+		let labels = {
+			'subscription.update': 'operation_subscription_update',
+			'service.start': 'operation_service_start', 'service.stop': 'operation_service_stop',
+			'service.reload': 'operation_service_reload', 'service.restart': 'operation_service_restart',
+			'updates.miclash': 'operation_updates_miclash', 'updates.mihomo': 'operation_updates_mihomo',
+			'guard.transition': 'operation_guard_transition'
+		};
+		return labels[kind] == null ? kind : telegram_i18n.text(locale, labels[kind]);
+	};
+
+	function operation_result_text(entry) {
+		let state_key = entry.state == 'success' ? 'operation_success' :
+			(entry.state == 'interrupted' ? 'operation_interrupted' : 'operation_failure');
+		let text = telegram_i18n.text(entry.locale, 'operation_result', {
+			operation: operation_label(entry.locale, entry.kind),
+			state: telegram_i18n.text(entry.locale, state_key)
+		});
+		if (entry.payload?.error != null) text += '\n\n' + entry.payload.error;
+		return text;
+	};
+
 	function deliver_receipt(entry, saved_panel) {
 		let settings = configuration(app);
 		if (!settings.available || !settings.enabled || !settings.configured ||
@@ -446,30 +488,13 @@ export function create(app) {
 		}
 		if (entry.state != 'success' && entry.state != 'failure' && entry.state != 'interrupted')
 			return false;
-		let state_key = entry.state == 'success' ? 'operation_success' :
-			(entry.state == 'interrupted' ? 'operation_interrupted' : 'operation_failure');
-		let labels = {
-			'subscription.update': 'operation_subscription_update',
-			'service.start': 'operation_service_start', 'service.stop': 'operation_service_stop',
-			'service.reload': 'operation_service_reload', 'service.restart': 'operation_service_restart',
-			'updates.miclash': 'operation_updates_miclash', 'updates.mihomo': 'operation_updates_mihomo',
-			'guard.transition': 'operation_guard_transition'
-		};
-		let operation_label = labels[entry.kind] == null ? entry.kind :
-			telegram_i18n.text(entry.locale, labels[entry.kind]);
-		let prefix = telegram_i18n.text(entry.locale, 'operation_result', {
-			operation: operation_label, state: telegram_i18n.text(entry.locale, state_key)
-		});
-		if (entry.payload?.error != null) prefix += ' (' + entry.payload.error + ')';
 		session.generation++;
 		if (session.generation > 999999999) session.generation = 1;
-		let return_screen = entry.kind == 'subscription.update' ? 'subscription' :
-			(match(entry.kind, /^updates\./) ? 'updates' :
-			(match(entry.kind, /^service\./) ? 'management' :
-			(entry.kind == 'guard.transition' ? 'guard' : 'main')));
-		let rendered = telegram_menu.render(return_screen, panel_model(app, return_screen), entry.locale,
-			session.generation);
-		let text = prefix + '\n\n' + rendered.text;
+		let target_screen = return_screen(entry.kind);
+		let rendered = telegram_menu.render('operation_result', {
+			operation_result: operation_result_text(entry),
+			operation_failed: entry.state != 'success', return_screen: target_screen
+		}, entry.locale, session.generation);
 		let identity = entry.message_id != null ?
 			{ chat_id: entry.chat_id, message_id: entry.message_id } : saved_panel;
 		let result = null;
@@ -480,7 +505,15 @@ export function create(app) {
 		if (result == null)
 			result = transport.send(settings, entry.chat_id, text, rendered.reply_markup);
 		if (result == null) return false;
-		session.screen = return_screen;
+		session.screen = 'operation_result';
+		if (entry.state == 'success') {
+			let result_generation = session.generation;
+			try { app.runtime.clock.set_timeout(2000, () => {
+				if (session.generation != result_generation || session.screen != 'operation_result') return;
+				show_panel(target_screen, configuration(app), {
+					chat_id: entry.chat_id, message_id: result.message_id });
+			}); } catch (error) {}
+		}
 		return { delivered: true, panel: { chat_id: entry.chat_id,
 			message_id: result.message_id, generation: session.generation } };
 	};
@@ -567,6 +600,17 @@ export function create(app) {
 	};
 
 	function execute_callback(target, destination) {
+		if (target == 'remove_admin' && session.awaiting?.kind == 'confirm_remove_admin') {
+			let ids = [], removed = session.awaiting.admin_id;
+			for (let id in configuration(app).user_ids) if (id != removed) push(ids, id);
+			session.awaiting = null;
+			return { response: true, record: app.settings_set({ telegram: { user_id: join(', ', ids) } }, 'telegram') };
+		}
+		if (target == 'add_admin' || target == 'remove_admin') {
+			session.awaiting = { kind: target, chat_id: destination.chat_id,
+				expires_at: app.runtime.clock.now() + 600000 };
+			return { response: true, record: null };
+		}
 		if (target == 'start') return dispatch({ name: 'start_service', argument: null }, destination);
 		if (target == 'stop') return dispatch({ name: 'stop_service', argument: null }, destination);
 		if (target == 'reload') return dispatch({ name: 'reload_service', argument: null }, destination);
@@ -591,7 +635,7 @@ export function create(app) {
 		let query = update.callback_query, sender = normalized_id(query?.from?.id),
 			chat = normalized_id(query?.message?.chat?.id);
 		if (type(query) != 'object' || query.message?.chat?.type != 'private' ||
-		    query.from?.is_bot === true || sender != settings.user_id || chat != settings.user_id ||
+	    query.from?.is_bot === true || !authorized(settings, sender) || chat != sender ||
 		    type(query.id) != 'string' || type(query.data) != 'string' ||
 		    type(query.message?.message_id) != 'int' || query.message.message_id < 1) {
 			state.last_update_id = update.update_id;
@@ -617,7 +661,7 @@ export function create(app) {
 				show_panel(action.target, settings, identity);
 			else if (action.name == 'back') {
 				session.awaiting = null;
-				show_panel('main', settings, identity);
+				show_panel(action.target, settings, identity);
 			}
 			else if (action.name == 'cancel') {
 				session.awaiting = null;
@@ -633,6 +677,13 @@ export function create(app) {
 			else if (action.name == 'execute') {
 				let outcome = execute_callback(action.target, { ...identity,
 					locale: telegram_i18n.locale(app.runtime) });
+				if (action.target == 'add_admin' ||
+				    (action.target == 'remove_admin' && session.awaiting?.kind != 'confirm_remove_admin')) {
+					send_message(action.target == 'add_admin' ? 'Send the administrator ID to add.' :
+						'Send the administrator ID to remove.', settings);
+					show_panel('settings', settings, identity);
+					return { handled: true, retryable: false };
+				}
 				show_panel(outcome.record != null ?
 					(action.target == 'update_subscription' ? 'subscription_loading' : 'operation_loading') :
 					(action.target == 'check_updates' ? 'updates' :
@@ -690,6 +741,31 @@ export function create(app) {
 		return { handled: true, retryable: false };
 	};
 
+	function handle_admin_input(update, message, settings) {
+		let awaiting = session.awaiting;
+		if (awaiting?.kind != 'add_admin' && awaiting?.kind != 'remove_admin') return null;
+		if (awaiting.chat_id != normalized_id(message.chat?.id) || app.runtime.clock.now() > awaiting.expires_at) {
+			session.awaiting = null; return { handled: false, retryable: false };
+		}
+		let admin_id = normalized_id(message.text);
+		if (admin_id == null) { send_message('Enter a numeric Telegram user ID.', settings); return { handled: false, retryable: false }; }
+		if (awaiting.kind == 'remove_admin') {
+			session.awaiting = { kind: 'confirm_remove_admin', admin_id, chat_id: awaiting.chat_id,
+				expires_at: app.runtime.clock.now() + 600000 };
+			show_panel('confirm_admin_remove', settings, outbox.panel());
+			return { handled: true, retryable: false };
+		}
+		let ids = settings.user_ids ?? [];
+		if (index(ids, admin_id) < 0) push(ids, admin_id);
+		session.awaiting = null;
+		let record = app.settings_set({ telegram: { user_id: join(', ', ids) } }, 'telegram');
+		operation_bridge.track(record, { chat_id: awaiting.chat_id,
+			message_id: outbox.panel()?.message_id ?? message.message_id,
+			locale: telegram_i18n.locale(app.runtime) });
+		show_panel('operation_loading', settings, outbox.panel());
+		return { handled: true, retryable: false };
+	};
+
 	function handle_update(update, settings) {
 		if (!settings.available || !settings.enabled || !settings.configured ||
 		    type(update) != 'object' ||
@@ -702,12 +778,14 @@ export function create(app) {
 		let sender = normalized_id(message?.from?.id);
 		let chat = normalized_id(message?.chat?.id);
 		if (type(message) != 'object' || message.chat?.type != 'private' ||
-		    message.from?.is_bot === true || sender != settings.user_id || chat != settings.user_id) {
+	    message.from?.is_bot === true || !authorized(settings, sender) || chat != sender) {
 			state.last_update_id = update.update_id;
 			audit('message', 'rejected', update.update_id);
 			return { handled: false, retryable: false };
 		}
 		let input = handle_subscription_input(update, message, settings);
+		if (input != null) return input;
+		input = handle_admin_input(update, message, settings);
 		if (input != null) return input;
 		let command = parse_command(message.text);
 		if (command == null) {

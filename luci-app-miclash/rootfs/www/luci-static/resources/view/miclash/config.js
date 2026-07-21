@@ -46,6 +46,7 @@ let configApi = null;
 let visibilityChangeHandler = null;
 let subscriptionUpdateBusy = false;
 let logsLoaded = false;
+let logsRefreshPromise = null;
 let pageGeneration = 0;
 let sessionExpired = false;
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
@@ -109,7 +110,11 @@ const managementOwner = (() => {
 				},
 				onProgress: (message, operation) => setOperationStatus('running', message, {
 					detail: operation?.stage || '', context: 'management'
-				})
+				}),
+				onSuccess: (message) => {
+					setOperationSuccess(message);
+					notify('info', message);
+				}
 			}));
 		} catch (error) {
 			for (const panel of created) panel.destroy();
@@ -134,7 +139,13 @@ const managementOwner = (() => {
 		if (panels && typeof panels[0]?.markSaved === 'function')
 			await panels[0].markSaved();
 	}
-	return { replace, mount, destroy, collectPatch, markSaved };
+	function refresh() {
+		if (!panels) return;
+		for (const panel of panels)
+			if (typeof panel.refresh === 'function') panel.refresh().catch(() => {});
+	}
+	return { replace, mount, destroy, collectPatch, markSaved, refresh,
+		ready: () => panels != null };
 })();
 view_miclash_utils.bumpRpcTimeout();
 
@@ -1597,6 +1608,8 @@ function releaseConfigRuntime() {
 	pageGeneration++;
 	appState.configReady = false;
 	subscriptionUpdateBusy = false;
+	logsLoaded = false;
+	logsRefreshPromise = null;
 	if (visibilityChangeHandler) document.removeEventListener('visibilitychange', visibilityChangeHandler);
 	visibilityChangeHandler = null;
 	if (editor) { try { editor.destroy(); } catch (error) {} editor = null; }
@@ -2432,12 +2445,14 @@ function renderSettingsPane() {
 	if (!pageRoot) return;
 	const pane = pageRoot.querySelector('#sbox-pane-settings');
 	if (!pane) return;
-
-	pane.innerHTML = buildSettingsPaneHtml();
-	bindSettingsPaneEvents();
-	const diagnosticsHost = pane.querySelector('#sbox-diagnostics-summary');
-	if (diagnosticsHost) diagnosticsOwner.mount(diagnosticsHost);
-	managementOwner.mount(pane);
+	if (!managementOwner.ready?.()) {
+		pane.innerHTML = buildSettingsPaneHtml();
+		bindSettingsPaneEvents();
+		const diagnosticsHost = pane.querySelector('#sbox-diagnostics-summary');
+		if (diagnosticsHost) diagnosticsOwner.mount(diagnosticsHost);
+		managementOwner.replace();
+		managementOwner.mount(pane);
+	} else managementOwner.refresh();
 }
 
 async function collectSettingsFormState() {
@@ -2653,22 +2668,24 @@ function bindSettingsPaneEvents() {
 }
 
 async function refreshLogs() {
-	const raw = await loadClashLogs();
-	appState.logsRaw = raw;
-	logsLoaded = true;
-
-	const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
-
-	if (content) {
-		const nearBottom = (content.scrollHeight - content.scrollTop - content.clientHeight) < 48;
-		content.innerHTML = formatLogHtml(raw);
-		if (nearBottom) content.scrollTop = content.scrollHeight;
-	}
+	if (logsRefreshPromise) return logsRefreshPromise;
+	logsRefreshPromise = (async () => {
+		const raw = await loadClashLogs();
+		appState.logsRaw = raw;
+		logsLoaded = true;
+		const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
+		if (content) {
+			const nearBottom = (content.scrollHeight - content.scrollTop - content.clientHeight) < 48;
+			content.innerHTML = formatLogHtml(raw);
+			if (nearBottom) content.scrollTop = content.scrollHeight;
+		}
+	})().finally(() => { logsRefreshPromise = null; });
+	return logsRefreshPromise;
 }
 
 function startLogPolling() {
 	logPollTimer = view_miclash_ui_shell.startInterval(logPollTimer, () => {
-		if (appState.activeCfgTab === 'logs') refreshLogs().catch(() => {});
+		refreshLogs().catch(() => {});
 	}, LOG_POLL_MS);
 }
 
@@ -3155,19 +3172,14 @@ function bindTabEvents() {
 			settings: '#sbox-pane-settings',
 			logs: '#sbox-pane-logs'
 		},
-		onChange: (name) => {
+			onChange: (name) => {
 			appState.activeCfgTab = name;
 			if (name === 'settings') {
-				stopLogPolling();
-				managementOwner.replace();
 				renderSettingsPane();
 			} else if (name === 'logs') {
-				managementOwner.destroy();
-				refreshLogs().catch(() => {});
+				if (!logsLoaded) refreshLogs().catch(() => {});
 				startLogPolling();
 			} else {
-				managementOwner.destroy();
-				stopLogPolling();
 				resizeConfigEditor();
 			}
 		}
@@ -3244,8 +3256,11 @@ return view.extend({
 		bindTabEvents();
 		diagnosticsOwner.replace();
 		notificationOwner.replace();
-		if (appState.activeCfgTab === 'settings') managementOwner.replace();
-		renderSettingsPane();
+		if (appState.activeCfgTab === 'settings') renderSettingsPane();
+		if (appState.activeCfgTab === 'logs') {
+			refreshLogs().catch(() => {});
+			startLogPolling();
+		}
 		updateHeaderAndControlDom();
 
 		startControlPolling();
@@ -3255,7 +3270,7 @@ return view.extend({
 		visibilityChangeHandler = () => {
 			if (document.hidden) {
 				stopLogPolling();
-			} else if (appState.activeCfgTab === 'logs') {
+		} else if (logsLoaded) {
 				refreshLogs().catch(() => {});
 				startLogPolling();
 			}

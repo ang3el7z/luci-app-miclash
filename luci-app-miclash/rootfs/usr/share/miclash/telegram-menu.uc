@@ -1,12 +1,7 @@
 import * as errors from 'miclash.errors';
 import * as i18n from 'miclash.telegram-i18n';
 
-const COMMAND_NAMES = [
-	'start', 'menu', 'status', 'health', 'memory', 'diagnostics', 'logs', 'help',
-	'start_service', 'stop_service', 'reload_service', 'restart_service',
-	'reboot_router', 'subscription', 'update_subscription', 'update_miclash',
-	'update_mihomo', 'guard_on', 'guard_off'
-];
+const COMMAND_NAMES = [ 'menu' ];
 
 const SIMPLE_COMMANDS = {
 	start: 'menu', menu: 'menu', status: 'status', health: 'health', memory: 'memory',
@@ -20,12 +15,13 @@ const SIMPLE_COMMANDS = {
 
 const CALLBACKS = {
 	open: [ 'status', 'management', 'subscription', 'updates', 'guard', 'memory',
-		'logs', 'diagnostics' ],
-	back: [ 'main' ], refresh: [ 'main', 'status', 'memory', 'logs', 'diagnostics' ],
+		'logs', 'diagnostics', 'settings' ],
+ back: [ 'main', 'management', 'subscription', 'updates', 'guard', 'memory',
+ 	'logs', 'diagnostics' ], refresh: [ 'main', 'status', 'memory', 'logs', 'diagnostics' ],
 	confirm: [ 'stop', 'guard_off', 'reboot', 'update_miclash', 'update_mihomo' ],
 	execute: [ 'start', 'stop', 'reload', 'restart', 'guard_on', 'guard_off', 'reboot',
 		'update_subscription', 'replace_subscription', 'check_updates', 'update_miclash',
-		'update_mihomo', 'route_check' ],
+		'update_mihomo', 'route_check', 'add_admin', 'remove_admin' ],
 	cancel: [ 'subscription_input' ]
 };
 
@@ -126,6 +122,7 @@ export function render(screen, model, locale, generation_value) {
 				button(locale, 'memory', generation_value, 'open', 'memory') ],
 			[ button(locale, 'logs', generation_value, 'open', 'logs'),
 				button(locale, 'diagnostics', generation_value, 'open', 'diagnostics') ],
+			[ { text: 'Settings', callback_data: callback(generation_value, 'open', 'settings') } ],
 			[ button(locale, 'reboot_router', generation_value, 'confirm', 'reboot') ]
 		];
 	}
@@ -176,6 +173,22 @@ export function render(screen, model, locale, generation_value) {
 	else if (screen == 'operation_loading') {
 		text = i18n.text(locale, 'operation_loading_body');
 		rows = [];
+	}
+	else if (screen == 'operation_result') {
+		text = value(model, 'operation_result', locale);
+		rows = model?.operation_failed === true &&
+			index(CALLBACKS.back, model?.return_screen) >= 0 ?
+			[ [ button(locale, 'back', generation_value, 'back', model.return_screen) ] ] : [];
+	}
+	else if (screen == 'settings') {
+		text = 'Settings\n\nAdministrators:\n' + value(model, 'administrators', locale);
+		rows = [
+			[ { text: 'Add administrator', callback_data: callback(generation_value, 'execute', 'add_admin') } ],
+			[ { text: 'Remove administrator', callback_data: callback(generation_value, 'execute', 'remove_admin') } ], back(locale, generation_value) ];
+	}
+	else if (screen == 'confirm_admin_remove') {
+		text = 'Remove administrator ' + value(model, 'administrator', locale) + '?';
+		rows = [ [ { text: 'Confirm', callback_data: callback(generation_value, 'execute', 'remove_admin') } ], back(locale, generation_value) ];
 	}
 	else if (screen == 'updates') {
 		text = i18n.text(locale, 'updates_body', {

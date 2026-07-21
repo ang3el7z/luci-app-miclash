@@ -174,7 +174,7 @@ function environment(changes) {
 		}
 	};
 	return { app, runtime, filesystem, clock, settings, requests, poll_replies,
-		submitted, domain_calls, audit, logs };
+		submitted, domain_calls, audit, logs, operation_subscribers };
 };
 
 assert_equal(type(telegram.create), 'function');
@@ -734,6 +734,24 @@ assert_equal(subscription_call.args[0], 'https://subscriptions.example.test/new.
 assert_true(index(join(',', map(subscription_env.requests, request_method)), 'deleteMessage') >= 0);
 assert_equal(subscription_controller.status().panel_screen, 'subscription_loading',
 	'subscription replacement did not remain on its loading screen');
+
+// A completed Telegram operation has a dedicated result state before the user
+// returns to the refreshed source section. The result must never be glued into
+// the navigable menu text.
+let completion_env = environment(), completion_controller = telegram.create(completion_env.app);
+assert_equal(completion_controller.handle_update(update(3050, '/start')), true);
+assert_equal(completion_controller.handle_update(callback(3051, 'g1:open:subscription')), true);
+assert_equal(completion_controller.handle_update(callback(3052, 'g2:execute:update_subscription')), true);
+let completed = { ...completion_env.submitted[0], state: 'success', stage: 'complete',
+	progress: 100, error: null };
+completion_env.operation_subscribers[0](completed);
+assert_equal(completion_controller.poll_once(), true);
+let completion_edit = completion_env.requests[length(completion_env.requests) - 1];
+assert_equal(request_method(completion_edit), 'editMessageText');
+let completion_body = urldecode(completion_edit.body);
+assert_match(completion_body, /Обновление подписки: Завершено/);
+assert_true(index(completion_body, 'Подписка\n') < 0,
+	'completed operation result must not be embedded in the subscription menu');
 
 let expired_env = environment(), expired_controller = telegram.create(expired_env.app);
 expired_controller.handle_update(update(3100, '/start'));

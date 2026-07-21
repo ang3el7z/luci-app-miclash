@@ -373,7 +373,8 @@ function validate_effective(current, patch) {
 	    memory.warmup_ms < memory.sample_interval_ms)
 		invalid();
 	let telegram = effective.telegram;
-	if (length(telegram.user_id) && !match(telegram.user_id, /^[1-9][0-9]{0,31}$/))
+	if (length(telegram.user_id) && !match(telegram.user_id,
+	    /^[1-9][0-9]{0,31}(,[[:space:]]*[1-9][0-9]{0,31})*$/))
 		invalid();
 	if (length(telegram.token) &&
 	    !match(telegram.token, /^[1-9][0-9]{0,19}:[A-Za-z0-9_-]{8,128}$/))

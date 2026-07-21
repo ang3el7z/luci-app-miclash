@@ -1726,6 +1726,12 @@ msgstr "Рекомендуются адаптивные значения по у
 msgid "Allowed Telegram user ID"
 msgstr "Разрешённый ID пользователя Telegram"
 
+msgid "Allowed Telegram user IDs"
+msgstr "Разрешённые ID пользователей Telegram"
+
+msgid "List IDs separated by commas, for example: 5818132224, 5818132223."
+msgstr "Перечислите ID через запятую, например: 5818132224, 5818132223."
+
 msgid "Backup and restore"
 msgstr "Резервное копирование и восстановление"
 

@@ -40,6 +40,16 @@ const EVENT_LABELS = {
 
 function value(value, fallback) { return value == null || value === '' ? (fallback || '-') : String(value); }
 function exactTelegramId(value) { return /^(?:[1-9][0-9]{0,31})$/.test(String(value || '').trim()); }
+function normalizeTelegramIds(value) {
+	if (!String(value || '').trim()) return '';
+	const seen = new Set();
+	for (const item of String(value || '').split(',')) {
+		const id = item.trim();
+		if (!exactTelegramId(id)) throw new Error(_('Enter exact numeric Telegram user IDs separated by commas.'));
+		seen.add(id);
+	}
+	return Array.from(seen).join(', ');
+}
 function exactTelegramToken(value) { return /^(?:[1-9][0-9]{0,19}:[A-Za-z0-9_-]{8,128})$/.test(String(value || '').trim()); }
 function integer(value, bounds, name) {
 	const text = String(value == null ? '' : value).trim();
@@ -81,7 +91,7 @@ function create(options) {
 		typeof api.telegram_settings !== 'function' || typeof api.telegram_token_reveal !== 'function' ||
 		typeof api.telegram_test !== 'function' ||
 		typeof api.notificationSettings !== 'function' || typeof api.testNotification !== 'function' ||
-		typeof api.settings_get !== 'function' ||
+		typeof api.settings_get !== 'function' || typeof api.settings_set !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
 		dirty = false, retryMs = POLL_MS;
@@ -158,7 +168,7 @@ function create(options) {
 
 	function telegramSection() {
 		const desired = state.desired.telegram || {}, settings = state.telegramSettings || {}, status = state.telegram || {};
-		const userId = exactTelegramId(settings.user_id) ? settings.user_id : '';
+		const userId = settings.user_id ? normalizeTelegramIds(settings.user_id) : '';
 		// telegram_settings always redacts the token field, including an empty one;
 		// only the dedicated status flag can tell whether a secret is configured.
 		const configured = status.configured === true;
@@ -171,7 +181,7 @@ function create(options) {
 			E('label', { 'for': 'sbox-telegram-token' }, _('BotFather token')),
 			E('div', { 'class': 'sbox-secret-input' }, [ tokenInput, reveal ])
 		]);
-		const userField = field('sbox-telegram-user-id', _('Allowed Telegram user ID'), E('input', { 'type': 'text',
+		const userField = field('sbox-telegram-user-id', _('Allowed Telegram user IDs'), E('input', { 'type': 'text',
 			'class': 'cbi-input-text', 'value': userId, 'inputmode': 'numeric', 'autocomplete': 'off' }));
 		return E('section', { 'class': 'sbox-integration-pane sbox-telegram-pane', 'data-panel': 'telegram' }, [
 			E('h4', {}, _('Telegram')),
@@ -179,6 +189,7 @@ function create(options) {
 			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
 				status.running === true ? _('Poller is running') : _('Poller is stopped')),
 			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField ]),
+			E('p', { 'class': 'sbox-muted', 'data-telegram-id-hint': 'true' }, _('List IDs separated by commas, for example: 5818132224, 5818132223.')),
 			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Send test'), 'telegram-test') ])
 		]);
 	}
@@ -277,14 +288,14 @@ function create(options) {
 			throw new Error(_('Memory expert settings are internally inconsistent.'));
 		const enabled = !!host.querySelector('#sbox-telegram-enabled')?.checked;
 		const token = String(host.querySelector('#sbox-telegram-token')?.value || '').trim();
-		const userId = String(host.querySelector('#sbox-telegram-user-id')?.value || '').trim();
+		const userId = normalizeTelegramIds(host.querySelector('#sbox-telegram-user-id')?.value || '');
 		if (token !== MASK && token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
-		if (userId && !exactTelegramId(userId)) throw new Error(_('Enter an exact numeric Telegram user ID.'));
+		const normalizedUserIds = userId ? normalizeTelegramIds(userId) : '';
 		const configured = state.telegram?.configured === true;
 		const hasToken = token === MASK ? configured : exactTelegramToken(token);
-		if (enabled && !(hasToken && exactTelegramId(userId)))
-			throw new Error(_('Enabling Telegram requires a BotFather token and exact user ID.'));
-		const telegram = { enabled, user_id: userId };
+		if (enabled && !(hasToken && normalizedUserIds))
+			throw new Error(_('Enabling Telegram requires a BotFather token and exact user IDs.'));
+		const telegram = { enabled, user_id: normalizedUserIds };
 		if (token !== MASK) telegram.token = token;
 		const notifications = {
 			auto_hide: !!host.querySelector('#sbox-notification-auto-hide')?.checked
@@ -305,6 +316,24 @@ function create(options) {
 		if (!hydrated) throw new Error(_('Settings panel is still loading.'));
 		return formPatch();
 	}
+	function telegramPatchForTest() {
+		const tokenInput = host.querySelector('#sbox-telegram-token');
+		const token = String(tokenInput?.value || '').trim();
+		const userId = normalizeTelegramIds(host.querySelector('#sbox-telegram-user-id')?.value || '');
+		const configured = state.telegram?.configured === true;
+		const hasToken = token === MASK ? configured : exactTelegramToken(token);
+		if (!hasToken) throw new Error(_('Enter a valid BotFather token.'));
+		if (!userId) throw new Error(_('Enter exact numeric Telegram user IDs separated by commas.'));
+		const current = state.desired?.telegram || {};
+		const next = { enabled: !!host.querySelector('#sbox-telegram-enabled')?.checked, user_id: userId };
+		if (token !== MASK) next.token = token;
+		const tokenChanged = token !== MASK && token !==
+			String(tokenInput?.dataset.originalTelegramToken || '');
+		const changed = next.enabled !== (current.enabled === true) ||
+		next.user_id !== normalizeTelegramIds(current.user_id || '') ||
+			tokenChanged;
+		return { changed, telegram: next };
+	}
 	async function markSaved() {
 		dirty = false;
 		await refresh(true, true);
@@ -313,6 +342,14 @@ function create(options) {
 		if (typeof options.onSave !== 'function')
 			throw new Error(_('Save settings before sending a test.'));
 		await options.onSave();
+	}
+	async function sendTelegramTest() {
+		const patch = telegramPatchForTest();
+		if (patch.changed) throw new Error(_('Save Telegram settings before sending a test.'));
+		progress(_('Sending Telegram test message…'));
+		const reply = await api.telegram_test();
+		if (reply?.sent !== true) throw new Error(_('Telegram test message was not sent.'));
+		if (typeof options.onSuccess === 'function') options.onSuccess(_('Telegram test message sent.'));
 	}
 	async function withBusy(button, callback) {
 		if (busy || destroyed) return;
@@ -340,9 +377,9 @@ function create(options) {
 				for (const pane of host.querySelectorAll('[data-notification-pane]'))
 					pane.hidden = pane.getAttribute('data-notification-pane') !== selected;
 			});
-		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () =>
-			withBusy(button, async () => {
-				const actionName = button.getAttribute('data-action');
+		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () => {
+			const actionName = button.getAttribute('data-action');
+			const run = () => withBusy(actionName === 'telegram-test' ? null : button, async () => {
 				if (actionName === 'telegram-token-reveal') {
 					const input = host.querySelector('#sbox-telegram-token');
 					if (!input) return;
@@ -356,6 +393,7 @@ function create(options) {
 						const reply = await api.telegram_token_reveal();
 						if (!exactTelegramToken(reply?.token)) throw new Error(_('Telegram token is not configured.'));
 						input.value = reply.token;
+						input.dataset.originalTelegramToken = reply.token;
 					}
 					input.type = 'text';
 					button.setAttribute('aria-label', _('Hide token'));
@@ -366,9 +404,7 @@ function create(options) {
 					await refresh(true);
 				}
 				else if (actionName === 'telegram-test') {
-					await saveBeforeTest();
-					const reply = await api.telegram_test();
-					if (reply?.sent !== true) throw new Error(_('Telegram test message was not sent.'));
+					await sendTelegramTest();
 				}
 				else if (actionName === 'notification-test') {
 					const channel = button.getAttribute('data-notification-test');
@@ -377,7 +413,12 @@ function create(options) {
 					const reply = await api.testNotification(channel);
 					if (reply?.sent !== true) throw new Error(_('Notification test message was not sent.'));
 				}
-			}).catch(report));
+			});
+			const promise = actionName === 'telegram-test'
+				? view_miclash_ui_shell.withButtons(button, run)
+				: run();
+			promise.catch(report);
+		});
 	}
 
 	async function refresh(force, replaceForm) {
