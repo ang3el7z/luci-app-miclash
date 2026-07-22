@@ -18,9 +18,8 @@ const REPORT_MAX_NODES = 8192;
 const REPORT_MAX_INPUT = 786432;
 const REPORT_MAX_STRING = 131072;
 const REPORT_SECTION_LIMITS = {
-	config: 65536,
 	process: 32768,
-	logs: 131072,
+	logs: 262144,
 	uci: 32768,
 	operations: 65536
 };
@@ -59,10 +58,14 @@ function discover_marker(secrets, input, marker) {
 	}
 };
 function discover_text(secrets, input) {
-	for (let marker in [ 'bearer ', 'password=', 'password:', 'passwd=', 'passwd:',
-		'secret=', 'secret:', 'token=', 'token:', 'api_key=', 'api_key:',
-		'api-key=', 'api-key:', 'authorization=', 'authorization:',
-		'basic ', 'cookie=', 'cookie:' ])
+	for (let marker in [ 'bearer ', 'basic ', 'auth=', 'auth:',
+		'authorization=', 'authorization:', 'cookie=', 'cookie:',
+		'credential=', 'credential:', 'password=', 'password:', 'passwd=', 'passwd:',
+		'secret=', 'secret:', 'session=', 'session:', 'token=', 'token:',
+		'api_key=', 'api_key:', 'api-key=', 'api-key:',
+		'private_key=', 'private_key:', 'private-key=', 'private-key:',
+		'access_key=', 'access_key:', 'access-key=', 'access-key:',
+		'client_secret=', 'client_secret:', 'client-secret=', 'client-secret:' ])
 		discover_marker(secrets, input, marker);
 	let lowered = lc(input), offset = 0;
 	while (offset < length(input)) {
@@ -270,17 +273,49 @@ function bound_section(name, value, limit) {
 		included_bytes: included
 	} };
 };
-function collect(sources) {
+function summarize_config(value, runtime) {
+	if (type(value) != 'string')
+		return { state: value?.state == 'unknown' ? 'unknown' : 'unavailable',
+			code: value?.code ?? 'UNAVAILABLE' };
+	let lines = length(value) ? length(split(value, '\n')) : 0;
+	return {
+		state: length(value) ? 'present' : 'empty',
+		bytes: length(value),
+		lines,
+		sha256: runtime.digest.sha256(value)
+	};
+};
+function log_entries(value) {
+	if (type(value) == 'array') return value;
+	if (type(value) != 'string') return value;
+	let entries = [];
+	for (let line in split(value, '\n'))
+		if (length(line)) push(entries, line);
+	return entries;
+};
+function collect(sources, runtime) {
 	let result = {};
 	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
 		'updates', 'settings', 'telegram', 'network_components', 'last_repair' ])
 		result[name] = call(sources, name);
 	let sections = {};
-	for (let name in [ 'config', 'process', 'logs', 'uci', 'operations' ]) {
+	let raw_config = call(sources, 'config');
+	result.config = summarize_config(raw_config, runtime);
+	sections.config = {
+		truncated: false,
+		summarized: true,
+		original_bytes: type(raw_config) == 'string' ? length(raw_config) : serialized_size(raw_config),
+		included_bytes: serialized_size(result.config)
+	};
+	for (let name in [ 'process', 'uci', 'operations' ]) {
 		let bounded = bound_section(name, call(sources, name), REPORT_SECTION_LIMITS[name]);
 		result[name] = bounded.value;
 		sections[name] = bounded.metadata;
 	}
+	let bounded_logs = bound_section('logs', log_entries(call(sources, 'logs')),
+		REPORT_SECTION_LIMITS.logs);
+	result.logs = bounded_logs.value;
+	sections.logs = bounded_logs.metadata;
 	result.public_status = public_status(result.settings);
 	result.collection = { sections };
 	return sanitize(result, {
@@ -633,9 +668,9 @@ export function create(dependencies) {
 					errors.fail('INTERNAL');
 				if (runtime.fs.chmod(path, 0o700) !== true) errors.fail('INTERNAL');
 				directory = { path, identity: verify_directory(runtime, path, initial) };
-				let safe = collect(sources);
+				let safe = collect(sources, runtime);
 				let summary = make_summary(safe, now);
-				let report = { schema_version: 2, generated_at: now, summary,
+				let report = { schema_version: 3, generated_at: now, summary,
 					issues: report_issues(safe), collection: safe.collection,
 					details: { config: safe.config, process: safe.process, logs: safe.logs,
 						uci: safe.uci, operations: safe.operations } };

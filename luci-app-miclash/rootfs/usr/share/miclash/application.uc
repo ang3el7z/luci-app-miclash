@@ -32,6 +32,7 @@ export function create(dependencies) {
 	    type(dependencies?.service?.stop) != 'function' ||
 	    type(dependencies?.service?.reload) != 'function' ||
 	    type(dependencies?.service?.restart_service) != 'function' ||
+	    type(dependencies?.service?.recover_network) != 'function' ||
 	    type(dependencies?.service?.wait_ready) != 'function' ||
 	    type(dependencies?.settings?.get) != 'function' ||
 	    type(dependencies?.settings?.validate) != 'function' ||
@@ -114,6 +115,9 @@ export function create(dependencies) {
 		service_stop: (profile, source) => service_action('stop', profile, source),
 		service_reload: (profile, source) => service_action('reload', profile, source),
 		service_restart: (profile, source) => service_action('restart', profile, source),
+		network_recover: (source) => domain_action('network.recover', source, {}, () => ({
+			restored: dependencies.service.recover_network('emergency-network-recovery') === true
+		})),
 		config_list: () => dependencies.config.list_profiles(),
 		config_read: (profile) => dependencies.config.read_active(profile),
 		config_validate: (profile, content, source) => {

@@ -35,7 +35,9 @@ let reconciler = adapter.create({
 						enabled: guard_enabled, generation: 7 }
 				] : [] }
 		}; },
-		wait_ready: (deadline, profile, options) => { push(wait_deadlines, deadline); push(wait_options, options); return { ok: ready, components: ready ? [
+		wait_ready: (deadline, profile, options) => { push(wait_deadlines, deadline); push(wait_options, options);
+			let healthy = options?.stopped === true ? service_state == 'stopped' : ready;
+			return { ok: healthy, components: healthy ? [
 			{ component: 'process', ready: true }, { component: 'api', ready: true },
 			{ component: 'dns', ready: true, observed_at: now },
 			{ component: 'forward', ready: true, observed_at: now },
@@ -46,10 +48,12 @@ let reconciler = adapter.create({
 		network_applies++;
 		push(network_guard_protected, guard_physical);
 		if (network_fails) die('INTERNAL');
+		network_clean = false;
 		return true;
 	}, cleanup: () => {
 		network_cleanups++;
 		if (network_cleanup_failures > 0) { network_cleanup_failures--; die('INTERNAL'); }
+		network_clean = true;
 		return true;
 	} },
 	settings: {
@@ -137,30 +141,51 @@ network_fails = false; now++;
 assert_equal(reconciler.run('scheduled').state, 'success');
 assert_equal(guard_latched, false);
 
-// Guard OFF still uses physical bootstrap protection as a temporary handoff
-// owner. A failed multi-component network transaction must leave that owner
-// armed and must not expose direct traffic between partial repair steps.
+// Guard OFF still uses physical bootstrap protection during mutation, but a
+// failed handoff must stop Mihomo, clean all native ownership and restore the
+// ordinary OpenWrt path before returning the original failure.
 guard_enabled = false; guard_latched = false; guard_physical = false;
 network_fails = true; ready = true; now++;
-let off_failure_restarts = service_restarts;
+let off_failure_restarts = service_restarts, off_failure_cleanups = network_cleanups;
 assert_equal(reconciler.run('automatic').state, 'failure');
 assert_equal(network_guard_protected[length(network_guard_protected) - 1], true,
 	'network mutation began without temporary Guard protection');
-assert_equal(guard_physical, true,
-	'failed Guard-OFF network mutation released temporary protection');
+assert_equal(network_cleanups, off_failure_cleanups + 1,
+	'failed Guard-OFF network mutation did not restore OpenWrt ownership');
+assert_equal(service_state, 'stopped',
+	'failed Guard-OFF network mutation left Mihomo running behind a clean network');
+assert_equal(guard_physical, false,
+	'failed Guard-OFF network mutation retained temporary protection');
+assert_equal(guard_latched, false,
+	'successful Guard-OFF rollback armed the durable safety latch');
 assert_equal(service_restarts, off_failure_restarts,
 	'failed Guard-OFF network mutation proceeded to Mihomo restart');
 network_fails = false;
 
 // Without Guard, the restoration closes the failure itself and is emitted once.
 ready = false; guard_enabled = false; now++;
+let direct_failure_cleanups = network_cleanups;
 assert_equal(reconciler.run('automatic').state, 'failure');
 let direct_failure = events[length(events) - 1].data.failure_id;
+assert_equal(network_cleanups, direct_failure_cleanups + 1,
+	'unready Mihomo did not trigger direct-network rollback');
+assert_equal(service_state, 'stopped');
+assert_equal(guard_physical, false);
 ready = true; now++;
 assert_equal(reconciler.run('scheduled').state, 'success');
 assert_equal(events[length(events) - 1].type, 'internet_restored');
 assert_equal(events[length(events) - 1].data.recovery_of, 'failure/' + direct_failure);
 assert_equal(events[length(events) - 1].data.network.path, 'proxy');
+
+// If direct-network rollback cannot prove a clean terminal state, fail closed
+// and persist the latch rather than releasing traffic through partial rules.
+guard_enabled = false; guard_latched = false; guard_physical = false;
+service_state = 'running'; ready = false; network_cleanup_failures = 1; now++;
+assert_equal(reconciler.run('automatic').state, 'failure');
+assert_equal(guard_physical, true);
+assert_equal(guard_latched, true);
+assert_equal(events[length(events) - 1].type, 'fail_closed');
+network_cleanup_failures = 0;
 
 // A durable safety latch is reconciled through the real adapter. Persistent
 // UCI failure keeps protection and the latch; later recovery repairs UCI ON
@@ -227,7 +252,7 @@ assert_equal(guard_physical, true);
 assert_equal(guard_latched, true);
 assert_equal(service_restarts, startup_restarts_before);
 
-service_state = 'stopped'; network_fails = false; ready = true; now++;
+service_state = 'stopped'; network_fails = false; network_clean = false; ready = true; now++;
 let cleanup_before = network_cleanups;
 assert_equal(reconciler.startup('daemon-startup'), true);
 assert_equal(network_cleanups, cleanup_before + 1,
@@ -297,3 +322,36 @@ assert_equal(service_state, 'stopped');
 assert_equal(network_applies, verify_fault_applies,
 	'stopped startup recovery unexpectedly applied proxy network ownership');
 assert_equal(guard_physical, false);
+
+// A cold Guard-OFF start proves process+API before taking any network
+// ownership. If Mihomo dies, the existing OpenWrt path remains untouched;
+// a healthy retry then performs the protected network handoff.
+service_state = 'stopped'; network_clean = true; guard_enabled = false;
+guard_latched = false; guard_physical = false; ready = false; now++;
+let cold_start_applies = network_applies, cold_start_calls = service_starts;
+assert_throws(() => reconciler.start('luci-start'), 'HEALTH_FAILED');
+assert_equal(service_starts, cold_start_calls + 1);
+assert_equal(network_applies, cold_start_applies,
+	'failed Mihomo preflight changed network ownership');
+assert_equal(service_state, 'stopped');
+assert_equal(network_clean, true);
+assert_equal(guard_physical, false);
+ready = true; now++;
+assert_equal(reconciler.start('luci-start'), true);
+assert_equal(network_applies, cold_start_applies + 1);
+assert_equal(wait_options[length(wait_options) - 2].core_only, true,
+	'cold start omitted process/API preflight');
+assert_equal(wait_options[length(wait_options) - 1].proxy_mode, proxy_mode,
+	'cold start omitted full post-handoff readiness');
+assert_equal(guard_physical, false);
+
+// The local emergency action is network-independent, idempotently restores
+// OpenWrt ownership, and can never weaken an explicitly enabled Guard.
+service_state = 'running'; network_clean = false; guard_enabled = false;
+guard_latched = false; guard_physical = false; ready = true; now++;
+assert_equal(reconciler.recover_network('luci-emergency'), true);
+assert_equal(service_state, 'stopped');
+assert_equal(network_clean, true);
+assert_equal(guard_physical, false);
+guard_enabled = true;
+assert_throws(() => reconciler.recover_network('luci-emergency'), 'PERMISSION_DENIED');

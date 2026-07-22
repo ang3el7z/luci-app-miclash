@@ -988,7 +988,8 @@ export function compose(runtime, overrides) {
 			start: () => runtime.reconcile.start('service-start'),
 			stop: () => runtime.reconcile.stop('service-stop'),
 			reload: () => runtime.reconcile.reload('service-reload'),
-			restart_service: () => runtime.reconcile.restart('service-restart')
+			restart_service: () => runtime.reconcile.restart('service-restart'),
+			recover_network: () => runtime.reconcile.recover_network('emergency-network-recovery')
 		};
 		let app = modules.application.create({
 			operations: operation_manager,
@@ -1117,7 +1118,7 @@ export function compose(runtime, overrides) {
 				app.overview()?.observed?.service, settings_domain.get()),
 			last_repair,
 			config: () => configuration.read_active('config.yaml'),
-			process: () => service_adapter.observe('config.yaml'),
+			process: () => service_adapter.diagnostics('config.yaml'),
 			logs: () => bounded_logs(runtime), uci: settings_domain.get,
 			operations: () => operation_manager.list()
 		} });

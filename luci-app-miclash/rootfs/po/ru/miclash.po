@@ -2358,3 +2358,24 @@ msgstr "Политики устройств ещё не готовы."
 
 msgid "Resetting device policy…"
 msgstr "Сброс политики устройства…"
+
+msgid "Invalid operation response"
+msgstr "Некорректный ответ операции"
+
+msgid "Emergency network recovery"
+msgstr "Аварийное восстановление сети"
+
+msgid "Restore OpenWrt network"
+msgstr "Восстановить сеть OpenWrt"
+
+msgid "Restoring..."
+msgstr "Восстановление..."
+
+msgid "OpenWrt network restored"
+msgstr "Сеть OpenWrt восстановлена"
+
+msgid "Network recovery failed"
+msgstr "Не удалось восстановить сеть"
+
+msgid "Stop Mihomo, remove MiClash DNS, firewall and routing ownership, and restore the ordinary OpenWrt network. No Internet connection is required."
+msgstr "Остановить Mihomo, удалить управление DNS, межсетевым экраном и маршрутизацией MiClash и восстановить обычную сеть OpenWrt. Подключение к Интернету не требуется."

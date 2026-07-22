@@ -27,26 +27,60 @@ export function create(runtime) {
 			fail('INTERNAL');
 		return result;
 	};
-	function observe(value) {
+	function diagnostic_integer(value) {
+		return type(value) == 'int' && value >= 0 ? value : null;
+	};
+	function diagnostics(value) {
 		profile(value);
 		let reply;
 		try { reply = connection().call('service', 'list', { name: SERVICE, verbose: true }); }
-		catch (error) { return { state: 'unknown', running: false }; }
+		catch (error) { return { state: 'unknown', running: false, registered: false,
+			instances: [] }; }
 		let registered = reply?.[SERVICE];
 		if (type(registered) != 'object')
-			return { state: 'unknown', running: false };
+			return { state: 'unknown', running: false, registered: false, instances: [] };
 		let instances = registered.instances;
 		if (instances != null && type(instances) != 'object')
-			return { state: 'unknown', running: false };
-		if (instances != null)
-			for (let name, instance in instances)
-				if (instance?.running === true)
-					return { state: 'running', running: true,
-						pid: type(instance.pid) == 'int' ? instance.pid : null };
+			return { state: 'unknown', running: false, registered: true, instances: [] };
+		let records = [], running = false, pid = null;
+		if (instances != null) for (let name, instance in instances) {
+			if (type(instance) != 'object') continue;
+			let record = {
+				name: type(name) == 'string' && match(name, /^[A-Za-z0-9._-]{1,64}$/)
+					? name : 'instance',
+				running: instance.running === true
+			};
+			for (let field in [ 'pid', 'exit_code', 'term_timeout', 'respawn_count' ]) {
+				let number = diagnostic_integer(instance[field]);
+				if (number != null) record[field] = number;
+			}
+			if (type(instance.respawn) == 'object') {
+				let respawn = {};
+				for (let field in [ 'threshold', 'timeout', 'retry' ]) {
+					let number = diagnostic_integer(instance.respawn[field]);
+					if (number != null) respawn[field] = number;
+				}
+				if (length(respawn)) record.respawn = respawn;
+			}
+			if (record.running) {
+				running = true;
+				if (record.pid != null && pid == null) pid = record.pid;
+			}
+			push(records, record);
+		}
+		if (running)
+			return { state: 'running', running: true, registered: true, pid,
+				instances: records };
 		let kernel = runtime.fs.lstat('/opt/clash/bin/clash');
 		if (kernel?.type != 'file' || kernel.nlink != 1)
-			return { state: 'missing_kernel', running: false };
-		return { state: 'stopped', running: false };
+			return { state: 'missing_kernel', running: false, registered: true,
+				instances: records };
+		return { state: 'stopped', running: false, registered: true, instances: records };
+	};
+	function observe(value) {
+		let result = diagnostics(value);
+		return { state: result.state, running: result.running,
+			pid: result.pid ?? null };
 	};
 	function service_state(spawn) {
 		try { connection().call('service', 'state', { name: SERVICE, spawn }); }
@@ -137,6 +171,11 @@ export function create(runtime) {
 		push(records, component('api', api?.ok === true ? 'ready' : 'failed'));
 		if (api?.ok !== true)
 			return records;
+		// A cold start proves the process/controller before MiClash assumes DNS,
+		// firewall or routing ownership. Those network observers are intentionally
+		// evaluated only after the atomic handoff has completed.
+		if (options.core_only === true)
+			return records;
 		if (options.proxy_mode != null)
 			push(records, observer_record('dataplane', options.proxy_mode));
 		push(records, observer_record('dns'));
@@ -221,7 +260,7 @@ export function create(runtime) {
 	};
 
 	return {
-		observe, start, stop, reload, restart_core, restart_service, wait_ready, recover,
+		observe, diagnostics, start, stop, reload, restart_core, restart_service, wait_ready, recover,
 		health: (value) => wait_ready(runtime.clock.now() + 5000, value).ok
 	};
 };

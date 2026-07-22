@@ -1,4 +1,4 @@
-import { assert_equal, assert_throws, assert_true } from 'testlib';
+import { assert_equal, assert_match, assert_throws, assert_true } from 'testlib';
 import * as diagnostics from 'miclash.diagnostics';
 import * as route_test from 'miclash.route-test';
 import * as fakes from 'fakes';
@@ -32,6 +32,8 @@ function urlsafe_unpadded_base64(value) {
 };
 
 let secrets = fixture('secret-corpus.json');
+let config_private_key = 'diagnostic-private-key-must-never-leak';
+let config_uuid = '00000000-1111-2222-3333-444444444444';
 let filesystem = fakes.fs({});
 for (let directory in [ '/tmp', '/tmp/miclash' ])
 	if (filesystem.lstat(directory) == null)
@@ -79,7 +81,9 @@ let sources = {
 		routing: { state: 'active' }, guard: { state: 'enabled' } }),
 	last_repair: () => ({ result: 'success', context:
 		'cookie=' + secrets.cookie }),
-	config: () => report_source('config', 'secret: ' + secrets.api_key + '\n'),
+	config: () => report_source('config', 'secret: ' + secrets.api_key + '\n' +
+		'private-key: ' + config_private_key + '\n' +
+		'uuid: ' + config_uuid + '\nmode: rule\n'),
 	process: () => report_source('process', { stdout: 'password=' + secrets.password,
 		stderr: 'Bearer ' + secrets.authorization }),
 	logs: () => report_source('logs', [
@@ -202,6 +206,7 @@ let camel_api_secret = 'camel-api-secret';
 let camel_proxy_password = 'camel-proxy-password';
 let acronym_api_key = 'acronym-api-key';
 let compound_authorization = 'compound-authorization-header';
+let text_only_private_key = 'text-only-private-key-secret';
 let boundary_sources = { ...sources,
 	settings: () => ({ core: { subscription_url: '' }, telegram: {
 		enabled: false, token: '', user_id: '' } }),
@@ -228,7 +233,8 @@ let boundary_sources = { ...sources,
 		'basic-alias=' + basic_secret,
 		'cookie-aliases=' + cookie_first + ',' + cookie_second,
 		'fully-percent=' + full_percent_lower(percent_secret),
-		'urlsafe-unpadded=' + urlsafe_unpadded_base64(urlsafe_secret)
+		'urlsafe-unpadded=' + urlsafe_unpadded_base64(urlsafe_secret),
+		'private-key: ' + text_only_private_key
 	]
 };
 let boundary_center = diagnostics.create({ runtime, sources: boundary_sources });
@@ -239,7 +245,7 @@ for (let secret in [ auth_secret, bearer_key_secret, session_secret,
 	private_key_secret, access_key_secret, nested_secret, basic_secret,
 	camel_api_secret, camel_proxy_password, acronym_api_key, compound_authorization,
 	cookie_first, cookie_second, full_percent_lower(percent_secret),
-	urlsafe_unpadded_base64(urlsafe_secret) ])
+	urlsafe_unpadded_base64(urlsafe_secret), text_only_private_key ])
 	assert_true(index(boundary_report.content, secret) < 0,
 		'redaction boundary leaked ' + secret);
 
@@ -273,10 +279,13 @@ let huge_runtime = { ...runtime,
 	fs: huge_filesystem,
 	clock: fakes.clock(1700000000000),
 	digest: fakes.digest(huge_filesystem) };
+let huge_logs = [];
+for (let index = 0; index < 1000; index++)
+	push(huge_logs, sprintf('line-%04d %396s', index, 'x'));
 let huge_center = diagnostics.create({ runtime: huge_runtime,
 	sources: { ...sources,
 		config: () => repeated('c', 70000),
-		logs: () => repeated('x', 140000),
+		logs: () => join('\n', huge_logs),
 		health: () => ({ observed: { readiness: { components: [
 			{ component: 'process', state: 'ready' },
 			{ component: 'dns', state: 'failed', code: 'HEALTH_FAILED',
@@ -289,21 +298,28 @@ assert_equal(huge_center.summary().schema_version, 1,
 	'summary must not collect report-only logs');
 let huge_created = huge_center.create_report();
 let huge_report = json(huge_center.read_report({ id: huge_created.id, format: 'json' }).content);
-assert_equal(huge_report.schema_version, 2);
+assert_equal(huge_report.schema_version, 3);
 assert_true(type(huge_report.issues) == 'array');
 assert_equal(length(huge_report.issues), 2);
 assert_equal(huge_report.issues[0].component, 'dns');
 assert_equal(huge_report.issues[0].severity, 'error');
 assert_equal(huge_report.issues[1].component, 'subscription.update');
 assert_equal(huge_report.issues[1].severity, 'error');
-assert_equal(huge_report.collection.sections.config.truncated, true);
+assert_equal(huge_report.collection.sections.config.truncated, false);
+assert_equal(huge_report.collection.sections.config.summarized, true);
 assert_equal(huge_report.collection.sections.logs.truncated, true);
 assert_true(huge_report.collection.sections.config.original_bytes >
 	huge_report.collection.sections.config.included_bytes);
 assert_true(huge_report.collection.sections.logs.original_bytes >
 	huge_report.collection.sections.logs.included_bytes);
-assert_true(length(huge_report.details.config) <= 65536);
-assert_true(length(huge_report.details.logs) <= 131072);
+assert_equal(huge_report.details.config.state, 'present');
+assert_equal(huge_report.details.config.bytes, 70000);
+assert_true(match(huge_report.details.config.sha256, /^[0-9a-f]{64}$/));
+assert_equal(type(huge_report.details.logs), 'array');
+assert_true(length(sprintf('%J', huge_report.details.logs)) <= 262144);
+assert_match(huge_report.details.logs[0], /^line-[0-9]{4}/);
+assert_match(huge_report.details.logs[length(huge_report.details.logs) - 1], /^line-0999 /,
+	'truncated report did not preserve the newest syslog entry');
 huge_runtime.clock.advance(900000);
 assert_throws(() => huge_center.read_report({ id: huge_created.id, format: 'json' }),
 	'NOT_FOUND');
@@ -327,7 +343,18 @@ assert_equal(json_report.id, created.id);
 assert_equal(json_report.format, 'json');
 assert_true(index(json_report.content, '\n  "summary": {') >= 0,
 	'JSON report must use readable indentation');
-assert_true(type(json(json_report.content).summary) == 'object');
+let parsed_report = json(json_report.content);
+assert_true(type(parsed_report.summary) == 'object');
+assert_equal(type(parsed_report.details.logs), 'array');
+assert_true(index(json_report.content, '\n    "logs": [\n') >= 0,
+	'JSON report must format one syslog entry per array line');
+assert_equal(type(parsed_report.details.config), 'object',
+	'diagnostic report must summarize rather than embed the active YAML');
+assert_equal(parsed_report.details.config.state, 'present');
+assert_true(parsed_report.details.config.bytes > 0);
+assert_true(match(parsed_report.details.config.sha256, /^[0-9a-f]{64}$/));
+assert_true(index(json_report.content, config_private_key) < 0);
+assert_true(index(json_report.content, config_uuid) < 0);
 assert_no_secrets(json_report, 'json report');
 let text_report = center.read_report({ id: created.id, format: 'text' });
 assert_equal(text_report.format, 'text');

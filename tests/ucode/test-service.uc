@@ -276,6 +276,27 @@ let stopped = env();
 let adapter = service.create(stopped.rt);
 assert_equal(adapter.observe('config.yaml').state, 'stopped');
 
+// Diagnostic process state preserves bounded procd crash/respawn evidence but
+// never exposes the service command, environment or configuration contents.
+let crashed_ubus = { connect: () => ({ call: (object, method, data) => {
+	if (object == 'service' && method == 'list') return { clash: { instances: { main: {
+		running: false, exit_code: 2, term_timeout: 5, respawn_count: 5,
+		respawn: { threshold: 3600, timeout: 5, retry: 5 },
+		command: [ '/opt/clash/bin/clash', '--secret', SECRET ],
+		env: { TOKEN: SECRET }
+	} } } };
+	die('unexpected ubus method');
+} }) };
+let crashed = service.create(env({ ubus: crashed_ubus }).rt).diagnostics('config.yaml');
+assert_equal(crashed.state, 'stopped');
+assert_equal(crashed.registered, true);
+assert_equal(crashed.instances[0].name, 'main');
+assert_equal(crashed.instances[0].exit_code, 2);
+assert_equal(crashed.instances[0].respawn.retry, 5);
+assert_equal(index(sprintf('%J', crashed), SECRET), -1);
+assert_equal(exists(crashed.instances[0], 'command'), false);
+assert_equal(exists(crashed.instances[0], 'env'), false);
+
 // OpenWrt 25 may omit `instances` entirely for a registered but stopped
 // procd service. This is still an authoritative stopped state, not an
 // unavailable service-manager response.
@@ -402,6 +423,11 @@ assert_equal(join(',', order), 'dns,tun,policy,forward');
 let no_tun = service.create(ready_env.rt).wait_ready(1100, 'config.yaml', { tun_required: false });
 assert_equal(join(',', map(no_tun.components, (item) => item.component)),
 	'process,api,dns,policy,forward');
+
+let core_only = service.create(ready_env.rt).wait_ready(1100, 'config.yaml', { core_only: true });
+assert_equal(core_only.ok, true);
+assert_equal(join(',', map(core_only.components, (item) => item.component)),
+	'process,api', 'cold-start preflight inspected network state before handoff');
 
 let incompatible_dataplane = env({ running: true, observers: {
 	dataplane: () => ({ ready: false }), dns: () => ({ ready: true }),

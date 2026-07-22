@@ -41,6 +41,18 @@ export function create(app) {
 			if (record?.component == name) return record;
 		return null;
 	};
+	function readiness_log(ready) {
+		let values = [];
+		for (let record in ready?.components ?? []) {
+			let name = record?.component, state = record?.state;
+			if (type(name) != 'string' || !match(name, /^[A-Za-z0-9._-]{1,32}$/)) continue;
+			if (type(state) != 'string' || !match(state, /^[A-Za-z0-9._-]{1,32}$/))
+				state = record?.ready === true ? 'ready' : 'failed';
+			push(values, name + ':' + state);
+			if (length(values) >= 12) break;
+		}
+		if (length(values)) operational_log('error', 'readiness ' + join(',', values));
+	};
 	function restoration(failure_id, desired, ready) {
 		let guard = component(ready?.components, 'guard');
 		let dns = component(ready?.components, 'dns');
@@ -130,6 +142,44 @@ export function create(app) {
 			return false;
 		}
 	};
+	function restore_system(desired) {
+		let failed = false;
+		// Keep the independent owner in place until every MiClash network
+		// component has returned to the ordinary OpenWrt path. Guard OFF permits
+		// direct traffic only after that terminal state is freshly verified.
+		try { protect_transition(desired); }
+		catch (error) { failed = true; }
+		try {
+			let observed = app.service.observe('config.yaml');
+			if (observed?.state == 'running') {
+				app.service.stop('config.yaml');
+				let stopped = app.service.wait_ready(app.clock.now() + STOPPED_READY_TIMEOUT_MS,
+					'config.yaml', { stopped: true });
+				if (stopped?.ok !== true) failed = true;
+			}
+			else if (observed?.state != 'stopped' && observed?.state != 'missing_kernel')
+				failed = true;
+		}
+		catch (error) { failed = true; }
+		try { app.network.cleanup(desired); }
+		catch (error) { failed = true; }
+		try { if (app.network.is_clean() !== true) failed = true; }
+		catch (error) { failed = true; }
+		if (!failed) {
+			try { release_transition(desired); }
+			catch (error) { failed = true; }
+		}
+		if (!failed) {
+			operational_log('info', 'rollback restored OpenWrt network ownership');
+			return true;
+		}
+		// An unproved rollback is the only Guard-OFF failure allowed to remain
+		// fail-closed. Persist the latch so reboot/startup cannot silently weaken it.
+		try { app.guard.latch_set(); } catch (latch_error) {}
+		try { app.guard.protect(); } catch (protect_error) {}
+		operational_log('error', 'rollback failed; fail-closed protection retained');
+		return false;
+	};
 	function reconcile_now(trigger, stage, service_action) {
 		let desired = app.settings.get(), ready = null, failure_component = 'network';
 		operational_log('info', sprintf('started reason=%s action=%s',
@@ -137,34 +187,54 @@ export function create(app) {
 		try {
 			if (app.guard.is_latched())
 				desired = recover_guard(trigger, stage);
+			// On a cold start, prove that Mihomo remains alive and its local API is
+			// reachable before redirecting any router/client traffic to it. Guard ON
+			// remains fail-closed; Guard OFF keeps the untouched OpenWrt path online.
+			if (service_action == 'start') {
+				failure_component = 'mihomo';
+				if (desired?.guard?.enabled === true) {
+					stage?.('guard-protect', 10, 'Maintaining fail-closed Guard protection');
+					protect_transition(desired);
+				}
+				stage?.('core-start', 20, 'Starting Mihomo before network handoff');
+				app.service.start('config.yaml');
+				ready = app.service.wait_ready(app.clock.now() + RUNNING_READY_TIMEOUT_MS,
+					'config.yaml', { core_only: true });
+				if (ready?.ok !== true) fail('HEALTH_FAILED');
+				operational_log('info', 'mihomo preflight ready components=process,api');
+				ready = null;
+				failure_component = 'network';
+			}
 			// Every multi-component network mutation has a separate physical safety
 			// owner, even when canonical Guard is OFF. It is released only after the
 			// complete native generation verifies, so partial state cannot leak direct
 			// traffic between routing, DNS and firewall transitions.
-			stage?.('guard-protect', 20, 'Maintaining network handoff protection');
+			stage?.('guard-protect', service_action == 'start' ? 35 : 20,
+				'Maintaining network handoff protection');
 			if (app.guard.protect() !== true || app.guard.verify_protected() !== true)
 				fail('HEALTH_FAILED');
 			if (desired?.guard?.enabled === true && app.guard.verify(true) !== true)
 				fail('HEALTH_FAILED');
-			stage?.('network', 30, 'Applying native firewall, routing and DNS state');
+			stage?.('network', service_action == 'start' ? 45 : 30,
+				'Applying native firewall, routing and DNS state');
 			app.network.apply(desired);
 			operational_log('info', 'network state applied components=dns,firewall,routing');
 			// Upgrade cleanup keeps an independent fail-closed owner armed until
 			// the native network generation is fully installed. Canonical OFF may
 			// only release it after that handoff point, never before.
 			if (desired?.guard?.enabled !== true) {
-				stage?.('guard-release', 45, 'Releasing temporary network handoff protection');
+				stage?.('guard-release', service_action == 'start' ? 55 : 45,
+					'Releasing temporary network handoff protection');
 				if (app.guard.disable() !== true || app.guard.verify(false) !== true)
 					fail('HEALTH_FAILED');
 			}
 			failure_component = 'mihomo';
-			stage?.('restart', 50, service_action == 'start'
-				? 'Starting Mihomo with native network state'
-				: (service_action == 'observe' ? 'Keeping running Mihomo instance' :
-					'Restarting Mihomo after configuration change'));
+			stage?.('restart', service_action == 'start' ? 60 : 50,
+				service_action == 'start' ? 'Verifying started Mihomo with native network state' :
+					(service_action == 'observe' ? 'Keeping running Mihomo instance' :
+						'Restarting Mihomo after configuration change'));
 			let service_health = health_options(desired);
-			if (service_action == 'start') app.service.start('config.yaml');
-			else if (service_action == 'repair') {
+			if (service_action == 'repair') {
 				let repaired = app.service.recover('config.yaml', null, service_health);
 				ready = repaired?.ready;
 				if (repaired?.ok !== true) fail('HEALTH_FAILED');
@@ -180,11 +250,12 @@ export function create(app) {
 				desired?.guard?.enabled === true ? 'enabled' : 'disabled'));
 		}
 		catch (error) {
-			// Keep the independent bootstrap owner armed after any failed network
-			// handoff. Canonical OFF is not rewritten; the next successful reconcile
-			// releases this temporary owner only after full verification.
-			try { app.guard.protect(); } catch (protect_error) {}
-			if (desired?.guard?.enabled === true || app.guard.is_latched()) {
+			let code = error?.code ?? error?.message ?? 'HEALTH_FAILED';
+			let rollback_required = desired?.guard?.enabled !== true && !app.guard.is_latched();
+			let rolled_back = rollback_required ? restore_system(desired) : false;
+			let reported_code = rollback_required && !rolled_back ? 'INTERNAL' : code;
+			if (!rolled_back) {
+				try { app.guard.protect(); } catch (protect_error) {}
 				try { app.guard.latch_set(); } catch (latch_error) {}
 			}
 			if (active_failure == null)
@@ -192,12 +263,12 @@ export function create(app) {
 			active_component = failure_component;
 			operational_log('error', sprintf(
 				'failed component=%s reason=%s code=%s',
-				failure_component, trigger,
-				error?.code ?? error?.message ?? 'HEALTH_FAILED'));
+				failure_component, trigger, reported_code));
+			readiness_log(ready);
 			let data = { failure_id: active_failure, component: failure_component, reason: trigger };
 			emit('failure', data);
-			if (desired?.guard?.enabled === true || app.guard.is_latched()) emit('fail_closed', data);
-			fail(error?.code ?? error?.message ?? 'HEALTH_FAILED');
+			if (!rolled_back) emit('fail_closed', data);
+			fail(reported_code);
 		}
 		return { desired, ready };
 	};
@@ -253,6 +324,13 @@ export function create(app) {
 		restart: (trigger) => reconcile_now(reason(trigger), null, 'restart')?.ready?.ok === true,
 		reload: (trigger) => reconcile_now(reason(trigger), null, 'repair')?.ready?.ok === true,
 		external: (trigger) => reconcile_now(reason(trigger), null, 'repair')?.ready?.ok === true,
+		recover_network: (trigger) => {
+			reason(trigger);
+			let desired = app.settings.get();
+			if (desired?.guard?.enabled === true) fail('PERMISSION_DENIED');
+			if (!restore_system(desired)) fail('INTERNAL');
+			return true;
+		},
 		apply: (trigger, stage) => reconcile_now(reason(trigger), stage, 'observe')?.ready?.ok === true,
 		run: (trigger) => {
 			trigger = reason(trigger);

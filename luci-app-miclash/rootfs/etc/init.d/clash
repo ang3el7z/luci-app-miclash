@@ -9,15 +9,31 @@ CORE="/opt/clash/bin/clash"
 CONFIG_DIR="/opt/clash"
 
 start_service() {
-	[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || return 1
-	[ -x "$CORE" ] || return 1
-	[ -f "$CONFIG_DIR/config.yaml" ] || return 1
+	[ ! -e "$PACKAGE_REMOVAL_BARRIER" ] || {
+		logger -t miclash -p daemon.err "mihomo: start blocked reason=package-removal"
+		return 1
+	}
+	[ -x "$CORE" ] || {
+		logger -t miclash -p daemon.err "mihomo: start blocked reason=missing-kernel"
+		return 1
+	}
+	[ -f "$CONFIG_DIR/config.yaml" ] || {
+		logger -t miclash -p daemon.err "mihomo: start blocked reason=missing-config"
+		return 1
+	}
 	# Do not let Mihomo become reachable until the independent early-boot
 	# owner has applied and exactly verified the effective Guard/latch policy.
 	# Re-running the idempotent transaction here also closes the rc.common
 	# failure boundary: a failed START=12 service cannot be bypassed by START=94.
-	[ -x /etc/init.d/miclash-guard ] || return 1
-	/etc/init.d/miclash-guard start || return 1
+	[ -x /etc/init.d/miclash-guard ] || {
+		logger -t miclash -p daemon.err "mihomo: start blocked reason=missing-guard-gate"
+		return 1
+	}
+	/etc/init.d/miclash-guard start || {
+		logger -t miclash -p daemon.err "mihomo: start blocked reason=guard-gate-failed"
+		return 1
+	}
+	logger -t miclash -p daemon.info "mihomo: starting under procd"
 
 	procd_open_instance
 	procd_set_param command /opt/clash/bin/clash -d /opt/clash -f /opt/clash/config.yaml

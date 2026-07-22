@@ -19,6 +19,7 @@ let service = {
 	stop: (profile) => push(actions, 'stop:' + profile),
 	reload: (profile) => { push(actions, 'reload:' + profile); return { ok: true }; },
 	restart_service: (profile) => push(actions, 'restart:' + profile),
+	recover_network: () => { push(actions, 'recover-network'); return true; },
 	wait_ready: (deadline, profile, options) => {
 		push(readiness_deadlines, deadline);
 		return { ok: true };
@@ -147,6 +148,10 @@ for (let action in [ 'start', 'stop', 'reload', 'restart' ]) {
 assert_equal(join(',', actions),
 	'start:config.yaml,stop:config.yaml,reload:config.yaml,restart:config.yaml');
 assert_equal(join(',', readiness_deadlines), '31000,6000,31000,31000');
+let network_recovery = app.network_recover('luci');
+submitted[length(submitted) - 1].worker({ stage: () => null });
+assert_equal(network_recovery.id, submitted[length(submitted) - 1].record.id);
+assert_equal(actions[length(actions) - 1], 'recover-network');
 
 let before_config = length(submitted);
 app.config_validate('config.yaml', 'valid\n', 'luci');

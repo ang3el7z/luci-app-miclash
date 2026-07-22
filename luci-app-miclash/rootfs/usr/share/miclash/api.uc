@@ -505,6 +505,7 @@ export function method_table(app, transfers) {
 	for (let name in [
 		'status', 'overview', 'health', 'operation_get', 'operation_list',
 		'service_start', 'service_stop', 'service_reload', 'service_restart',
+		'network_recover',
 		'config_list', 'config_read',
 		'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
 		'settings_get', 'settings_set', 'guard_transition', 'set_draining', 'telegram_ingest'
@@ -579,6 +580,10 @@ export function method_table(app, transfers) {
 		service_restart: method(service_policy, (arguments) => {
 			exact(arguments, { profile: { type: 'string' }, source: { type: 'string' } });
 			return operation_reply(app.service_restart(profile(arguments), source(arguments)));
+		}),
+		network_recover: method({ source: '' }, (arguments) => {
+			exact(arguments, { source: { type: 'string' } });
+			return operation_reply(app.network_recover(source(arguments)));
 		}),
 		config_list: method(empty, (arguments) => {
 			exact(arguments, {});

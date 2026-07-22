@@ -14,6 +14,7 @@ let app = {
 	operation_list: () => [],
 	service_start: () => operation('service.start'), service_stop: () => operation('service.stop'),
 	service_reload: () => operation('service.reload'), service_restart: () => operation('service.restart'),
+	network_recover: () => operation('network.recover'),
 	config_list: () => [ 'config.yaml', 'config2.yaml', 'config3.yaml' ],
 	config_read: () => 'mode: rule\n', config_validate: () => operation('config.validate'),
 	config_apply: () => operation('config.apply'),
@@ -83,6 +84,7 @@ assert_equal(methods.config_read.call({ args: { profile: 'config.yaml' } }).cont
 assert_true(type(methods.config_apply.call({ args: {
 	profile: 'config.yaml', content: 'mode: rule\n', source: 'luci'
 } }).operation_id) == 'string');
+assert_true(type(methods.network_recover.call({ args: { source: 'luci' } }).operation_id) == 'string');
 assert_equal(methods.config_apply.call({ args: {
 	profile: '../config.yaml', content: 'mode: rule\n', source: 'luci'
 } }).error.code, 'INVALID_ARGUMENT');

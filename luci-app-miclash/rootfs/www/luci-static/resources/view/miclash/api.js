@@ -12,6 +12,7 @@ const METHOD_SPECS = [
 	{ name: 'service_stop', params: ['profile', 'source'], operation: true, access: 'write' },
 	{ name: 'service_reload', params: ['profile', 'source'], operation: true, access: 'write' },
 	{ name: 'service_restart', params: ['profile', 'source'], operation: true, access: 'write' },
+	{ name: 'network_recover', params: ['source'], operation: true, access: 'write' },
 	{ name: 'config_list', params: [], operation: false, access: 'read' },
 	{ name: 'config_read', params: ['profile'], operation: false, access: 'write' },
 	{ name: 'config_validate', params: ['profile', 'content', 'source'], operation: true, access: 'write' },
@@ -406,6 +407,7 @@ function createClient(options) {
 	Object.assign(client, {
 		diagnosticsSummary: client.diagnostics_summary,
 		createDiagnosticReport: client.diagnostics_create_report,
+		recoverNetwork: client.network_recover,
 		routeTest: client.diagnostics_route_test,
 		memoryStatus: client.memory_status,
 		memoryResetBaseline: client.memory_reset_baseline,

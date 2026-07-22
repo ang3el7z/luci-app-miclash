@@ -2311,3 +2311,24 @@ msgstr "设备策略尚未就绪。"
 
 msgid "Resetting device policy…"
 msgstr "正在重置设备策略…"
+
+msgid "Invalid operation response"
+msgstr "操作响应无效"
+
+msgid "Emergency network recovery"
+msgstr "紧急网络恢复"
+
+msgid "Restore OpenWrt network"
+msgstr "恢复 OpenWrt 网络"
+
+msgid "Restoring..."
+msgstr "正在恢复..."
+
+msgid "OpenWrt network restored"
+msgstr "OpenWrt 网络已恢复"
+
+msgid "Network recovery failed"
+msgstr "网络恢复失败"
+
+msgid "Stop Mihomo, remove MiClash DNS, firewall and routing ownership, and restore the ordinary OpenWrt network. No Internet connection is required."
+msgstr "停止 Mihomo，移除 MiClash 对 DNS、防火墙和路由的控制，并恢复普通 OpenWrt 网络。此操作无需互联网连接。"
