@@ -9,7 +9,7 @@ const menuPath = 'luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash
 const makefilePath = 'luci-app-miclash/Makefile';
 
 const expectedNames = 'status,overview,health,operation_get,operation_list,' +
-	'service_start,service_stop,service_reload,service_restart,network_recover,config_list,config_read,' +
+	'service_start,service_stop,service_reload,service_restart,network_recover,developer_uninstall,config_list,config_read,' +
 	'config_validate,config_apply,' +
 	'operational_settings_apply,config_swap,config_external_adopt,settings_get,settings_set,' +
 	'guard_transition,' +

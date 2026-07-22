@@ -60,6 +60,7 @@ export function create(dependencies) {
 	    type(dependencies?.telegram?.settings) != 'function' ||
 	    type(dependencies?.telegram?.test) != 'function' ||
 	    type(dependencies?.telegram?.configure) != 'function' ||
+	    type(dependencies?.system?.schedule_uninstall) != 'function' ||
 	    type(dependencies?.clock?.now) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 
@@ -118,6 +119,13 @@ export function create(dependencies) {
 		network_recover: (source) => domain_action('network.recover', source, {}, () => ({
 			restored: dependencies.service.recover_network('emergency-network-recovery') === true
 		})),
+		developer_uninstall: (source) => {
+			writable();
+			if (dependencies.system.schedule_uninstall(source) !== true)
+				errors.fail('INTERNAL');
+			draining = true;
+			return { accepted: true };
+		},
 		config_list: () => dependencies.config.list_profiles(),
 		config_read: (profile) => dependencies.config.read_active(profile),
 		config_validate: (profile, content, source) => {

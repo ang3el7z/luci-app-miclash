@@ -2362,20 +2362,68 @@ msgstr "Сброс политики устройства…"
 msgid "Invalid operation response"
 msgstr "Некорректный ответ операции"
 
-msgid "Emergency network recovery"
-msgstr "Аварийное восстановление сети"
-
 msgid "Restore OpenWrt network"
 msgstr "Восстановить сеть OpenWrt"
-
-msgid "Restoring..."
-msgstr "Восстановление..."
 
 msgid "OpenWrt network restored"
 msgstr "Сеть OpenWrt восстановлена"
 
-msgid "Network recovery failed"
-msgstr "Не удалось восстановить сеть"
+msgid "Developer"
+msgstr "Разработчик"
 
-msgid "Stop Mihomo, remove MiClash DNS, firewall and routing ownership, and restore the ordinary OpenWrt network. No Internet connection is required."
-msgstr "Остановить Mihomo, удалить управление DNS, межсетевым экраном и маршрутизацией MiClash и восстановить обычную сеть OpenWrt. Подключение к Интернету не требуется."
+msgid "Developer tools"
+msgstr "Инструменты разработчика"
+
+msgid "This hidden session stays open for 10 minutes. These emergency actions can interrupt access to the router."
+msgstr "Эта скрытая сессия доступна 10 минут. Аварийные действия могут прервать доступ к роутеру."
+
+msgid "Stop Mihomo and remove MiClash DNS, firewall and routing ownership. Remove Guard first if it is enabled."
+msgstr "Остановить Mihomo и удалить управление DNS, межсетевым экраном и маршрутизацией MiClash. Если Защита включена, сначала удалите её."
+
+msgid "Restore network"
+msgstr "Восстановить сеть"
+
+msgid "Remove Guard"
+msgstr "Удалить Защиту"
+
+msgid "Disable Guard and remove its active fail-closed rules."
+msgstr "Отключить Защиту и удалить её активные fail-closed правила."
+
+msgid "Remove MiClash"
+msgstr "Удалить MiClash"
+
+msgid "Remove MiClash through the OpenWrt package manager after its normal network cleanup."
+msgstr "Удалить MiClash через пакетный менеджер OpenWrt после штатной очистки сети."
+
+msgid "Stop Mihomo and remove all MiClash-owned DNS, firewall and routing state?"
+msgstr "Остановить Mihomo и удалить всё состояние DNS, межсетевого экрана и маршрутизации, принадлежащее MiClash?"
+
+msgid "If Guard is enabled, remove it first. No Internet connection is required."
+msgstr "Если Защита включена, сначала удалите её. Подключение к Интернету не требуется."
+
+msgid "Restoring OpenWrt network…"
+msgstr "Восстановление сети OpenWrt…"
+
+msgid "Disable Guard and remove all active fail-closed Guard rules?"
+msgstr "Отключить Защиту и удалить все её активные fail-closed правила?"
+
+msgid "Devices may use a direct connection after this action."
+msgstr "После этого действия устройства смогут использовать прямое соединение."
+
+msgid "Removing Guard…"
+msgstr "Удаление Защиты…"
+
+msgid "Guard removed."
+msgstr "Защита удалена."
+
+msgid "Remove MiClash from this router?"
+msgstr "Удалить MiClash с этого роутера?"
+
+msgid "The normal package removal protocol restores OpenWrt networking first. This page will become unavailable."
+msgstr "Штатный протокол удаления пакета сначала восстановит сеть OpenWrt. Эта страница станет недоступна."
+
+msgid "MiClash removal was not accepted."
+msgstr "Запуск удаления MiClash не подтверждён."
+
+msgid "MiClash removal started."
+msgstr "Удаление MiClash запущено."

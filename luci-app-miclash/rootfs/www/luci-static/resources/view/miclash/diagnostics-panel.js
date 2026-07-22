@@ -327,74 +327,11 @@ function create(options) {
 
 	function actionButton(label, action) {
 		const button = E('button', { 'type': 'button',
-			'class': 'cbi-button ' + (action === 'recover-network' ?
-				'cbi-button-negative' : 'cbi-button-neutral'), 'data-action': action }, label);
+			'class': 'cbi-button cbi-button-neutral', 'data-action': action }, label);
 		button.addEventListener('click', () => {
 			if (action === 'download-report') downloadReport(button).catch(showError);
-			else if (action === 'recover-network') confirmNetworkRecovery();
 		});
 		return button;
-	}
-
-	function waitOperation(reply) {
-		const id = reply && reply.operation_id;
-		if (typeof id !== 'string') return Promise.reject(Object.assign(
-			new Error(_('Invalid operation response')), { code: 'INVALID_RESPONSE' }));
-		return new Promise((resolve, reject) => {
-			let stop = () => {}, settled = false;
-			const finish = (callback, value) => {
-				if (settled) return;
-				settled = true;
-				stop();
-				callback(value);
-			};
-			stop = api.watchOperation(id, (record, error) => {
-				if (error) { finish(reject, error); return; }
-				if (!record || ![ 'success', 'failure', 'interrupted' ].includes(record.state)) return;
-				if (record.state === 'success') finish(resolve, record);
-				else finish(reject, Object.assign(new Error(record.error?.message || record.error?.code ||
-					_('Network recovery failed')), { code: record.error?.code || 'HEALTH_FAILED' }));
-			});
-			// A test double or future event-driven client may resolve synchronously.
-			// Ensure its unsubscribe handle is still invoked exactly once.
-			if (settled) stop();
-		});
-	}
-
-	function recoveryRequired(summary, serviceState) {
-		if (summary?.state?.desired?.guard?.enabled === true) return false;
-		if (![ 'stopped', 'missing_kernel' ].includes(serviceState)) return false;
-		const components = summary?.components || {};
-		if (String(components.guard?.state || '').toLowerCase() === 'failed') return true;
-		return [ 'dns', 'firewall', 'routing' ].some((name) =>
-			[ 'active', 'failed', 'error' ].includes(String(components[name]?.state || '').toLowerCase()));
-	}
-
-	function confirmNetworkRecovery() {
-		const cancel = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral' }, _('Cancel'));
-		const confirm = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-negative',
-			'data-action': 'recover-network-confirm' },
-			_('Restore OpenWrt network'));
-		cancel.addEventListener('click', () => ui.hideModal());
-		confirm.addEventListener('click', async () => {
-			cancel.disabled = true;
-			confirm.disabled = true;
-			confirm.replaceChildren(E('span', { 'class': 'sbox-spinner', 'aria-hidden': 'true' }),
-				' ' + _('Restoring...'));
-			try {
-				await waitOperation(await api.recoverNetwork('luci'));
-				ui.hideModal();
-				await refresh();
-				ui.addNotification(null, E('p', {}, _('OpenWrt network restored')), 'info');
-			} catch (error) {
-				ui.hideModal();
-				showError(error);
-			}
-		});
-		ui.showModal(_('Emergency network recovery'), [
-			E('p', {}, _('Stop Mihomo, remove MiClash DNS, firewall and routing ownership, and restore the ordinary OpenWrt network. No Internet connection is required.')),
-			E('div', { 'class': 'right' }, [ cancel, ' ', confirm ])
-		]);
 	}
 
 	function renderLoading() {
@@ -422,8 +359,6 @@ function create(options) {
 			status.observed?.service?.state ?? status.state?.observed?.service?.state ??
 			(typeof serviceRunning === 'boolean' ? (serviceRunning ? 'running' : 'stopped') : 'unknown')).toLowerCase();
 		const diagnosticActions = [ actionButton(_('Download diagnostic report'), 'download-report') ];
-		if (recoveryRequired(summary, serviceState))
-			diagnosticActions.push(actionButton(_('Restore OpenWrt network'), 'recover-network'));
 		const componentRows = COMPONENTS.filter(([ name ]) => name !== 'guard').map(([ name, label ]) => {
 			let componentState = summary.components?.[name]?.state ?? health[name]?.state;
 			if (name === 'mihomo' && !componentState && typeof serviceRunning === 'boolean')

@@ -591,6 +591,48 @@
 	margin: 0 0 7px;
 	font-size: 12px;
 }
+.sbox-developer-pane {
+	display: grid;
+	gap: 12px;
+}
+.sbox-developer-pane[hidden] {
+	display: none !important;
+}
+.sbox-developer-intro {
+	padding: 12px 13px;
+	border: 1px solid color-mix(in srgb, var(--sbox-danger) 38%, var(--sbox-border));
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--sbox-danger) 7%, var(--sbox-panel-soft));
+}
+.sbox-developer-intro h4,
+.sbox-developer-intro p,
+.sbox-developer-action h4,
+.sbox-developer-action p {
+	margin: 0;
+}
+.sbox-developer-intro h4,
+.sbox-developer-action h4 {
+	margin-bottom: 5px;
+}
+.sbox-developer-intro p,
+.sbox-developer-action p {
+	color: var(--sbox-muted);
+}
+.sbox-developer-actions {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+}
+.sbox-developer-action {
+	justify-content: space-between;
+	gap: 16px;
+}
+.sbox-developer-action .cbi-button {
+	align-self: flex-start;
+}
+@media (max-width: 900px) {
+	.sbox-developer-actions { grid-template-columns: 1fr; }
+}
 .sbox-card-divider {
 	height: 1px;
 	margin: 11px 0;

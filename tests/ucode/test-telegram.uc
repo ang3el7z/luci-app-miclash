@@ -823,6 +823,7 @@ let minimal_app = {
 	operation_list: () => [], service_start: () => ({ id: 'op-1' }),
 	service_stop: () => ({ id: 'op-1' }), service_reload: () => ({ id: 'op-1' }),
 	service_restart: () => ({ id: 'op-1' }), network_recover: () => ({ id: 'op-1' }),
+	developer_uninstall: () => ({ accepted: true }),
 	config_list: () => [],
 	config_read: () => '', config_validate: () => ({ id: 'op-1' }),
 	config_apply: () => ({ id: 'op-1' }),

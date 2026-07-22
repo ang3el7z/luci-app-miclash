@@ -32,6 +32,9 @@ const SERVICE_JOB_POLL_MS = 1000;
 const SERVICE_JOB_TIMEOUT_MS = 3 * 60 * 1000;
 const OPERATION_TOKEN_STORAGE_PREFIX = 'miclash-operation-token-';
 const AUTO_UPDATE_PRESET_INTERVAL_HOURS = ['2', '4', '12', '24'];
+const DEVELOPER_TAP_COUNT = 10;
+const DEVELOPER_TAP_WINDOW_MS = 5000;
+const DEVELOPER_SESSION_MS = 10 * 60 * 1000;
 
 let editor = null;
 let pageRoot = null;
@@ -49,6 +52,10 @@ let logsLoaded = false;
 let logsRefreshPromise = null;
 let pageGeneration = 0;
 let sessionExpired = false;
+let cfgTabSetter = null;
+let developerVisible = false;
+let developerTapTimes = [];
+let developerExpiryTimer = null;
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
@@ -2271,6 +2278,7 @@ function buildPageHtml() {
 				'<button type="button" class="cbi-tab sbox-tab" data-cfg-tab="config">' + safeText(_('Config')) + '</button>' +
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="settings">' + safeText(_('Settings')) + '</button>' +
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
+				'<button id="sbox-developer-tab" type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="developer" hidden>' + safeText(_('Developer')) + '</button>' +
 			'</div>' +
 
 				'<div id="sbox-pane-config">' +
@@ -2300,6 +2308,27 @@ function buildPageHtml() {
 				'<pre id="sbox-log-content" class="sbox-log-content">' +
 					view_miclash_ui_shell.loadingHtml({ kind: 'editor', lines: 7 }) +
 				'</pre>' +
+			'</div>' +
+
+			'<div id="sbox-pane-developer" class="sbox-developer-pane" hidden>' +
+				'<div class="sbox-developer-intro">' +
+					'<h4>' + safeText(_('Developer tools')) + '</h4>' +
+					'<p>' + safeText(_('This hidden session stays open for 10 minutes. These emergency actions can interrupt access to the router.')) + '</p>' +
+				'</div>' +
+				'<div class="sbox-developer-actions">' +
+					'<article class="sbox-settings-card sbox-developer-action">' +
+						'<div><h4>' + safeText(_('Restore OpenWrt network')) + '</h4><p>' + safeText(_('Stop Mihomo and remove MiClash DNS, firewall and routing ownership. Remove Guard first if it is enabled.')) + '</p></div>' +
+						'<button type="button" class="cbi-button cbi-button-negative" data-developer-action="restore-network">' + safeText(_('Restore network')) + '</button>' +
+					'</article>' +
+					'<article class="sbox-settings-card sbox-developer-action">' +
+						'<div><h4>' + safeText(_('Remove Guard')) + '</h4><p>' + safeText(_('Disable Guard and remove its active fail-closed rules.')) + '</p></div>' +
+						'<button type="button" class="cbi-button cbi-button-negative" data-developer-action="remove-guard">' + safeText(_('Remove Guard')) + '</button>' +
+					'</article>' +
+					'<article class="sbox-settings-card sbox-developer-action">' +
+						'<div><h4>' + safeText(_('Remove MiClash')) + '</h4><p>' + safeText(_('Remove MiClash through the OpenWrt package manager after its normal network cleanup.')) + '</p></div>' +
+						'<button type="button" class="cbi-button cbi-button-negative" data-developer-action="remove-miclash">' + safeText(_('Remove MiClash')) + '</button>' +
+					'</article>' +
+				'</div>' +
 			'</div>' +
 		'</div>';
 }
@@ -3205,6 +3234,120 @@ function bindConfigEvents() {
 
 }
 
+function clearDeveloperTimer() {
+	if (developerExpiryTimer != null) clearTimeout(developerExpiryTimer);
+	developerExpiryTimer = null;
+}
+
+function setDeveloperVisible(visible, activate) {
+	developerVisible = visible === true;
+	developerTapTimes = [];
+	clearDeveloperTimer();
+	const tab = pageRoot?.querySelector('#sbox-developer-tab');
+	const pane = pageRoot?.querySelector('#sbox-pane-developer');
+	if (tab) tab.hidden = !developerVisible;
+	if (!developerVisible && pane) pane.hidden = true;
+	if (developerVisible) {
+		developerExpiryTimer = window.setTimeout(() => setDeveloperVisible(false, true),
+			DEVELOPER_SESSION_MS);
+		if (activate && typeof cfgTabSetter === 'function') cfgTabSetter('developer');
+	} else if (activate && appState.activeCfgTab === 'developer' &&
+		typeof cfgTabSetter === 'function') cfgTabSetter('settings');
+}
+
+function registerDeveloperTap() {
+	const now = Date.now();
+	developerTapTimes = developerTapTimes.filter((timestamp) =>
+		now - timestamp <= DEVELOPER_TAP_WINDOW_MS);
+	developerTapTimes.push(now);
+	if (developerTapTimes.length < DEVELOPER_TAP_COUNT) return;
+	setDeveloperVisible(!developerVisible, true);
+}
+
+function developerConfirmation(options) {
+	view_miclash_ui_shell.showModal({
+		title: options.title,
+		body: E('div', { 'class': 'sbox-modal-responsive' }, [
+			E('p', {}, options.message),
+			options.detail ? E('p', { 'class': 'sbox-muted' }, options.detail) : null
+		].filter(Boolean)),
+		buttons: [
+			{ label: _('Cancel'), className: 'cbi-button cbi-button-neutral' },
+			{
+				label: options.confirmLabel,
+				className: 'cbi-button cbi-button-negative',
+				onClick: async ({ closeModal }) => {
+					try {
+						await options.run();
+						closeModal();
+					} catch (error) {}
+				}
+			}
+		]
+	});
+}
+
+async function runDeveloperOperation(reply, progress) {
+	setOperationStatus('running', progress, { context: 'developer' });
+	const record = await awaitTypedOperation(reply, progress);
+	return record;
+}
+
+function bindDeveloperEvents() {
+	const settingsTab = pageRoot?.querySelector('[data-cfg-tab="settings"]');
+	if (settingsTab) settingsTab.addEventListener('click', registerDeveloperTap);
+	const pane = pageRoot?.querySelector('#sbox-pane-developer');
+	if (!pane) return;
+	const restore = pane.querySelector('[data-developer-action="restore-network"]');
+	const removeGuard = pane.querySelector('[data-developer-action="remove-guard"]');
+	const removeMiClash = pane.querySelector('[data-developer-action="remove-miclash"]');
+
+	if (restore) restore.addEventListener('click', () => developerConfirmation({
+		title: _('Restore OpenWrt network'),
+		message: _('Stop Mihomo and remove all MiClash-owned DNS, firewall and routing state?'),
+		detail: _('If Guard is enabled, remove it first. No Internet connection is required.'),
+		confirmLabel: _('Restore network'),
+		run: async () => {
+			try {
+				await runDeveloperOperation(await configApi.recoverNetwork('luci'), _('Restoring OpenWrt network…'));
+				setOperationSuccess(_('OpenWrt network restored'));
+				notify('info', _('OpenWrt network restored'));
+				await refreshHeaderAndControlSafe();
+			} catch (error) { setOperationError(error); notify('error', error.message || error); throw error; }
+		}
+	}));
+
+	if (removeGuard) removeGuard.addEventListener('click', () => developerConfirmation({
+		title: _('Remove Guard'),
+		message: _('Disable Guard and remove all active fail-closed Guard rules?'),
+		detail: _('Devices may use a direct connection after this action.'),
+		confirmLabel: _('Remove Guard'),
+		run: async () => {
+			try {
+				await runDeveloperOperation(await configApi.guard_transition(false, 'luci'), _('Removing Guard…'));
+				await refreshCanonicalGuardState();
+				setOperationSuccess(_('Guard removed.'));
+				notify('info', _('Guard removed.'));
+			} catch (error) { setOperationError(error); notify('error', error.message || error); throw error; }
+		}
+	}));
+
+	if (removeMiClash) removeMiClash.addEventListener('click', () => developerConfirmation({
+		title: _('Remove MiClash'),
+		message: _('Remove MiClash from this router?'),
+		detail: _('The normal package removal protocol restores OpenWrt networking first. This page will become unavailable.'),
+		confirmLabel: _('Remove MiClash'),
+		run: async () => {
+			try {
+				const reply = await configApi.uninstallMiClash('luci');
+				if (reply?.accepted !== true) throw new Error(_('MiClash removal was not accepted.'));
+				setOperationSuccess(_('MiClash removal started.'));
+				notify('info', _('MiClash removal started.'));
+			} catch (error) { setOperationError(error); notify('error', error.message || error); throw error; }
+		}
+	}));
+}
+
 function bindTabEvents() {
 	view_miclash_ui_shell.bindTabGroup(pageRoot, {
 		tabAttr: 'ctrl-tab',
@@ -3217,15 +3360,19 @@ function bindTabEvents() {
 		}
 	});
 
-	view_miclash_ui_shell.bindTabGroup(pageRoot, {
+	let cfgTabsInitialized = false;
+	cfgTabSetter = view_miclash_ui_shell.bindTabGroup(pageRoot, {
 		tabAttr: 'cfg-tab',
 		initial: appState.activeCfgTab || 'config',
 		panes: {
 			config: '#sbox-pane-config',
 			settings: '#sbox-pane-settings',
-			logs: '#sbox-pane-logs'
+			logs: '#sbox-pane-logs',
+			developer: '#sbox-pane-developer'
 		},
 		onChange: (name) => {
+			if (cfgTabsInitialized && appState.activeCfgTab === name) return;
+			cfgTabsInitialized = true;
 			appState.activeCfgTab = name;
 			managementOwner.setActive(name === 'settings');
 			diagnosticsOwner.setActive(name === 'settings');
@@ -3240,6 +3387,7 @@ function bindTabEvents() {
 			}
 		}
 	});
+	bindDeveloperEvents();
 }
 
 return view.extend({
@@ -3253,6 +3401,11 @@ return view.extend({
 
 	render: function(data) {
 		sessionExpired = false;
+		clearDeveloperTimer();
+		developerVisible = false;
+		developerTapTimes = [];
+		cfgTabSetter = null;
+		if (appState.activeCfgTab === 'developer') appState.activeCfgTab = 'settings';
 		notificationOwner.destroy();
 		managementOwner.destroy();
 		releaseConfigRuntime();
@@ -3354,6 +3507,10 @@ return view.extend({
 	},
 
 	unload: function() {
+		clearDeveloperTimer();
+		developerVisible = false;
+		developerTapTimes = [];
+		cfgTabSetter = null;
 		diagnosticsOwner.destroy();
 		notificationOwner.destroy();
 		managementOwner.destroy();

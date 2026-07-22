@@ -373,7 +373,7 @@ const guardedStoppedHealth = panel.renderSummary({ summary: {
 assert.match(guardedStoppedHealth.textContent, /Firewall●Guard/,
 	'a verified fail-closed firewall must be distinguishable from plain OpenWrt');
 assert.equal(guardedStoppedHealth.querySelector('[data-action="recover-network"]'), null,
-	'emergency recovery must not bypass an enabled Guard');
+	'component diagnostics must not expose hidden developer actions');
 const brokenDirectHealth = panel.renderSummary({ summary: {
 	...replies.summary,
 	components: {
@@ -386,19 +386,8 @@ const brokenDirectHealth = panel.renderSummary({ summary: {
 		observed: { service: { state: 'stopped', running: false } }
 	}
 } });
-const recoveryButton = brokenDirectHealth.querySelector('[data-action="recover-network"]');
-assert.ok(recoveryButton, 'broken Guard-OFF terminal state must expose local network recovery');
-recoveryButton.click();
-let recoveryModal = modalCalls.at(-1);
-assert.equal(recoveryModal.title, 'Emergency network recovery');
-const recoveryConfirm = recoveryModal.body.at(-1).querySelector('[data-action="recover-network-confirm"]');
-assert.ok(recoveryConfirm, 'network recovery modal is missing its confirmation action');
-recoveryConfirm.click();
-await new Promise((resolve) => setImmediate(resolve));
-await new Promise((resolve) => setImmediate(resolve));
-assert.deepEqual(calls.find((call) => call[0] === 'recoverNetwork')?.slice(1), ['luci']);
-assert.ok(calls.some((call) => call[0] === 'watchOperation' && call[1] === 'op_recover_1'));
-assert.ok(notifications.some((item) => item.text === 'OpenWrt network restored'));
+assert.equal(brokenDirectHealth.querySelector('[data-action="recover-network"]'), null,
+	'network recovery must remain confined to the hidden developer tab');
 assert.match(stoppedHealth.textContent, /Mihomo memory \(RSS\)Inactive/,
 	'a stopped Mihomo must not expose a stale RSS sample');
 const readinessHealth = panel.renderSummary({ summary: {

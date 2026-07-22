@@ -104,9 +104,12 @@ let telegram = {
 	prepare: (value) => value,
 	configure: (value) => push(management_calls, [ 'telegram.configure', value ])
 };
+let uninstall_scheduled = 0;
 let app = application.create({
 	operations, service, settings, config, state, memory, devices,
-	notifications, telegram, clock: { now: () => 1000 }
+	notifications, telegram,
+	system: { schedule_uninstall: () => { uninstall_scheduled++; return true; } },
+	clock: { now: () => 1000 }
 });
 
 assert_equal(app.status().status, 'safe');
@@ -152,6 +155,17 @@ let network_recovery = app.network_recover('luci');
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(network_recovery.id, submitted[length(submitted) - 1].record.id);
 assert_equal(actions[length(actions) - 1], 'recover-network');
+assert_equal(app.developer_uninstall('luci').accepted, true);
+assert_equal(uninstall_scheduled, 1);
+assert_throws(() => app.settings_set({ core: { proxy_mode: 'tun' } }, 'luci'), 'BUSY');
+
+// Continue exercising ordinary mutations with a fresh non-draining instance.
+app = application.create({
+	operations, service, settings, config, state, memory, devices,
+	notifications, telegram,
+	system: { schedule_uninstall: () => true },
+	clock: { now: () => 1000 }
+});
 
 let before_config = length(submitted);
 app.config_validate('config.yaml', 'valid\n', 'luci');
@@ -260,6 +274,7 @@ let atomic_app = application.create({
 	operations, service, settings: atomic_settings, config, state: atomic_state,
 	memory: atomic_memory_domain, devices, notifications: atomic_notification_domain,
 	telegram: atomic_telegram_domain,
+	system: { schedule_uninstall: () => true },
 	clock: { now: () => 1000 }
 });
 function run_last() { return submitted[length(submitted) - 1].worker({ stage: () => null }); };

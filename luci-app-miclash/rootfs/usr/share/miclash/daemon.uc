@@ -1002,6 +1002,11 @@ export function compose(runtime, overrides) {
 			notifications: notifications_domain,
 			telegram: telegram_domain,
 			guard: { transition: guard_transition },
+			system: {
+				schedule_uninstall: () => runtime.process.run({
+					command: '/usr/share/miclash/developer-remove', args: [ 'schedule' ]
+				})?.code == 0
+			},
 			clock: runtime.clock
 		});
 		let compact_overview = app.overview;

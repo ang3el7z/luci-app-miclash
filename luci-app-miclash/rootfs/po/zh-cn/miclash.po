@@ -2315,20 +2315,68 @@ msgstr "正在重置设备策略…"
 msgid "Invalid operation response"
 msgstr "操作响应无效"
 
-msgid "Emergency network recovery"
-msgstr "紧急网络恢复"
-
 msgid "Restore OpenWrt network"
 msgstr "恢复 OpenWrt 网络"
-
-msgid "Restoring..."
-msgstr "正在恢复..."
 
 msgid "OpenWrt network restored"
 msgstr "OpenWrt 网络已恢复"
 
-msgid "Network recovery failed"
-msgstr "网络恢复失败"
+msgid "Developer"
+msgstr "开发者"
 
-msgid "Stop Mihomo, remove MiClash DNS, firewall and routing ownership, and restore the ordinary OpenWrt network. No Internet connection is required."
-msgstr "停止 Mihomo，移除 MiClash 对 DNS、防火墙和路由的控制，并恢复普通 OpenWrt 网络。此操作无需互联网连接。"
+msgid "Developer tools"
+msgstr "开发者工具"
+
+msgid "This hidden session stays open for 10 minutes. These emergency actions can interrupt access to the router."
+msgstr "此隐藏会话开放 10 分钟。紧急操作可能会中断对路由器的访问。"
+
+msgid "Stop Mihomo and remove MiClash DNS, firewall and routing ownership. Remove Guard first if it is enabled."
+msgstr "停止 Mihomo 并移除 MiClash 对 DNS、防火墙和路由的控制。如果 Guard 已启用，请先将其移除。"
+
+msgid "Restore network"
+msgstr "恢复网络"
+
+msgid "Remove Guard"
+msgstr "移除 Guard"
+
+msgid "Disable Guard and remove its active fail-closed rules."
+msgstr "禁用 Guard 并移除其活动的故障关闭规则。"
+
+msgid "Remove MiClash"
+msgstr "移除 MiClash"
+
+msgid "Remove MiClash through the OpenWrt package manager after its normal network cleanup."
+msgstr "完成常规网络清理后，通过 OpenWrt 包管理器移除 MiClash。"
+
+msgid "Stop Mihomo and remove all MiClash-owned DNS, firewall and routing state?"
+msgstr "停止 Mihomo 并移除所有由 MiClash 管理的 DNS、防火墙和路由状态？"
+
+msgid "If Guard is enabled, remove it first. No Internet connection is required."
+msgstr "如果 Guard 已启用，请先将其移除。此操作无需互联网连接。"
+
+msgid "Restoring OpenWrt network…"
+msgstr "正在恢复 OpenWrt 网络…"
+
+msgid "Disable Guard and remove all active fail-closed Guard rules?"
+msgstr "禁用 Guard 并移除所有活动的故障关闭规则？"
+
+msgid "Devices may use a direct connection after this action."
+msgstr "执行此操作后，设备可能会使用直连。"
+
+msgid "Removing Guard…"
+msgstr "正在移除 Guard…"
+
+msgid "Guard removed."
+msgstr "Guard 已移除。"
+
+msgid "Remove MiClash from this router?"
+msgstr "从此路由器移除 MiClash？"
+
+msgid "The normal package removal protocol restores OpenWrt networking first. This page will become unavailable."
+msgstr "标准包移除流程会先恢复 OpenWrt 网络。此页面随后将不可用。"
+
+msgid "MiClash removal was not accepted."
+msgstr "MiClash 移除请求未被接受。"
+
+msgid "MiClash removal started."
+msgstr "MiClash 移除已开始。"

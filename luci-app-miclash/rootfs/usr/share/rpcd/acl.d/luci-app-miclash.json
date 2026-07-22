@@ -18,7 +18,7 @@
       "ubus": {
         "miclash": [
           "service_start", "service_stop", "service_reload",
-          "service_restart", "network_recover", "config_read",
+          "service_restart", "network_recover", "developer_uninstall", "config_read",
           "config_validate", "config_apply", "operational_settings_apply", "config_swap",
           "config_external_adopt", "settings_set", "guard_transition", "subscription_set",
           "subscription_update", "update_miclash", "update_mihomo",
