@@ -50,6 +50,7 @@ const FIELDS = {
 	updates: {
 		auto_subscription: 'bool',
 		interval_hours: 'interval',
+		interval_source: 'interval_source',
 		miclash_release_channel: 'release_channel',
 		mihomo_release_channel: 'release_channel',
 		auto_major_miclash: 'bool'
@@ -108,6 +109,7 @@ function defaults() {
 		updates: {
 			auto_subscription: true,
 			interval_hours: 4,
+			interval_source: 'manual',
 			miclash_release_channel: 'release',
 			mihomo_release_channel: 'release',
 			auto_major_miclash: true
@@ -251,6 +253,8 @@ function normalize(kind, value, fallback, strict) {
 			invalid();
 		return normalized;
 	}
+	if (kind == 'interval_source')
+		return enum_value(value, [ 'manual', 'provider' ]);
 	if (kind == 'telegram_poll_timeout_seconds')
 		return bounded_integer(value, 5, 50);
 	let memory_bounds = {

@@ -271,6 +271,7 @@ function defaultOperationalSettings() {
 		autoHideNotifications: true,
 		autoUpdateConfig: true,
 		autoUpdateIntervalHours: '4',
+		autoUpdateIntervalSource: 'manual',
 		autoUpdateIntervalStored: false,
 		autoMajorMiclash: true,
 		miclashReleaseChannel: 'release',
@@ -307,6 +308,7 @@ function operationalSettingsFromTyped(source) {
 		settings.autoHideNotifications = notifications.auto_hide !== false;
 		settings.autoUpdateConfig = updates.auto_subscription !== false;
 		settings.autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(updates.interval_hours);
+		settings.autoUpdateIntervalSource = updates.interval_source === 'provider' ? 'provider' : 'manual';
 		settings.autoUpdateIntervalStored = true;
 		settings.autoMajorMiclash = updates.auto_major_miclash !== false;
 		settings.miclashReleaseChannel = view_miclash_release.normalizeReleaseChannel(updates.miclash_release_channel);

@@ -61,6 +61,7 @@ assert_equal(defaults.memory.sample_interval_ms, 60000);
 assert_equal(defaults.memory.failure_cooldown_ms, 86400000);
 assert_equal(defaults.updates.auto_subscription, true);
 assert_equal(defaults.updates.interval_hours, 4);
+assert_equal(defaults.updates.interval_source, 'manual');
 assert_equal(defaults.updates.miclash_release_channel, 'release');
 assert_equal(defaults.updates.mihomo_release_channel, 'release');
 assert_equal(defaults.updates.auto_major_miclash, true);
@@ -113,7 +114,7 @@ assert_json_equal(legacy.notifications.telegram_events, [ 'failure', 'recovery' 
 let normalized_env = fake_runtime();
 assert_json_equal(settings.validate_patch({
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
-	updates: { interval_hours: '24' },
+	updates: { interval_hours: '24', interval_source: 'provider' },
 	telegram: { poll_timeout_seconds: '25' },
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
 	notifications: { syslog_enabled: true,
@@ -122,7 +123,7 @@ assert_json_equal(settings.validate_patch({
 		telegram_enabled: true, telegram_events: [ 'internet_restored' ] }
 }), {
 	interfaces: { included: [ 'br-lan', 'wlan0' ] },
-	updates: { interval_hours: 24 },
+	updates: { interval_hours: 24, interval_source: 'provider' },
 	telegram: { poll_timeout_seconds: 25 },
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
 	notifications: { syslog_enabled: true,

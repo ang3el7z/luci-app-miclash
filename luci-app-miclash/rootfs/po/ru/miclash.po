@@ -1413,6 +1413,12 @@ msgstr "Обновить"
 msgid "Auto-update config"
 msgstr "Автообновление конфига"
 
+msgid "Every:"
+msgstr "каждые:"
+
+msgid "Interval set by subscription"
+msgstr "Интервал задан подпиской"
+
 msgid "hours"
 msgstr "часы"
 

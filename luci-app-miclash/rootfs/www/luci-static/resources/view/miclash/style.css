@@ -731,6 +731,18 @@
 .sbox-auto-update-interval[hidden] {
 	display: none !important;
 }
+.sbox-auto-update-every,
+.sbox-auto-update-provider {
+	font-size: 12px;
+	line-height: 1.3;
+}
+.sbox-auto-update-every {
+	margin-left: 4px;
+}
+.sbox-auto-update-provider {
+	flex-basis: 100%;
+	margin-left: 24px;
+}
 .sbox-auto-update-choice {
 	display: inline-flex;
 	align-items: center;

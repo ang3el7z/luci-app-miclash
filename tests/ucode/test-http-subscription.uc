@@ -472,6 +472,23 @@ assert_equal(length(direct_sub.calls.apply), 1);
 assert_equal(direct_sub.calls.validate[0].id, direct_sub.calls.apply[0].id);
 assert_match(direct_sub.calls.apply[0].content, /^mode: rule\n# Proxy Mode: TPROXY\nredir-port: 7892\ntproxy-port: 7894\n/);
 assert_equal(direct_sub.calls.apply[0].extra.download_result, 'success');
+assert_equal(direct_sub.settings.get().updates.interval_hours, 12,
+	'provider interval from an automatic update becomes the canonical setting');
+assert_equal(direct_sub.settings.get().updates.interval_source, 'provider',
+	'provider interval keeps its source for the settings UI');
+
+let manual_interval = subscription_environment({
+	'https://subscriptions.example.test/manual-interval.yaml': {
+		headers: { 'profile-update-interval': '24' }, body: yaml
+	}
+});
+let manual_interval_op = manual_interval.client.update({ profile: 'config.yaml',
+	url: 'https://subscriptions.example.test/manual-interval.yaml' }, 'luci');
+assert_equal(finish_subscription(manual_interval, manual_interval_op).state, 'success');
+assert_equal(manual_interval.settings.get().updates.interval_hours, 24,
+	'provider interval from a manual update becomes the canonical setting');
+assert_equal(manual_interval.settings.get().updates.interval_source, 'provider',
+	'provider source is retained after a manual update');
 
 let replacement_url = 'https://subscriptions.example.test/replacement.yaml';
 let replacement = subscription_environment({

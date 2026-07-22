@@ -1874,20 +1874,46 @@ function buildSettingsSummary() {
 	).join('');
 }
 
+function buildAutoUpdateIntervalOptionsHtml(current, fixed) {
+	const preset = AUTO_UPDATE_PRESET_INTERVAL_HOURS.includes(current);
+	const values = fixed ? [current] : preset ? AUTO_UPDATE_PRESET_INTERVAL_HOURS : [current];
+	return values.map((value) =>
+		'<label class="sbox-auto-update-choice">' +
+			'<input type="radio" name="sbox-auto-update-interval" value="' + safeText(value) + '"' + (value === current ? ' checked' : '') + ' />' +
+			'<span>' + safeText(_('%s h').format(value)) + '</span>' +
+		'</label>'
+	).join('');
+}
+
 function buildAutoUpdateIntervalChoicesHtml(settings) {
 	const current = normalizeAutoUpdateIntervalHours(settings && settings.autoUpdateIntervalHours || '4') || '4';
-	const preset = AUTO_UPDATE_PRESET_INTERVAL_HOURS.includes(current);
-	const values = preset ? AUTO_UPDATE_PRESET_INTERVAL_HOURS : [current];
+	const provider = settings?.autoUpdateIntervalSource === 'provider';
 
 	return '' +
+		'<span class="sbox-auto-update-every">' + safeText(_('Every:')) + '</span>' +
 		'<span id="sbox-auto-update-interval" class="sbox-auto-update-interval"' + (settings && settings.autoUpdateConfig !== false ? '' : ' hidden') + '>' +
-			values.map((value) =>
-				'<label class="sbox-auto-update-choice">' +
-					'<input type="radio" name="sbox-auto-update-interval" value="' + safeText(value) + '"' + (value === current ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('%s h').format(value)) + '</span>' +
-				'</label>'
-			).join('') +
-		'</span>';
+			buildAutoUpdateIntervalOptionsHtml(current, provider) +
+		'</span>' +
+		(provider ? '<span id="sbox-auto-update-provider" class="sbox-muted sbox-auto-update-provider">' +
+			safeText(_('Interval set by subscription')) + '</span>' : '');
+}
+
+function refreshAutoUpdateIntervalChoices(hours) {
+	const current = normalizeAutoUpdateIntervalHours(hours);
+	if (!current) return;
+	if (appState.settings) {
+		appState.settings.autoUpdateIntervalHours = current;
+		appState.settings.autoUpdateIntervalStored = true;
+		appState.settings.autoUpdateIntervalSource = 'provider';
+	}
+	const choices = pageRoot?.querySelector('#sbox-auto-update-interval');
+	if (choices) choices.innerHTML = buildAutoUpdateIntervalOptionsHtml(current, true);
+	const provider = pageRoot?.querySelector('#sbox-auto-update-provider');
+	if (!provider && choices?.parentNode) {
+		const note = E('span', { id: 'sbox-auto-update-provider',
+			'class': 'sbox-muted sbox-auto-update-provider' }, _('Interval set by subscription'));
+		choices.parentNode.appendChild(note);
+	}
 }
 
 function buildReleaseChannelSectionHtml(settings) {
@@ -2430,6 +2456,7 @@ async function collectSettingsFormState() {
 	const autoUpdateIntervalEl = pane.querySelector('input[name="sbox-auto-update-interval"]:checked');
 	const autoUpdateConfig = autoUpdateConfigEl ? !!autoUpdateConfigEl.checked : true;
 	const autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalEl?.value || '4') || '4';
+	const autoUpdateIntervalSource = appState.settings?.autoUpdateIntervalSource === 'provider' ? 'provider' : 'manual';
 	const autoMajorMiclashEl = pane.querySelector('#sbox-auto-major-miclash');
 	const autoMajorMiclash = autoMajorMiclashEl ? !!autoMajorMiclashEl.checked : true;
 	const enableHwid = !!pane.querySelector('#sbox-enable-hwid')?.checked;
@@ -2458,6 +2485,7 @@ async function collectSettingsFormState() {
 		useTmpfsRules,
 		autoUpdateConfig,
 		autoUpdateIntervalHours,
+		autoUpdateIntervalSource,
 		autoMajorMiclash,
 		selected,
 		enableHwid,
@@ -2472,6 +2500,7 @@ function updatesPatchFromForm(formState) {
 	return {
 		auto_subscription: formState.autoUpdateConfig !== false,
 		interval_hours: parseInt(formState.autoUpdateIntervalHours || '4', 10),
+		interval_source: formState.autoUpdateIntervalSource === 'provider' ? 'provider' : 'manual',
 		miclash_release_channel: normalizeReleaseChannel(formState.miclashReleaseChannel),
 		mihomo_release_channel: normalizeReleaseChannel(formState.mihomoReleaseChannel),
 		auto_major_miclash: formState.autoMajorMiclash !== false
@@ -2613,6 +2642,12 @@ function bindSettingsPaneEvents() {
 		});
 		syncAutoUpdateInterval();
 	}
+	pane.querySelectorAll('input[name="sbox-auto-update-interval"]').forEach((input) => {
+		input.addEventListener('change', () => {
+			if (appState.settings) appState.settings.autoUpdateIntervalSource = 'manual';
+			pane.querySelector('#sbox-auto-update-provider')?.remove();
+		});
+	});
 
 	const enableHwidEl = pane.querySelector('#sbox-enable-hwid');
 	const hwidFields = pane.querySelector('.sbox-hwid-fields');
@@ -2983,6 +3018,7 @@ function bindConfigEvents() {
 			let serviceReloaded = false;
 			if (selectedConfig === MAIN_CONFIG_NAME) {
 				await applySubscriptionProfileUpdateInterval(appliedInfo.profileUpdateIntervalHours);
+				refreshAutoUpdateIntervalChoices(appliedInfo.profileUpdateIntervalHours);
 				if (await getServiceStatus()) {
 					setOperationStatus('running', _('Reloading Mihomo configuration...'));
 					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));

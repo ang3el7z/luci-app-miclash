@@ -1360,6 +1360,12 @@ msgstr "更新"
 msgid "Auto-update config"
 msgstr "自动更新配置"
 
+msgid "Every:"
+msgstr "每隔："
+
+msgid "Interval set by subscription"
+msgstr "间隔由订阅设定"
+
 msgid "hours"
 msgstr "小时"
 

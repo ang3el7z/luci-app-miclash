@@ -203,6 +203,17 @@ export function create(app) {
 		return schema.url(url);
 	};
 
+	function save_provider_interval(hours) {
+		if (type(hours) != 'int' || hours < 1 || hours > 8760)
+			return;
+		let saved = app.settings.set(app.settings.validate({
+			updates: { interval_hours: hours, interval_source: 'provider' }
+		}));
+		if (saved?.updates?.interval_hours != hours ||
+		    saved?.updates?.interval_source != 'provider')
+			errors.fail('INTERNAL');
+	};
+
 	function fetch(options) {
 		exact(options, { url: true });
 		let value = current(), url = schema.url(options.url);
@@ -336,6 +347,7 @@ export function create(app) {
 				}
 				if (applied?.activated !== true || applied?.reload_ok !== true)
 					errors.fail('INTERNAL');
+				save_provider_interval(candidate.interval_hours);
 				ctx.stage('complete', 99, 'Subscription active');
 				return true;
 			}, pre_enqueue);
