@@ -10,6 +10,13 @@ export function create(app) {
 
 	let closed = false, started = false, active = false, timer = null;
 	let generation = 0, failures = 0, attempt;
+	function operational_log(level, message) {
+		try {
+			let write = app.logger?.[level];
+			if (type(write) == 'function') write('daemon: ' + message);
+		}
+		catch (error) {}
+	};
 
 	function cancel_timer() {
 		generation++;
@@ -55,10 +62,12 @@ export function create(app) {
 			active = true;
 			failures = 0;
 			cancel_timer();
+			operational_log('info', 'ready');
 			return true;
 		}
 		catch (error) {
 			failures++;
+			operational_log('error', 'readiness failed; retry scheduled');
 			schedule_retry();
 			return false;
 		}
@@ -68,6 +77,7 @@ export function create(app) {
 		start: () => {
 			if (closed) return false;
 			if (!started) {
+				operational_log('info', 'starting');
 				if (app.observe() !== true) fail('INTERNAL');
 				started = true;
 			}
@@ -79,6 +89,7 @@ export function create(app) {
 			if (closed) return false;
 			closed = true;
 			cancel_timer();
+			if (started) operational_log('info', 'stopped');
 			return true;
 		}
 	};

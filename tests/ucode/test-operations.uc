@@ -29,6 +29,33 @@ let manager = operations.create(env.rt);
 assert_equal(env.fs.mode('/tmp/miclash'), 0o700);
 assert_equal(env.fs.mode('/tmp/miclash/operations'), 0o700);
 
+// Operational logs describe durable boundaries without logging contexts or stage noise.
+let logging_env = environment();
+let operational_logs = fakes.events();
+logging_env.rt.logger = operational_logs.logger;
+let logging_manager = operations.create(logging_env.rt);
+logging_manager.submit('service.restart', 'luci', { token: 'must-not-be-logged' }, () => null);
+logging_env.clock.advance(0);
+assert_equal(length(operational_logs.items), 2);
+assert_equal(operational_logs.items[0].type, 'info');
+assert_equal(operational_logs.items[0].data,
+	'operations: started kind=service.restart source=luci');
+assert_equal(operational_logs.items[1].type, 'info');
+assert_equal(operational_logs.items[1].data,
+	'operations: completed kind=service.restart source=luci state=success');
+assert_true(index(sprintf('%J', operational_logs.items), 'must-not-be-logged') < 0);
+
+let failed_logging_env = environment();
+let failed_operational_logs = fakes.events();
+failed_logging_env.rt.logger = failed_operational_logs.logger;
+let failed_logging_manager = operations.create(failed_logging_env.rt);
+failed_logging_manager.submit('service.start', 'system', {}, () => die('private detail'));
+failed_logging_env.clock.advance(0);
+assert_equal(failed_operational_logs.items[1].type, 'error');
+assert_equal(failed_operational_logs.items[1].data,
+	'operations: completed kind=service.start source=system state=failure code=INTERNAL');
+assert_true(index(sprintf('%J', failed_operational_logs.items), 'private detail') < 0);
+
 // A live mutation context is an identity-bearing daemon authority, not a
 // capability which can be reconstructed from its public-looking fields.
 let authority_env = environment();

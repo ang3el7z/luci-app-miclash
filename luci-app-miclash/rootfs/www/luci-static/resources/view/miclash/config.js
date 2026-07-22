@@ -3172,8 +3172,9 @@ function bindTabEvents() {
 			settings: '#sbox-pane-settings',
 			logs: '#sbox-pane-logs'
 		},
-			onChange: (name) => {
+		onChange: (name) => {
 			appState.activeCfgTab = name;
+			if (name !== 'logs') stopLogPolling();
 			if (name === 'settings') {
 				renderSettingsPane();
 			} else if (name === 'logs') {
@@ -3270,7 +3271,7 @@ return view.extend({
 		visibilityChangeHandler = () => {
 			if (document.hidden) {
 				stopLogPolling();
-		} else if (logsLoaded) {
+		} else if (appState.activeCfgTab === 'logs' && logsLoaded) {
 				refreshLogs().catch(() => {});
 				startLogPolling();
 			}

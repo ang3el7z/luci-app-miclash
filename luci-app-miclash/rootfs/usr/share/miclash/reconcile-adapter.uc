@@ -28,6 +28,13 @@ export function create(app) {
 	if (app.events != null && type(app.events.emit) != 'function')
 		fail('INVALID_ARGUMENT');
 	let failure_sequence = 0, active_failure = null, active_component = null;
+	function operational_log(level, message) {
+		try {
+			let write = app.logger?.[level];
+			if (type(write) == 'function') write('reconcile: ' + message);
+		}
+		catch (error) {}
+	};
 	function component(records, name) {
 		for (let record in records ?? [])
 			if (record?.component == name) return record;
@@ -124,6 +131,8 @@ export function create(app) {
 	};
 	function reconcile_now(trigger, stage, service_action) {
 		let desired = app.settings.get(), ready = null, failure_component = 'network';
+		operational_log('info', sprintf('started reason=%s action=%s',
+			trigger, service_action));
 		try {
 			if (app.guard.is_latched())
 				desired = recover_guard(trigger, stage);
@@ -138,6 +147,7 @@ export function create(app) {
 				fail('HEALTH_FAILED');
 			stage?.('network', 30, 'Applying native firewall, routing and DNS state');
 			app.network.apply(desired);
+			operational_log('info', 'network state applied components=dns,firewall,routing');
 			// Upgrade cleanup keeps an independent fail-closed owner armed until
 			// the native network generation is fully installed. Canonical OFF may
 			// only release it after that handoff point, never before.
@@ -164,6 +174,9 @@ export function create(app) {
 				ready = app.service.wait_ready(app.clock.now() + RUNNING_READY_TIMEOUT_MS,
 					'config.yaml', service_health);
 			if (ready?.ok !== true) fail('HEALTH_FAILED');
+			operational_log('info', sprintf(
+				'ready components=mihomo,dns,firewall,routing guard=%s',
+				desired?.guard?.enabled === true ? 'enabled' : 'disabled'));
 		}
 		catch (error) {
 			// Keep the independent bootstrap owner armed after any failed network
@@ -176,6 +189,10 @@ export function create(app) {
 			if (active_failure == null)
 				active_failure = sprintf('failure-%d-%d', ++failure_sequence, app.clock.now());
 			active_component = failure_component;
+			operational_log('error', sprintf(
+				'failed component=%s reason=%s code=%s',
+				failure_component, trigger,
+				error?.code ?? error?.message ?? 'HEALTH_FAILED'));
 			let data = { failure_id: active_failure, component: failure_component, reason: trigger };
 			emit('failure', data);
 			if (desired?.guard?.enabled === true || app.guard.is_latched()) emit('fail_closed', data);

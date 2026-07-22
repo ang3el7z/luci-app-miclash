@@ -1,7 +1,8 @@
 import { assert_equal } from 'testlib';
 import * as adapter from 'miclash.reconcile-adapter';
 
-let records = [], events = [], ready = false, guard_enabled = true, now = 1700000000000;
+let records = [], events = [], operational_logs = [], ready = false,
+	guard_enabled = true, now = 1700000000000;
 let guard_latched = false, guard_physical = true, guard_persist_fails = false;
 let guard_latch_clear_fails = false;
 let guard_disable_failures = 0, guard_verify_off_failures = 0;
@@ -79,6 +80,10 @@ let reconciler = adapter.create({
 		}
 	},
 	clock: { now: () => now },
+	logger: {
+		info: (message) => push(operational_logs, { level: 'info', message }),
+		error: (message) => push(operational_logs, { level: 'error', message })
+	},
 	events: { emit: (type_name, data) => { push(events, { type: type_name, data }); return true; } }
 });
 
@@ -90,6 +95,13 @@ assert_equal(events[0].data.component, 'mihomo');
 assert_equal(events[1].type, 'fail_closed');
 assert_equal(events[1].data.failure_id, events[0].data.failure_id);
 assert_equal(network_applies, 1, 'native network lifecycle not invoked before readiness');
+assert_equal(operational_logs[0].message,
+	'reconcile: started reason=automatic action=repair');
+assert_equal(operational_logs[1].message,
+	'reconcile: network state applied components=dns,firewall,routing');
+assert_equal(operational_logs[2].level, 'error');
+assert_equal(operational_logs[2].message,
+	'reconcile: failed component=mihomo reason=automatic code=HEALTH_FAILED');
 
 ready = true; now++;
 assert_equal(reconciler.run('scheduled').state, 'success');
@@ -100,6 +112,8 @@ assert_equal(events[2].data.guard.enabled, true);
 assert_equal(events[2].data.network.path, 'proxy');
 assert_equal(events[3].type, 'recovery');
 assert_equal(events[3].data.failure_id, events[0].data.failure_id);
+assert_equal(operational_logs[length(operational_logs) - 1].message,
+	'reconcile: ready components=mihomo,dns,firewall,routing guard=enabled');
 
 // A healthy run without an active outage is not an Internet-restored event.
 assert_equal(reconciler.run('scheduled').state, 'success');

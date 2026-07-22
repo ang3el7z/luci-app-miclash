@@ -388,7 +388,7 @@ export function request(runtime, options) {
 	let proxy_url = options.managed === true && RETRYABLE_CURL_CODES[direct.curl_code] === true
 		? github_proxy_url(clean.url) : null;
 	if (proxy_url != null) {
-		try { runtime.logger?.warn('Direct GitHub download failed; trying gh-proxy.com'); }
+		try { runtime.logger?.warn('http: direct GitHub download failed; trying gh-proxy.com'); }
 		catch (error) {}
 		let proxied = request_attempt(runtime, { ...clean, url: proxy_url }, clean.url);
 		if (proxied.failure == null)

@@ -108,8 +108,8 @@ assert.match(daemonSource, /runtime\.reconcile\?\.apply\?\.\('device-policy'/,
 	'device policy mutations must reconcile routing immediately');
 assert.match(daemonSource, /guard_on[\s\S]*protect_strict\(\)[\s\S]*callback\(\)[\s\S]*apply_device_policy/,
 	'Guard must become strictly fail-closed before a device policy mutation and remain protected until reconcile');
-assert.match(daemonSource, /modules\.devices\.active_device_policies[\s\S]*modules\.interface_scope\.effective_settings[\s\S]*native_network\.apply\(effective, \{ device_policies \}\)/,
-	'the native firewall compiler must receive active persisted device policies with the effective interface scope');
+assert.match(daemonSource, /modules\.devices\.active_device_policies[\s\S]*modules\.interface_scope\.effective_settings[\s\S]*native_network\.apply\(effective, \{ device_policies,[\s\S]*server_ips:[\s\S]*fakeip_cidrs:/,
+	'the native firewall compiler must receive active device policies and provider data with the effective interface scope');
 assert.match(source, /\/cgi-bin\/miclash-device-vendors/,
 	'the panel must load the local offline database without a large RPC response');
 assert.ok((source.match(/deviceDisplayName\(/g) || []).length >= 3,

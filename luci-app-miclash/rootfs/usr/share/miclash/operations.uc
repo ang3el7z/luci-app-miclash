@@ -277,6 +277,22 @@ export function create(runtime) {
 	let subscription_sequence = 0;
 	let start;
 
+	function operational_log(level, message) {
+		try {
+			let write = runtime.logger?.[level];
+			if (type(write) == 'function') write('operations: ' + message);
+		}
+		catch (error) {}
+	};
+
+	function terminal_log(record) {
+		let message = sprintf('completed kind=%s source=%s state=%s',
+			record.kind, record.source, record.state);
+		if (record.error?.code != null)
+			message += ' code=' + record.error.code;
+		operational_log(record.state == 'success' ? 'info' : 'error', message);
+	};
+
 	function path_for(id) {
 		return journal + '/' + schema.operation_id(id) + '.json';
 	};
@@ -363,6 +379,7 @@ export function create(runtime) {
 			record.progress = 100;
 		persist(record);
 		entry.finished = true;
+		terminal_log(record);
 		publish(records[entry.id]);
 		if (active_mutation == entry.id) {
 			active_mutation = null;
@@ -386,6 +403,8 @@ export function create(runtime) {
 			scheduler_frozen = true;
 			return;
 		}
+		operational_log('info', sprintf('started kind=%s source=%s',
+			running.kind, running.source));
 		publish(records[entry.id]);
 
 		let ctx = {

@@ -28,6 +28,8 @@ import * as routing from 'miclash.routing';
 import * as platform from 'miclash.platform';
 import * as app_update_scheduler from 'miclash.app-update-scheduler';
 import * as device_vendor_update from 'miclash.device-vendor-update';
+import * as provider_data from 'miclash.provider-data';
+import * as provider_sync from 'miclash.provider-sync';
 
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
@@ -88,7 +90,7 @@ export function bounded_logs(runtime) {
 	if (type(popen) != 'function') return '';
 	let pipe = null, output = '';
 	try {
-		pipe = popen("/sbin/logread 2>/dev/null | /bin/grep -E '(^|[[:space:]])(miclash|mihomo|clash(-rules|-hotplug)?)(\\[[0-9]+\\])?:[[:space:]]'", 'r');
+		pipe = popen("/sbin/logread 2>/dev/null | /bin/grep -E '(^|[[:space:]])(miclash|mihomo|clash)(\\[[0-9]+\\])?:[[:space:]]'", 'r');
 		if (pipe == null) return '';
 		while (true) {
 			let chunk = pipe.read(4096);
@@ -102,7 +104,7 @@ export function bounded_logs(runtime) {
 	if (pipe != null) try { pipe.close(); } catch (error) { output = ''; }
 	let selected = [];
 	for (let line in split(output, '\n'))
-		if (match(lc(line), /(^|[ \t])(clash(-rules|-hotplug)?|miclash|mihomo)(\[[0-9]+\])?:[ \t]/))
+		if (match(lc(line), /(^|[ \t])(clash|miclash|mihomo)(\[[0-9]+\])?:[ \t]/))
 			push(selected, substr(redact.sanitize(line), 0, 2048));
 	if (length(selected) > 1000)
 		selected = slice(selected, length(selected) - 1000);
@@ -367,7 +369,7 @@ export function compose(runtime, overrides) {
 		operations, settings, storage, service, config, state, application,
 		api, memory, devices, notify, notification_settings, telegram, mutation_lock,
 		reconcile_adapter, network, interface_scope, subscription, scheduler, updates, http, diagnostics, route_test, routing,
-		mihomo_api, app_update_scheduler, device_vendor_update,
+		mihomo_api, app_update_scheduler, device_vendor_update, provider_data, provider_sync,
 		...(overrides ?? {})
 	};
 	let operation_manager = modules.operations.create(runtime);
@@ -406,6 +408,7 @@ export function compose(runtime, overrides) {
 		};
 		let desired = effective_network_settings(runtime, settings_domain.get());
 		let device_app = null;
+		let provider_sync_domain = null, provider_candidate = null;
 		let native_network = modules.network.create(runtime);
 		let policy_network = {
 			apply: (settings) => {
@@ -414,7 +417,12 @@ export function compose(runtime, overrides) {
 				let device_policies = modules.devices.active_device_policies(device_app, timestamp);
 				let effective = modules.interface_scope.effective_settings(settings,
 					modules.interface_scope.detect(runtime, settings));
-				return native_network.apply(effective, { device_policies });
+				let provider_values = provider_candidate ?? provider_sync_domain?.current?.() ?? {
+					server_ips: [], fakeip_cidrs: []
+				};
+				return native_network.apply(effective, { device_policies,
+					server_ips: provider_values.server_ips,
+					fakeip_cidrs: provider_values.fakeip_cidrs });
 			},
 			cleanup: (settings) => native_network.cleanup(settings)
 		};
@@ -432,8 +440,76 @@ export function compose(runtime, overrides) {
 				operations: operation_manager, service: service_adapter,
 				settings: reconcile_settings, guard: runtime.guard_control,
 				network: policy_network,
-				clock: runtime.clock, events: runtime.events
+				clock: runtime.clock, events: runtime.events, logger: runtime.logger
 			});
+		function provider_dns_values(reply, record_type) {
+			if (reply?.ok !== true || type(reply.data) != 'object' ||
+			    type(reply.data.Status) != 'int')
+				errors.fail('HEALTH_FAILED');
+			if (reply.data.Status != 0) return [];
+			let values = [];
+			for (let answer in reply.data.Answer ?? []) {
+				if (type(answer) != 'object' || type(answer.type) != 'int' ||
+				    type(answer.data) != 'string') errors.fail('INVALID_RESPONSE');
+				if (answer.type == record_type) push(values, answer.data);
+			}
+			return values;
+		};
+		function convert_provider_mrs(path, behavior) {
+			if (behavior != 'classical' && behavior != 'ipcidr')
+				errors.fail('INVALID_ARGUMENT');
+			let output = runtime.paths.tmp + '/provider-' + runtime.random.hex(8) + '.txt';
+			if (runtime.fs.lstat(output) != null) errors.fail('BUSY');
+			let failure = null, content = null;
+			try {
+				let result = runtime.process.run({ command: '/opt/clash/bin/clash', args: [
+					'convert-ruleset', behavior, 'mrs', path, output
+				], timeout_ms: 30000 });
+				let stat = runtime.fs.lstat(output);
+				content = runtime.fs.readfile(output);
+				if (result?.code != 0 || stat?.type != 'file' || stat.nlink != 1 ||
+				    (stat.uid != null && stat.uid != 0) || stat.size > 1024 * 1024 ||
+				    type(content) != 'string' || length(content) != stat.size ||
+				    runtime.fs.realpath(output) != output)
+					failure = 'HEALTH_FAILED';
+			}
+			catch (error) { failure = errors.normalize(error).code; }
+			try {
+				if (runtime.fs.lstat(output) != null && runtime.fs.unlink(output) !== true)
+					failure = 'INTERNAL';
+			}
+			catch (error) { failure = 'INTERNAL'; }
+			if (failure != null) errors.fail(failure);
+			return content;
+		};
+		provider_sync_domain = modules.provider_sync.create({
+			runtime, logger: runtime.logger,
+			collect: () => {
+				let content = configuration.read_active('config.yaml');
+				return modules.provider_data.collect(runtime, content, {
+					auto_fakeip_whitelist:
+						settings_domain.get()?.guard?.auto_fakeip_whitelist === true,
+					resolve: (name) => [
+						...provider_dns_values(modules.mihomo_api.dns_query(runtime, name, 'A',
+							'config.yaml', content), 1),
+						...provider_dns_values(modules.mihomo_api.dns_query(runtime, name, 'AAAA',
+							'config.yaml', content), 28)
+					],
+					convert_mrs: convert_provider_mrs
+				});
+			},
+			apply: (candidate) => {
+				provider_candidate = candidate;
+				let result = false, failure = null;
+				try { result = runtime.reconcile.apply('provider-sync', null) === true; }
+				catch (error) { failure = errors.normalize(error).code; }
+				provider_candidate = null;
+				if (failure != null) errors.fail(failure);
+				return result;
+			}
+		});
+		push(close_domains, { close: () => provider_sync_domain.stop() });
+		if (provider_sync_domain.start() !== true) errors.fail('INTERNAL');
 		let notification_settings = clone(desired.notifications);
 		let notifier = modules.notify.create(runtime,
 			modules.notification_settings.notifier_config(notification_settings));
@@ -454,6 +530,11 @@ export function compose(runtime, overrides) {
 			if (record?.state != 'success' && record?.state != 'failure' &&
 			    record?.state != 'interrupted') return;
 			try { notifier.emit(producer.operation(record)); } catch (error) {}
+			if (record?.state == 'success' && index([
+				'settings.apply', 'config.apply', 'config.swap',
+				'config.external_adopt', 'subscription.update'
+			], record.kind) >= 0)
+				try { provider_sync_domain?.refresh?.(); } catch (error) {}
 		});
 		let notifications_closed = false;
 		function sync_telegram_channel() {
@@ -937,7 +1018,8 @@ export function compose(runtime, overrides) {
 			updates: () => ({ ...updates_domain.status(),
 				automatic_config: subscription_scheduler_domain.status(),
 				automatic_miclash: app_update_domain.status(),
-				device_vendors: device_vendor_domain.status() }),
+				device_vendors: device_vendor_domain.status(),
+				providers: provider_sync_domain.status() }),
 			settings: settings_domain.get,
 			last_repair,
 			config: () => configuration.read_active('config.yaml'),

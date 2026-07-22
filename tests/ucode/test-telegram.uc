@@ -505,7 +505,7 @@ let network_controller = telegram.create(network.app);
 assert_equal(network_controller.poll_once(), false);
 assert_equal(network_controller.status().retry_after_ms, 1000);
 assert_equal(network.logs[length(network.logs) - 1],
-	'Telegram poll failed: DOWNLOAD_FAILED');
+	'telegram: poll failed: DOWNLOAD_FAILED');
 assert_equal(network_controller.poll_once(), false);
 assert_equal(network_controller.status().retry_after_ms, 2000);
 

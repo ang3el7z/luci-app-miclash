@@ -53,7 +53,8 @@ function start_observation() {
 lifecycle = daemon_activation.create({
 	clock: environment.clock,
 	activate: () => readiness.activate(environment.reconcile, 'daemon-startup'),
-	observe: start_observation
+	observe: start_observation,
+	logger: environment.logger
 });
 
 function start_normal_lifecycle() {

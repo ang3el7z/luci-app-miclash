@@ -518,12 +518,6 @@
 .sbox-log-level-muted .sbox-log-level {
 	color: var(--sbox-muted);
 }
-.sbox-log-daemon-clash-rules .sbox-log-daemon {
-	color: var(--sbox-code-string);
-}
-.sbox-log-daemon-clash-hotplug .sbox-log-daemon {
-	color: var(--sbox-code-number);
-}
 .sbox-log-daemon-miclash .sbox-log-daemon {
 	color: var(--sbox-success);
 }

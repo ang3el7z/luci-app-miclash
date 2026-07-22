@@ -362,7 +362,7 @@ export function create(app) {
 	state.last_update_id = read_offset(app.runtime);
 
 	function log_failure(message) {
-		try { app.logger?.warn(message); } catch (error) {}
+		try { app.logger?.warn('telegram: ' + message); } catch (error) {}
 	};
 
 	function audit(action, result, update_id) {
@@ -404,7 +404,7 @@ export function create(app) {
 				bounded_text(text), null) != null;
 		}
 		catch (error) {
-			log_failure('Telegram delivery failed');
+			log_failure('delivery failed');
 			return false;
 		}
 	};
@@ -658,10 +658,10 @@ export function create(app) {
 			return { handled: false, retryable: false };
 		}
 		try { transport.answer(settings, query.id, ''); }
-		catch (error) { log_failure('Telegram callback acknowledgement failed'); }
+		catch (error) { log_failure('callback acknowledgement failed'); }
 		try { persist_offset(update.update_id); }
 		catch (error) {
-			log_failure('Telegram offset persistence failed');
+			log_failure('offset persistence failed');
 			return { handled: false, retryable: true, error: 'INTERNAL' };
 		}
 		let identity = callback_identity(query);
@@ -734,7 +734,7 @@ export function create(app) {
 			return { handled: false, retryable: true, error: 'INTERNAL' };
 		}
 		try { transport.delete(settings, settings.user_id, message.message_id); }
-		catch (error) { log_failure('Telegram accepted message deletion failed'); }
+		catch (error) { log_failure('accepted message deletion failed'); }
 		session.awaiting = null;
 		try {
 			let record = app.subscription_update(url, 'telegram');
@@ -814,7 +814,7 @@ export function create(app) {
 		}
 		try { persist_offset(update.update_id); }
 		catch (error) {
-			log_failure('Telegram offset persistence failed');
+			log_failure('offset persistence failed');
 			return { handled: false, retryable: true, error: 'INTERNAL' };
 		}
 		if (!rate_allowed(app.runtime.clock.now())) {
@@ -943,7 +943,7 @@ export function create(app) {
 			state.last_error = failure.code;
 			state.retry_after_ms = min(MAX_BACKOFF_MS,
 				1000 * (1 << min(state.failures - 1, 6)));
-			log_failure('Telegram poll failed: ' + failure.code);
+			log_failure('poll failed: ' + failure.code);
 			return false;
 		}
 	};
@@ -1013,7 +1013,7 @@ export function create(app) {
 		}
 		catch (error) {
 			state.last_error = errors.normalize(error).code;
-			log_failure('Telegram notification enqueue failed');
+			log_failure('notification enqueue failed');
 			return false;
 		}
 	};

@@ -41,8 +41,8 @@ function valid_ipv6(value) {
 	return compressed ? units < 8 : units == 8;
 };
 
-function valid_ip(value) { return valid_ipv4(value) || valid_ipv6(value); };
-function valid_cidr(value) {
+export function valid_ip(value) { return valid_ipv4(value) || valid_ipv6(value); };
+export function valid_cidr(value) {
 	let at = rindex(value, '/');
 	if (at < 1) return false;
 	let address = substr(value, 0, at), prefix = substr(value, at + 1);

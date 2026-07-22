@@ -43,7 +43,7 @@ log_source += 'Mon Jul 20 02:05:03 2026 daemon.info mihomo: api ready\n';
 let log_reads = 0;
 let log_runtime = { fs: { popen: (command, mode) => {
 	assert_equal(command,
-		"/sbin/logread 2>/dev/null | /bin/grep -E '(^|[[:space:]])(miclash|mihomo|clash(-rules|-hotplug)?)(\\[[0-9]+\\])?:[[:space:]]'");
+		"/sbin/logread 2>/dev/null | /bin/grep -E '(^|[[:space:]])(miclash|mihomo|clash)(\\[[0-9]+\\])?:[[:space:]]'");
 	assert_equal(mode, 'r');
 	return {
 		read: (amount) => log_reads++ == 0 ? log_source : '',
@@ -51,10 +51,10 @@ let log_runtime = { fs: { popen: (command, mode) => {
 	};
 } } };
 let selected_logs = daemon.bounded_logs(log_runtime);
-assert_equal(length(split(selected_logs, '\n')), 254);
+assert_equal(length(split(selected_logs, '\n')), 252);
 assert_true(index(selected_logs, 'event-0') >= 0, 'older MiClash log was dropped');
-assert_true(index(selected_logs, 'clash-rules: routing ready') >= 0);
-assert_true(index(selected_logs, 'clash-hotplug: wan ready') >= 0);
+assert_true(index(selected_logs, 'clash-rules: routing ready') < 0);
+assert_true(index(selected_logs, 'clash-hotplug: wan ready') < 0);
 assert_true(index(selected_logs, 'clash: core ready') >= 0);
 assert_true(index(selected_logs, 'mihomo: api ready') >= 0);
 

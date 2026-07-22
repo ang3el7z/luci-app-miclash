@@ -92,7 +92,7 @@ export function create(app) {
 	try { current = state(storage.read_json(runtime, STATE_PATH)); }
 	catch (error) {
 		if (errors.normalize(error).code != 'NOT_FOUND')
-			try { runtime.logger?.warn('Device vendor update state was reset'); } catch (ignored) {}
+			try { runtime.logger?.warn('device-vendors: update state was reset'); } catch (ignored) {}
 		current = initial_state(runtime.clock.now());
 	}
 	let started = false, closed = false, timer = null, api = {};
