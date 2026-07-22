@@ -193,7 +193,7 @@ function create(options) {
 			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
 				status.running === true ? _('Poller is running') : _('Poller is stopped')),
 			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField, timeoutField ]),
-			E('p', { 'class': 'sbox-muted', 'data-telegram-id-hint': 'true' }, _('List IDs separated by commas, for example: 5818132224, 5818132223.')),
+			E('p', { 'class': 'sbox-muted', 'data-telegram-id-hint': 'true' }, _('List IDs separated by commas, for example: 123456789, 987654321.')),
 			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Send test'), 'telegram-test') ])
 		]);
 	}

@@ -316,12 +316,31 @@ function github_proxy_url(url) {
 	return null;
 };
 
-function request_attempt(runtime, clean, logical_url) {
+function request_session(runtime, clean, logical_url) {
 	let authority = ensure_root(runtime);
-	let output = null, header = null, config = null;
-	let result = null;
-	let failure = null;
-	let curl_code = null;
+	let output = null, header = null, config = null, closed = false;
+
+	function cleanup() {
+		if (closed)
+			return true;
+		closed = true;
+		let valid = true;
+		for (let owned in [ config, header, output ]) {
+			if (owned == null)
+				continue;
+			try {
+				verify_authority(runtime, authority);
+				let current = runtime.fs.lstat(owned.path);
+				if (!same_node(owned.identity, current) ||
+				    runtime.fs.realpath(owned.path) != owned.path ||
+				    runtime.fs.unlink(owned.path) != true)
+					valid = false;
+			}
+			catch (error) { valid = false; }
+		}
+		return valid;
+	};
+
 	try {
 		verify_authority(runtime, authority);
 		output = candidate(runtime, 'body');
@@ -330,54 +349,100 @@ function request_attempt(runtime, clean, logical_url) {
 		verify_authority(runtime, authority);
 		config = candidate(runtime, 'curl-config',
 			curl_config(clean, header.path, output.path));
-		let args = [ '--config', config.path ];
+		verify_authority(runtime, authority);
+		verify_candidate(runtime, output);
+		verify_candidate(runtime, header);
+		verify_candidate(runtime, config);
+	}
+	catch (error) {
+		let failure = errors.normalize(error).code;
+		if (!cleanup())
+			failure = 'INTERNAL';
+		errors.fail(failure);
+	}
+
+	function finish(code) {
+		let result = null, failure = null, curl_code = null;
+		try {
+			if (closed || type(code) != 'int')
+				errors.fail('INTERNAL');
+			verify_authority(runtime, authority);
+			verify_candidate(runtime, output);
+			verify_candidate(runtime, header);
+			verify_candidate(runtime, config);
+			if (code != 0) {
+				failure = 'DOWNLOAD_FAILED';
+				curl_code = code;
+			}
+			else {
+				let parsed = parse_headers(read_bounded(runtime, header, HEADER_LIMIT),
+					clean.url, clean.redirects, clean.accepted_statuses);
+				let body = read_bounded(runtime, output, clean.maximum);
+				result = { status: parsed.status, headers: parsed.headers, body,
+					url: logical_url, insecure: clean.insecure };
+			}
+		}
+		catch (error) {
+			failure = errors.normalize(error).code;
+			curl_code = null;
+		}
+		if (!cleanup())
+			failure = 'INTERNAL';
+		if (failure == 'INTERNAL')
+			curl_code = null;
+		return { result, failure, curl_code };
+	};
+
+	return {
+		command: '/usr/bin/curl',
+		args: [ '--config', config.path ],
+		timeout_ms: clean.total,
+		finish,
+		abort: cleanup
+	};
+};
+
+function request_attempt(runtime, clean, logical_url) {
+	let session;
+	try {
+		session = request_session(runtime, clean, logical_url);
 		// curl only accepts output pathnames. Root-owned 0700 parent/root
 		// authorities prevent unprivileged replacement in the remaining open
 		// window; exact identities are checked on both sides of process.run().
-		verify_authority(runtime, authority);
-		verify_candidate(runtime, output);
-		verify_candidate(runtime, header);
-		verify_candidate(runtime, config);
 		let reply = runtime.process.run({
-			command: '/usr/bin/curl', args, timeout_ms: clean.total
+			command: session.command, args: session.args, timeout_ms: session.timeout_ms
 		});
-		verify_authority(runtime, authority);
-		verify_candidate(runtime, output);
-		verify_candidate(runtime, header);
-		verify_candidate(runtime, config);
 		if (!adapter_reply(reply))
 			errors.fail('INTERNAL');
-		if (reply.code != 0) {
-			failure = 'DOWNLOAD_FAILED';
-			curl_code = reply.code;
-		}
-		else {
-			let parsed = parse_headers(read_bounded(runtime, header, HEADER_LIMIT),
-				clean.url, clean.redirects, clean.accepted_statuses);
-			let body = read_bounded(runtime, output, clean.maximum);
-			result = { status: parsed.status, headers: parsed.headers, body,
-				url: logical_url, insecure: clean.insecure };
-		}
+		return session.finish(reply.code);
 	}
 	catch (error) {
-		failure = errors.normalize(error).code;
-		curl_code = null;
+		let failure = errors.normalize(error).code;
+		if (session != null && session.abort() !== true)
+			failure = 'INTERNAL';
+		return { result: null, failure, curl_code: null };
 	}
-	for (let owned in [ config, header, output ]) {
-		if (owned == null)
-			continue;
-		try {
-			verify_authority(runtime, authority);
-			let current = runtime.fs.lstat(owned.path);
-			if (!same_node(owned.identity, current) || runtime.fs.realpath(owned.path) != owned.path ||
-			    runtime.fs.unlink(owned.path) != true)
-				failure = 'INTERNAL';
+};
+
+export function begin(runtime, options) {
+	let clean = clean_options(runtime, options);
+	let session = request_session(runtime, clean, clean.url);
+	return {
+		command: session.command,
+		args: session.args,
+		timeout_ms: session.timeout_ms,
+		complete: (code) => {
+			let reply = session.finish(code);
+			if (reply.failure != null)
+				errors.fail(reply.failure);
+			return reply.result;
+		},
+		abort: () => {
+			if (session.abort() !== true)
+				errors.fail('INTERNAL');
+			return true;
 		}
-		catch (error) { failure = 'INTERNAL'; }
-	}
-	if (failure == 'INTERNAL')
-		curl_code = null;
-	return { result, failure, curl_code };
+	};
 };
 
 export function request(runtime, options) {

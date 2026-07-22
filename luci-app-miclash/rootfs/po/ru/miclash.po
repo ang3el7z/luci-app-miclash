@@ -1735,8 +1735,8 @@ msgstr "Тайм-аут опроса Telegram (секунды)"
 msgid "Telegram polling timeout"
 msgstr "Тайм-аут опроса Telegram"
 
-msgid "List IDs separated by commas, for example: 5818132224, 5818132223."
-msgstr "Перечислите ID через запятую, например: 5818132224, 5818132223."
+msgid "List IDs separated by commas, for example: 123456789, 987654321."
+msgstr "Перечислите ID через запятую, например: 123456789, 987654321."
 
 msgid "Backup and restore"
 msgstr "Резервное копирование и восстановление"

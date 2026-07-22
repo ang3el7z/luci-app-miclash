@@ -27,9 +27,21 @@ let settings = { token: '123456:telegram-secret', user_id: '42' };
 assert_throws(() => transport_module.create({}), 'INVALID_ARGUMENT');
 
 let env = environment(), transport = env.transport;
+assert_equal(type(transport.prepare_poll), 'function',
+	'transport exports asynchronous poll planning');
+let prepared = transport.prepare_poll(settings, 12, 25);
+assert_equal(prepared.request.timeout_ms, 30000);
+assert_match(prepared.request.url, /getUpdates\?/);
+let prepared_result = prepared.complete({
+	status: 200, headers: {}, body: '{"ok":true,"result":[{"update_id":12}]}'
+});
+assert_equal(prepared_result.updates[0].update_id, 12);
+assert_equal(prepared_result.retry_after_ms, 0);
 let polled = transport.poll(settings, 12);
 assert_equal(polled.updates[0].update_id, 12);
 assert_equal(polled.retry_after_ms, 0);
+assert_equal(sprintf('%J', prepared.request), sprintf('%J', env.requests[0]),
+	'synchronous and asynchronous polling must use the same request');
 let sent = transport.send(settings, '42', 'Ready', { inline_keyboard: [] });
 assert_equal(sent.message_id, 9);
 let edited = transport.edit(settings, '42', 10, 'Ready', { inline_keyboard: [] });

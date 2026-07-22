@@ -100,30 +100,65 @@ export function create(app) {
 	if (type(app) != 'object' || type(app.runtime) != 'object' ||
 	    type(app.http?.request) != 'function') invalid();
 
-	function call(settings, method, fields, post, timeout_ms) {
-		let safe = configuration(settings), response, encoded = query(fields);
-		try {
-			let request = {
-				url: 'https://api.telegram.org/bot' + safe.token + '/' + method +
-					(post ? '' : '?' + encoded),
-				connect_timeout_ms: CONNECT_TIMEOUT_MS, timeout_ms: timeout_ms ?? REQUEST_TIMEOUT_MS,
-				max_redirects: 0, max_bytes: RESPONSE_LIMIT, managed: true,
-				accept_statuses: [ 429 ]
-			};
-			if (post) {
-				request.method = 'POST';
-				request.body = encoded;
-				request.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
-			}
-			response = app.http.request(app.runtime, request);
+	function call_plan(settings, method, fields, post, timeout_ms) {
+		let safe = configuration(settings), encoded = query(fields);
+		let request = {
+			url: 'https://api.telegram.org/bot' + safe.token + '/' + method +
+				(post ? '' : '?' + encoded),
+			connect_timeout_ms: CONNECT_TIMEOUT_MS, timeout_ms: timeout_ms ?? REQUEST_TIMEOUT_MS,
+			max_redirects: 0, max_bytes: RESPONSE_LIMIT, managed: true,
+			accept_statuses: [ 429 ]
+		};
+		if (post) {
+			request.method = 'POST';
+			request.body = encoded;
+			request.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
 		}
+		return {
+			request,
+			complete: (response) => {
+				let parsed = document(response);
+				if (response.status == 429)
+					return { limited: true, retry_after_ms: retry_after(response, parsed) };
+				if (response.status < 200 || response.status >= 300 || parsed.ok !== true)
+					errors.fail('INVALID_RESPONSE');
+				return { limited: false, document: parsed };
+			}
+		};
+	};
+
+	function call(settings, method, fields, post, timeout_ms) {
+		let plan = call_plan(settings, method, fields, post, timeout_ms), response;
+		try { response = app.http.request(app.runtime, plan.request); }
 		catch (error) { errors.fail('DOWNLOAD_FAILED'); }
-		let parsed = document(response);
-		if (response.status == 429)
-			return { limited: true, retry_after_ms: retry_after(response, parsed) };
-		if (response.status < 200 || response.status >= 300 || parsed.ok !== true)
-			errors.fail('INVALID_RESPONSE');
-		return { limited: false, document: parsed };
+		return plan.complete(response);
+	};
+
+	function poll_plan(settings, offset, poll_timeout_seconds) {
+		if (type(offset) != 'int' || offset < -1) invalid();
+		let timeout = poll_timeout_seconds ?? 25;
+		if (type(timeout) != 'int' || timeout < 5 || timeout > 50) invalid();
+		let plan = call_plan(settings, 'getUpdates', {
+			offset: offset + 1, timeout,
+			limit: 20,
+			allowed_updates: [ 'message', 'callback_query' ]
+		}, false, (timeout + 5) * 1000);
+		return {
+			request: plan.request,
+			complete: (response) => {
+				let reply = plan.complete(response);
+				if (reply.limited)
+					return { updates: [], retry_after_ms: reply.retry_after_ms };
+				let updates = reply.document.result;
+				if (type(updates) != 'array' || length(updates) > 100)
+					errors.fail('INVALID_RESPONSE');
+				for (let update in updates)
+					if (type(update) != 'object' || type(update.update_id) != 'int' ||
+					    update.update_id < 0)
+						errors.fail('INVALID_RESPONSE');
+				return { updates, retry_after_ms: 0 };
+			}
+		};
 	};
 
 	function message_fields(settings, chat, text, reply_markup, parse_mode) {
@@ -142,23 +177,12 @@ export function create(app) {
 	};
 
 	return {
+		prepare_poll: poll_plan,
 		poll: (settings, offset, poll_timeout_seconds) => {
-			if (type(offset) != 'int' || offset < -1) invalid();
-			let timeout = poll_timeout_seconds ?? 25;
-			if (type(timeout) != 'int' || timeout < 5 || timeout > 50) invalid();
-			let reply = call(settings, 'getUpdates', {
-				offset: offset + 1, timeout,
-				limit: 20,
-				allowed_updates: [ 'message', 'callback_query' ]
-			}, false, (timeout + 5) * 1000);
-			if (reply.limited) return { updates: [], retry_after_ms: reply.retry_after_ms };
-			let updates = reply.document.result;
-			if (type(updates) != 'array' || length(updates) > 100)
-				errors.fail('INVALID_RESPONSE');
-			for (let update in updates)
-				if (type(update) != 'object' || type(update.update_id) != 'int' || update.update_id < 0)
-					errors.fail('INVALID_RESPONSE');
-			return { updates, retry_after_ms: 0 };
+			let plan = poll_plan(settings, offset, poll_timeout_seconds), response;
+			try { response = app.http.request(app.runtime, plan.request); }
+			catch (error) { errors.fail('DOWNLOAD_FAILED'); }
+			return plan.complete(response);
 		},
 		send: (settings, chat, text, reply_markup, parse_mode) => {
 			let reply = call(settings, 'sendMessage',
