@@ -309,23 +309,27 @@ function resolve_mihomo(runtime, selected_channel, requested) {
 	let selected = choose_release(runtime, selected_channel, requested);
 	let arch = architecture(runtime);
 	let name = 'mihomo-linux-' + arch + '-' + selected.version + '.gz';
-	let binary = null, checksum = null;
+	let binary = null, digest = null;
 	if (type(selected.release.assets) != 'array')
 		errors.fail('INVALID_RESPONSE');
 	for (let asset in selected.release.assets) {
 		if (asset?.name == name) {
 			if (binary != null) errors.fail('INVALID_RESPONSE');
 			binary = asset_url(asset, selected.version, name);
-		}
-		else if (asset?.name == name + '.sha256') {
-			if (checksum != null) errors.fail('INVALID_RESPONSE');
-			checksum = asset_url(asset, selected.version, name + '.sha256');
+			if (asset.digest != null) {
+				let found = type(asset.digest) == 'string' ?
+					match(asset.digest, /^sha256:([0-9A-Fa-f]{64})$/) : null;
+				if (found == null) errors.fail('INVALID_RESPONSE');
+				digest = lc(found[1]);
+			}
 		}
 	}
 	if (binary == null)
 		errors.fail('NOT_FOUND');
+	if (digest == null)
+		errors.fail('INVALID_RESPONSE');
 	return { version: selected.version, architecture: arch, asset_name: name,
-		asset_url: binary, checksum_url: checksum };
+		asset_url: binary, digest };
 };
 
 function choose_miclash(runtime, selected_channel, requested) {
@@ -383,7 +387,7 @@ function public_release(resolved, selected_channel) {
 	return {
 		kind: 'mihomo', channel: selected_channel, version: resolved.version,
 		architecture: resolved.architecture, asset_name: resolved.asset_name,
-		published_checksum_available: resolved.checksum_url != null
+		published_checksum_available: true
 	};
 };
 
@@ -395,13 +399,7 @@ function download(runtime, url, maximum) {
 };
 
 function published_hash(runtime, resolved, compressed, local_hash) {
-	if (resolved.checksum_url == null)
-		errors.fail('INVALID_RESPONSE');
-	let body = download(runtime, resolved.checksum_url, 65536);
-	let found = match(trim(body), /^([0-9A-Fa-f]{64})[ \t]+\*?([^ \t\r\n]+)$/);
-	if (found == null || found[2] != resolved.asset_name)
-		errors.fail('INVALID_RESPONSE');
-	if (lc(found[1]) != local_hash)
+	if (resolved.digest != local_hash)
 		errors.fail('VALIDATION_FAILED');
 	return true;
 };
@@ -850,7 +848,7 @@ export function create(app) {
 					expected_version: resolved.version,
 					sha256: installed.sha256,
 					published_checksum_verified: candidate?.published_checksum_verified ??
-						(resolved.checksum_url != null),
+						true,
 					previous_id: installed.previous_id, error_code: null,
 					applied: true, recovery_state: 'not_needed',
 					service_was_running: installed.service_was_running,

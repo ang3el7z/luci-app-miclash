@@ -84,10 +84,22 @@ function environment(options) {
 			}
 		};
 	}
+	let gzip_body = options.gzip_body ?? 'GZIP:new mihomo binary';
+	let mihomo_digest = options.mihomo_digest ?? require('digest').sha256(gzip_body);
+	let mihomo_release = json(fixture('mihomo-release.json'));
+	let mihomo_prereleases = json(fixture('mihomo-prereleases.json'));
+	for (let release in [ mihomo_release, ...mihomo_prereleases ]) {
+		for (let asset in release.assets ?? []) {
+			if (match(asset?.name, /^mihomo-linux-.*\.gz$/) &&
+			    options.mihomo_without_digest !== true)
+				asset.digest = 'sha256:' + (asset.name ==
+					'mihomo-linux-arm64-v1.2.3.gz' ? mihomo_digest : sprintf('%064x', 0));
+		}
+	}
 	let responses = {
-		[RELEASE_LATEST]: fixture('mihomo-release.json'),
-		[RELEASES]: fixture('mihomo-prereleases.json'),
-		[RELEASE_TAG]: fixture('mihomo-release.json'),
+		[RELEASE_LATEST]: sprintf('%J', mihomo_release),
+		[RELEASES]: sprintf('%J', mihomo_prereleases),
+		[RELEASE_TAG]: sprintf('%J', mihomo_release),
 		[MICLASH_LATEST]: fixture('miclash-release.json'),
 		[MICLASH_TAG]: fixture('miclash-release.json'),
 		[MICLASH_RELEASES]: '[' + replace(fixture('miclash-release.json'),
@@ -98,16 +110,12 @@ function environment(options) {
 	};
 	for (let url, body in options.responses ?? {})
 		responses[url] = body;
-	let gzip_body = options.gzip_body ?? 'GZIP:new mihomo binary';
 	let asset_url =
 		'https://github.com/MetaCubeX/mihomo/releases/download/v1.2.3/' +
 		'mihomo-linux-arm64-v1.2.3.gz';
 	responses[asset_url] = gzip_body;
-	let checksum_url = asset_url + '.sha256';
-	responses[checksum_url] = options.checksum ??
-		require('digest').sha256(gzip_body) +
-		'  mihomo-linux-arm64-v1.2.3.gz\n';
-	let service_calls = [], wait_calls = [], running = options.running === true, start_count = 0;
+	let service_calls = [], wait_calls = [], curl_urls = [], running = options.running === true,
+		start_count = 0;
 	let stop_count = 0, stopped_wait_failed = false;
 	let readiness = [ ...(options.readiness ?? []) ], wait_count = 0;
 	let service = {
@@ -142,8 +150,9 @@ function environment(options) {
 		}
 	};
 	process.on_run = (request) => {
-		if (request.command == '/usr/bin/curl') {
+	if (request.command == '/usr/bin/curl') {
 			let curl = curl_request(filesystem, request.args);
+			push(curl_urls, curl.url);
 			let body = responses[curl.url];
 			if (body == null) {
 				process.replies[request.command + ':' + join(' ', request.args)] = { code: 22 };
@@ -214,8 +223,9 @@ function environment(options) {
 			}
 		}
 	};
+	let digest = fakes.digest(filesystem);
 	let runtime = {
-		fs: filesystem, clock, process, digest: fakes.digest(filesystem),
+		fs: filesystem, clock, process, digest,
 		random: fakes.entropy(), paths: { tmp: '/tmp/miclash' },
 		update_options: options.update_options ?? { max_kernel_bytes: 1024 }
 	};
@@ -227,7 +237,7 @@ function environment(options) {
 			miclash_release_channel: 'release'
 		} }) }
 	};
-	return { filesystem, clock, process, ops, service_calls, wait_calls,
+	return { filesystem, clock, process, digest, ops, service_calls, wait_calls, curl_urls,
 		updater: updates.create(app) };
 };
 
@@ -269,20 +279,35 @@ assert_equal(length(bounded_unpack), 1);
 assert_equal(length(bounded_unpack[0].args), 3);
 assert_equal(bounded_unpack[0].args[2], '1024');
 
-let without_checksum_release = json(fixture('mihomo-release.json'));
-without_checksum_release.assets = [ without_checksum_release.assets[0] ];
-let without_checksum = environment({ responses: {
-	[RELEASE_TAG]: sprintf('%J', without_checksum_release)
+let without_digest_release = json(fixture('mihomo-release.json'));
+let without_digest = environment({ responses: {
+	[RELEASE_TAG]: sprintf('%J', without_digest_release)
 } });
-let local_op = without_checksum.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
-without_checksum.clock.advance(0);
-assert_equal(without_checksum.ops.get(local_op.id).state, 'failure');
-assert_equal(without_checksum.ops.get(local_op.id).error.code, 'INVALID_RESPONSE');
-assert_equal(length(without_checksum.service_calls), 0,
-	'checksumless Mihomo release fails before service stop');
+let local_op = without_digest.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
+without_digest.clock.advance(0);
+assert_equal(without_digest.ops.get(local_op.id).state, 'failure');
+assert_equal(without_digest.ops.get(local_op.id).error.code, 'INVALID_RESPONSE');
+assert_equal(join(',', without_digest.curl_urls), RELEASE_TAG,
+	'Mihomo release without a GitHub digest does not request its asset');
+assert_equal(length(without_digest.service_calls), 0,
+	'Mihomo release without a GitHub digest fails before service stop');
 
-let mismatch = environment({ checksum: sprintf('%064d', 0) +
-	'  mihomo-linux-arm64-v1.2.3.gz\n' });
+let metadata_checksum_release = json(fixture('mihomo-release.json'));
+metadata_checksum_release.assets = [ metadata_checksum_release.assets[0] ];
+metadata_checksum_release.assets[0].digest = 'sha256:' +
+	require('digest').sha256('GZIP:new mihomo binary');
+let metadata_checksum = environment({ responses: {
+	[RELEASE_TAG]: sprintf('%J', metadata_checksum_release)
+} });
+let metadata_checksum_op = metadata_checksum.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+metadata_checksum.clock.advance(0);
+assert_equal(metadata_checksum.ops.get(metadata_checksum_op.id).state, 'success');
+assert_equal(metadata_checksum.updater.status().published_checksum_verified, true);
+assert_equal(length(metadata_checksum.service_calls), 0,
+	'GitHub asset digest verifies Mihomo without a sidecar checksum file');
+
+let mismatch = environment({ mihomo_digest: sprintf('%064d', 0) });
 let mismatch_op = mismatch.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
 mismatch.clock.advance(0);
 assert_equal(mismatch.ops.get(mismatch_op.id).state, 'failure');
@@ -369,7 +394,8 @@ for (let mapping in [
 	let release = json(fixture('mihomo-release.json'));
 	let name = 'mihomo-linux-' + mapping[1] + '-v1.2.3.gz';
 	push(release.assets, { name,
-		browser_download_url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.2.3/' + name });
+		browser_download_url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.2.3/' + name,
+		digest: 'sha256:' + sprintf('%064x', 0) });
 	let mapped = environment({ arch: mapping[0], responses: {
 		[RELEASE_LATEST]: sprintf('%J', release)
 	} });

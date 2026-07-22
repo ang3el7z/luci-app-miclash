@@ -406,6 +406,19 @@ verify_download_checksum() {
         || die "Checksum mismatch for $artifact_name"
 }
 
+verify_download_digest() {
+    artifact="$1"
+    digest="$2"
+    artifact_name="$3"
+    expected=$(printf '%s' "$digest" | sed -n 's/^sha256:\([0-9A-Fa-f]\{64\}\)$/\1/p')
+    [ -n "$expected" ] || die "Invalid published digest for $artifact_name"
+    actual=$(sha256sum "$artifact" 2>/dev/null | awk '{print $1}') \
+        || die "Failed to hash $artifact_name"
+    [ "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" = \
+      "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ] \
+        || die "Checksum mismatch for $artifact_name"
+}
+
 pkg_update() {
     if [ "$PKG_UPDATED" = "1" ]; then
         info "Package index already updated"
@@ -981,6 +994,37 @@ run_ready_release_selection_test() {
     printf '%s\n' "$MICLASH_TAG_NAME"
 }
 
+resolve_mihomo_release() {
+    release_file="$1"
+    architecture="$2"
+    ucode_bin="${UCODE_BIN:-ucode}"
+    ucode_modules="${UCODE_MODULES:-/usr/lib/ucode/*.so}"
+    command -v "$ucode_bin" >/dev/null 2>&1 || return 127
+    "$ucode_bin" -L "$ucode_modules" -e '
+let release;
+try { release = json(require("fs").readfile(ARGV[0])); } catch (error) { exit(1); }
+let tag = release?.tag_name;
+if (type(tag) != "string" || !match(tag, /^v[0-9][0-9A-Za-z.-]*$/) ||
+    type(release.assets) != "array") exit(1);
+let name = "mihomo-linux-" + ARGV[1] + "-" + tag + ".gz";
+let expected = "https://github.com/MetaCubeX/mihomo/releases/download/" + tag + "/" + name;
+let binary = null, digest = null;
+for (let asset in release.assets) {
+	if (asset?.name == name) {
+		if (binary != null || asset.browser_download_url != expected) exit(1);
+		binary = asset.browser_download_url;
+		if (asset.digest != null) {
+			if (type(asset.digest) != "string" ||
+			    match(asset.digest, /^sha256:[0-9A-Fa-f]{64}$/) == null) exit(1);
+			digest = asset.digest;
+		}
+	}
+}
+if (binary == null || digest == null) exit(1);
+print(tag, "\n", binary, "\n", digest, "\n");
+' "$release_file" "$architecture"
+}
+
 install_mihomo() {
     log "Fetching latest Mihomo release..."
     mihomo_release_file="$WORK_DIR/mihomo-release.json"
@@ -990,17 +1034,16 @@ install_mihomo() {
     MIHOMO_JSON=$(cat "$mihomo_release_file" 2>/dev/null) || die "Failed to read Mihomo release data"
     [ -n "$MIHOMO_JSON" ] || die "Mihomo release API returned empty response"
 
-    MIHOMO_VER=$(printf '%s' "$MIHOMO_JSON" \
-        | grep '"tag_name"' | head -1 \
-        | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-    [ -n "$MIHOMO_VER" ] || die "Failed to parse Mihomo version"
-
-    MIHOMO_URL="${MIHOMO_BASE}/download/${MIHOMO_VER}/mihomo-linux-${MIHOMO_ARCH}-${MIHOMO_VER}.gz"
+    mihomo_metadata=$(resolve_mihomo_release "$mihomo_release_file" "$MIHOMO_ARCH") \
+        || die "Failed to resolve a verified Mihomo release asset"
+    MIHOMO_VER=$(printf '%s\n' "$mihomo_metadata" | sed -n '1p')
+    MIHOMO_URL=$(printf '%s\n' "$mihomo_metadata" | sed -n '2p')
+    MIHOMO_DIGEST=$(printf '%s\n' "$mihomo_metadata" | sed -n '3p')
     info "Latest Mihomo: ${B}${MIHOMO_VER}${N}"
     info "Kernel URL: ${MIHOMO_URL}"
 
     download_artifact "$MIHOMO_URL" "$mihomo_archive" "Mihomo kernel"
-    verify_download_checksum "$mihomo_archive" "${MIHOMO_URL}.sha256" "${MIHOMO_URL##*/}"
+    verify_download_digest "$mihomo_archive" "$MIHOMO_DIGEST" "${MIHOMO_URL##*/}"
 
     mkdir -p "$(dirname "$CLASH_BIN")"
     gunzip -c "$mihomo_archive" > "$CLASH_BIN" || die "Failed to unpack Mihomo kernel"

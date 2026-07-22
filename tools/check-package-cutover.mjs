@@ -127,8 +127,11 @@ requireMatch(installer, /download_artifact "\$MICLASH_APK_URL"[\s\S]*verify_down
 	'APK must be checksum-verified before package-manager execution');
 requireMatch(installer, /download_artifact "\$MICLASH_IPK_URL"[\s\S]*verify_download_checksum "\$PKG_FILE" "\$MICLASH_IPK_SHA256_URL"/,
 	'IPK must be checksum-verified before package-manager execution');
-requireMatch(installer, /download_artifact "\$MIHOMO_URL"[\s\S]*verify_download_checksum "\$mihomo_archive" "\$\{MIHOMO_URL\}\.sha256"/,
-	'Mihomo archive must be checksum-verified before unpacking');
+requireMatch(installer, /resolve_mihomo_release\(\)[\s\S]*asset\.digest[\s\S]*sha256:\[0-9A-Fa-f\]/,
+	'installer must resolve the Mihomo asset digest from verified release metadata');
+requireMatch(installer,
+	/download_artifact "\$MIHOMO_URL"[\s\S]*verify_download_digest "\$mihomo_archive" "\$MIHOMO_DIGEST"/,
+	'Mihomo archive must verify the release digest before unpacking');
 requireMatch(makefile, /stat -c '%u:%a:%h'[\s\S]*= 0:600:1[\s\S]*Ignoring untrusted MiClash hard-reinstall marker/,
 	'postrm must authenticate the root-owned hard-reinstall marker before deleting Mihomo');
 
