@@ -519,7 +519,7 @@ export function compose(runtime, overrides) {
 		};
 		push(close_domains, notifications_domain);
 		let telegram_settings = clone(desired.telegram ?? {
-			enabled: false, token: '', user_id: ''
+			enabled: false, token: '', user_id: '', poll_timeout_seconds: 25
 		});
 		function prepare_telegram_settings(next) {
 			if (type(next) != 'object' || type(next.enabled) != 'bool')
@@ -539,25 +539,23 @@ export function compose(runtime, overrides) {
 					telegram_settings = clone(next);
 					return clone(telegram_settings);
 				}
-				let running = telegram_controller.status().running === true;
-				if (next.enabled && !running) {
-					let started = false, failure = null;
-					try { started = telegram_controller.start() === true; }
-					catch (error) { failure = errors.normalize(error).code; }
-					if (!started) {
-						try { telegram_controller.stop(); } catch (cleanup_error) {}
-						errors.fail(failure ?? 'HEALTH_FAILED');
-					}
-				}
-				if (!next.enabled && running) {
-					let stopped = false, failure = null;
-					try { stopped = telegram_controller.stop() === true; }
-					catch (error) { failure = errors.normalize(error).code; }
-					if (!stopped) errors.fail(failure ?? 'HEALTH_FAILED');
-				}
+				let previous = clone(telegram_settings);
 				telegram_settings = clone(next);
-				if (next.enabled)
-					try { telegram_controller.configure(); } catch (error) {}
+				try {
+					if (next.enabled) {
+						telegram_controller.configure();
+						if (!telegram_controller.status().running &&
+						    telegram_controller.start() !== true)
+							errors.fail('HEALTH_FAILED');
+					}
+					else if (telegram_controller.status().running &&
+					         telegram_controller.stop() !== true)
+						errors.fail('HEALTH_FAILED');
+				}
+				catch (error) {
+					telegram_settings = previous;
+					errors.fail(errors.normalize(error).code);
+				}
 				return clone(telegram_settings);
 			}
 		};
@@ -1098,6 +1096,7 @@ export function compose(runtime, overrides) {
 				guard_transition
 			};
 			telegram_controller = modules.telegram.create(telegram_app);
+			app.telegram_ingest = (update) => telegram_controller.ingest(update);
 			sync_telegram_channel();
 			telegram_domain.configure(telegram_settings);
 			let telegram_closed = false;

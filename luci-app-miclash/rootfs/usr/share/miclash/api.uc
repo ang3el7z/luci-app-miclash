@@ -507,7 +507,7 @@ export function method_table(app, transfers) {
 		'service_start', 'service_stop', 'service_reload', 'service_restart',
 		'config_list', 'config_read',
 		'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
-		'settings_get', 'settings_set', 'guard_transition', 'set_draining'
+		'settings_get', 'settings_set', 'guard_transition', 'set_draining', 'telegram_ingest'
 	]) if (type(app?.[name]) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 
@@ -729,6 +729,10 @@ export function method_table(app, transfers) {
 			exact(arguments, {});
 			return { sent: type(app.telegram_test) == 'function' &&
 				app.telegram_test() === true };
+		}),
+		telegram_ingest: method({ update: {} }, (arguments) => {
+			exact(arguments, { update: { type: 'object', required: true } });
+			return app.telegram_ingest(arguments.update);
 		}),
 		devices_list: method(empty, (arguments) => {
 			exact(arguments, {});

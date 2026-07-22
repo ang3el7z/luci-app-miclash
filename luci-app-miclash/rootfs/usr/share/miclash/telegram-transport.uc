@@ -100,13 +100,13 @@ export function create(app) {
 	if (type(app) != 'object' || type(app.runtime) != 'object' ||
 	    type(app.http?.request) != 'function') invalid();
 
-	function call(settings, method, fields, post) {
+	function call(settings, method, fields, post, timeout_ms) {
 		let safe = configuration(settings), response, encoded = query(fields);
 		try {
 			let request = {
 				url: 'https://api.telegram.org/bot' + safe.token + '/' + method +
 					(post ? '' : '?' + encoded),
-				connect_timeout_ms: CONNECT_TIMEOUT_MS, timeout_ms: REQUEST_TIMEOUT_MS,
+				connect_timeout_ms: CONNECT_TIMEOUT_MS, timeout_ms: timeout_ms ?? REQUEST_TIMEOUT_MS,
 				max_redirects: 0, max_bytes: RESPONSE_LIMIT, managed: true,
 				accept_statuses: [ 429 ]
 			};
@@ -138,13 +138,15 @@ export function create(app) {
 	};
 
 	return {
-		poll: (settings, offset) => {
+		poll: (settings, offset, poll_timeout_seconds) => {
 			if (type(offset) != 'int' || offset < -1) invalid();
+			let timeout = poll_timeout_seconds ?? 25;
+			if (type(timeout) != 'int' || timeout < 5 || timeout > 50) invalid();
 			let reply = call(settings, 'getUpdates', {
-				offset: offset + 1, timeout: 0,
+				offset: offset + 1, timeout,
 				limit: 20,
 				allowed_updates: [ 'message', 'callback_query' ]
-			});
+			}, false, (timeout + 5) * 1000);
 			if (reply.limited) return { updates: [], retry_after_ms: reply.retry_after_ms };
 			let updates = reply.document.result;
 			if (type(updates) != 'array' || length(updates) > 100)

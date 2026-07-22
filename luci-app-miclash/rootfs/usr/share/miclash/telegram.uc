@@ -876,6 +876,11 @@ export function create(app) {
 	};
 	controller.handle_update = (update) =>
 		handle_update(update, configuration(app)).handled;
+	controller.ingest = (update) => {
+		let outcome = handle_update(update, configuration(app));
+		return { handled: outcome.handled === true, retryable: outcome.retryable === true,
+			last_update_id: state.last_update_id };
+	};
 	controller.poll_once = () => {
 		let settings = configuration(app);
 		if (!settings.available) {
@@ -971,13 +976,6 @@ export function create(app) {
 		if (state.running || !settings.available || !settings.enabled || !settings.configured)
 			return false;
 		state.running = true;
-		try { schedule(0); }
-		catch (error) {
-			state.running = false;
-			if (timer?.cancel != null) try { timer.cancel(); } catch (cancel_error) {}
-			timer = null;
-			errors.fail('INTERNAL');
-		}
 		return true;
 	};
 	controller.stop = () => {

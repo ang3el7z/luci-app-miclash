@@ -57,7 +57,8 @@ const FIELDS = {
 	telegram: {
 		enabled: 'bool',
 		token: 'secret_string',
-		user_id: 'string'
+		user_id: 'string',
+		poll_timeout_seconds: 'telegram_poll_timeout_seconds'
 	},
 	notifications: {
 		auto_hide: 'bool',
@@ -111,7 +112,7 @@ function defaults() {
 			mihomo_release_channel: 'release',
 			auto_major_miclash: true
 		},
-		telegram: { enabled: false, token: '', user_id: '' },
+		telegram: { enabled: false, token: '', user_id: '', poll_timeout_seconds: 25 },
 		notifications: {
 			auto_hide: true,
 			syslog_enabled: true,
@@ -250,6 +251,8 @@ function normalize(kind, value, fallback, strict) {
 			invalid();
 		return normalized;
 	}
+	if (kind == 'telegram_poll_timeout_seconds')
+		return bounded_integer(value, 5, 50);
 	let memory_bounds = {
 		memory_sample_interval_ms: [ 10000, 3600000 ],
 		memory_sustained_samples: [ 2, 60 ],
@@ -290,7 +293,7 @@ function normalize(kind, value, fallback, strict) {
 function encoded(kind, value) {
 	if (kind == 'bool')
 		return value ? '1' : '0';
-	if (kind == 'interval' || kind == 'schema_version')
+	if (kind == 'interval' || kind == 'schema_version' || kind == 'telegram_poll_timeout_seconds')
 		return sprintf('%d', value);
 	if (substr(kind, 0, 7) == 'memory_')
 		return sprintf('%d', value);

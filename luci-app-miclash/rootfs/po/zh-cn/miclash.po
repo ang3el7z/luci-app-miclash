@@ -1676,6 +1676,12 @@ msgstr "允许的 Telegram 用户 ID"
 msgid "Allowed Telegram user IDs"
 msgstr "允许的 Telegram 用户 ID"
 
+msgid "Telegram polling timeout (seconds)"
+msgstr "Telegram 轮询超时（秒）"
+
+msgid "Telegram polling timeout"
+msgstr "Telegram 轮询超时"
+
 msgid "List IDs separated by commas, for example: 5818132224, 5818132223."
 msgstr "请用逗号分隔 ID，例如：5818132224, 5818132223。"
 

@@ -1729,6 +1729,12 @@ msgstr "Разрешённый ID пользователя Telegram"
 msgid "Allowed Telegram user IDs"
 msgstr "Разрешённые ID пользователей Telegram"
 
+msgid "Telegram polling timeout (seconds)"
+msgstr "Тайм-аут опроса Telegram (секунды)"
+
+msgid "Telegram polling timeout"
+msgstr "Тайм-аут опроса Telegram"
+
 msgid "List IDs separated by commas, for example: 5818132224, 5818132223."
 msgstr "Перечислите ID через запятую, например: 5818132224, 5818132223."
 

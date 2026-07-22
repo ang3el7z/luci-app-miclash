@@ -36,6 +36,7 @@ let app = {
 	telegram_status: () => ({ running: true }), telegram_settings: () => ({ token: '123:secret' }),
 	telegram_token_reveal: () => ({ token: '123:secret' }),
 	telegram_test: () => true, devices_list: () => [], devices_timezones: () => [ 'UTC' ],
+	telegram_ingest: () => ({ handled: true, retryable: false, last_update_id: 1 }),
 	devices_policy_list: () => [], devices_policy_set: () => operation('devices.set'),
 	devices_policy_delete: () => operation('devices.delete'),
 	notifications_settings: () => ({ auto_hide: true }), notifications_test: () => ({ sent: true }),

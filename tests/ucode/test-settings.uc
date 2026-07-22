@@ -74,6 +74,7 @@ assert_json_equal(defaults.notifications.telegram_events,
 	[ 'guard_outage', 'failure', 'recovery', 'fail_closed', 'direct_fallback',
 		'memory_outcome', 'subscription_outcome', 'update_outcome', 'internet_restored' ]);
 assert_equal(defaults.telegram.enabled, false);
+assert_equal(defaults.telegram.poll_timeout_seconds, 25);
 assert_equal(defaults.meta.schema_version, 1);
 
 let legacy = settings.load(fake_runtime({ miclash: {
@@ -92,6 +93,7 @@ let normalized_env = fake_runtime();
 assert_json_equal(settings.validate_patch({
 	interfaces: { included: [ ' br-lan ', '', 'wlan0', 'br-lan' ] },
 	updates: { interval_hours: '24' },
+	telegram: { poll_timeout_seconds: '25' },
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
 	notifications: { syslog_enabled: true,
 		syslog_events: [ 'failure', 'internet_restored', 'failure' ],
@@ -100,6 +102,7 @@ assert_json_equal(settings.validate_patch({
 }), {
 	interfaces: { included: [ 'br-lan', 'wlan0' ] },
 	updates: { interval_hours: 24 },
+	telegram: { poll_timeout_seconds: 25 },
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
 	notifications: { syslog_enabled: true,
 		syslog_events: [ 'failure', 'internet_restored' ],
@@ -177,6 +180,10 @@ assert_throws(() => settings.save(fake_runtime().rt,
 	{ memory: { success_cooldown_ms: 172800000, failure_cooldown_ms: 86400000 } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ telegram: { enabled: true, token: '', user_id: '' } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ telegram: { poll_timeout_seconds: 4 } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ telegram: { poll_timeout_seconds: 51 } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ telegram: { enabled: true, token: 'token', user_id: '9007199254740993e0' } }), 'INVALID_ARGUMENT');
 let telegram_partial_env = fake_runtime({ miclash: {

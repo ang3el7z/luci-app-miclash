@@ -183,12 +183,16 @@ function create(options) {
 		]);
 		const userField = field('sbox-telegram-user-id', _('Allowed Telegram user IDs'), E('input', { 'type': 'text',
 			'class': 'cbi-input-text', 'value': userId, 'inputmode': 'numeric', 'autocomplete': 'off' }));
+		const pollTimeout = Number.isInteger(desired.poll_timeout_seconds) ? desired.poll_timeout_seconds : 25;
+		const timeoutField = field('sbox-telegram-poll-timeout', _('Telegram polling timeout (seconds)'), E('input', {
+			'type': 'number', 'class': 'cbi-input-text', 'min': '5', 'max': '50', 'step': '1', 'value': pollTimeout
+		}));
 		return E('section', { 'class': 'sbox-integration-pane sbox-telegram-pane', 'data-panel': 'telegram' }, [
 			E('h4', {}, _('Telegram')),
 			check('sbox-telegram-enabled', _('Enable Telegram control'), desired.enabled === true),
 			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
 				status.running === true ? _('Poller is running') : _('Poller is stopped')),
-			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField ]),
+			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField, timeoutField ]),
 			E('p', { 'class': 'sbox-muted', 'data-telegram-id-hint': 'true' }, _('List IDs separated by commas, for example: 5818132224, 5818132223.')),
 			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Send test'), 'telegram-test') ])
 		]);
@@ -296,6 +300,8 @@ function create(options) {
 		if (enabled && !(hasToken && normalizedUserIds))
 			throw new Error(_('Enabling Telegram requires a BotFather token and exact user IDs.'));
 		const telegram = { enabled, user_id: normalizedUserIds };
+		telegram.poll_timeout_seconds = integer(host.querySelector('#sbox-telegram-poll-timeout')?.value,
+			[ 5, 50 ], _('Telegram polling timeout'));
 		if (token !== MASK) telegram.token = token;
 		const notifications = {
 			auto_hide: !!host.querySelector('#sbox-notification-auto-hide')?.checked

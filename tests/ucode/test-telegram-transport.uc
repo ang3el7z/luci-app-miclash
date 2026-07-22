@@ -41,10 +41,10 @@ assert_equal(transport.set_commands(settings, 'ru', [
 ]), true);
 
 assert_equal(length(env.requests), 6);
-for (let request in env.requests) {
+for (let index, request in env.requests) {
 	assert_match(request.url, /^https:\/\/api\.telegram\.org\/bot123456:telegram-secret\//);
 	assert_equal(request.connect_timeout_ms, 2000);
-	assert_equal(request.timeout_ms, 5000);
+	assert_equal(request.timeout_ms, index == 0 ? 30000 : 5000);
 	assert_equal(request.max_redirects, 0);
 	assert_equal(request.max_bytes, 65536);
 	assert_equal(request.managed, true);
@@ -52,7 +52,7 @@ for (let request in env.requests) {
 }
 assert_match(env.requests[0].url, /getUpdates\?/);
 assert_match(env.requests[0].url, /offset=13/);
-assert_match(env.requests[0].url, /timeout=0/);
+assert_match(env.requests[0].url, /timeout=25/);
 assert_match(env.requests[0].url, /allowed_updates=/);
 for (let index in [ 1, 2, 3, 4 ]) {
 	assert_equal(env.requests[index].method, 'POST');
@@ -75,6 +75,8 @@ for (let invalid in [
 ])
 	assert_throws(() => transport.poll(invalid, 0), 'INVALID_ARGUMENT');
 assert_throws(() => transport.poll(settings, -2), 'INVALID_ARGUMENT');
+assert_throws(() => transport.poll(settings, 0, 4), 'INVALID_ARGUMENT');
+assert_throws(() => transport.poll(settings, 0, 51), 'INVALID_ARGUMENT');
 assert_throws(() => transport.send(settings, '42', '', null), 'INVALID_ARGUMENT');
 assert_throws(() => transport.send(settings, '42', sprintf('%04100d', 0), null),
 	'INVALID_ARGUMENT');

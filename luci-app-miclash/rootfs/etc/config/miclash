@@ -36,6 +36,7 @@ config telegram 'telegram'
 	option enabled '0'
 	option token ''
 	option user_id ''
+	option poll_timeout_seconds '25'
 
 config notifications 'notifications'
 	option auto_hide '1'

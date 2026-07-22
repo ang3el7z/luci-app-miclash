@@ -268,16 +268,6 @@ for (let settings in [
 	assert_equal(index(encoded, 'missing-user-secret'), -1);
 }
 
-// Startup is atomic: a rejected/throwing scheduler cannot leave a running poller.
-for (let timer_failure in [ 'throw', 'null' ]) {
-	let failed_start = environment();
-	failed_start.clock.set_timeout = () => timer_failure == 'throw' ? die('timer failed') : null;
-	let failed_controller = telegram.create(failed_start.app);
-	assert_throws(() => failed_controller.start(), 'INTERNAL');
-	assert_equal(failed_controller.status().running, false, timer_failure);
-	assert_equal(active_timers(failed_start.clock), 0, timer_failure);
-}
-
 // Authorization accepts one normalized ID and private messages only.
 let authorized = environment();
 let authorized_controller = telegram.create(authorized.app);
@@ -297,8 +287,14 @@ assert_equal(length(authorized.filesystem.calls.open), authorized_writes,
 assert_equal(json(authorized.filesystem.readfile(offset_path)).last_update_id, 102);
 assert_equal(authorized_controller.status().last_update_id, 108);
 assert_equal(authorized_controller.poll_once(), true);
+
 assert_match(authorized.requests[length(authorized.requests) - 1].url,
-	/\/getUpdates\?offset=109&timeout=0/);
+	/\/getUpdates\?offset=109&timeout=25/);
+
+let ingested = authorized_controller.ingest(update(109, '/status'));
+assert_equal(ingested.handled, true);
+assert_equal(ingested.retryable, false);
+assert_equal(ingested.last_update_id, 109);
 
 // A handled update is consumed once, including rejected/unsupported updates.
 let duplicate = fixture_json('private-authorized-reboot.json');
@@ -363,9 +359,9 @@ let poll_env = environment({ poll_replies: [ {
 } ] });
 let poll_controller = telegram.create(poll_env.app);
 assert_equal(poll_controller.poll_once(), true);
-assert_match(poll_env.requests[0].url, /\/getUpdates\?offset=0&timeout=0/);
-assert_true(poll_env.requests[0].timeout_ms <= 5000,
-	'Telegram polling must not monopolize the miclashd RPC loop');
+assert_match(poll_env.requests[0].url, /\/getUpdates\?offset=0&timeout=25/);
+assert_equal(poll_env.requests[0].timeout_ms, 30000,
+	'Telegram polling must allow the configured long-poll response plus a grace period');
 assert_equal(poll_controller.status().last_update_id, 702);
 let persisted_bytes = poll_env.filesystem.readfile(offset_path);
 assert_true(type(persisted_bytes) == 'string', 'durable Telegram offset was not persisted');
@@ -379,7 +375,7 @@ assert_equal(poll_env.filesystem.readfile('/var/run/miclash/telegram-offset.json
 let recreated = environment({ filesystem: poll_env.filesystem });
 let recreated_controller = telegram.create(recreated.app);
 assert_equal(recreated_controller.poll_once(), true);
-assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=0/);
+assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=25/);
 
 // OpenWrt overlayfs may report the private directory and a regular file inside it
 // on different st_dev values. The fixed path and file identity remain authoritative.
@@ -477,26 +473,23 @@ let barrier = environment({
 let barrier_controller = telegram.create(barrier.app);
 assert_equal(barrier_controller.start(), true);
 barrier.filesystem.fail_on = 'rename';
-barrier.clock.advance(0);
+assert_equal(barrier_controller.poll_once(), false);
 assert_equal(barrier_controller.status().last_update_id, 799);
 assert_equal(json(barrier.filesystem.readfile(offset_path)).last_update_id, 799);
 assert_equal(length(barrier.submitted), 0);
 assert_equal(length(barrier.audit), 0, 'later update crossed persistence barrier');
 assert_equal(barrier_controller.status().last_error, 'INTERNAL');
 assert_equal(barrier_controller.status().retry_after_ms, 1000);
-assert_equal(active_timers(barrier.clock), 1);
-assert_match(barrier.requests[0].url, /\/getUpdates\?offset=800&timeout=0/);
+assert_equal(active_timers(barrier.clock), 0);
+assert_match(barrier.requests[0].url, /\/getUpdates\?offset=800&timeout=25/);
 barrier.filesystem.fail_on = null;
-barrier.clock.advance(999);
-assert_equal(length(barrier.requests), 1);
-assert_equal(active_timers(barrier.clock), 1);
-barrier.clock.advance(1);
-assert_match(barrier.requests[1].url, /\/getUpdates\?offset=800&timeout=0/);
+assert_equal(barrier_controller.poll_once(), true);
+assert_match(barrier.requests[1].url, /\/getUpdates\?offset=800&timeout=25/);
 assert_equal(json(barrier.filesystem.readfile(offset_path)).last_update_id, 800);
 assert_equal(barrier_controller.status().last_update_id, 801);
 assert_equal(length(barrier.submitted), 1);
 assert_equal(barrier_controller.status().retry_after_ms, 0);
-assert_equal(active_timers(barrier.clock), 1);
+assert_equal(active_timers(barrier.clock), 0);
 
 // Telegram 429 honors retry_after; network failures back off exponentially.
 let limited_poll = environment({ poll_replies: [ {
@@ -516,14 +509,13 @@ assert_equal(network.logs[length(network.logs) - 1],
 assert_equal(network_controller.poll_once(), false);
 assert_equal(network_controller.status().retry_after_ms, 2000);
 
-// Start/stop controls one timer while bounded short polling keeps ubus responsive.
+// Start/stop only represents controller availability; the worker owns polling timers.
 let lifecycle = environment();
 let lifecycle_controller = telegram.create(lifecycle.app);
 assert_equal(lifecycle_controller.start(), true);
 assert_equal(lifecycle_controller.start(), false);
 assert_equal(lifecycle_controller.status().running, true);
-lifecycle.clock.advance(0);
-assert_true(length(lifecycle.requests) >= 1);
+assert_equal(active_timers(lifecycle.clock), 0);
 assert_equal(lifecycle_controller.stop(), true);
 assert_equal(lifecycle_controller.stop(), false);
 assert_equal(lifecycle_controller.status().running, false);
@@ -543,21 +535,12 @@ snapshot.app.settings_get = () => {
 };
 let snapshot_controller = telegram.create(snapshot.app);
 assert_equal(snapshot_controller.start(), true);
-snapshot.clock.advance(0);
+assert_equal(snapshot_controller.poll_once(), true);
 assert_equal(snapshot_reads, 2, 'poll handler reread validated settings');
 assert_equal(length(snapshot.submitted), 1);
-assert_equal(active_timers(snapshot.clock), 1);
-let snapshot_requests = length(snapshot.requests);
-snapshot.clock.advance(3000);
-assert_equal(snapshot_controller.status().last_error, 'SETTINGS_UNAVAILABLE');
-assert_equal(snapshot_controller.status().retry_after_ms, 1000);
-assert_equal(length(snapshot.requests), snapshot_requests);
-assert_equal(active_timers(snapshot.clock), 1);
-snapshot.clock.advance(999);
-assert_equal(length(snapshot.requests), snapshot_requests);
-assert_equal(active_timers(snapshot.clock), 1);
+assert_equal(active_timers(snapshot.clock), 0);
 
-// A live controller becomes inactive without a tight loop when settings are disabled/incomplete.
+// A controller records disabled/incomplete settings without creating a timer.
 for (let change in [ 'disabled', 'incomplete' ]) {
 	let inactive = environment();
 	let inactive_controller = telegram.create(inactive.app);
@@ -566,32 +549,21 @@ for (let change in [ 'disabled', 'incomplete' ]) {
 		inactive.settings.telegram.enabled = false;
 	else
 		inactive.settings.telegram.token = '';
-	inactive.clock.advance(0);
-	assert_equal(inactive_controller.status().running, false, change);
+	assert_equal(inactive_controller.poll_once(), false, change);
 	assert_equal(active_timers(inactive.clock), 0, change);
 	assert_equal(length(inactive.requests), 0, change);
-	inactive.clock.advance(60000);
-	assert_equal(active_timers(inactive.clock), 0, change + ' rescheduled');
-	assert_equal(length(inactive.requests), 0, change + ' polled');
 }
 
-// A settings read error remains distinguishable and retries with bounded backoff, not 10ms.
+// A settings read error remains distinguishable and has no controller timer.
 let settings_error = environment();
 let settings_error_controller = telegram.create(settings_error.app);
 assert_equal(settings_error_controller.start(), true);
 settings_error.app.settings_get = () => die('INTERNAL');
-settings_error.clock.advance(0);
+assert_equal(settings_error_controller.poll_once(), false);
 assert_equal(settings_error_controller.status().running, true);
 assert_equal(settings_error_controller.status().last_error, 'SETTINGS_UNAVAILABLE');
 assert_equal(settings_error_controller.status().retry_after_ms, 1000);
-assert_equal(active_timers(settings_error.clock), 1);
-assert_equal(length(settings_error.requests), 0);
-settings_error.clock.advance(999);
-assert_equal(active_timers(settings_error.clock), 1);
-assert_equal(length(settings_error.requests), 0);
-settings_error.clock.advance(1);
-assert_equal(settings_error_controller.status().retry_after_ms, 2000);
-assert_equal(active_timers(settings_error.clock), 1);
+assert_equal(active_timers(settings_error.clock), 0);
 assert_equal(length(settings_error.requests), 0);
 
 // The authorized command limiter is bounded and audited without IDs, token, URL, or text.
@@ -817,7 +789,7 @@ assert_equal(command_controller.configure(), true);
 assert_equal(length(command_env.requests), 0,
 	'BotFather synchronization must not block settings RPC');
 assert_equal(command_controller.start(), true);
-command_env.clock.advance(0);
+assert_equal(command_controller.poll_once(), true);
 assert_equal(request_method(command_env.requests[0]), 'getUpdates');
 assert_equal(request_method(command_env.requests[1]), 'setMyCommands');
 assert_equal(request_method(command_env.requests[2]), 'setMyCommands');
@@ -828,7 +800,7 @@ assert_true(index(command_env.requests[2].body, 'language_code=ru') >= 0);
 let api_env = environment();
 let controller = telegram.create(api_env.app);
 assert_equal(sprintf('%J', sort(keys(controller))), sprintf('%J', sort([
-	'configure', 'start', 'stop', 'status', 'test', 'poll_once', 'handle_update', 'send_event'
+	'configure', 'start', 'stop', 'status', 'test', 'poll_once', 'handle_update', 'ingest', 'send_event'
 ])));
 let minimal_app = {
 	status: () => ({}), health: () => ({}), operation_get: () => null,
@@ -843,7 +815,8 @@ let minimal_app = {
 	guard_transition: () => ({ id: 'op-1' }),
 	telegram_status: () => controller.status(),
 	telegram_settings: () => api_env.settings.telegram,
-	telegram_test: () => controller.test()
+	telegram_test: () => controller.test(),
+	telegram_ingest: (update) => controller.ingest(update)
 };
 let methods = api.method_table(minimal_app);
 assert_true(methods.telegram_status != null);

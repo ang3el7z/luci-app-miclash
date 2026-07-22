@@ -120,6 +120,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/mihomo-https.uc $(1)/usr/libexec/miclash/
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) ./rootfs/usr/sbin/miclashd $(1)/usr/sbin/
+	$(INSTALL_BIN) ./rootfs/usr/sbin/miclash-telegram-poller $(1)/usr/sbin/
 
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/miclash
 	$(CP) ./rootfs/www/luci-static/resources/view/miclash/* $(1)/www/luci-static/resources/view/miclash/
@@ -333,6 +334,7 @@ define Package/$(PKG_NAME)/postrm
 				[ ! -e /etc/init.d/clash ] && [ ! -L /etc/init.d/clash ] && \
 				[ ! -e /etc/init.d/miclashd ] && [ ! -L /etc/init.d/miclashd ] && \
 				[ ! -e /usr/sbin/miclashd ] && [ ! -L /usr/sbin/miclashd ] && \
+				[ ! -e /usr/sbin/miclash-telegram-poller ] && [ ! -L /usr/sbin/miclash-telegram-poller ] && \
 				[ ! -e /etc/init.d/miclash-guard ] && [ ! -L /etc/init.d/miclash-guard ] && \
 				[ ! -e /usr/share/miclash/routing.uc ] && [ ! -L /usr/share/miclash/routing.uc ] && \
 				[ ! -e /usr/share/miclash/routing-cleanup.uc ] && [ ! -L /usr/share/miclash/routing-cleanup.uc ] && \

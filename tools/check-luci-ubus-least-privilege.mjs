@@ -16,7 +16,7 @@ const expectedNames = 'status,health,operation_get,operation_list,' +
 	'subscription_get,subscription_set,subscription_update,update_release,update_miclash,' +
 	'update_mihomo,update_rollback_mihomo,memory_status,memory_reset_baseline,memory_settings,' +
 	'diagnostics_summary,diagnostics_create_report,diagnostics_route_test,' +
-	'telegram_status,telegram_settings,telegram_token_reveal,telegram_test,' +
+	'telegram_status,telegram_settings,telegram_token_reveal,telegram_test,telegram_ingest,' +
 	'devices_list,devices_timezones,devices_policy_list,devices_policy_set,devices_policy_delete,' +
 	'notifications_settings,notifications_test,notifications_list,logs_read,system_info,' +
 	'network_interfaces,ruleset_list,ruleset_read,ruleset_write,ruleset_delete,' +
@@ -45,9 +45,10 @@ assert.equal(new Set(names).size, names.length, 'canonical API contains duplicat
 for (const method of fixture.methods) {
 	assert.deepEqual(Object.keys(method), [ 'name', 'params', 'operation', 'access' ],
 		`${method.name} must have one exact canonical contract`);
-	assert.ok(method.access === 'read' || method.access === 'write',
-		`${method.name} has no exact read/write classification`);
-	assert.equal(method.access, expectedRead.has(method.name) ? 'read' : 'write',
+	assert.ok(method.access === 'read' || method.access === 'write' || method.access === 'internal',
+		`${method.name} has no exact read/write/internal classification`);
+	assert.equal(method.access, method.name === 'telegram_ingest' ? 'internal' :
+		(expectedRead.has(method.name) ? 'read' : 'write'),
 		`${method.name} violates the reviewed least-privilege partition`);
 }
 for (const name of secretBearing)
@@ -66,7 +67,8 @@ const uiMethods = [ ...ui.matchAll(/\{ name: '([a-z0-9_]+)', params: \[([^\]]*)\
 		operation: match[3] === 'true',
 		access: match[4]
 	}));
-assert.deepEqual(uiMethods, fixture.methods, 'api.js methods/access must equal canonical fixture');
+assert.deepEqual(uiMethods, fixture.methods.filter((method) => method.access !== 'internal'),
+	'api.js methods/access must equal the public canonical fixture');
 
 const aclDocument = JSON.parse(readFileSync(aclPath, 'utf8'));
 assert.deepEqual(Object.keys(aclDocument), [ 'luci-app-miclash' ], 'ACL exposes an orphan role');
@@ -87,8 +89,9 @@ assert.deepEqual(aclRead, fixture.methods.filter((method) => method.access === '
 assert.deepEqual(aclWrite, fixture.methods.filter((method) => method.access === 'write').map((method) => method.name),
 	'write ACL differs from canonical method partition');
 assert.deepEqual(aclRead.filter((name) => aclWrite.includes(name)), [], 'read/write ACL overlap');
-assert.deepEqual(aclRead.concat(aclWrite).sort(), names.slice().sort(),
-	'ACL has missing or orphan methods');
+assert.deepEqual(aclRead.concat(aclWrite).sort(), fixture.methods
+	.filter((method) => method.access !== 'internal').map((method) => method.name).sort(),
+	'ACL has missing or orphan public methods');
 
 function inspectAuthority(value) {
 	if (Array.isArray(value)) {

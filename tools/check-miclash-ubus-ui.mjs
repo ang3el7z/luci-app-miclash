@@ -13,6 +13,8 @@ assert.ok(existsSync(uiPath), `missing ${uiPath}`);
 
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const names = fixture.methods.map((entry) => entry.name);
+const publicMethods = fixture.methods.filter((entry) => entry.access !== 'internal');
+const publicNames = publicMethods.map((entry) => entry.name);
 assert.equal(new Set(names).size, names.length, 'canonical methods must be unique');
 const ui = readFileSync(uiPath, 'utf8');
 const backend = readFileSync(backendPath, 'utf8');
@@ -33,8 +35,8 @@ assert.ok(!names.includes('subscription_swap') &&
 	'config_swap must be the only public profile/URL swap boundary');
 assert.deepEqual(readMethods.filter((name) => writeMethods.includes(name)), [],
 	'LuCI ACL read/write authorities must not overlap');
-assert.deepEqual([ ...new Set(readMethods.concat(writeMethods)) ].sort(), names.slice().sort(),
-	'LuCI ACL must cover every canonical method exactly by typed API authority');
+assert.deepEqual([ ...new Set(readMethods.concat(writeMethods)) ].sort(), publicNames.slice().sort(),
+	'LuCI ACL must cover every public canonical method exactly by typed API authority');
 const declared = [ ...ui.matchAll(/\{ name: '([a-z0-9_]+)', params: \[([^\]]*)\], operation: (true|false), access: '(read|write)' \}/g) ]
 	.map((match) => ({
 		name: match[1],
@@ -42,7 +44,7 @@ const declared = [ ...ui.matchAll(/\{ name: '([a-z0-9_]+)', params: \[([^\]]*)\]
 		operation: match[3] === 'true',
 		access: match[4]
 	}));
-assert.deepEqual(declared, fixture.methods, 'api.js declarations must equal the canonical fixture');
+assert.deepEqual(declared, publicMethods, 'api.js declarations must equal the public canonical fixture');
 assert.equal((ui.match(/rpc\.declare\s*\(/g) || []).length, 1,
 	'all declarations must use the single typed declaration factory');
 assert.match(ui, /object:\s*'miclash'/);
@@ -175,7 +177,7 @@ assert.equal(moduleApi.isSessionExpired({ code: 'RPC_ERROR', message: 'Request t
 
 replies.set('service_start', { error: { code: 'BUSY', message: 'Busy' } });
 const errorClient = moduleApi.create();
-assert.deepEqual(declarations.slice(0, fixture.methods.length), fixture.methods.map((method) => ({
+assert.deepEqual(declarations.slice(0, publicMethods.length), publicMethods.map((method) => ({
 	object: 'miclash', method: method.name, params: method.params, expect: { '': {} }, reject: true
 })), 'every rpc declaration must use exact object/method/params/expect/reject semantics');
 await assert.rejects(errorClient.service_start('config.yaml', 'luci'),

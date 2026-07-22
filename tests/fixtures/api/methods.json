@@ -35,6 +35,7 @@
     { "name": "telegram_settings", "params": [], "operation": false, "access": "read" },
     { "name": "telegram_token_reveal", "params": [], "operation": false, "access": "write" },
     { "name": "telegram_test", "params": [], "operation": false, "access": "write" },
+    { "name": "telegram_ingest", "params": ["update"], "operation": false, "access": "internal" },
     { "name": "devices_list", "params": [], "operation": false, "access": "read" },
     { "name": "devices_timezones", "params": [], "operation": false, "access": "read" },
     { "name": "devices_policy_list", "params": [], "operation": false, "access": "read" },

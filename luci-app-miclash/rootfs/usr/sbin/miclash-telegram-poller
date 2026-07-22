@@ -1,0 +1,54 @@
+#!/usr/bin/ucode
+
+import * as runtime_module from 'miclash.runtime';
+import * as settings_module from 'miclash.settings';
+import * as http_module from 'miclash.http';
+import * as transport_module from 'miclash.telegram-transport';
+import * as poller_module from 'miclash.telegram-poller';
+import * as errors from 'miclash.errors';
+
+let runtime = runtime_module.create();
+let transport = transport_module.create({ runtime, http: http_module });
+let failures = 0;
+
+function pause(milliseconds) {
+	try { runtime.clock.sleep(milliseconds); } catch (error) {}
+};
+
+while (true) {
+	let configured = settings_module.load(runtime).telegram;
+	if (configured?.enabled !== true || type(configured.token) != 'string' ||
+	    !length(configured.token) || type(configured.user_id) != 'string' ||
+	    !length(configured.user_id)) {
+		failures = 0;
+		pause(1000);
+		continue;
+	}
+	let connection = runtime.ubus.connect();
+	if (connection == null) { pause(1000); continue; }
+	try {
+		let status = connection.call('miclash', 'telegram_status', {});
+		let offset = status?.last_update_id;
+		if (type(offset) != 'int' || offset < -1) errors.fail('INTERNAL');
+		let reply = transport.poll(configured, offset,
+			poller_module.poll_timeout_seconds(configured));
+		if (reply.retry_after_ms > 0) {
+			failures++;
+			pause(reply.retry_after_ms);
+		}
+		else {
+			for (let update in reply.updates) {
+				let ingested = connection.call('miclash', 'telegram_ingest', { update });
+				if (ingested?.retryable === true) errors.fail('INTERNAL');
+			}
+			failures = 0;
+		}
+	}
+	catch (error) {
+		failures++;
+		let code = errors.normalize(error).code;
+		try { runtime.logger.warn('Telegram poll failed: ' + code); } catch (ignored) {}
+		pause(poller_module.retry_delay_ms(failures));
+	}
+	try { connection.disconnect(); } catch (error) {}
+}
