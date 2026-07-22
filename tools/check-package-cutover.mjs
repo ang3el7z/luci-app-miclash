@@ -111,8 +111,16 @@ requireMatch(installer, /mktemp -d \/tmp\/miclash-install\.XXXXXX[\s\S]*validate
 	'interactive installer must use a verified root-private workspace');
 requireMatch(installer, /WORK_DIR="\$\{STATUS_FILE%\/\*\}"[\s\S]*validate_work_dir/,
 	'app installer must reuse the verified update authority');
-requireMatch(installer,
-	/schedule_backend_reload\(\)[\s\S]*\/bin\/busybox sleep 3[\s\S]*\/etc\/init\.d\/miclashd restart/,
+const reloadStart = installer.indexOf('schedule_backend_reload()');
+const reloadEnd = installer.indexOf('\nrun_app_mode()', reloadStart);
+if (reloadStart < 0 || reloadEnd <= reloadStart)
+	throw new Error('missing backend reload scheduler');
+const reloadScheduler = installer.slice(reloadStart, reloadEnd);
+requireMatch(reloadScheduler, /while[^\n]*STATUS_FILE[^\n]*-e/,
+	'backend reload must wait while the authenticated update handoff is still active');
+requireMatch(reloadScheduler, /MAX_BACKEND_RELOAD_WAIT/,
+	'backend reload wait must remain bounded');
+requireMatch(reloadScheduler, /\/etc\/init\.d\/miclashd restart[\s\S]*&/,
 	'successful in-app package updates must asynchronously reload the backend');
 requireMatch(installer,
 	/write_status success done[^}]*[\s\S]*schedule_backend_reload/,
