@@ -91,7 +91,7 @@ function create(options) {
 		typeof api.telegram_settings !== 'function' || typeof api.telegram_token_reveal !== 'function' ||
 		typeof api.telegram_test !== 'function' ||
 		typeof api.notificationSettings !== 'function' || typeof api.testNotification !== 'function' ||
-		typeof api.settings_get !== 'function' || typeof api.settings_set !== 'function' ||
+		typeof api.settings_get !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
 		dirty = false, retryMs = POLL_MS;
@@ -194,14 +194,19 @@ function create(options) {
 		const timeoutField = field('sbox-telegram-poll-timeout', _('Telegram polling timeout (seconds)'), E('input', {
 			'type': 'number', 'class': 'cbi-input-text', 'min': '5', 'max': '50', 'step': '1', 'value': pollTimeout
 		}));
-		return E('section', { 'class': 'sbox-integration-pane sbox-telegram-pane', 'data-panel': 'telegram' }, [
+		const children = [
 			E('h4', {}, _('Telegram')),
 			check('sbox-telegram-enabled', _('Enable Telegram control'), desired.enabled === true),
 			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
 				status.running === true ? _('Poller is running') : _('Poller is stopped')),
-			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField, timeoutField ]),
-			E('div', { 'class': 'sbox-management-actions' }, [ action(_('Send test'), 'telegram-test') ])
-		]);
+			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField, timeoutField ])
+		];
+		if (desired.enabled === true)
+			children.push(E('div', { 'class': 'sbox-management-actions' }, [
+				action(_('Send test'), 'telegram-test')
+			]));
+		return E('section', { 'class': 'sbox-integration-pane sbox-telegram-pane',
+			'data-panel': 'telegram' }, children);
 	}
 
 	function protectionIntegrationSection() {
@@ -235,8 +240,6 @@ function create(options) {
 				if (input) input.setAttribute('data-notification-channel', name);
 				return node;
 			});
-			const test = action(_('Send test'), 'notification-test');
-			test.setAttribute('data-notification-test', name);
 			const children = [
 				enabled,
 				E('h5', {}, _('Notification events')),
@@ -245,7 +248,11 @@ function create(options) {
 			if (name === 'luci')
 				children.splice(1, 0, check('sbox-notification-auto-hide',
 					_('Automatically close LuCI notifications'), desired.auto_hide !== false));
-			children.push(E('div', { 'class': 'sbox-management-actions' }, [ test ]));
+			if (configured === true) {
+				const test = action(_('Send test'), 'notification-test');
+				test.setAttribute('data-notification-test', name);
+				children.push(E('div', { 'class': 'sbox-management-actions' }, [ test ]));
+			}
 			return E('section', {
 				'class': 'sbox-notification-pane',
 				'role': 'tabpanel',
@@ -328,36 +335,11 @@ function create(options) {
 		if (!hydrated) throw new Error(_('Settings panel is still loading.'));
 		return formPatch();
 	}
-	function telegramPatchForTest() {
-		const tokenInput = host.querySelector('#sbox-telegram-token');
-		const token = String(tokenInput?.value || '').trim();
-		const userId = normalizeTelegramIds(host.querySelector('#sbox-telegram-user-id')?.value || '');
-		const configured = state.telegram?.configured === true;
-		const hasToken = token === MASK ? configured : exactTelegramToken(token);
-		if (!hasToken) throw new Error(_('Enter a valid BotFather token.'));
-		if (!userId) throw new Error(_('Enter exact numeric Telegram user IDs separated by commas.'));
-		const current = state.desired?.telegram || {};
-		const next = { enabled: !!host.querySelector('#sbox-telegram-enabled')?.checked, user_id: userId };
-		if (token !== MASK) next.token = token;
-		const tokenChanged = token !== MASK && token !==
-			String(tokenInput?.dataset.originalTelegramToken || '');
-		const changed = next.enabled !== (current.enabled === true) ||
-		next.user_id !== normalizeTelegramIds(current.user_id || '') ||
-			tokenChanged;
-		return { changed, telegram: next };
-	}
 	async function markSaved() {
 		dirty = false;
 		await refresh(true, true);
 	}
-	async function saveBeforeTest() {
-		if (typeof options.onSave !== 'function')
-			throw new Error(_('Save settings before sending a test.'));
-		await options.onSave();
-	}
 	async function sendTelegramTest() {
-		const patch = telegramPatchForTest();
-		if (patch.changed) throw new Error(_('Save Telegram settings before sending a test.'));
 		progress(_('Sending Telegram test message…'));
 		const reply = await api.telegram_test();
 		if (reply?.sent !== true) throw new Error(_('Telegram test message was not sent.'));
@@ -391,7 +373,8 @@ function create(options) {
 			});
 		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () => {
 			const actionName = button.getAttribute('data-action');
-			const run = () => withBusy(actionName === 'telegram-test' ? null : button, async () => {
+			const testAction = [ 'telegram-test', 'notification-test' ].includes(actionName);
+			const run = () => withBusy(testAction ? null : button, async () => {
 				if (actionName === 'telegram-token-reveal') {
 					const input = host.querySelector('#sbox-telegram-token');
 					if (!input) return;
@@ -421,12 +404,11 @@ function create(options) {
 				else if (actionName === 'notification-test') {
 					const channel = button.getAttribute('data-notification-test');
 					if (!KNOWN_CHANNELS.includes(channel)) throw new Error(_('Invalid notification channel.'));
-					await saveBeforeTest();
 					const reply = await api.testNotification(channel);
 					if (reply?.sent !== true) throw new Error(_('Notification test message was not sent.'));
 				}
 			});
-			const promise = actionName === 'telegram-test'
+			const promise = testAction
 				? view_miclash_ui_shell.withButtons(button, run)
 				: run();
 			promise.catch(report);

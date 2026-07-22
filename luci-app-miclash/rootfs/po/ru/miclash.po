@@ -383,9 +383,6 @@ msgstr "Обновить статус"
 msgid "Restart Service"
 msgstr "Перезапустить службу"
 
-msgid "Save Settings"
-msgstr "Сохранить настройки"
-
 msgid "Clear All Interfaces"
 msgstr "Очистить выбор"
 
@@ -1825,9 +1822,6 @@ msgstr "Введите точный числовой ID пользователя
 msgid "Enter exact numeric Telegram user IDs separated by commas."
 msgstr "Введите точные числовые ID пользователей Telegram через запятую."
 
-msgid "Save Telegram settings before sending a test."
-msgstr "Сохраните настройки Telegram перед отправкой теста."
-
 msgid "Sending Telegram test message…"
 msgstr "Отправка тестового сообщения Telegram…"
 
@@ -2168,9 +2162,6 @@ msgstr "Дополнительные настройки ещё не готовы
 msgid "Settings panel is not available."
 msgstr "Панель настроек недоступна."
 
-msgid "Save settings before sending a test."
-msgstr "Сохраните настройки перед отправкой теста."
-
 msgid "Settings are not ready."
 msgstr "Настройки ещё не готовы."
 
@@ -2349,3 +2340,21 @@ msgstr "Ожидание"
 
 msgid "OpenWrt"
 msgstr "OpenWrt"
+
+msgid "Apply Settings"
+msgstr "Применить настройки"
+
+msgid "Save required"
+msgstr "Необходимо сохранить"
+
+msgid "Reset"
+msgstr "Сбросить"
+
+msgid "Device policies are busy."
+msgstr "Выполняется применение политик устройств."
+
+msgid "Device policies are not ready."
+msgstr "Политики устройств ещё не готовы."
+
+msgid "Resetting device policy…"
+msgstr "Сброс политики устройства…"

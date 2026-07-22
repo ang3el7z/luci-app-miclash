@@ -416,9 +416,6 @@ msgstr "刷新状态"
 msgid "Restart Service"
 msgstr "重启服务"
 
-msgid "Save Settings"
-msgstr "保存设置"
-
 msgid "Clear All Interfaces"
 msgstr "清除所有接口"
 
@@ -1769,9 +1766,6 @@ msgstr "请输入精确的数字 Telegram 用户 ID。"
 msgid "Enter exact numeric Telegram user IDs separated by commas."
 msgstr "请输入以逗号分隔的准确 Telegram 数字用户 ID。"
 
-msgid "Save Telegram settings before sending a test."
-msgstr "发送测试前请先保存 Telegram 设置。"
-
 msgid "Sending Telegram test message…"
 msgstr "正在发送 Telegram 测试消息…"
 
@@ -2121,9 +2115,6 @@ msgstr "管理设置尚未就绪。"
 msgid "Settings panel is not available."
 msgstr "设置面板不可用。"
 
-msgid "Save settings before sending a test."
-msgstr "发送测试前请先保存设置。"
-
 msgid "Settings are not ready."
 msgstr "设置尚未就绪。"
 
@@ -2302,3 +2293,21 @@ msgstr "等待中"
 
 msgid "OpenWrt"
 msgstr "OpenWrt"
+
+msgid "Apply Settings"
+msgstr "应用设置"
+
+msgid "Save required"
+msgstr "需要保存"
+
+msgid "Reset"
+msgstr "重置"
+
+msgid "Device policies are busy."
+msgstr "正在应用设备策略。"
+
+msgid "Device policies are not ready."
+msgstr "设备策略尚未就绪。"
+
+msgid "Resetting device policy…"
+msgstr "正在重置设备策略…"

@@ -77,6 +77,14 @@ assert.match(settings, /name \+ '_events'/,
 	'channel events are not independently persisted');
 assert.doesNotMatch(settings, /sbox-notification-test-channel/,
 	'notification test still uses a global channel selector');
+assert.doesNotMatch(settings, /saveBeforeTest|options\.onSave|telegramPatchForTest/,
+	'test actions must never save settings or inspect unsaved Telegram fields');
+assert.match(settings, /desired\.enabled === true[\s\S]*action\(_\('Send test'\), 'telegram-test'\)/,
+	'Telegram test visibility must depend on persisted enabled state');
+assert.match(settings, /configured === true[\s\S]*action\(_\('Send test'\), 'notification-test'\)/,
+	'notification test visibility must depend on persisted channel state');
+assert.match(settings, /\[\s*'telegram-test', 'notification-test'\s*\]\.includes\(actionName\)[\s\S]*withButtons\(button, run\)/,
+	'all test actions need button-local busy feedback');
 assert.match(settings, /E\('span', \{ 'aria-hidden': 'true' \}, '\*'\)/,
 	'Telegram token reveal must have a visible star fallback');
 assert.match(settings,

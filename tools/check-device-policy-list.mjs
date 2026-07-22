@@ -16,6 +16,25 @@ assert.equal(typeof module.deviceRows, 'function', 'deviceRows model builder mus
 assert.equal(typeof module.deviceDisplayName, 'function');
 assert.equal(typeof module.loadVendorDatabase, 'function');
 assert.equal(typeof module.policyPresentation, 'function');
+assert.equal(typeof module.createPolicyDrafts, 'function',
+	'device policy drafts must use a testable page-local state model');
+
+const drafts = module.createPolicyDrafts();
+const draftMac = 'AA:BB:CC:DD:EE:50';
+const savedDirect = { id: 'dp-direct', revision: 3, scope: 'device', mac: draftMac,
+	action: 'direct', schedule: null };
+drafts.stage(draftMac, { scope: 'device', mac: draftMac, action: 'direct', schedule: null }, null);
+assert.equal(drafts.list().length, 1, 'new policy remains pending until page-level apply');
+assert.equal(drafts.get(draftMac).action, 'direct');
+drafts.stage(draftMac, { scope: 'device', mac: draftMac, action: 'inherit', schedule: null }, null);
+assert.equal(drafts.list().length, 0, 'resetting a new draft to inherit removes the no-op');
+drafts.stage(draftMac, { scope: 'device', mac: draftMac, action: 'direct', schedule: null }, savedDirect);
+assert.equal(drafts.list().length, 0, 'persisted-equivalent edits are not marked dirty');
+drafts.stage(draftMac, { scope: 'device', mac: draftMac, action: 'block', schedule: null }, savedDirect);
+assert.equal(drafts.get(draftMac).action, 'block');
+assert.equal(drafts.get(draftMac).expected_revision, 3);
+drafts.stage(draftMac, { scope: 'device', mac: draftMac, action: 'inherit', schedule: null }, savedDirect);
+assert.equal(drafts.get(draftMac).action, 'inherit', 'reset of a saved policy remains pending');
 assert.match(source, /view\.miclash\.ui-shell/,
 	'device policies must use the shared loading surface');
 assert.match(source, /let hydrated = false/,
@@ -84,6 +103,10 @@ assert.deepEqual(module.policyPresentation({ action: 'direct' }, {
 
 assert.match(source, /_\('Set policy'\)/, 'inherited rows need the Set policy action');
 assert.match(source, /_\('Change policy'\)/, 'explicit rows need the Change policy action');
+assert.match(source, /_\('Save required'\)/,
+	'pending rows need a clear page-level apply reminder');
+assert.match(source, /_\('Reset'\)/,
+	'saved policies must use Reset rather than destructive Delete wording');
 assert.doesNotMatch(source, /proxy:\s*\(\)\s*=>\s*_\('Proxy'\)/,
 	'Proxy must not remain a selectable device policy');
 assert.match(source, /_\('Priority: Block → Direct → Inherit'\)/,
@@ -92,14 +115,24 @@ assert.doesNotMatch(source, /Guard has highest precedence|Guard precedence:/,
 	'obsolete Guard-first explanations must be removed');
 assert.match(source, /_\('Direct devices use the router shared DNS\./,
 	'Direct must explain the intentionally shared DNS behavior');
-assert.match(source, /wanted\.action === 'inherit'[\s\S]*deleteDevicePolicy/,
-	'saving Inherit must remove an existing policy instead of persisting one');
-assert.match(source, /_\('Saving…'\)/, 'the affected device row needs an in-place saving state');
-assert.match(source, /pendingMac === mac/, 'only the affected device row may become busy');
+const editorStart = source.indexOf('function openEditor(');
+const editorEnd = source.indexOf('\n\tfunction policyFromEditor(', editorStart);
+const editorSource = source.slice(editorStart, editorEnd);
+assert.doesNotMatch(editorSource, /setDevicePolicy|deleteDevicePolicy|watchOperation/,
+	'modal actions must only stage drafts and never mutate backend state');
+assert.match(source, /function collectChanges\(\)/,
+	'the unified settings flow must be able to collect policy drafts');
+assert.match(source, /async function applyChanges\(\)/,
+	'the unified settings flow must own policy persistence');
+const applyStart = source.indexOf('async function applyChanges()');
+const applyEnd = source.indexOf('\n\tasync function markSaved()', applyStart);
+const applySource = source.slice(applyStart, applyEnd);
+assert.match(applySource, /catch \(error\)[\s\S]*await refreshAfterMutation\(\)[\s\S]*throw error/,
+	'a partial policy failure must refresh already-applied rows while retaining remaining drafts');
 assert.match(source, /persistent_policy_eligible/,
 	'private MAC policies need an explicit stability warning instead of silent contradiction');
-assert.match(source, /ui\.hideModal\(\);[\s\S]*pendingMac = mac/,
-	'a valid save closes the modal before the row-level operation runs');
+assert.match(editorSource, /policyDrafts\.stage\([\s\S]*ui\.hideModal\(\); paint\(\)/,
+	'a valid modal save must stage the draft, close, and repaint locally');
 assert.match(source, /async function refreshAfterMutation\(\)[\s\S]*try \{ await refresh\(true\); \} catch \(error\) \{\}/,
 	'a transient discovery refresh must not turn a successful policy mutation into a false failure');
 assert.match(daemonSource, /modules\.devices\.discover_effective/,

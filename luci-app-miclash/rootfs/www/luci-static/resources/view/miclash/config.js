@@ -100,7 +100,6 @@ const managementOwner = (() => {
 		try {
 			for (const factory of factories) created.push(factory.create({
 				api: view_miclash_api.create(),
-				onSave: () => saveAllSettings(),
 				onError: (error, context) => {
 					if (!context?.background) setOperationError(error);
 					notify('error', error?.message || error);
@@ -135,9 +134,15 @@ const managementOwner = (() => {
 			throw new Error(_('Management settings are not ready.'));
 		return panels[0].collectPatch();
 	}
+	async function applyPending() {
+		if (!panels || typeof panels[1]?.applyChanges !== 'function')
+			throw new Error(_('Device policies are not ready.'));
+		return panels[1].applyChanges();
+	}
 	async function markSaved() {
-		if (panels && typeof panels[0]?.markSaved === 'function')
-			await panels[0].markSaved();
+		if (!panels) return;
+		for (const panel of panels)
+			if (typeof panel.markSaved === 'function') await panel.markSaved();
 	}
 	function refresh(force) {
 		if (!panels) return;
@@ -150,7 +155,7 @@ const managementOwner = (() => {
 			if (typeof panel.setActive === 'function') panel.setActive(active);
 		return true;
 	}
-	return { replace, mount, destroy, collectPatch, markSaved, refresh, setActive,
+	return { replace, mount, destroy, collectPatch, applyPending, markSaved, refresh, setActive,
 		ready: () => panels != null };
 })();
 view_miclash_utils.bumpRpcTimeout();
@@ -2186,7 +2191,7 @@ function buildSettingsPaneHtml() {
 			'</section>' +
 
 			'<div class="sbox-settings-save-wrap">' +
-				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply sbox-settings-save-btn">' + safeText(_('Save Settings')) + '</button>' +
+				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply sbox-settings-save-btn">' + safeText(_('Apply Settings')) + '</button>' +
 			'</div>' +
 		'</div>';
 }
@@ -2615,6 +2620,8 @@ async function saveAllSettings() {
 			);
 			if (!applied) throw new Error(_('Failed to apply Mihomo settings.'));
 		}
+
+		await managementOwner.applyPending();
 
 		appState.settings = await loadOperationalSettings();
 		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode);
