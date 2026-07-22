@@ -632,9 +632,11 @@ async function refreshReleaseMeta(options) {
 	return true;
 }
 
-function isRpcReconnectLikeError(message) {
-	const text = String(message || '').toLowerCase();
+function isRpcReconnectLikeError(error) {
+	const text = String(error?.message || error || '').toLowerCase();
 	if (!text) return false;
+	if (text.indexOf('ubus code 7') !== -1) return true;
+	if (text.indexOf('тайм-аут') !== -1) return true;
 	if (text.indexOf('xhr') !== -1 && text.indexOf('timeout') !== -1) return true;
 	if (text.indexOf('request timed out') !== -1) return true;
 	if (text.indexOf('networkerror') !== -1) return true;
@@ -828,7 +830,7 @@ async function installMiClashFromSettings(actionKind) {
 		await startMiClashUpdateJob('app', ['--target-tag', release.version, '--mode', mode]);
 		await pollMiClashUpdateJob(_('Updating MiClash package on router...'));
 	} catch (e) {
-		if (isRpcReconnectLikeError(e.message)) {
+		if (isRpcReconnectLikeError(e)) {
 			notify('info', _('Connection interrupted while finalizing MiClash update. Reloading interface...'));
 			setTimeout(() => {
 				window.location.reload();

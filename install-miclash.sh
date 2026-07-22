@@ -34,6 +34,7 @@ STATUS_TARGET_VERSION=""
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
+MAX_BACKEND_RELOAD_WAIT=30
 PKG_FILE=""
 TEMP_FILES=""
 TEMP_DIRS=""
@@ -871,7 +872,16 @@ run_clean_install_mode() {
 schedule_backend_reload() {
     [ -x /etc/init.d/miclashd ] || return 0
     (
-        /bin/busybox sleep 3
+        waited=0
+        while [ -n "$STATUS_FILE" ] && [ -e "$STATUS_FILE" ] &&
+            [ "$waited" -lt "$MAX_BACKEND_RELOAD_WAIT" ]; do
+            /bin/busybox sleep 1
+            waited=$((waited + 1))
+        done
+        # The handoff disappears only after the current daemon has completed
+        # its service postcheck. Leave enough time for the terminal RPC reply
+        # to reach LuCI before replacing the daemon process.
+        /bin/busybox sleep 5
         /etc/init.d/miclashd restart
     ) >/dev/null 2>&1 &
 }
