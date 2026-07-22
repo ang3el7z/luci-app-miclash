@@ -68,8 +68,8 @@ assert_equal(defaults.updates.auto_major_miclash, true);
 assert_equal(defaults.notifications.auto_hide, true);
 assert_equal(defaults.notifications.syslog_enabled, true);
 assert_json_equal(defaults.notifications.syslog_events, ALL_EVENTS);
-assert_equal(defaults.notifications.luci_enabled, true);
-assert_json_equal(defaults.notifications.luci_events, ALL_EVENTS);
+assert_equal(defaults.notifications.luci_enabled, false);
+assert_json_equal(defaults.notifications.luci_events, []);
 assert_equal(defaults.notifications.telegram_enabled, false);
 assert_json_equal(defaults.notifications.telegram_events,
 	[ 'guard_outage', 'failure', 'recovery', 'fail_closed', 'direct_fallback',
