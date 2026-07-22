@@ -72,6 +72,8 @@ function same_file(left, right) {
 
 function read_provider(runtime, value) {
 	let path = provider_path(value), before = runtime.fs.lstat(path);
+	if (before == null)
+		errors.fail('NOT_FOUND');
 	if (before?.type != 'file' || before.nlink != 1 ||
 	    (before.uid != null && before.uid != 0) || before.size > MAX_PROVIDER_FILE ||
 	    runtime.fs.realpath(path) != path)

@@ -130,6 +130,16 @@ export function create(runtime, injected) {
 		});
 	};
 
+	function is_clean() {
+		let nft_state = modules.nft.observe(runtime);
+		let route_state = modules.routing.observe(runtime);
+		let dns_state = modules.dns.observe(runtime);
+		return nft_state?.installed !== true &&
+			!length(route_state?.ownership?.committed?.routes ?? []) &&
+			!length(route_state?.ownership?.committed?.rules ?? []) &&
+			dns_state?.ownership?.trusted !== true;
+	};
+
 	function cleanup(settings) {
 		if (type(settings?.guard?.enabled) != 'bool') fail('INVALID_ARGUMENT');
 		return with_lock(runtime, { barrier: 'normal', wait_ms: 0 }, () => {
@@ -166,5 +176,5 @@ export function create(runtime, injected) {
 		});
 	};
 
-	return { apply, cleanup };
+	return { apply, cleanup, is_clean };
 };

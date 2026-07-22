@@ -260,6 +260,13 @@ function producer_event(runtime, input) {
 		if (!subscription && !update)
 			invalid();
 		let success = data.state == 'success';
+		let context = { id, kind, state: data.state };
+		if (data.source != null)
+			context.source = identifier(data.source, 64);
+		if (data.stage != null)
+			context.stage = identifier(data.stage, 64);
+		if (!success && data.error?.code != null)
+			context.error = { code: key(data.error.code) };
 		return {
 			type: subscription ? 'subscription_outcome' : 'update_outcome',
 			severity: success ? 'notice' : 'error',
@@ -270,7 +277,7 @@ function producer_event(runtime, input) {
 			message: success ? 'The validated operation completed successfully' :
 				'The operation failed without weakening Guard',
 			dedupe_key: (subscription ? 'subscription/outcome/' : 'updates/outcome/') + id,
-			occurred_at: now, recovery_of: null, context: data
+			occurred_at: now, recovery_of: null, context
 		};
 	}
 
@@ -444,12 +451,31 @@ export function create(runtime, settings) {
 	let history = [], entries = [], cursor = 0;
 	let dedupe = {}, dedupe_order = [], active = {};
 	let channels = {}, channel_order = [];
+	function summary_value(value) {
+		return type(value) == 'string' && length(value) <= 64 &&
+			match(value, /^[A-Za-z0-9._-]+$/) ? value : null;
+	};
+	function syslog_summary(event) {
+		let parts = [
+			'notifications:',
+			'type=' + event.type,
+			'component=' + event.component,
+			'severity=' + event.severity
+		];
+		for (let field in [ 'kind', 'source', 'state', 'stage' ]) {
+			let value = summary_value(event.context?.[field]);
+			if (value != null) push(parts, field + '=' + value);
+		}
+		let code = summary_value(event.context?.error?.code);
+		if (code != null) push(parts, 'code=' + code);
+		return join(' ', parts);
+	};
 
 	function send_syslog(event) {
 		let result = runtime.process.run({
 			command: '/usr/bin/logger',
 			args: [ '-t', 'miclash', '-p', 'daemon.' + SYSLOG_PRIORITIES[event.severity],
-				'--', sprintf('%J', event) ]
+				'--', syslog_summary(event) ]
 		});
 		return type(result) == 'object' && result.code === 0;
 	};

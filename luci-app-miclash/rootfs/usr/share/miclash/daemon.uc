@@ -424,7 +424,8 @@ export function compose(runtime, overrides) {
 					server_ips: provider_values.server_ips,
 					fakeip_cidrs: provider_values.fakeip_cidrs });
 			},
-			cleanup: (settings) => native_network.cleanup(settings)
+			cleanup: (settings) => native_network.cleanup(settings),
+			is_clean: () => native_network.is_clean()
 		};
 		let reconcile_settings = {
 			get: () => effective_network_settings(runtime, settings_domain.get()),
@@ -484,6 +485,7 @@ export function compose(runtime, overrides) {
 		};
 		provider_sync_domain = modules.provider_sync.create({
 			runtime, logger: runtime.logger,
+			ready: () => service_adapter.observe('config.yaml')?.running === true,
 			collect: () => {
 				let content = configuration.read_active('config.yaml');
 				return modules.provider_data.collect(runtime, content, {
@@ -532,7 +534,8 @@ export function compose(runtime, overrides) {
 			try { notifier.emit(producer.operation(record)); } catch (error) {}
 			if (record?.state == 'success' && index([
 				'settings.apply', 'config.apply', 'config.swap',
-				'config.external_adopt', 'subscription.update'
+				'config.external_adopt', 'subscription.update',
+				'service.start', 'service.restart'
 			], record.kind) >= 0)
 				try { provider_sync_domain?.refresh?.(); } catch (error) {}
 		});

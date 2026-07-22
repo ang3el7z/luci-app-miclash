@@ -51,7 +51,7 @@ function environment(failure) {
 	let dns = {
 		observe: () => {
 			seen('dns.observe');
-			return { conflicts: [], ownership: dns_active
+			return { conflicts: failure == 'dns-conflict' ? [ 'FOREIGN_STATE' ] : [], ownership: dns_active
 				? { trusted: true, state: 'active', transition: null }
 				: { trusted: false, state: 'clean', transition: null } };
 		},
@@ -93,6 +93,14 @@ let settings = {
 	guard: { enabled: false }
 };
 
+let idle = environment();
+assert_equal(idle.api.is_clean(), true,
+	'idle native network state was not recognized without mutation');
+assert_equal(length(filter(idle.calls, (name) => match(name, /\.cleanup$/))), 0,
+	'clean observation unexpectedly mutated a network component');
+assert_equal(environment('dns-conflict').api.is_clean(), true,
+	'foreign DNS state without MiClash ownership triggered stopped cleanup');
+
 let live_projection = network.interface_projection({ ...settings, interfaces: {
 	...settings.interfaces, mode: 'exclude', auto_detect_lan: true, auto_detect_wan: true,
 	detected_lan: '', detected_wan: ''
@@ -115,6 +123,8 @@ assert_equal(applied.runtime.mutation_lock_lease, null,
 	'network mutation leaked the in-process lease');
 assert_equal(applied.filesystem.lstat('/var/run/miclash/mutation.lock'), null,
 	'network mutation leaked the on-disk owner lease');
+assert_equal(applied.api.is_clean(), false,
+	'active native ownership was mistaken for a clean stopped state');
 
 // A component may mutate and then fail. Marking it touched must happen before
 // invocation so reverse cleanup removes every possibly partial owner.

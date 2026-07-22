@@ -106,9 +106,37 @@ assert_equal(length(no_url.calls), 0);
 assert_equal(no_url.machine.status().reason, 'no_url');
 assert_equal(no_url.machine.status().next_attempt, null);
 
+// Saving the first URL is a configuration change, not permission to run an
+// immediate background update. The explicit LuCI action owns the first
+// download; automatic work begins only after the configured interval.
+let first_url_settings = {
+	core: { subscription_url: '', subscription_url_config_yaml: '' },
+	updates: { auto_subscription: true, interval_hours: 4 }
+};
+let first_url = environment({ settings: first_url_settings });
+first_url.machine.tick();
+first_url_settings.core.subscription_url =
+	'https://subscriptions.example.test/config.yaml';
+first_url.machine.tick();
+assert_equal(length(first_url.calls), 0);
+assert_equal(first_url.machine.status().next_attempt,
+	first_url.clock.now() + 4 * HOUR);
+
+// A successful explicit update is authoritative for the next automatic due
+// time, including a trusted interval supplied by the subscription profile.
+let manual_success = environment({ scenarios: [ { interval_hours: 3 } ] });
+manual_success.machine.tick();
+manual_success.app.subscription.update({ profile: 'config.yaml' }, 'luci');
+drain(manual_success);
+assert_equal(manual_success.machine.status().last_success,
+	manual_success.clock.now());
+assert_equal(manual_success.machine.status().next_attempt,
+	manual_success.clock.now() + 3 * HOUR);
+
 // A successful scheduled update records every stage, resets backoff, and uses
 // the configured interval. Only the scheduler operation id is persisted.
 let normal = environment();
+normal.machine.run_now();
 normal.machine.tick();
 drain(normal);
 let normal_status = normal.machine.status();
@@ -188,6 +216,7 @@ for (let contradiction in [
 // A trusted profile interval overrides the configured interval for this next
 // schedule and survives daemon reconstruction from durable state.
 let provided = environment({ scenarios: [ { interval_hours: 12 } ] });
+provided.machine.run_now();
 provided.machine.tick();
 drain(provided);
 assert_equal(provided.machine.status().next_attempt,
@@ -203,6 +232,7 @@ assert_equal(length(provided.calls), 1);
 // operation completed while no scheduler observer existed, its terminal
 // journal record and one-shot outcome are reconciled on construction.
 let pending_restart = environment();
+pending_restart.machine.run_now();
 pending_restart.machine.tick();
 let durable_id = pending_restart.machine.status().pending_operation_id;
 pending_restart.machine.stop();
@@ -215,6 +245,7 @@ assert_equal(pending_restart.ops.get(durable_id).state, 'success');
 // A queued operation has not attempted network work. last_attempt is stamped
 // only by the durable `attempt` timeline stage, never by submission itself.
 let queued_before_attempt = environment();
+queued_before_attempt.machine.run_now();
 queued_before_attempt.machine.tick();
 assert_equal(queued_before_attempt.machine.status().last_attempt, null);
 queued_before_attempt.machine.stop();
@@ -238,6 +269,7 @@ assert_equal(queued_restart_scheduler.status().last_failure_code, 'INTERRUPTED')
 // The terminal journal alone restores every current-attempt stage and the
 // profile-provided interval.
 let process_loss = environment({ scenarios: [ { interval_hours: 12 } ] });
+process_loss.machine.run_now();
 process_loss.machine.tick();
 process_loss.machine.stop();
 drain(process_loss);
@@ -269,6 +301,7 @@ assert_equal(restart_status.next_attempt, restart_clock.now() + 12 * HOUR);
 // A failed newer attempt reconstructed from disk overwrites stale stage values
 // from the prior success and clears stages the new attempt never reached.
 let stale = environment({ scenarios: [ {}, { error: 'VALIDATION_FAILED' } ] });
+stale.machine.run_now();
 stale.machine.tick();
 drain(stale);
 let old_success = stale.machine.status().last_success;
@@ -294,6 +327,7 @@ assert_equal(stale_status.last_reload, null);
 assert_equal(stale_status.last_success, old_success);
 
 let stopped_pending = environment();
+stopped_pending.machine.run_now();
 stopped_pending.machine.tick();
 stopped_pending.machine.stop();
 drain(stopped_pending);
@@ -308,6 +342,7 @@ let retry = environment({ scenarios: [
 	{ error: 'DOWNLOAD_FAILED' }, { error: 'DOWNLOAD_FAILED' },
 	{ error: 'DOWNLOAD_FAILED' }, {}
 ] });
+retry.machine.run_now();
 for (let expected in [ 5, 15, 60 ]) {
 	let attempt = retry.clock.now();
 	retry.machine.tick();
@@ -329,6 +364,7 @@ assert_equal(retry.machine.status().last_success, retry.clock.now());
 let stages = environment({ scenarios: [
 	{ error: 'VALIDATION_FAILED' }, { error: 'HEALTH_FAILED' }
 ] });
+stages.machine.run_now();
 stages.machine.tick();
 drain(stages);
 let validation = stages.machine.status();
@@ -351,6 +387,7 @@ assert_equal(reload.last_success, null);
 let busy = environment();
 busy.ops.submit('config.apply', 'luci', {}, () => false);
 drain(busy);
+busy.machine.run_now();
 busy.machine.tick();
 assert_equal(length(busy.calls), 0);
 assert_equal(busy.machine.status().failure_count, 0);
@@ -360,6 +397,7 @@ assert_equal(busy.machine.status().next_attempt, busy.clock.now() + MINUTE);
 // pre-enqueue barrier terminally fails that operation before its worker can
 // touch Active. A later tick retries once without an uncorrelated duplicate.
 let persist_crash = environment({ scenarios: [ {}, {} ] });
+persist_crash.machine.run_now();
 persist_crash.filesystem.fail_open_once_matching = 'subscription-scheduler.json.miclash';
 persist_crash.filesystem.fail_open_matching_count = 16;
 persist_crash.machine.tick();
@@ -376,6 +414,7 @@ assert_equal(persist_crash.machine.status().last_success, persist_crash.clock.no
 // Manual run resets only waiting: existing audit and failure counters remain,
 // but the operation becomes immediately due.
 let manual = environment({ scenarios: [ { error: 'DOWNLOAD_FAILED' } ] });
+manual.machine.run_now();
 manual.machine.tick();
 drain(manual);
 let previous_attempt = manual.machine.status().last_attempt;
@@ -388,6 +427,7 @@ assert_equal(manual.machine.status().next_attempt, manual.clock.now());
 // If the wall clock moves backwards, the remaining delay is shifted with it
 // and is never converted into an immediate retry storm.
 let rollback = environment({ scenarios: [ {}, { error: 'VALIDATION_FAILED' } ] });
+rollback.machine.run_now();
 rollback.machine.tick();
 drain(rollback);
 let rollback_success = rollback.machine.status().last_success;
@@ -406,6 +446,7 @@ assert_equal(rollback.machine.status().last_success, rollback_success);
 // scheduler waiting forever: a missing/interrupted record becomes a bounded
 // retry with a redacted code.
 let interrupted = environment();
+interrupted.machine.run_now();
 interrupted.machine.tick();
 let pending = interrupted.machine.status().pending_operation_id;
 assert_true(pending != null);

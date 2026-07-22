@@ -60,6 +60,20 @@ assert_equal(finish(env, applied).state, 'success');
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), fixture('valid.yaml'));
 assert_equal(env.cfg.detect_external('config.yaml').changed, false);
 
+// Applying a validated profile while Mihomo is intentionally stopped must
+// commit the file without starting or recovering the service.
+let stopped_recovery_calls = 0;
+let stopped = environment({
+	observe: () => ({ state: 'stopped', running: false }),
+	recover: () => { stopped_recovery_calls++; return { ok: true }; },
+	reload: () => true,
+	health: () => true
+});
+let stopped_apply = stopped.cfg.apply('config.yaml', fixture('valid.yaml'), 'luci');
+assert_equal(finish(stopped, stopped_apply).state, 'success');
+assert_equal(stopped_recovery_calls, 0);
+assert_equal(stopped.fs.readfile('/opt/clash/config.yaml'), fixture('valid.yaml'));
+
 let recovery_calls = 0;
 let unhealthy = environment({
 	reload: () => { recovery_calls++; return recovery_calls > 1; },

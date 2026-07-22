@@ -276,6 +276,8 @@ export function apply(runtime, compiled) {
 
 export function cleanup(runtime, mode) {
 	if (mode?.preserve_guard !== true) fail('INVALID_ARGUMENT');
+	if (!observe(runtime).installed)
+		return { clean: true, guard_preserved: true };
 	let result = runtime.process.run({ command: 'nft', args: [ 'delete', 'table', 'inet', 'miclash' ] });
 	if (result.code != 0 && observe(runtime).installed) fail('INTERNAL');
 	return { clean: !observe(runtime).installed, guard_preserved: true };

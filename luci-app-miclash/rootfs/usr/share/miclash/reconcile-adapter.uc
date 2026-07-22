@@ -17,6 +17,7 @@ export function create(app) {
 	    type(app?.service?.wait_ready) != 'function' ||
 	    type(app?.service?.recover) != 'function' ||
 	    type(app?.network?.apply) != 'function' || type(app?.network?.cleanup) != 'function' ||
+	    type(app?.network?.is_clean) != 'function' ||
 	    type(app?.settings?.get) != 'function' || type(app?.settings?.set) != 'function' ||
 	    type(app?.guard?.is_latched) != 'function' || type(app?.guard?.latch_set) != 'function' ||
 	    type(app?.guard?.protect) != 'function' ||
@@ -228,14 +229,18 @@ export function create(app) {
 			let observed = app.service.observe('config.yaml');
 			if (observed?.state == 'stopped' || observed?.state == 'missing_kernel') {
 				let desired = app.settings.get();
+				if (app.network.is_clean() === true) {
+					if (desired?.guard?.enabled === true) protect_transition(desired);
+					else release_transition(desired);
+					return true;
+				}
 				protect_transition(desired);
 				try {
 					app.network.cleanup(desired);
 					release_transition(desired);
 				}
 				catch (error) {
-					if (restore_running(desired)) return true;
-					fail('INTERNAL');
+					fail(error?.code ?? error?.message ?? 'INTERNAL');
 				}
 				return true;
 			}

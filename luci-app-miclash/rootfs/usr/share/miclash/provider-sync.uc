@@ -68,6 +68,11 @@ export function create(app) {
 		if (!started || running) return false;
 		running = true;
 		try {
+			let ready = type(app.ready) == 'function' ? app.ready() : true;
+			if (ready !== true) {
+				reason = 'waiting_for_mihomo';
+				running = false; arm(RETRY); return false;
+			}
 			let previous_reason = reason;
 			let candidate = validate_snapshot(app.collect());
 			if (!same(candidate, current)) {
@@ -86,6 +91,10 @@ export function create(app) {
 		}
 		catch (error) {
 			let next_reason = errors.normalize(error).code;
+			if (next_reason == 'NOT_FOUND') {
+				reason = 'waiting_for_providers';
+				running = false; arm(RETRY); return false;
+			}
 			if (reason != next_reason)
 				log('warn', sprintf('failed code=%s', next_reason));
 			reason = next_reason; running = false; arm(RETRY); return false;

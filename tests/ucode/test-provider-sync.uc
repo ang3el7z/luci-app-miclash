@@ -72,7 +72,16 @@ assert_throws(() => provider_data.collect({ fs: filesystem }, CONFIG, {
 	auto_fakeip_whitelist: true, resolve: () => [ '198.51.100.20' ], convert_mrs: () => ''
 }), 'INVALID_ARGUMENT');
 
-function environment(sequence) {
+// Provider files referenced by a freshly installed profile do not exist until
+// Mihomo has downloaded them. Absence is a transient input state, while a
+// symlink or malformed path above remains a hard validation failure.
+let missing_provider_fs = fakes.fs({ '/opt/clash/config.yaml': CONFIG });
+assert_throws(() => provider_data.collect({ fs: missing_provider_fs }, CONFIG, {
+	auto_fakeip_whitelist: true, resolve: () => [ '198.51.100.20' ], convert_mrs: () => ''
+}), 'NOT_FOUND');
+
+function environment(sequence, options) {
+	options ??= {};
 	let fs = fakes.fs({ '/opt/clash/config.yaml': 'active\n' });
 	let clock = fakes.clock(1700000000000), applied = [], logs = [], cursor = 0;
 	let runtime = { fs, clock, digest: fakes.digest(fs), random: fakes.entropy() };
@@ -84,12 +93,28 @@ function environment(sequence) {
 		collect: () => {
 			let value = sequence[cursor++];
 			if (value == 'error') die('HEALTH_FAILED');
+			if (value == 'missing') die('NOT_FOUND');
 			return value;
 		},
+		ready: options.ready,
 		apply: (value) => { push(applied, value); return true; }
 	});
 	return { fs, clock, machine, applied, logs };
 };
+
+let stopped = environment([
+	{ server_ips: [ '192.0.2.1' ], fakeip_cidrs: [] }
+], { ready: () => false });
+stopped.machine.start(); stopped.clock.advance(0);
+assert_equal(length(stopped.applied), 0);
+assert_equal(length(stopped.logs), 0);
+assert_equal(stopped.machine.status().reason, 'waiting_for_mihomo');
+
+let providers_pending = environment([ 'missing' ]);
+providers_pending.machine.start(); providers_pending.clock.advance(0);
+assert_equal(length(providers_pending.applied), 0);
+assert_equal(length(providers_pending.logs), 0);
+assert_equal(providers_pending.machine.status().reason, 'waiting_for_providers');
 
 let normal = environment([
 	{ server_ips: [ '192.0.2.1' ], fakeip_cidrs: [] },

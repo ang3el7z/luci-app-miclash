@@ -307,10 +307,26 @@ for (let unlink_mode in [ 'false', 'throw' ]) {
 	assert_true(stuck.fs.exists(path), 'failed cleanup remains visible and prevents success');
 }
 
-let clean = runtime_with({
-	'nft:delete table inet miclash': { code: 0 },
+// Startup cleanup is idempotent and must not execute a failing `nft delete`
+// when the MiClash table is already absent on a fresh installation.
+let already_clean = runtime_with({
 	'nft:-j list table inet miclash': { code: 1 },
 	'nft:list table inet miclash': { code: 1 }
 });
+assert_true(cleanup(already_clean, { preserve_guard: true }).clean);
+assert_equal(length(already_clean.process.calls), 0);
+
+let clean = runtime_with({
+	'nft:delete table inet miclash': { code: 0 },
+	'nft:-j list table inet miclash': active_reply(compiled.generation),
+	'nft:list table inet miclash': { code: 1 }
+});
+let clean_run = clean.process.run;
+clean.process.run = (request) => {
+	let result = clean_run(request);
+	if (join(' ', request.args ?? []) == 'delete table inet miclash')
+		clean.process.replies['nft:-j list table inet miclash'] = { code: 1 };
+	return result;
+};
 assert_true(cleanup(clean, { preserve_guard: true }).clean, 'cleanup removes only main owned table');
 assert_equal(sprintf('%J', clean.process.calls[0].args), sprintf('%J', [ 'delete', 'table', 'inet', 'miclash' ]), 'cleanup scope is exact');

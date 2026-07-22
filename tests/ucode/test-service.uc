@@ -275,6 +275,20 @@ assert_throws(() => missing_service.stop('config.yaml'), 'HEALTH_FAILED');
 let stopped = env();
 let adapter = service.create(stopped.rt);
 assert_equal(adapter.observe('config.yaml').state, 'stopped');
+
+// OpenWrt 25 may omit `instances` entirely for a registered but stopped
+// procd service. This is still an authoritative stopped state, not an
+// unavailable service-manager response.
+let apk_stopped_ubus = { connect: () => ({
+	call: (object, method, data) => {
+		if (object == 'service' && method == 'list')
+			return { clash: { triggers: [] } };
+		die('unexpected ubus method');
+	}
+}) };
+let apk_stopped = env({ ubus: apk_stopped_ubus });
+assert_equal(service.create(apk_stopped.rt).observe('config.yaml').state, 'stopped');
+
 assert_equal(adapter.start('config.yaml').changed, true);
 assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].method, 'state');
 assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].data.spawn, true);

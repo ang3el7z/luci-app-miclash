@@ -295,14 +295,9 @@ export function create(app) {
 			timer.cancel();
 		let current = runtime.clock.now();
 		let delay = MINUTE;
-		if (state.next_attempt == null) {
-			let configured = settings_state();
-			if (configured.enabled && state.pending_operation_id == null)
-				delay = 0;
-		}
-		else if (state.next_attempt <= current)
+		if (state.next_attempt != null && state.next_attempt <= current)
 			delay = 0;
-		else if (state.next_attempt - current < delay)
+		else if (state.next_attempt != null && state.next_attempt - current < delay)
 			delay = state.next_attempt - current;
 		timer = runtime.clock.set_timeout(delay, () => {
 			timer = null;
@@ -377,9 +372,18 @@ export function create(app) {
 	};
 
 	function operation_event(record) {
+		if (record?.kind != 'subscription.update')
+			return;
+		if (record.source != 'auto') {
+			if (record.state != 'success' || state.pending_operation_id != null)
+				return;
+			finish(record);
+			persist();
+			schedule_timer();
+			return;
+		}
 		if (state.pending_operation_id == null ||
-		    record?.id != state.pending_operation_id ||
-		    record.kind != 'subscription.update' || record.source != 'auto')
+		    record.id != state.pending_operation_id)
 			return;
 		apply_timeline(record);
 		let at = record.updated_at;
@@ -471,8 +475,12 @@ export function create(app) {
 			schedule_timer();
 			return api.status();
 		}
-		if (state.next_attempt == null)
-			state.next_attempt = current;
+		if (state.next_attempt == null) {
+			state.next_attempt = current + configured.hours * HOUR;
+			persist();
+			schedule_timer();
+			return api.status();
+		}
 		if (state.next_attempt > current) {
 			persist();
 			schedule_timer();

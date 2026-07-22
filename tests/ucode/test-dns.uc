@@ -289,15 +289,27 @@ assert_crafted_plan_refused((plan) => plan.target_preexisting = true,
 	'crafted target ownership flag is refused');
 
 for (let partial in [
-	{ server: [ TARGET ], cachesize: '1000' },
-	{ server: [ '1.1.1.1' ], cachesize: '0' },
-	{ server: [ '1.1.1.1' ], cachesize: '1000', noresolv: '1' }
+	{ server: [ TARGET ], cachesize: '1000' }
 ]) {
 	let partial_runtime = runtime({ uci: { dhcp: { main: { '.type': 'dnsmasq', ...partial } } } });
 	assert_throws(() => cleanup(partial_runtime), 'CORRUPT_STATE',
 		'manifest-absent partial MiClash DNS signature is ambiguous');
 	assert_throws(() => recover(partial_runtime, 'clean'), 'CORRUPT_STATE',
 		'manifest-absent clean recovery shares the partial-signature refusal');
+}
+
+// Scalar dnsmasq values are not ownership evidence. OpenWrt or the user may
+// legitimately disable dnsmasq caching or upstream resolv.conf independently
+// of MiClash, so stopped startup must preserve them without inventing a fault.
+for (let independent in [
+	{ server: [ '1.1.1.1' ], cachesize: '0' },
+	{ server: [ '1.1.1.1' ], cachesize: '1000', noresolv: '1' }
+]) {
+	let independent_runtime = runtime({ uci: { dhcp: {
+		main: { '.type': 'dnsmasq', ...independent }
+	} } });
+	assert_true(cleanup(independent_runtime).clean,
+		'manifest-absent user DNS scalars were mistaken for MiClash ownership');
 }
 
 let barrier_apply = runtime();

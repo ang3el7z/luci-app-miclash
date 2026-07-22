@@ -63,10 +63,6 @@ function settings(changes) {
 	return value;
 };
 
-function logger_event(call) {
-	return json(call.args[length(call.args) - 1]);
-};
-
 function percent_all(value) {
 	let output = '';
 	for (let offset = 0; offset < length(value); offset++)
@@ -368,39 +364,40 @@ assert_equal(sprintf('%J', log_call.args), sprintf('%J', [
 ]));
 assert_equal(length(routed.published), 1);
 assert_equal(routed.published[0].channel, 'miclash.notification');
-let logged = logger_event(log_call);
+let logged = log_call.args[length(log_call.args) - 1];
 let luci_event = routed.published[0].event;
-assert_equal(sprintf('%J', logged), sprintf('%J', luci_event));
-assert_equal(logged.context.auth, '[REDACTED]');
-assert_equal(logged.context.credential, '[REDACTED]');
-assert_equal(logged.context.session, '[REDACTED]');
-assert_equal(logged.context.private_key, '[REDACTED]');
-assert_equal(logged.context.access_key, '[REDACTED]');
-assert_equal(logged.context.proxy_password, '[REDACTED]');
-assert_equal(logged.context.api_secret, '[REDACTED]');
-assert_equal(logged.context.secret_key, '[REDACTED]');
-assert_equal(logged.context.x_api_key, '[REDACTED]');
-assert_equal(logged.context.signing_key, '[REDACTED]');
-assert_equal(logged.context.ssh_key, '[REDACTED]');
-assert_equal(logged.context.token_value, '[REDACTED]');
-assert_equal(logged.context.apiSecret, '[REDACTED]');
-assert_equal(logged.context.proxyPassword, '[REDACTED]');
-assert_equal(logged.context.authorizationHeader, '[REDACTED]');
-assert_equal(logged.context.sessionId, '[REDACTED]');
-assert_equal(logged.context.cookieValue, '[REDACTED]');
-assert_equal(logged.context.bearerToken, '[REDACTED]');
-assert_equal(logged.context.xAPIKey, '[REDACTED]');
-assert_equal(logged.context.nested_meta.dedupe_key, '[REDACTED]');
-assert_equal(logged.context.nested_meta.recovery_of, '[REDACTED]');
-assert_equal(logged.context.encoded_token, '[REDACTED]');
-assert_equal(logged.context.nested[0].authorization, '[REDACTED]');
-assert_equal(logged.context.nested[0].cookie, '[REDACTED]');
-assert_equal(logged.context.nested[1].safe, 'visible');
-assert_equal(logged.message,
+assert_equal(logged, 'notifications: type=failure component=dns severity=warning');
+assert_equal(luci_event.context.auth, '[REDACTED]');
+assert_equal(luci_event.context.credential, '[REDACTED]');
+assert_equal(luci_event.context.session, '[REDACTED]');
+assert_equal(luci_event.context.private_key, '[REDACTED]');
+assert_equal(luci_event.context.access_key, '[REDACTED]');
+assert_equal(luci_event.context.proxy_password, '[REDACTED]');
+assert_equal(luci_event.context.api_secret, '[REDACTED]');
+assert_equal(luci_event.context.secret_key, '[REDACTED]');
+assert_equal(luci_event.context.x_api_key, '[REDACTED]');
+assert_equal(luci_event.context.signing_key, '[REDACTED]');
+assert_equal(luci_event.context.ssh_key, '[REDACTED]');
+assert_equal(luci_event.context.x_api_key, '[REDACTED]');
+assert_equal(luci_event.context.token_value, '[REDACTED]');
+assert_equal(luci_event.context.apiSecret, '[REDACTED]');
+assert_equal(luci_event.context.proxyPassword, '[REDACTED]');
+assert_equal(luci_event.context.authorizationHeader, '[REDACTED]');
+assert_equal(luci_event.context.sessionId, '[REDACTED]');
+assert_equal(luci_event.context.cookieValue, '[REDACTED]');
+assert_equal(luci_event.context.bearerToken, '[REDACTED]');
+assert_equal(luci_event.context.xAPIKey, '[REDACTED]');
+assert_equal(luci_event.context.nested_meta.dedupe_key, '[REDACTED]');
+assert_equal(luci_event.context.nested_meta.recovery_of, '[REDACTED]');
+assert_equal(luci_event.context.encoded_token, '[REDACTED]');
+assert_equal(luci_event.context.nested[0].authorization, '[REDACTED]');
+assert_equal(luci_event.context.nested[0].cookie, '[REDACTED]');
+assert_equal(luci_event.context.nested[1].safe, 'visible');
+assert_equal(luci_event.message,
 	'Bearer [REDACTED] password=[REDACTED] ' +
 	'encoded=[REDACTED] percent=[REDACTED] mixed=[REDACTED] ' +
 	'See https://***:***@example.test/path?token=***&safe=yes');
-assert_equal(logged.context.nested[1].url,
+assert_equal(luci_event.context.nested[1].url,
 	'https://***:***@example.test/a?access_token=***');
 assert_equal(center.history()[0].context.safe, null);
 let serialized = sprintf('%J', { history: center.history(), calls: routed.process.calls,
@@ -849,6 +846,34 @@ for (let produced in [
 	assert_equal(producer_center.history()[length(producer_center.history()) - 1].type,
 		produced.expected);
 };
+
+let operation_log_env = make_runtime(31000);
+let operation_log_center = notify.create(operation_log_env.runtime, settings({
+	luci: { enabled: false, channel: 'miclash.notification',
+		minimum_severity: 'debug', types: [], components: [] }
+}));
+let operation_log_producer = notify.producer(operation_log_env.runtime);
+let actual_success_event = operation_log_producer.operation({
+	id: 'operation-success', kind: 'subscription.update', source: 'luci',
+	state: 'success', stage: 'complete', progress: 100,
+	message: 'Subscription active', error: null,
+	created_at: 30000, updated_at: 31000, finished_at: 31000,
+	timeline: [ { stage: 'queued', at: 30000 }, { stage: 'complete', at: 31000 } ],
+	result: { interval_hours: 3, insecure: false }
+});
+assert_equal(join(',', sort(keys(actual_success_event.context))),
+	'id,kind,source,stage,state');
+assert_equal(operation_log_center.emit(actual_success_event), true);
+assert_equal(operation_log_center.emit(operation_log_producer.operation({
+	id: 'operation-logging', kind: 'subscription.update', source: 'luci',
+	state: 'failure', stage: 'activation', error: { code: 'INTERNAL' },
+	timeline: [ { stage: 'queued', at: 30000 }, { stage: 'activation', at: 31000 } ]
+})), true);
+assert_equal(operation_log_env.process.calls[1].args[5],
+	'notifications: type=subscription_outcome component=subscription severity=error ' +
+	'kind=subscription.update source=luci state=failure stage=activation code=INTERNAL');
+assert_true(index(operation_log_env.process.calls[1].args[5], 'timeline') < 0);
+
 let producer_serialized = sprintf('%J', producer_center.history());
 assert_true(index(producer_serialized, 'operation-secret') < 0);
 assert_true(index(producer_serialized, 'update-secret') < 0);

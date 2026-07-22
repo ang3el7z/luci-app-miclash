@@ -32,12 +32,17 @@ export function create(runtime) {
 		let reply;
 		try { reply = connection().call('service', 'list', { name: SERVICE, verbose: true }); }
 		catch (error) { return { state: 'unknown', running: false }; }
-		let instances = reply?.[SERVICE]?.instances;
-		if (type(instances) != 'object')
+		let registered = reply?.[SERVICE];
+		if (type(registered) != 'object')
 			return { state: 'unknown', running: false };
-		for (let name, instance in instances)
-			if (instance?.running === true)
-				return { state: 'running', running: true, pid: type(instance.pid) == 'int' ? instance.pid : null };
+		let instances = registered.instances;
+		if (instances != null && type(instances) != 'object')
+			return { state: 'unknown', running: false };
+		if (instances != null)
+			for (let name, instance in instances)
+				if (instance?.running === true)
+					return { state: 'running', running: true,
+						pid: type(instance.pid) == 'int' ? instance.pid : null };
 		let kernel = runtime.fs.lstat('/opt/clash/bin/clash');
 		if (kernel?.type != 'file' || kernel.nlink != 1)
 			return { state: 'missing_kernel', running: false };

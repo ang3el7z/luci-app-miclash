@@ -1,4 +1,4 @@
-import { assert_equal } from 'testlib';
+import { assert_equal, assert_throws } from 'testlib';
 import * as adapter from 'miclash.reconcile-adapter';
 
 let records = [], events = [], operational_logs = [], ready = false,
@@ -11,6 +11,7 @@ let service_restarts = 0, service_repairs = 0,
 let network_applies = 0, network_cleanups = 0, network_fails = false;
 let network_guard_protected = [];
 let network_cleanup_failures = 0;
+let network_clean = false;
 let proxy_mode = 'tproxy', wait_options = [], wait_deadlines = [];
 let sequence = 0;
 let reconciler = adapter.create({
@@ -41,7 +42,7 @@ let reconciler = adapter.create({
 			{ component: 'guard', ready: true, observed_at: now,
 				enabled: guard_enabled, generation: 7 }
 		] : [] }; } },
-	network: { apply: () => {
+	network: { is_clean: () => network_clean, apply: () => {
 		network_applies++;
 		push(network_guard_protected, guard_physical);
 		if (network_fails) die('INTERNAL');
@@ -233,6 +234,16 @@ assert_equal(network_cleanups, cleanup_before + 1,
 	'stopped daemon startup retained stale proxy ownership');
 assert_equal(service_starts, 0, 'daemon startup started an explicitly stopped service');
 
+// A clean, intentionally stopped installation is observation-only: do not
+// install a temporary Guard owner or sweep components that have no ownership.
+network_clean = true; guard_physical = false; cleanup_before = network_cleanups;
+assert_equal(reconciler.startup('daemon-startup'), true);
+assert_equal(network_cleanups, cleanup_before,
+	'clean stopped startup ran an unnecessary network cleanup');
+assert_equal(guard_physical, false,
+	'clean Guard-OFF startup installed temporary fail-closed state');
+network_clean = false;
+
 // Explicit Guard-OFF stop is a protected transaction. If cleanup cannot
 // complete after Mihomo stops, restore native network ownership and the core
 // before reporting the failed stop request; never leave stale redirects with
@@ -266,27 +277,23 @@ assert_equal(service_state, 'running');
 assert_equal(service_starts, disable_fault_starts + 1);
 assert_equal(guard_physical, false);
 
-// A daemon startup that discovers an already-stopped core normally cleans
-// stale ownership without starting it. If that cleanup faults, availability
-// recovery is exceptional: restore network+core instead of preserving a
-// router-wide blackhole.
+// A daemon startup that discovers an intentionally stopped core may retry a
+// stale-state cleanup, but must never silently start Mihomo as error recovery.
 service_state = 'stopped'; guard_physical = false; ready = true;
 network_cleanup_failures = 1; now++;
 let starts_before_startup_fault = service_starts;
-assert_equal(reconciler.startup('daemon-startup'), true);
-assert_equal(service_state, 'running');
-assert_equal(service_starts, starts_before_startup_fault + 1,
-	'stopped-startup cleanup fault did not restore Mihomo availability');
-assert_equal(guard_physical, false);
+assert_throws(() => reconciler.startup('daemon-startup'), 'INTERNAL');
+assert_equal(service_state, 'stopped');
+assert_equal(service_starts, starts_before_startup_fault,
+	'stopped-startup cleanup fault unexpectedly started Mihomo');
 
 // A failed OFF verification may happen after disable already changed physical
-// state. Recovery must re-protect before restoring network ownership.
+// state. Startup reports the fault for retry without starting the stopped core.
 service_state = 'stopped'; guard_physical = false; ready = true;
 guard_verify_off_failures = 1; now++;
 let verify_fault_applies = network_applies;
-assert_equal(reconciler.startup('daemon-startup'), true);
-assert_equal(service_state, 'running');
-assert_equal(network_applies, verify_fault_applies + 1);
-assert_equal(network_guard_protected[length(network_guard_protected) - 1], true,
-	'OFF verification recovery mutated network without re-protecting');
+assert_throws(() => reconciler.startup('daemon-startup'), 'HEALTH_FAILED');
+assert_equal(service_state, 'stopped');
+assert_equal(network_applies, verify_fault_applies,
+	'stopped startup recovery unexpectedly applied proxy network ownership');
 assert_equal(guard_physical, false);

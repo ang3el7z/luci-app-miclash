@@ -347,9 +347,7 @@ function prove_active(runtime, document) {
 function prove_manifest_absent_clean(runtime) {
 	let observed = observe(runtime);
 	if (length(observed.conflicts) || observed.current == null ||
-	    count(observed.current.server.value, TARGET) > 0 ||
-	    (observed.current.cachesize.present && observed.current.cachesize.value == '0') ||
-	    (observed.current.noresolv.present && observed.current.noresolv.value == '1'))
+	    count(observed.current.server.value, TARGET) > 0)
 		fail('CORRUPT_STATE');
 	return true;
 };

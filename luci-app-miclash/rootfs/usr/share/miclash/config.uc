@@ -40,6 +40,18 @@ function healthy(service, profile, controller_config) {
 	}
 };
 
+function recovery_required(service, profile) {
+	if (type(service?.observe) != 'function')
+		return true;
+	try {
+		let observed = service.observe(profile);
+		return observed?.state != 'stopped' && observed?.state != 'missing_kernel';
+	}
+	catch (error) {
+		return true;
+	}
+};
+
 export function create(runtime, operations) {
 	if (type(runtime?.fs) != 'object' || type(runtime?.process?.run) != 'function' ||
 	    type(runtime?.digest?.sha256) != 'function' ||
@@ -216,10 +228,11 @@ export function create(runtime, operations) {
 	function activation(ctx, profile, content) {
 		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
 			let previous = read_active_state(profile);
+			let recover_service = recovery_required(runtime.service, profile);
 			assert_active_state(profile, previous);
 			storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
 			record_active(profile, candidate_hash, ctx.id);
-			if (!healthy(runtime.service, profile, previous.content)) {
+			if (recover_service && !healthy(runtime.service, profile, previous.content)) {
 				let rolled_back = false;
 				try {
 					storage.atomic_write(runtime, active_path(profile), previous.content, 0o600);
@@ -274,6 +287,7 @@ export function create(runtime, operations) {
 		    type(transaction.rollback) != 'function') errors.fail('INVALID_ARGUMENT');
 		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
 			let previous = read_active_state(profile);
+			let recover_service = recovery_required(runtime.service, profile);
 			let prepared;
 			ctx.stage('transaction-prepare', 78, 'Preparing coupled durable state');
 			try { prepared = transaction.prepare(); }
@@ -296,7 +310,8 @@ export function create(runtime, operations) {
 				}
 				try { if (transaction.rollback(prepared) !== true) failed = true; }
 				catch (error) { failed = true; }
-				if (activated && !failed && !healthy(runtime.service, profile, candidate))
+				if (recover_service && activated && !failed &&
+				    !healthy(runtime.service, profile, candidate))
 					failed = true;
 				return errors.new(failed ? 'INTERNAL' : code, failed ? 'INTERNAL' : code, { profile });
 			};
@@ -311,7 +326,7 @@ export function create(runtime, operations) {
 				let failure = rollback(errors.normalize(error).code);
 				return { ok: false, activated, reload_ok: false, error: failure };
 			}
-			if (!healthy(runtime.service, profile, previous.content)) {
+			if (recover_service && !healthy(runtime.service, profile, previous.content)) {
 				let failure = rollback('HEALTH_FAILED');
 				return { ok: false, activated: true, reload_ok: false, error: failure };
 			}
@@ -344,6 +359,7 @@ export function create(runtime, operations) {
 			return complete_result(ctx, with_candidate(ctx, profile, content,
 				(candidate, candidate_hash) => {
 					let previous = read_active_state(profile);
+					let recover_service = recovery_required(runtime.service, profile);
 					let prepared = transaction.prepare();
 					assert_active_state(profile, previous);
 					storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
@@ -375,7 +391,7 @@ export function create(runtime, operations) {
 							error: errors.new(rolled_back ? failure : 'INTERNAL',
 								rolled_back ? failure : 'INTERNAL', { profile }) };
 					}
-					if (!healthy(runtime.service, profile, previous.content)) {
+					if (recover_service && !healthy(runtime.service, profile, previous.content)) {
 						let rolled_back = rollback();
 						if (rolled_back) healthy(runtime.service, profile, candidate);
 						return { ok: false, activated: true, reload_ok: false,
@@ -450,14 +466,7 @@ export function create(runtime, operations) {
 				errors.fail('INTERNAL');
 			}
 
-			let reload = true;
-			if (type(runtime.service.observe) == 'function') {
-				try {
-					let observed = runtime.service.observe('config.yaml');
-					reload = observed?.state != 'stopped' && observed?.state != 'missing_kernel';
-				}
-				catch (error) { reload = true; }
-			}
+			let reload = recovery_required(runtime.service, 'config.yaml');
 			if (reload && !healthy(runtime.service, 'config.yaml', main.content)) {
 				let rolled_back = rollback();
 				if (rolled_back)
