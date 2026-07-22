@@ -161,6 +161,7 @@ const appState = {
 	serviceRunning: false,
 	serviceHealth: 'unknown',
 	serviceState: {},
+	guardObservedState: 'unknown',
 	proxyMode: 'tproxy',
 	configContent: '',
 	subscriptionUrl: '',
@@ -660,7 +661,8 @@ async function readMiClashServiceState() {
 		operation: current ? 'running' : 'idle', phase: current?.stage || '',
 		operation_id: current?.id || null,
 		message: readiness?.message || '',
-		desired: snapshot?.desired || null
+		desired: snapshot?.desired || null,
+		observedGuard: observed?.guard || { state: 'unknown' }
 	};
 }
 
@@ -678,6 +680,7 @@ function applyServiceState(status) {
 	appState.serviceRunning = service === 'running';
 	appState.serviceHealth = health || (appState.serviceRunning ? 'unknown' : 'stopped');
 	appState.serviceJobBusy = operation === 'running';
+	appState.guardObservedState = String(state.observedGuard?.state || 'unknown');
 	if (state.desired?.guard && appState.settings)
 		appState.settings.internetOnlyMiclash = state.desired.guard.enabled === true;
 
@@ -2134,6 +2137,7 @@ function buildPageHtml() {
 			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
 			: _('Not installed')
 	) : '';
+	const guardHeader = resolveGuardHeaderState();
 
 	return '' +
 		'<div class="sbox-header">' +
@@ -2151,9 +2155,9 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Direct connection guard')) + '">' +
+			'<span id="sbox-guard" class="sbox-guard-state-label ' + guardHeader.className + '" title="' + safeText(_('Direct connection guard')) + '">' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
-				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
+				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(guardHeader.label) + '</span>' +
 			'</span>' +
 			'<button id="sbox-dashboard" type="button" class="cbi-button ' + dashboardButtonState.className + ' sbox-header-button sbox-btn-dashboard"' +
 				(dashboardButtonState.disabled ? ' disabled' : '') +
@@ -2332,18 +2336,27 @@ function updateHeaderAndControlDom() {
 
 	const guardPill = pageRoot.querySelector('#sbox-guard');
 	const guardState = pageRoot.querySelector('#sbox-guard-state');
-	const guardEnabled = isInternetOnlyEnabled();
+	const guardHeader = resolveGuardHeaderState();
 	if (guardPill) {
 		guardPill.classList.remove('cbi-button', 'cbi-button-apply', 'cbi-button-neutral', 'cbi-button-positive', 'cbi-button-negative');
-		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
-		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
+		guardPill.classList.remove('sbox-guard-on', 'sbox-guard-off', 'sbox-guard-error', 'sbox-guard-unknown');
+		guardPill.classList.add(guardHeader.className);
 		guardPill.title = _('Direct connection guard');
 	}
-	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
+	if (guardState) guardState.textContent = guardHeader.label;
 }
 
 function isInternetOnlyEnabled() {
 	return !!(appState.settings && appState.settings.internetOnlyMiclash);
+}
+
+function resolveGuardHeaderState() {
+	const desired = isInternetOnlyEnabled();
+	const observed = String(appState.guardObservedState || 'unknown');
+	if (desired && observed === 'enabled') return { className: 'sbox-guard-on', label: _('ON') };
+	if (!desired && observed === 'disabled') return { className: 'sbox-guard-off', label: _('OFF') };
+	if (observed === 'failed') return { className: 'sbox-guard-error', label: _('Error') };
+	return { className: 'sbox-guard-unknown', label: _('Unknown') };
 }
 
 async function refreshHeaderAndControl() {

@@ -1003,6 +1003,17 @@ export function compose(runtime, overrides) {
 			guard: { transition: guard_transition },
 			clock: runtime.clock
 		});
+		let compact_overview = app.overview;
+		app.overview = () => {
+			let snapshot = compact_overview();
+			return {
+				...snapshot,
+				observed: {
+					...(snapshot?.observed ?? {}),
+					guard: guard_component_status(runtime, settings_domain.get())
+				}
+			};
+		};
 		let domain_settings = { get: reconcile_settings.get, set: reconcile_settings.set,
 			validate: settings_domain.validate };
 		let subscription_domain = modules.subscription.create({

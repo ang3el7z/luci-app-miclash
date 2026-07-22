@@ -79,6 +79,9 @@ assert.match(composition, /modules\.scheduler\.create\(\{[\s\S]*?subscription: s
 	'the daemon must construct the config scheduler with the canonical subscription domain');
 assert.match(composition, /automatic_config: subscription_scheduler_domain\.status\(\)/,
 	'diagnostics must expose config auto-update scheduler status');
+assert.match(composition,
+	/let compact_overview = app\.overview;[\s\S]*app\.overview = \(\) =>[\s\S]*guard_component_status\(runtime, settings_domain\.get\(\)\)/,
+	'the compact overview must publish the same Guard component state used by diagnostics');
 assert.match(composition, /subscription_scheduler: subscription_scheduler_domain/,
 	'the composed daemon must expose ownership of the config scheduler domain');
 assert.ok(composition.indexOf('let subscription_domain = modules.subscription.create') <

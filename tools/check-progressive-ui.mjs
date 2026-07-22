@@ -53,6 +53,14 @@ requirePattern(/function setConfigWorkspaceReady\(/, 'Missing config-control rea
 requirePattern(/configReady:\s*false/, 'The config workspace must be unavailable before hydration succeeds.');
 requirePattern(/desired:\s*snapshot\?\.desired\s*\|\|\s*null/, 'The service adapter must preserve desired state for Guard rendering.');
 requirePattern(/state\.desired\?\.guard/, 'Service polling must keep the Guard header synchronized.');
+requirePattern(/guardObservedState:\s*'unknown'/,
+	'The Guard header must start without claiming an unverified state.');
+requirePattern(/observedGuard:\s*observed\?\.guard\s*\|\|\s*\{\s*state:\s*'unknown'\s*\}/,
+	'The compact overview response must carry the same observed Guard component state used by diagnostics.');
+requirePattern(/state\.observedGuard\?\.state/,
+	'Service polling must retain the observed Guard component state.');
+requirePattern(/sbox-guard-error[\s\S]*sbox-guard-unknown/,
+	'The header must distinguish a failed Guard verification from an unknown state.');
 requirePattern(/hydrateInitialState\(generation\)/,
 	'Initial state hydration must start after the page shell exists.');
 requirePattern(/managementOwner\.setActive\(name === 'settings'\)/,

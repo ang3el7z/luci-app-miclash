@@ -331,6 +331,35 @@ fi
 
 for command in curl sha256sum jsonfilter sed awk grep cp rm mkdir chmod date id mktemp rmdir; do need "$command"; done
 
+supported_openwrt_release() {
+	release="$1"
+	[ "$release" = SNAPSHOT ] && return 0
+	printf '%s\n' "$release" | grep -Eq '^[0-9]+(\.[0-9]+)*(-rc[0-9]+)?$' || return 1
+	release_major="${release%%.*}"
+	release_minor=''
+	case "$release" in
+		*.*)
+			release_minor="${release#*.}"
+			release_minor="${release_minor%%.*}"
+			release_minor="${release_minor%%-*}"
+			;;
+	esac
+	[ "$release_major" -gt 24 ] 2>/dev/null && return 0
+	[ "$release_major" -eq 24 ] 2>/dev/null &&
+		[ -n "$release_minor" ] &&
+		[ "$release_minor" -ge 10 ] 2>/dev/null
+}
+
+validate_openwrt_support() {
+	[ -f /etc/openwrt_release ] || die 'OpenWrt release metadata is missing'
+	. /etc/openwrt_release
+	release="${DISTRIB_RELEASE:-unknown}"
+	supported_openwrt_release "$release" ||
+		die "OpenWrt $release is unsupported; OpenWrt 24.10 or newer is required"
+	command -v fw4 >/dev/null 2>&1 ||
+		die 'firewall4 (fw4) is missing; OpenWrt 24.10 or newer is required'
+}
+
 if command -v apk >/dev/null 2>&1; then
 	PKG_MGR=apk
 elif command -v opkg >/dev/null 2>&1; then
@@ -338,6 +367,7 @@ elif command -v opkg >/dev/null 2>&1; then
 else
 	die 'installed MiClash package was not found'
 fi
+validate_openwrt_support
 INSTALLED_VERSION="$(installed_miclash_version "$PKG_MGR")"
 case "$INSTALLED_VERSION" in
 	0.9.*)

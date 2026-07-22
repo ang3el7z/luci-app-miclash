@@ -15,6 +15,14 @@ const EMERGENCY = 'miclash_guard_emergency_v1';
 const PRIMARY = 'miclash_guard_bootstrap_v1';
 const BARRIER = '/var/run/miclash/package-removal';
 const BATCH = '/tmp/miclash/guard-runtime.nft';
+const STATUS = '/var/run/miclash/guard-bootstrap.json';
+
+function record_bootstrap_status(runtime, enabled, installed) {
+	atomic_write(runtime, STATUS, sprintf('%J\n', {
+		schema_version: 1, enabled, installed
+	}), 0o600);
+	return true;
+};
 
 function trusted_package_barrier(runtime) {
 	let root = runtime.fs.lstat('/var/run/miclash'), leaf = runtime.fs.lstat(BARRIER);
@@ -170,6 +178,10 @@ function main() {
 				runtime_guard.verify_iptables(stdin(), ARGV[0] == 'verify-iptables4' ? 'ipv4' : 'ipv6', expected);
 		}
 		if (!terminal_success) assert_held(runtime, lease);
+		if (ok && ARGV[0] == 'verify-bootstrap-on')
+			record_bootstrap_status(runtime, true, true);
+		else if (ok && ARGV[0] == 'verify-bootstrap-off')
+			record_bootstrap_status(runtime, false, false);
 	}
 	catch (error) { thrown = error; }
 	try { release(runtime, lease); }

@@ -243,16 +243,31 @@ reject_unauthorized_cross_major() {
     fi
 }
 
+supported_openwrt_release() {
+    release="$1"
+
+    [ "$release" = "SNAPSHOT" ] && return 0
+    printf '%s\n' "$release" | grep -Eq '^[0-9]+(\.[0-9]+)*(-rc[0-9]+)?$' || return 1
+    release_major="${release%%.*}"
+    release_minor=''
+    case "$release" in
+        *.*)
+            release_minor="${release#*.}"
+            release_minor="${release_minor%%.*}"
+            release_minor="${release_minor%%-*}"
+            ;;
+    esac
+    [ "$release_major" -gt 24 ] 2>/dev/null && return 0
+    [ "$release_major" -eq 24 ] 2>/dev/null &&
+        [ -n "$release_minor" ] &&
+        [ "$release_minor" -ge 10 ] 2>/dev/null
+}
+
 validate_openwrt_support() {
     release="$1"
 
-    if [ "$release" != "SNAPSHOT" ]; then
-        printf '%s\n' "$release" | grep -Eq '^[0-9]+(\.[0-9]+)*(-rc[0-9]+)?$' \
-            || die "Неподдерживаемая версия OpenWrt: $release. Требуется OpenWrt 24.10 или новее"
-        release_major="${release%%.*}"
-        [ "$release_major" -ge 24 ] 2>/dev/null \
-            || die "OpenWrt $release не поддерживается. Требуется OpenWrt 24.10 или новее"
-    fi
+    supported_openwrt_release "$release" \
+        || die "OpenWrt $release не поддерживается. Требуется OpenWrt 24.10 или новее"
 
     command -v fw4 >/dev/null 2>&1 \
         || die "Не найден firewall4 (fw4). Требуется OpenWrt 24.10 или новее"

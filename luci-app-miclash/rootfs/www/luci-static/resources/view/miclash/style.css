@@ -360,6 +360,20 @@
 	background: color-mix(in srgb, var(--sbox-danger) 12%, transparent);
 	border-color: color-mix(in srgb, var(--sbox-danger) 38%, transparent);
 }
+.sbox-guard-error {
+	color: var(--sbox-danger);
+	background: var(--sbox-panel-soft);
+	border-color: var(--sbox-danger);
+	background: color-mix(in srgb, var(--sbox-danger) 12%, transparent);
+	border-color: color-mix(in srgb, var(--sbox-danger) 38%, transparent);
+}
+.sbox-guard-unknown {
+	color: var(--sbox-warning);
+	background: var(--sbox-panel-soft);
+	border-color: var(--sbox-warning);
+	background: color-mix(in srgb, var(--sbox-warning) 10%, transparent);
+	border-color: color-mix(in srgb, var(--sbox-warning) 38%, transparent);
+}
 .sbox-guard-state {
 	font-weight: 800;
 }

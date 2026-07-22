@@ -89,6 +89,11 @@ assert.match(installer, /releases\?per_page=20/);
 assert.match(installer, /luci-app-miclash-\$\{clean_tag\}\.apk/);
 assert.match(installer, /luci-app-miclash_\$\{clean_tag\}_all\.ipk/);
 assert.match(installer, /miclash-release-manifest\.json/);
+assert.match(installer,
+	/supported_openwrt_release\(\)[\s\S]*release_major[\s\S]*release_minor[\s\S]*-gt 24[\s\S]*-eq 24[\s\S]*-ge 10/,
+	'installer must enforce the exact OpenWrt 24.10 boundary instead of accepting every 24.x release');
+assert.match(installer, /case "\$release" in[\s\S]*\*\.\*[\s\S]*release_minor[\s\S]*-n "\$release_minor"/,
+	'installer must not interpret a major-only release such as 24 as its own minor version');
 
 const upgrade = readFileSync('install-miclash-upgrade-0-9-x-to-2.x.x.sh', 'utf8');
 assert.match(upgrade, /releases\?per_page=20/);
@@ -122,5 +127,14 @@ assert.ok(backupCreated >= 0 && guardDisabled > backupCreated && packageRemoved 
 	'legacy Guard must be disabled after backup and before package removal');
 assert.match(upgrade, /verify_legacy_guard_off \|\| die 'legacy Guard returned during package removal'/,
 	'transition installer must verify that package removal did not restore legacy Guard');
+assert.match(upgrade,
+	/supported_openwrt_release\(\)[\s\S]*validate_openwrt_support\(\)/,
+	'transition installer must share the exact OpenWrt 24.10 support boundary');
+assert.match(upgrade, /case "\$release" in[\s\S]*\*\.\*[\s\S]*release_minor[\s\S]*-n "\$release_minor"/,
+	'transition installer must reject a major-only release at the 24.x boundary');
+const transitionPreflight = upgrade.indexOf('\nvalidate_openwrt_support\n');
+assert.ok(transitionPreflight >= 0 && transitionPreflight < backupCreated &&
+	transitionPreflight < guardDisabled && transitionPreflight < packageRemoved,
+	'transition OpenWrt/fw4 preflight must run before backup, Guard changes and package removal');
 
 console.log('terminal installation documentation contract passed');

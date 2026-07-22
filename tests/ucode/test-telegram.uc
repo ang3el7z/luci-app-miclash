@@ -819,7 +819,7 @@ assert_equal(sprintf('%J', sort(keys(controller))), sprintf('%J', sort([
 	'configure', 'start', 'stop', 'status', 'test', 'poll_once', 'handle_update', 'ingest', 'send_event'
 ])));
 let minimal_app = {
-	status: () => ({}), health: () => ({}), operation_get: () => null,
+	status: () => ({}), overview: () => ({}), health: () => ({}), operation_get: () => null,
 	operation_list: () => [], service_start: () => ({ id: 'op-1' }),
 	service_stop: () => ({ id: 'op-1' }), service_reload: () => ({ id: 'op-1' }),
 	service_restart: () => ({ id: 'op-1' }), config_list: () => [],

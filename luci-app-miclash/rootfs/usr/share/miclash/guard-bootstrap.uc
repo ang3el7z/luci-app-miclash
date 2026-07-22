@@ -77,8 +77,7 @@ function production_adapter(runtime, backend) {
 			direct_macs: wanted.direct_macs, interface_scope: wanted.interface_scope
 		}, 0o600),
 		record_status: (status) => write_json(runtime, STATUS_PATH, {
-			...status,
-			verified_at_ms: runtime.clock.now()
+			...status
 		}, 0o600)
 	};
 };
