@@ -126,7 +126,7 @@ export function create(app) {
 		return { limited: false, document: parsed };
 	};
 
-	function message_fields(settings, chat, text, reply_markup) {
+	function message_fields(settings, chat, text, reply_markup, parse_mode) {
 		configuration(settings);
 		let fields = {
 			chat_id: normalized_id(chat), text: message_text(text),
@@ -134,6 +134,10 @@ export function create(app) {
 		};
 		let validated = markup(reply_markup);
 		if (validated != null) fields.reply_markup = validated;
+		if (parse_mode != null) {
+			if (parse_mode != 'MarkdownV2') invalid();
+			fields.parse_mode = parse_mode;
+		}
 		return fields;
 	};
 
@@ -156,17 +160,17 @@ export function create(app) {
 					errors.fail('INVALID_RESPONSE');
 			return { updates, retry_after_ms: 0 };
 		},
-		send: (settings, chat, text, reply_markup) => {
+		send: (settings, chat, text, reply_markup, parse_mode) => {
 			let reply = call(settings, 'sendMessage',
-				message_fields(settings, chat, text, reply_markup), true);
+				message_fields(settings, chat, text, reply_markup, parse_mode), true);
 			if (reply.limited) return null;
 			let result = reply.document.result;
 			if (type(result) != 'object' || type(result.message_id) != 'int' || result.message_id < 1)
 				errors.fail('INVALID_RESPONSE');
 			return result;
 		},
-		edit: (settings, chat, id, text, reply_markup) => {
-			let fields = message_fields(settings, chat, text, reply_markup);
+		edit: (settings, chat, id, text, reply_markup, parse_mode) => {
+			let fields = message_fields(settings, chat, text, reply_markup, parse_mode);
 			fields.message_id = message_id(id);
 			let reply = call(settings, 'editMessageText', fields, true);
 			if (reply.limited) return null;

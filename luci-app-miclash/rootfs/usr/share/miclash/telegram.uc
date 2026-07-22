@@ -4,6 +4,7 @@ import * as redact from 'miclash.redact';
 import * as schema from 'miclash.schema';
 import * as storage from 'miclash.storage';
 import * as telegram_i18n from 'miclash.telegram-i18n';
+import * as telegram_format from 'miclash.telegram-format';
 import * as telegram_menu from 'miclash.telegram-menu';
 import * as telegram_outbox from 'miclash.telegram-outbox';
 import * as telegram_operations from 'miclash.telegram-operations';
@@ -141,7 +142,12 @@ function bounded_text(value) {
 			safe = sprintf('%J', redact.sanitize(value));
 	}
 	catch (error) { safe = 'Unavailable'; }
-	safe = replace(safe, /[[:cntrl:]]+/, ' ');
+	let visible = '';
+	for (let index = 0; index < length(safe); index++) {
+		let character = substr(safe, index, 1), byte = ord(safe, index);
+		visible += byte == 9 || byte == 10 || byte == 13 || byte >= 32 ? character : ' ';
+	}
+	safe = visible;
 	if (length(safe) > MAX_MESSAGE_BYTES)
 		safe = substr(safe, 0, MAX_MESSAGE_BYTES - 3) + '...';
 	return safe;
@@ -311,9 +317,11 @@ export function panel_model(app, screen) {
 		memory_baseline: baseline || (memory.enabled === true ? 'not_learned' : 'disabled'),
 		memory_state: memory.enabled === false ? 'disabled' : (memory.phase ?? 'unknown'),
 		last_memory_action: memory.last_action ?? 'not_required',
-		logs: screen == 'logs' ? safe_call(() => app.logs_read(), '') : '',
+		logs: screen == 'logs' ? telegram_format.fenced_code(
+			safe_call(() => app.logs_read(), ''), '') : '',
 		diagnostics: screen == 'diagnostics' ?
-			sprintf('%J', safe_call(() => app.diagnostics_summary(), {})) : '',
+			telegram_format.fenced_code(telegram_format.pretty_json(
+				safe_call(() => app.diagnostics_summary(), {})), 'json') : '',
 		updates: {
 			miclash_installed: info.app_version ?? update_status.miclash?.installed ?? '',
 			miclash_available: update_status.automatic_miclash?.latest_version ??
@@ -395,13 +403,13 @@ export function create(app) {
 		state.last_update_id = update_id;
 	};
 
-	function send_message(text, settings, chat_id) {
+	function send_message(text, settings, chat_id, parse_mode) {
 		settings = settings ?? configuration(app);
 		if (!settings.available || !settings.enabled || !settings.configured)
 			return false;
 		try {
 			return transport.send(settings, chat_id ?? settings.user_id,
-				bounded_text(text), null) != null;
+				bounded_text(text), null, parse_mode) != null;
 		}
 		catch (error) {
 			log_failure('delivery failed');
@@ -419,19 +427,20 @@ export function create(app) {
 		if (screen == 'confirm_admin_remove') model.administrator = session.awaiting?.admin_id ?? '';
 		let rendered = telegram_menu.render(screen, model, locale,
 			session.generation);
+		let parse_mode = (screen == 'logs' || screen == 'diagnostics') ? 'MarkdownV2' : null;
 		// Slash commands pass null and must produce a visible fresh reply. Button
 		// callbacks pass an explicit message identity and continue editing in place.
 		let identity = target, result = null;
 		if (identity != null && type(identity.message_id) == 'int')
 			try {
 				result = transport.edit(settings, identity.chat_id, identity.message_id,
-					rendered.text, rendered.reply_markup);
+					rendered.text, rendered.reply_markup, parse_mode);
 			}
 			catch (error) { result = null; }
 		let destination = identity?.chat_id ?? settings.user_id;
 		if (result == null)
 			result = transport.send(settings, destination, rendered.text,
-				rendered.reply_markup);
+				rendered.reply_markup, parse_mode);
 		if (result == null) return false;
 		outbox.panel({ chat_id: destination, message_id: result.message_id,
 			generation: session.generation });
@@ -556,7 +565,9 @@ export function create(app) {
 	};
 
 	function dispatch(command, destination) {
-		function response(value) { return { response: value, record: null }; };
+		function response(value, parse_mode) {
+			return { response: value, record: null, parse_mode };
+		};
 		function mutation(record) {
 			if (destination != null) operation_bridge.track(record, destination);
 			return { response: operation_message(record), record };
@@ -568,9 +579,10 @@ export function create(app) {
 		if (command.name == 'memory')
 			return response(app.memory_status());
 		if (command.name == 'diagnostics')
-			return response(app.diagnostics_summary());
+			return response(telegram_format.fenced_code(telegram_format.pretty_json(
+				app.diagnostics_summary()), 'json'), 'MarkdownV2');
 		if (command.name == 'logs')
-			return response(app.logs_read());
+			return response(telegram_format.fenced_code(app.logs_read(), ''), 'MarkdownV2');
 		if (command.name == 'help')
 			return response(HELP);
 		if (command.name == 'menu')
@@ -838,7 +850,7 @@ export function create(app) {
 			return { handled: false, retryable: false };
 		}
 		audit(command.name, 'accepted', update.update_id);
-		send_message(outcome.response, settings, chat);
+		send_message(outcome.response, settings, chat, outcome.parse_mode);
 		return { handled: true, retryable: false };
 	};
 

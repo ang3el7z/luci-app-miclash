@@ -377,6 +377,22 @@ let recreated_controller = telegram.create(recreated.app);
 assert_equal(recreated_controller.poll_once(), true);
 assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=25/);
 
+// Diagnostics and logs are rendered as readable code blocks for Telegram.
+let formatted_env = environment();
+formatted_env.app.diagnostics_summary = () => ({ state: 'ok', nested: { value: 1 } });
+formatted_env.app.logs_read = () => 'line one\nline two';
+let formatted_controller = telegram.create(formatted_env.app);
+assert_equal(formatted_controller.handle_update(update(705, '/diagnostics')), true);
+let diagnostics_request = formatted_env.requests[length(formatted_env.requests) - 1];
+assert_equal(request_method(diagnostics_request), 'sendMessage');
+assert_match(diagnostics_request.body, /parse_mode=MarkdownV2/);
+assert_match(diagnostics_request.body, /text=%60%60%60json/);
+assert_match(diagnostics_request.body, /%0A%20%20%22nested%22%3A%20%7B/);
+assert_equal(formatted_controller.handle_update(update(706, '/logs')), true);
+let logs_request = formatted_env.requests[length(formatted_env.requests) - 1];
+assert_match(logs_request.body, /parse_mode=MarkdownV2/);
+assert_match(logs_request.body, /text=%60%60%60%0Aline%20one%0Aline%20two%0A%60%60%60/);
+
 // OpenWrt overlayfs may report the private directory and a regular file inside it
 // on different st_dev values. The fixed path and file identity remain authoritative.
 let overlay = environment();

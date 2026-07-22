@@ -1,4 +1,5 @@
 import * as errors from 'miclash.errors';
+import * as telegram_format from 'miclash.telegram-format';
 import * as redact from 'miclash.redact';
 
 const ROOT = '/tmp/miclash/diagnostics';
@@ -624,7 +625,7 @@ export function create(dependencies) {
 					issues: report_issues(safe), collection: safe.collection,
 					details: { config: safe.config, process: safe.process, logs: safe.logs,
 						uci: safe.uci, operations: safe.operations } };
-				let json_text = sprintf('%J\n', report);
+				let json_text = telegram_format.pretty_json(report) + '\n';
 				let text = 'MiClash diagnostic report\nGenerated: ' + now + '\n' +
 					'Architecture: ' + summary.architecture + '\n' +
 					'Mihomo health: ' + (summary.health?.mihomo?.state ?? 'unknown') + '\n';

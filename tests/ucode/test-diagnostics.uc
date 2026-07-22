@@ -314,6 +314,8 @@ assert_true(index(sprintf('%J', created), '/tmp/') < 0,
 let json_report = center.read_report({ id: created.id, format: 'json' });
 assert_equal(json_report.id, created.id);
 assert_equal(json_report.format, 'json');
+assert_true(index(json_report.content, '\n  "summary": {') >= 0,
+	'JSON report must use readable indentation');
 assert_true(type(json(json_report.content).summary) == 'object');
 assert_no_secrets(json_report, 'json report');
 let text_report = center.read_report({ id: created.id, format: 'text' });
