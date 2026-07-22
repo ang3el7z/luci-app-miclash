@@ -1,12 +1,7 @@
 import * as errors from 'miclash.errors';
 import * as i18n from 'miclash.telegram-i18n';
 
-const COMMAND_NAMES = [
-	'start', 'menu', 'status', 'health', 'memory', 'diagnostics', 'logs', 'help',
-	'start_service', 'stop_service', 'reload_service', 'restart_service',
-	'reboot_router', 'subscription', 'update_subscription', 'update_miclash',
-	'update_mihomo', 'guard_on', 'guard_off'
-];
+const COMMAND_NAMES = [ 'menu' ];
 
 const SIMPLE_COMMANDS = {
 	start: 'menu', menu: 'menu', status: 'status', health: 'health', memory: 'memory',

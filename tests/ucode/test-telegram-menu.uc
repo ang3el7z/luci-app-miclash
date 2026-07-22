@@ -50,9 +50,10 @@ assert_equal(menu.parse_command('/unknown'), null);
 assert_equal(menu.parse_command('not a command'), null);
 
 let commands = menu.commands('ru');
-assert_true(length(commands) >= 18);
-assert_equal(commands[0].command, 'start');
-assert_equal(commands[1].command, 'menu');
+assert_equal(length(commands), 1);
+assert_equal(commands[0].command, 'menu');
+assert_equal(menu.parse_command('/start').name, 'menu');
+assert_equal(menu.parse_command('/diagnostics').name, 'diagnostics');
 for (let command in commands) {
 	assert_match(command.command, /^[a-z0-9_]{1,32}$/);
 	assert_true(type(command.description) == 'string' &&
