@@ -1508,6 +1508,9 @@ msgstr "Давление памяти"
 msgid "Inactive"
 msgstr "Неактивно"
 
+msgid "Stopped"
+msgstr "Остановлен"
+
 msgid "Cooldown"
 msgstr "Период ожидания"
 

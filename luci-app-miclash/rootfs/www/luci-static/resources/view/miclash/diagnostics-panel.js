@@ -47,7 +47,9 @@ function stateName(value) {
 	const state = String(value || 'unknown').toLowerCase();
 	if (state === 'ok' || state === 'running' || state === 'ready' || state === 'success') return _('Ready');
 	if (state === 'degraded' || state === 'warning') return _('Degraded');
-	if (state === 'failed' || state === 'error' || state === 'stopped') return _('Failed');
+	if (state === 'stopped') return _('Stopped');
+	if (state === 'inactive') return _('Inactive');
+	if (state === 'failed' || state === 'error') return _('Failed');
 	return _('Unknown');
 }
 
@@ -55,7 +57,7 @@ function stateClass(value) {
 	const state = String(value || 'unknown').toLowerCase();
 	if (state === 'ok' || state === 'running' || state === 'ready' || state === 'success') return 'sbox-diagnostics-state-ok';
 	if (state === 'degraded' || state === 'warning') return 'sbox-diagnostics-state-warning';
-	if (state === 'failed' || state === 'error' || state === 'stopped') return 'sbox-diagnostics-state-error';
+	if (state === 'failed' || state === 'error') return 'sbox-diagnostics-state-error';
 	return 'sbox-diagnostics-state-unknown';
 }
 
@@ -310,10 +312,15 @@ function create(options) {
 		const status = state.status || {};
 		const serviceRunning = summary.state?.observed?.service?.running ??
 			status.observed?.service?.running ?? status.state?.observed?.service?.running ?? status.running;
+		const serviceState = String(summary.state?.observed?.service?.state ??
+			status.observed?.service?.state ?? status.state?.observed?.service?.state ??
+			(typeof serviceRunning === 'boolean' ? (serviceRunning ? 'running' : 'stopped') : 'unknown')).toLowerCase();
 		const componentRows = COMPONENTS.filter(([ name ]) => name !== 'guard').map(([ name, label ]) => {
 			let componentState = health[name]?.state;
 			if (name === 'mihomo' && !componentState && typeof serviceRunning === 'boolean')
 				componentState = serviceRunning ? 'running' : 'stopped';
+			if (name !== 'mihomo' && !componentState && serviceState === 'stopped')
+				componentState = 'inactive';
 			return E('div', { 'class': 'sbox-diagnostics-row' }, [
 				E('span', { 'class': 'sbox-diagnostics-label' }, label()),
 				statusNode(label(), componentState)

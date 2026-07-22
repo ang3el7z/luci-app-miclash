@@ -320,6 +320,21 @@ const arrayHealth = panel.renderSummary({ status: replies.status, health: {}, su
 	...replies.summary, health: { components: [ { component: 'mihomo', state: 'degraded' } ] }
 } }).textContent;
 assert.match(arrayHealth, /Mihomo●Degraded/, 'component arrays must normalize safely');
+const stoppedHealth = panel.renderSummary({ summary: {
+	...replies.summary,
+	health: {},
+	state: {
+		observed: {
+			service: { state: 'stopped', running: false },
+			readiness: { components: [ { component: 'process', state: 'stopped', ready: false } ] }
+		}
+	}
+} });
+assert.match(stoppedHealth.textContent,
+	/Mihomo●Stopped[\s\S]*DNS●Inactive[\s\S]*Firewall●Inactive[\s\S]*Routing●Inactive/,
+	'an intentionally stopped Mihomo must not be presented as four component failures');
+assert.equal(stoppedHealth.querySelectorAll('.sbox-diagnostics-state-error').length, 0,
+	'inactive component dependencies must use a neutral state');
 const readinessHealth = panel.renderSummary({ summary: {
 	...replies.summary,
 	health: {},
