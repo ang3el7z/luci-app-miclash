@@ -79,6 +79,9 @@ assert.doesNotMatch(settings, /sbox-notification-test-channel/,
 	'notification test still uses a global channel selector');
 assert.match(settings, /E\('span', \{ 'aria-hidden': 'true' \}, '\*'\)/,
 	'Telegram token reveal must have a visible star fallback');
+assert.match(settings,
+	/const userField = E\('div',[\s\S]*Allowed Telegram user IDs[\s\S]*data-telegram-id-hint[\s\S]*5818132224, 5818132223/,
+	'Telegram ID guidance must sit directly inside the allowed-user field');
 assert.doesNotMatch(settings, /Save management settings|data-action[^\n]*save/,
 	'management panel still owns a separate save button');
 assert.doesNotMatch(settings, /backup_outcome|Backup result/,
