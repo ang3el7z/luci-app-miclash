@@ -101,6 +101,13 @@ function isSessionExpired(error) {
 	return /(?:Login session is expired|notifySessionExpiry)/i.test(message);
 }
 
+function isTransientBackendUnavailable(error) {
+	const message = String(error?.message || error || '').toLowerCase();
+	return message.indexOf('ubus code 4') !== -1 ||
+		message.indexOf('resource not found') !== -1 ||
+		message.indexOf('ресурс не найден') !== -1;
+}
+
 function bytesOf(value) {
 	if (value instanceof Uint8Array) return value;
 	if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -204,6 +211,10 @@ function createClient(options) {
 	const activeTransfers = new Set();
 	const timerSet = options.setTimeout || window.setTimeout.bind(window);
 	const timerClear = options.clearTimeout || window.clearTimeout.bind(window);
+	const now = options.now || Date.now;
+	const startupRetryMs = Math.max(0, Number(options.startupRetryMs ?? 30000));
+	const startupRetryDelayMs = Math.max(50, Number(options.startupRetryDelayMs) || 500);
+	const startupRetryDeadline = now() + startupRetryMs;
 	const cryptoProvider = options.crypto || window.crypto;
 	const eventTarget = options.eventTarget || window;
 	const EventConstructor = options.CustomEvent || window.CustomEvent;
@@ -225,13 +236,24 @@ function createClient(options) {
 		rawCalls[spec.name] = declared;
 		calls[spec.name] = (...args) => {
 			if (destroyed) return Promise.reject(apiError('CANCELLED', 'View destroyed'));
-			return Promise.resolve(declared(...args))
+			const invoke = () => {
+				if (destroyed) return Promise.reject(apiError('CANCELLED', 'View destroyed'));
+				return Promise.resolve().then(() => declared(...args))
 				.then((reply) => {
 					const normalized = normalizeReply(reply, spec.operation);
 					if (spec.operation) emitChange(spec.name, normalized.operation_id, 'accepted');
 					return normalized;
 				})
-				.catch((error) => { throw normalizeFailure(error); });
+				.catch((error) => {
+					const normalized = normalizeFailure(error);
+					if (!destroyed && spec.access === 'read' &&
+						isTransientBackendUnavailable(normalized) && now() < startupRetryDeadline) {
+						return new Promise((resolve) => timerSet(resolve, startupRetryDelayMs)).then(invoke);
+					}
+					throw normalized;
+				});
+			};
+			return invoke();
 		};
 	}
 	function abortTransfer(transferId) {

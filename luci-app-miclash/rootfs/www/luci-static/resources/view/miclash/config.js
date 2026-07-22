@@ -316,6 +316,15 @@ function suspendForSessionExpiry() {
 	if (configApi) configApi.destroy();
 }
 
+function suspendForBackendRestart() {
+	controlPollTimer = view_miclash_ui_shell.stopInterval(controlPollTimer);
+	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
+	updatePollTimer = view_miclash_ui_shell.stopInterval(updatePollTimer);
+	diagnosticsOwner.destroy();
+	notificationOwner.destroy();
+	managementOwner.destroy();
+}
+
 function operationStageOptions(initialMessage) {
 	return {
 		onStage: (message) => setOperationStatus('running', message || initialMessage)
@@ -645,6 +654,45 @@ function isRpcReconnectLikeError(error) {
 	return false;
 }
 
+function isExpectedBackendRestartInterruption(error) {
+	const text = String(error?.message || error || '').toLowerCase();
+	return isRpcReconnectLikeError(error) || text.indexOf('ubus code 4') !== -1 ||
+		text.indexOf('resource not found') !== -1 || text.indexOf('ресурс не найден') !== -1;
+}
+
+async function waitForMiClashBackendRestart(api, options) {
+	const opts = options || {};
+	const timeoutMs = Math.max(1000, Number(opts.timeoutMs) || 30000);
+	const intervalMs = Math.max(10, Number(opts.intervalMs) || 500);
+	const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+	const sleep = typeof opts.sleep === 'function' ? opts.sleep :
+		(delay) => new Promise((resolve) => window.setTimeout(resolve, delay));
+	const deadline = now() + timeoutMs;
+	let unavailable = false;
+
+	while (now() < deadline) {
+		await sleep(intervalMs);
+		try {
+			await api.system_info();
+			if (unavailable) return true;
+		} catch (error) {
+			if (!isExpectedBackendRestartInterruption(error)) throw error;
+			unavailable = true;
+		}
+	}
+
+	return false;
+}
+
+async function waitForCurrentMiClashBackendRestart() {
+	const probe = view_miclash_api.create({ startupRetryMs: 0 });
+	try {
+		return await waitForMiClashBackendRestart(probe);
+	} finally {
+		probe.destroy();
+	}
+}
+
 async function clearMiClashUpdateStatus() {
 	appState.pendingUpdateOperation = null;
 	clearStoredOperationToken('update');
@@ -832,9 +880,9 @@ async function installMiClashFromSettings(actionKind) {
 	} catch (e) {
 		if (isRpcReconnectLikeError(e)) {
 			notify('info', _('Connection interrupted while finalizing MiClash update. Reloading interface...'));
-			setTimeout(() => {
-				window.location.reload();
-			}, 3000);
+			suspendForBackendRestart();
+			await waitForCurrentMiClashBackendRestart();
+			window.location.reload();
 			return true;
 		}
 		setOperationError(e);
@@ -843,9 +891,10 @@ async function installMiClashFromSettings(actionKind) {
 
 	await logUiAction('info', 'MiClash package installed');
 	notify('info', _('MiClash package installed. Reloading interface...'));
-	setTimeout(() => {
-		window.location.reload();
-	}, 1500);
+	setOperationStatus('running', _('MiClash package installed. Reloading interface...'));
+	suspendForBackendRestart();
+	await waitForCurrentMiClashBackendRestart();
+	window.location.reload();
 	return true;
 }
 
