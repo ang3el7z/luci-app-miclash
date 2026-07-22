@@ -24,6 +24,12 @@ function record_bootstrap_status(runtime, enabled, installed) {
 	return true;
 };
 
+function invalidate_bootstrap_status(runtime) {
+	if (runtime.fs.lstat(STATUS) != null && runtime.fs.unlink(STATUS) !== true)
+		fail('INTERNAL');
+	return true;
+};
+
 function trusted_package_barrier(runtime) {
 	let root = runtime.fs.lstat('/var/run/miclash'), leaf = runtime.fs.lstat(BARRIER);
 	let canonical = runtime.fs.realpath(BARRIER);
@@ -139,8 +145,13 @@ function main() {
 	if (package_mode && !trusted_package_barrier(runtime)) die('BUSY\n');
 	let lease = acquire(runtime, { barrier: package_mode ? 'package' : 'normal', wait_ms: 0 });
 	let ok = false, thrown = null, terminal_success = false;
+	let bootstrap_verification = ARGV[0] == 'verify-bootstrap-on' ? true :
+		(ARGV[0] == 'verify-bootstrap-off' ? false : null);
+	let bootstrap_observed = false;
 	try {
 		assert_held(runtime, lease);
+		if (bootstrap_verification != null)
+			invalidate_bootstrap_status(runtime);
 		if (ARGV[0] == 'latch-set') ok = guard_latch.set(runtime);
 		else if (ARGV[0] == 'latch-clear') ok = guard_latch.clear(runtime);
 		else if (ARGV[0] == 'latch-status') ok = guard_latch.is_set(runtime);
@@ -160,6 +171,8 @@ function main() {
 			}
 			else {
 				let present = inventory(nft);
+				if (present != null && bootstrap_verification != null)
+					bootstrap_observed = true;
 				if (present != null && ARGV[0] == 'verify-protected') {
 					ok = length(present) > 0;
 					for (let table in present)
@@ -178,10 +191,10 @@ function main() {
 				runtime_guard.verify_iptables(stdin(), ARGV[0] == 'verify-iptables4' ? 'ipv4' : 'ipv6', expected);
 		}
 		if (!terminal_success) assert_held(runtime, lease);
-		if (ok && ARGV[0] == 'verify-bootstrap-on')
-			record_bootstrap_status(runtime, true, true);
-		else if (ok && ARGV[0] == 'verify-bootstrap-off')
-			record_bootstrap_status(runtime, false, false);
+		if (bootstrap_observed && ARGV[0] == 'verify-bootstrap-on')
+			record_bootstrap_status(runtime, true, ok);
+		else if (bootstrap_observed && ARGV[0] == 'verify-bootstrap-off')
+			record_bootstrap_status(runtime, false, !ok);
 	}
 	catch (error) { thrown = error; }
 	try { release(runtime, lease); }

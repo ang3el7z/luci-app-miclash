@@ -422,12 +422,15 @@ assert_true(index(bootstrap, "'/opt/clash/settings'") < 0 &&
 	'Guard bootstrap must not retain a second legacy source of truth');
 assert_true(index(bootstrap, 'verified_at_ms') < 0,
 	'Guard component state must not contain a timestamp that is not maintained as a heartbeat');
-assert_true(index(runtime_guard_source, 'function record_bootstrap_status') >= 0 &&
+assert_true(index(runtime_guard_source, 'function invalidate_bootstrap_status') >= 0 &&
+	index(runtime_guard_source, 'invalidate_bootstrap_status(runtime)') >= 0 &&
+	index(runtime_guard_source, 'bootstrap_observed') >= 0 &&
+	index(runtime_guard_source, 'function record_bootstrap_status') >= 0 &&
 	index(runtime_guard_source, "ARGV[0] == 'verify-bootstrap-on'") >= 0 &&
 	index(runtime_guard_source, "ARGV[0] == 'verify-bootstrap-off'") >= 0 &&
-	index(runtime_guard_source, 'record_bootstrap_status(runtime, true, true)') >= 0 &&
-	index(runtime_guard_source, 'record_bootstrap_status(runtime, false, false)') >= 0,
-	'every successful runtime Guard verification must publish the shared component state');
+	index(runtime_guard_source, 'record_bootstrap_status(runtime, true, ok)') >= 0 &&
+	index(runtime_guard_source, 'record_bootstrap_status(runtime, false, !ok)') >= 0,
+	'every runtime Guard verification must invalidate stale state and publish conclusive results');
 let runtime_source = fs.readfile('luci-app-miclash/rootfs/usr/share/miclash/runtime.uc');
 assert_true(index(runtime_source, 'guard-runtime.uc') >= 0 &&
 	index(runtime_source, '/opt/clash/bin/clash-rules') < 0,

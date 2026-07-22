@@ -68,6 +68,7 @@ set -eu
 state="$MICLASH_GUARD_GATE_STATE"
 printf '%s\n' "$*" >> "$state/calls"
 if [ "$*" = '-j list tables' ]; then
+	[ ! -f "$state/fail-inventory" ] || exit 1
 	first=1
 	printf '{"nftables":['
 	for table in miclash_guard_emergency_v1 miclash_guard_bootstrap_v1; do
@@ -126,6 +127,40 @@ run_guard verify-protected
 run_guard release
 [ -f "$state/table.miclash_guard_bootstrap_v1" ]
 [ ! -e "$state/table.miclash_guard_emergency_v1" ]
+run_guard verify-bootstrap-on
+
+# A verification that cannot observe nft state must invalidate the previous
+# success instead of keeping a stale ON result.
+: > "$state/fail-inventory"
+if run_guard verify-bootstrap-on >/dev/null 2>&1; then
+	echo 'Guard verification ignored unavailable nft inventory' >&2
+	exit 1
+fi
+[ ! -e /var/run/miclash/guard-bootstrap.json ]
+rm -f "$state/fail-inventory"
+run_guard verify-bootstrap-on
+
+# A conclusive topology mismatch must replace the previous success with a
+# failed component snapshot.
+rm -f "$state/table.miclash_guard_bootstrap_v1"
+if run_guard verify-bootstrap-on >/dev/null 2>&1; then
+	echo 'Guard verification ignored missing bootstrap topology' >&2
+	exit 1
+fi
+grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' /var/run/miclash/guard-bootstrap.json || {
+	echo 'Guard mismatch status did not preserve enabled intent' >&2
+	cat /var/run/miclash/guard-bootstrap.json >&2
+	exit 1
+}
+grep -Eq '"installed"[[:space:]]*:[[:space:]]*false' /var/run/miclash/guard-bootstrap.json || {
+	echo 'Guard mismatch status did not publish failed installation state' >&2
+	cat /var/run/miclash/guard-bootstrap.json >&2
+	exit 1
+}
+
+# Restore the valid topology before exercising the ordinary disable path.
+run_guard protect
+run_guard release
 run_guard verify-bootstrap-on
 run_guard disable
 [ ! -e "$state/table.miclash_guard_bootstrap_v1" ]

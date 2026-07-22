@@ -161,7 +161,7 @@ const appState = {
 	serviceRunning: false,
 	serviceHealth: 'unknown',
 	serviceState: {},
-	guardObservedState: 'unknown',
+	guardObservedState: 'loading',
 	proxyMode: 'tproxy',
 	configContent: '',
 	subscriptionUrl: '',
@@ -2138,6 +2138,8 @@ function buildPageHtml() {
 			: _('Not installed')
 	) : '';
 	const guardHeader = resolveGuardHeaderState();
+	const guardLoadingState = guardHeader.loading
+		? ' aria-busy="true" aria-label="' + safeText(_('Loading…')) + '"' : '';
 
 	return '' +
 		'<div class="sbox-header">' +
@@ -2155,7 +2157,7 @@ function buildPageHtml() {
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="sbox-guard-state-label ' + guardHeader.className + '" title="' + safeText(_('Direct connection guard')) + '">' +
+			'<span id="sbox-guard" class="sbox-guard-state-label ' + guardHeader.className + '" title="' + safeText(_('Direct connection guard')) + '"' + guardLoadingState + '>' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
 				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(guardHeader.label) + '</span>' +
 			'</span>' +
@@ -2339,9 +2341,12 @@ function updateHeaderAndControlDom() {
 	const guardHeader = resolveGuardHeaderState();
 	if (guardPill) {
 		guardPill.classList.remove('cbi-button', 'cbi-button-apply', 'cbi-button-neutral', 'cbi-button-positive', 'cbi-button-negative');
-		guardPill.classList.remove('sbox-guard-on', 'sbox-guard-off', 'sbox-guard-error', 'sbox-guard-unknown');
+		guardPill.classList.remove('sbox-guard-on', 'sbox-guard-off', 'sbox-guard-error', 'sbox-guard-unknown', 'sbox-guard-loading');
 		guardPill.classList.add(guardHeader.className);
 		guardPill.title = _('Direct connection guard');
+		guardPill.toggleAttribute('aria-busy', guardHeader.loading === true);
+		if (guardHeader.loading) guardPill.setAttribute('aria-label', _('Loading…'));
+		else guardPill.removeAttribute('aria-label');
 	}
 	if (guardState) guardState.textContent = guardHeader.label;
 }
@@ -2353,6 +2358,7 @@ function isInternetOnlyEnabled() {
 function resolveGuardHeaderState() {
 	const desired = isInternetOnlyEnabled();
 	const observed = String(appState.guardObservedState || 'unknown');
+	if (observed === 'loading') return { className: 'sbox-guard-loading', label: '', loading: true };
 	if (desired && observed === 'enabled') return { className: 'sbox-guard-on', label: _('ON') };
 	if (!desired && observed === 'disabled') return { className: 'sbox-guard-off', label: _('OFF') };
 	if (observed === 'failed') return { className: 'sbox-guard-error', label: _('Error') };
@@ -3235,7 +3241,11 @@ return view.extend({
 			if (generation === pageGeneration) console.error('[MiClash] Failed to hydrate system metadata:', error);
 		});
 		const initialHydration = hydrateInitialState(generation).catch((error) => {
-			if (generation === pageGeneration) console.error('[MiClash] Failed to hydrate initial state:', error);
+			if (generation === pageGeneration) {
+				console.error('[MiClash] Failed to hydrate initial state:', error);
+				appState.guardObservedState = 'unknown';
+				updateHeaderAndControlDom();
+			}
 		});
 		Promise.allSettled([ configHydration, initialHydration ]).then(() => {
 			window.setTimeout(() => {
