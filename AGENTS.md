@@ -26,6 +26,10 @@ Use the smallest verification that proves the change:
 
 Avoid unrelated full suites, lengthy plans, or brainstorming/TDD for mechanical low-risk work. Use systematic debugging and stronger tests when the cause is uncertain or networking is at risk.
 
+Keep ucode tests synchronized with current production contracts. When changing backend behavior, schemas, defaults, RPC methods, or lifecycle ordering, update the affected tests in the same change. Add focused tests for new behavior whenever it changes logic, data handling, RPC contracts, security, networking, persistence, scheduling, or lifecycle behavior. Add regression coverage for meaningful bugs; do not preserve obsolete expectations merely to keep tests passing. Cosmetic and purely mechanical changes do not require new tests.
+
+For meaningful new behavior and bug fixes, use the `superpowers:test-driven-development` skill and follow its red-green-refactor workflow. When a bug's cause is uncertain, use `superpowers:systematic-debugging` first. Skip TDD for cosmetic, documentation-only, and purely mechanical changes.
+
 Complete every accepted requirement end-to-end. “Smallest verification” limits test scope, never implementation scope; do not stop at artificial iteration boundaries.
 
 ## Model and Agent Budget
@@ -34,6 +38,6 @@ Use the lowest-cost reliable setting. Default to Terra Medium for implementation
 
 ## Git, PR, and Security
 
-Use Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`, and `ci:`. Never put agent or AI-tool names (`codex`, `chatgpt`, `ai`) in branches, commits, or PR titles; use the task name. Keep commits scoped. Never force-add or commit ignored `docs/`. Never commit tokens, subscription URLs, router credentials, generated reports, or live UCI state. PRs should state impact, safety, verification, and include LuCI screenshots.
+Use Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`, and `ci:`. Never put agent or AI-tool names (`codex`, `chatgpt`, `ai`) in branches, commits, or PR titles; use the task name. Keep commits scoped. Ignored `docs/` may contain local plans and specifications, but never force-add or commit it. Never commit tokens, subscription URLs, router credentials, generated reports, or live UCI state. PRs should state impact, safety, verification, and include LuCI screenshots.
 
 @RTK.md

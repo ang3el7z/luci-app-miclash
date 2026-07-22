@@ -95,21 +95,28 @@ assert_equal(length(swap_calls), 1);
 let external = environment();
 external.fs.writefile('/opt/clash/config.yaml', fixture('valid.yaml'));
 assert_equal(external.cfg.detect_external('config.yaml').changed, true);
-let adopted = external.cfg.adopt_external('config.yaml', 'external');
+let adopted = external.cfg.adopt_external('config.yaml', 'system');
 assert_equal(finish(external, adopted).state, 'success');
 assert_equal(external.cfg.detect_external('config.yaml').changed, false);
 
 let internal = environment();
 let context_seen = null;
+let checked_seen = null, activated_seen = null, internal_error = null;
 let record = internal.ops.submit('subscription.update', 'auto', {}, (ctx) => {
 	context_seen = ctx;
-	let checked = internal.cfg.validate_in_operation(ctx, 'config.yaml', fixture('valid.yaml'));
-	assert_equal(checked.ok, true);
-	let activated = internal.cfg.apply_in_operation(ctx, 'config.yaml', fixture('valid.yaml'));
-	assert_equal(activated.ok, true);
+	try {
+		checked_seen = internal.cfg.validate_in_operation(ctx, 'config.yaml', fixture('valid.yaml'));
+		activated_seen = internal.cfg.apply_in_operation(ctx, 'config.yaml', fixture('valid.yaml'));
+		ctx.result({ interval_hours: null, insecure: false });
+	}
+	catch (error) { internal_error = error; }
 	return true;
 });
-assert_equal(finish(internal, record).state, 'success');
+let internal_done = finish(internal, record);
+assert_equal(internal_error, null, sprintf('internal API failed: %J', internal_error));
+assert_equal(internal_done.state, 'success', sprintf('internal operation failed: %J', internal_done));
+assert_equal(checked_seen.ok, true);
+assert_equal(activated_seen.ok, true);
 assert_throws(() => internal.cfg.validate_in_operation(
 	context_seen, 'config.yaml', fixture('valid.yaml')), 'INVALID_ARGUMENT');
 assert_true(length(internal.ops.list()) == 1);

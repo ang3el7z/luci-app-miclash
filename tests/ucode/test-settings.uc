@@ -117,6 +117,15 @@ assert_equal(normalized.telegram.enabled, true);
 assert_equal(normalized_env.cursor.commit_calls, 1);
 assert_true(normalized_env.cursor.set_calls > 0);
 
+let multi_admin_env = fake_runtime();
+let multi_admin = settings.save(multi_admin_env.rt, { telegram: {
+	enabled: true, token: '123456:secret-token', user_id: '12345, 67890'
+} });
+assert_equal(multi_admin.telegram.user_id, '12345, 67890');
+assert_throws(() => settings.save(fake_runtime().rt, { telegram: {
+	enabled: true, token: '123456:secret-token', user_id: '12345, invalid'
+} }), 'INVALID_ARGUMENT');
+
 let empty_lists_env = fake_runtime({ miclash: {
 	interfaces: { '.type': 'interfaces', included: [ 'br-lan' ], excluded: [ 'wan' ] },
 	notifications: { '.type': 'notifications', syslog_events: 'failure' }

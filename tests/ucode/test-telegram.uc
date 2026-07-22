@@ -183,6 +183,12 @@ assert_equal(type(telegram.create), 'function');
 // Keep this contract explicit so bot labels cannot silently drift from the UI.
 assert_equal(type(telegram.panel_model), 'function');
 let production_panel = telegram.panel_model({
+	runtime: {
+		uci: fakes.uci({ system: { main: { '.type': 'system', zonename: 'Europe/Moscow' } } }),
+		timezones: { resolve: (name) => name == 'Europe/Moscow' ? {
+			name, from: 0, until: 4102444800, initial_offset: 10800, transitions: []
+		} : null }
+	},
 	settings_get: () => ({
 		core: { proxy_mode: 'tproxy',
 			subscription_url_config_yaml: 'https://example.test/full/path?token=owner-visible' },
@@ -711,6 +717,42 @@ assert_equal(direct_controller.handle_update(update(2100, '/stop_service')), tru
 assert_equal(direct_env.submitted[0].kind, 'service.stop');
 assert_equal(direct_controller.handle_update(update(2101, '/stop')), false);
 
+// Every configured administrator receives replies in their own private chat.
+let multi_admin_env = environment({ settings: {
+	telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42, 84' },
+	core: { subscription_url: 'https://example.test/current', proxy_mode: 'tproxy' }
+} }), multi_admin_controller = telegram.create(multi_admin_env.app);
+assert_equal(multi_admin_controller.handle_update(update(2200, '/start', 84)), true);
+assert_match(multi_admin_env.requests[0].body, /(^|&)chat_id=84(&|$)/);
+
+// Administrator add/remove conversations stay inside the editable panel and
+// submit the complete canonical ID list through the typed settings operation.
+let admin_env = environment({ settings: {
+	telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42, 84' },
+	core: { subscription_url: 'https://example.test/current', proxy_mode: 'tproxy' }
+} }), admin_controller = telegram.create(admin_env.app);
+assert_equal(admin_controller.handle_update(update(2300, '/start')), true);
+assert_equal(admin_controller.handle_update(callback(2301, 'g1:open:settings')), true);
+assert_equal(admin_controller.handle_update(callback(2302, 'g2:execute:add_admin')), true);
+assert_equal(admin_controller.status().awaiting, 'add_admin');
+assert_equal(admin_controller.status().panel_screen, 'admin_input');
+assert_equal(admin_controller.handle_update(update(2303, '126')), true);
+assert_equal(admin_env.submitted[0].kind, 'settings.set');
+assert_equal(admin_env.submitted[0].context.patch.telegram.user_id, '42, 84, 126');
+
+let remove_env = environment({ settings: {
+	telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42, 84' },
+	core: { subscription_url: 'https://example.test/current', proxy_mode: 'tproxy' }
+} }), remove_controller = telegram.create(remove_env.app);
+remove_controller.handle_update(update(2400, '/start'));
+remove_controller.handle_update(callback(2401, 'g1:open:settings'));
+remove_controller.handle_update(callback(2402, 'g2:execute:remove_admin'));
+assert_equal(remove_controller.handle_update(update(2403, '84')), true);
+assert_equal(remove_controller.status().panel_screen, 'confirm_admin_remove');
+assert_equal(remove_controller.handle_update(callback(2404, 'g4:execute:remove_admin')), true);
+assert_equal(remove_env.submitted[0].context.patch.telegram.user_id, '42');
+assert_equal(remove_controller.status().panel_screen, 'operation_loading');
+
 // Subscription replacement is a bounded conversation. Accepted URL messages
 // are deleted, while invalid input remains available for correction.
 let subscription_env = environment(), subscription_controller = telegram.create(subscription_env.app);
@@ -744,14 +786,18 @@ assert_equal(completion_controller.handle_update(callback(3051, 'g1:open:subscri
 assert_equal(completion_controller.handle_update(callback(3052, 'g2:execute:update_subscription')), true);
 let completed = { ...completion_env.submitted[0], state: 'success', stage: 'complete',
 	progress: 100, error: null };
+completion_env.submitted[0] = completed;
 completion_env.operation_subscribers[0](completed);
 assert_equal(completion_controller.poll_once(), true);
-let completion_edit = completion_env.requests[length(completion_env.requests) - 1];
+let completion_edit = null;
+for (let request in completion_env.requests)
+	if (request_method(request) == 'editMessageText') completion_edit = request;
+assert_true(completion_edit != null, 'completed operation did not edit the panel');
 assert_equal(request_method(completion_edit), 'editMessageText');
-let completion_body = urldecode(completion_edit.body);
-assert_match(completion_body, /Обновление подписки: Завершено/);
-assert_true(index(completion_body, 'Подписка\n') < 0,
-	'completed operation result must not be embedded in the subscription menu');
+assert_match(completion_edit.body, /(^|&)chat_id=42(&|$)/);
+assert_match(completion_edit.body, /(^|&)message_id=50(&|$)/);
+assert_match(completion_edit.body, /(^|&)text=[^&]+/);
+assert_equal(completion_controller.status().panel_screen, 'operation_result');
 
 let expired_env = environment(), expired_controller = telegram.create(expired_env.app);
 expired_controller.handle_update(update(3100, '/start'));

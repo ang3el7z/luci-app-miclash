@@ -1,7 +1,12 @@
 import * as errors from 'miclash.errors';
 import * as i18n from 'miclash.telegram-i18n';
 
-const COMMAND_NAMES = [ 'menu' ];
+const COMMAND_NAMES = [
+	'start', 'menu', 'status', 'health', 'memory', 'diagnostics', 'logs', 'help',
+	'start_service', 'stop_service', 'reload_service', 'restart_service',
+	'reboot_router', 'subscription', 'update_subscription', 'update_miclash',
+	'update_mihomo', 'guard_on', 'guard_off'
+];
 
 const SIMPLE_COMMANDS = {
 	start: 'menu', menu: 'menu', status: 'status', health: 'health', memory: 'memory',
@@ -16,8 +21,8 @@ const SIMPLE_COMMANDS = {
 const CALLBACKS = {
 	open: [ 'status', 'management', 'subscription', 'updates', 'guard', 'memory',
 		'logs', 'diagnostics', 'settings' ],
- back: [ 'main', 'management', 'subscription', 'updates', 'guard', 'memory',
- 	'logs', 'diagnostics' ], refresh: [ 'main', 'status', 'memory', 'logs', 'diagnostics' ],
+	back: [ 'main', 'management', 'subscription', 'updates', 'guard', 'memory',
+		'logs', 'diagnostics', 'settings' ], refresh: [ 'main', 'status', 'memory', 'logs', 'diagnostics' ],
 	confirm: [ 'stop', 'guard_off', 'reboot', 'update_miclash', 'update_mihomo' ],
 	execute: [ 'start', 'stop', 'reload', 'restart', 'guard_on', 'guard_off', 'reboot',
 		'update_subscription', 'replace_subscription', 'check_updates', 'update_miclash',
@@ -66,8 +71,8 @@ function button(locale, key, generation_value, action, target) {
 		callback_data: callback(generation_value, action, target) };
 };
 function markup(rows) { return { inline_keyboard: rows }; };
-function back(locale, generation_value) {
-	return [ button(locale, 'back', generation_value, 'back', 'main') ];
+function back(locale, generation_value, target) {
+	return [ button(locale, 'back', generation_value, 'back', target ?? 'main') ];
 };
 
 export function commands(locale) {
@@ -122,7 +127,7 @@ export function render(screen, model, locale, generation_value) {
 				button(locale, 'memory', generation_value, 'open', 'memory') ],
 			[ button(locale, 'logs', generation_value, 'open', 'logs'),
 				button(locale, 'diagnostics', generation_value, 'open', 'diagnostics') ],
-			[ { text: 'Settings', callback_data: callback(generation_value, 'open', 'settings') } ],
+			[ button(locale, 'settings', generation_value, 'open', 'settings') ],
 			[ button(locale, 'reboot_router', generation_value, 'confirm', 'reboot') ]
 		];
 	}
@@ -181,14 +186,25 @@ export function render(screen, model, locale, generation_value) {
 			[ [ button(locale, 'back', generation_value, 'back', model.return_screen) ] ] : [];
 	}
 	else if (screen == 'settings') {
-		text = 'Settings\n\nAdministrators:\n' + value(model, 'administrators', locale);
+		text = i18n.text(locale, 'settings_body', {
+			administrators: value(model, 'administrators', locale)
+		});
 		rows = [
-			[ { text: 'Add administrator', callback_data: callback(generation_value, 'execute', 'add_admin') } ],
-			[ { text: 'Remove administrator', callback_data: callback(generation_value, 'execute', 'remove_admin') } ], back(locale, generation_value) ];
+			[ button(locale, 'add_administrator', generation_value, 'execute', 'add_admin') ],
+			[ button(locale, 'remove_administrator', generation_value, 'execute', 'remove_admin') ],
+			back(locale, generation_value) ];
+	}
+	else if (screen == 'admin_input') {
+		text = i18n.text(locale, model?.admin_action == 'remove_admin' ?
+			'remove_administrator_input' : 'add_administrator_input');
+		rows = [ back(locale, generation_value, 'settings') ];
 	}
 	else if (screen == 'confirm_admin_remove') {
-		text = 'Remove administrator ' + value(model, 'administrator', locale) + '?';
-		rows = [ [ { text: 'Confirm', callback_data: callback(generation_value, 'execute', 'remove_admin') } ], back(locale, generation_value) ];
+		text = i18n.text(locale, 'confirm_remove_administrator_body', {
+			administrator: value(model, 'administrator', locale)
+		});
+		rows = [ [ button(locale, 'confirm', generation_value, 'execute', 'remove_admin') ],
+			back(locale, generation_value, 'settings') ];
 	}
 	else if (screen == 'updates') {
 		text = i18n.text(locale, 'updates_body', {

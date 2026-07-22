@@ -87,9 +87,17 @@ for (let language in [ 'en', 'ru', 'zh-cn' ]) {
 		}
 }
 
+let completed = menu.render('operation_result', {
+	operation_result: 'Subscription update: completed', operation_failed: false
+}, 'en', 8);
+assert_equal(completed.text, 'Subscription update: completed');
+assert_equal(length(completed.reply_markup.inline_keyboard), 0,
+	'success result must not be mixed with a navigation menu');
+
 for (let screen in [ 'status', 'management', 'subscription', 'updates', 'guard',
 	'memory', 'logs', 'diagnostics', 'subscription_input', 'confirm_stop', 'confirm_guard_off',
-	'confirm_reboot', 'confirm_update_miclash', 'confirm_update_mihomo' ]) {
+	'confirm_reboot', 'confirm_update_miclash', 'confirm_update_mihomo', 'settings',
+	'admin_input', 'confirm_admin_remove' ]) {
 	let rendered = menu.render(screen, model, 'en', 7);
 	assert_true(type(rendered.text) == 'string' && length(rendered.text));
 	assert_true(type(rendered.reply_markup.inline_keyboard) == 'array');

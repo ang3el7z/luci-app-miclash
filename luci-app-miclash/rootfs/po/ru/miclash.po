@@ -1795,6 +1795,9 @@ msgstr "Включить управление через Telegram"
 msgid "Enabling Telegram requires a BotFather token and exact user ID."
 msgstr "Для включения Telegram нужны токен BotFather и точный ID пользователя."
 
+msgid "Enabling Telegram requires a BotFather token and exact user IDs."
+msgstr "Для включения Telegram нужны токен BotFather и точные ID пользователей."
+
 msgid "End"
 msgstr "Окончание"
 
@@ -1803,6 +1806,18 @@ msgstr "Введите корректный MAC-адрес, например AA:
 
 msgid "Enter an exact numeric Telegram user ID."
 msgstr "Введите точный числовой ID пользователя Telegram."
+
+msgid "Enter exact numeric Telegram user IDs separated by commas."
+msgstr "Введите точные числовые ID пользователей Telegram через запятую."
+
+msgid "Save Telegram settings before sending a test."
+msgstr "Сохраните настройки Telegram перед отправкой теста."
+
+msgid "Sending Telegram test message…"
+msgstr "Отправка тестового сообщения Telegram…"
+
+msgid "Telegram test message sent."
+msgstr "Тестовое сообщение Telegram отправлено."
 
 msgid "Enter a valid BotFather token."
 msgstr "Введите корректный токен BotFather."

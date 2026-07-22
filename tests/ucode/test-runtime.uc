@@ -6,11 +6,15 @@ let fake_process = fakes.process({
 	'echo:hello': { code: 0 }
 });
 let fake_clock = fakes.clock(1000);
-let rt = runtime.create({ process: fake_process, clock: fake_clock });
+let packaged_fs = fakes.fs({ '/usr/share/miclash/version': '2.0.4\n' });
+let rt = runtime.create({ process: fake_process, clock: fake_clock, fs: packaged_fs });
 
 assert_true(rt.fs != null);
 assert_equal(rt.clock.now(), 1000);
 assert_equal(rt.app_version, '2.0.4');
+let fallback_rt = runtime.create({ process: fakes.process(), clock: fakes.clock(0),
+	fs: fakes.fs({}) });
+assert_equal(fallback_rt.app_version, '0.9.3');
 let timer_fired = false;
 fake_clock.set_timeout(10, () => timer_fired = true);
 fake_clock.advance(9);

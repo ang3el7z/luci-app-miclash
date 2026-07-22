@@ -61,6 +61,8 @@ assert_true(index(selected_logs, 'mihomo: api ready') >= 0);
 assert_throws(() => daemon.compose({}, {}), 'INVALID_ARGUMENT');
 assert_throws(() => daemon.compose({
 	ubus: { connect: () => null }, clock: { now: () => 0 }, paths: { tmp: '/tmp/miclash' }
-}, {}), 'INTERNAL');
+}, {
+	operations: { create: () => ({ recover_interrupted: () => true }) }
+}), 'INTERNAL');
 
 print('daemon boundary tests passed\n');

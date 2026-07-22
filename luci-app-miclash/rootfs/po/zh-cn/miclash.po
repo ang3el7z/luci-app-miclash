@@ -1739,6 +1739,9 @@ msgstr "启用 Telegram 控制"
 msgid "Enabling Telegram requires a BotFather token and exact user ID."
 msgstr "启用 Telegram 需要 BotFather 令牌和精确的用户 ID。"
 
+msgid "Enabling Telegram requires a BotFather token and exact user IDs."
+msgstr "启用 Telegram 需要 BotFather 令牌和准确的用户 ID。"
+
 msgid "End"
 msgstr "结束"
 
@@ -1747,6 +1750,18 @@ msgstr "请输入有效的 MAC 地址，例如 AA:BB:CC:DD:EE:FF。"
 
 msgid "Enter an exact numeric Telegram user ID."
 msgstr "请输入精确的数字 Telegram 用户 ID。"
+
+msgid "Enter exact numeric Telegram user IDs separated by commas."
+msgstr "请输入以逗号分隔的准确 Telegram 数字用户 ID。"
+
+msgid "Save Telegram settings before sending a test."
+msgstr "发送测试前请先保存 Telegram 设置。"
+
+msgid "Sending Telegram test message…"
+msgstr "正在发送 Telegram 测试消息…"
+
+msgid "Telegram test message sent."
+msgstr "Telegram 测试消息已发送。"
 
 msgid "Enter a valid BotFather token."
 msgstr "请输入有效的 BotFather 令牌。"

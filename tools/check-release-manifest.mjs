@@ -252,13 +252,14 @@ function runRepositoryContracts() {
 		'CI shell syntax gate must parse the standalone transition installer');
 
 	const docs = [ 'README.md', 'README.ru.md', 'README.zh-cn.md' ];
-	const commands = [ '/status', '/health', '/memory', '/diagnostics', '/logs', '/help',
-		'/start', '/stop', '/restart', '/reload', '/reboot', '/subscription URL',
+	const commands = [ '/start', '/menu', '/status', '/health', '/memory', '/diagnostics',
+		'/logs', '/help', '/start_service', '/stop_service', '/reload_service',
+		'/restart_service', '/reboot_router', '/subscription URL',
 		'/update_subscription', '/update_miclash', '/update_mihomo', '/guard_on',
 		'/guard_off' ];
 	const required = [ 'OpenWrt 24.10+', '25.12', 'miclashd', 'ubus', 'UCI', 'Guard', 'latch',
 		'YAML', 'diagnostic', 'route test', 'notification', 'Telegram', '/status',
-		'/reboot', 'device polic', 'update' ];
+		'/reboot_router', 'device polic', 'update' ];
 	for (const path of docs) {
 		const text = readFileSync(path, 'utf8');
 		assert.doesNotMatch(text, /23\.05/, `${path} still documents unsupported OpenWrt 23.05`);

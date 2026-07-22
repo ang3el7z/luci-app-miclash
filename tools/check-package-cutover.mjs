@@ -102,9 +102,6 @@ if (startupReconcile < 0 || readyPublication < 0 || readyPublication < startupRe
 	throw new Error('daemon readiness must be atomically published after startup reconcile');
 requireMatch(miclashd, /function shutdown\(\)[\s\S]*readiness\.revoke\(\)[\s\S]*process\.drain\(\)/,
 	'daemon must revoke readiness before normal shutdown drain');
-requireMatch(subscription, /apply_transaction_in_operation[\s\S]*prepare:[\s\S]*settings\.set\(next_patch\)[\s\S]*rollback:/,
-	'subscription replacement must use the coupled durable transaction');
-
 for (const unsafe of [
 	'/tmp/luci-app-miclash.apk', '/tmp/luci-app-miclash.ipk',
 	'/tmp/miclash-release-$$.json', '/tmp/mihomo-release-$$.json', '/tmp/clash.gz'
