@@ -934,10 +934,11 @@ export function create(app) {
 		}
 		catch (error) {
 			state.failures++;
-			state.last_error = errors.normalize(error).code;
+			let failure = errors.normalize(error);
+			state.last_error = failure.code;
 			state.retry_after_ms = min(MAX_BACKOFF_MS,
 				1000 * (1 << min(state.failures - 1, 6)));
-			log_failure('Telegram poll failed');
+			log_failure('Telegram poll failed: ' + failure.code);
 			return false;
 		}
 	};
