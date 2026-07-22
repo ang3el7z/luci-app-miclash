@@ -2279,5 +2279,20 @@ msgstr "已计划"
 msgid "Updating"
 msgstr "正在更新"
 
+msgid "Provider synchronization"
+msgstr "代理提供者同步"
+
+msgid "Synchronized"
+msgstr "已同步"
+
+msgid "Waiting for providers"
+msgstr "等待代理提供者"
+
+msgid "Error"
+msgstr "错误"
+
 msgid "Waiting"
 msgstr "等待中"
+
+msgid "OpenWrt"
+msgstr "OpenWrt"

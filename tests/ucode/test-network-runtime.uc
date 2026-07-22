@@ -96,10 +96,18 @@ let settings = {
 let idle = environment();
 assert_equal(idle.api.is_clean(), true,
 	'idle native network state was not recognized without mutation');
+assert_equal(sprintf('%J', idle.api.refresh_components()), sprintf('%J', {
+	dns: { state: 'system' }, firewall: { state: 'system' }, routing: { state: 'system' }
+}), 'clean stopped network state was not classified as OpenWrt-owned');
+assert_equal(sprintf('%J', idle.api.component_status()), sprintf('%J', {
+	dns: { state: 'system' }, firewall: { state: 'system' }, routing: { state: 'system' }
+}), 'component status did not reuse the latest observer-proven snapshot');
 assert_equal(length(filter(idle.calls, (name) => match(name, /\.cleanup$/))), 0,
 	'clean observation unexpectedly mutated a network component');
 assert_equal(environment('dns-conflict').api.is_clean(), true,
 	'foreign DNS state without MiClash ownership triggered stopped cleanup');
+assert_equal(environment('dns-conflict').api.refresh_components().dns.state, 'failed',
+	'ambiguous DNS ownership was presented as a clean OpenWrt fallback');
 
 let live_projection = network.interface_projection({ ...settings, interfaces: {
 	...settings.interfaces, mode: 'exclude', auto_detect_lan: true, auto_detect_wan: true,
@@ -123,6 +131,9 @@ assert_equal(applied.runtime.mutation_lock_lease, null,
 	'network mutation leaked the in-process lease');
 assert_equal(applied.filesystem.lstat('/var/run/miclash/mutation.lock'), null,
 	'network mutation leaked the on-disk owner lease');
+assert_equal(sprintf('%J', applied.api.component_status()), sprintf('%J', {
+	dns: { state: 'active' }, firewall: { state: 'active' }, routing: { state: 'active' }
+}), 'successful apply did not publish its observer-proven component state');
 assert_equal(applied.api.is_clean(), false,
 	'active native ownership was mistaken for a clean stopped state');
 

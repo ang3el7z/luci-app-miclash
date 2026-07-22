@@ -316,6 +316,51 @@ export function device_external_interfaces(snapshot) {
 	return type(wan) == 'string' && length(wan) ? [ wan ] : [];
 };
 
+function guard_component_status(runtime, settings) {
+	let enabled = settings?.guard?.enabled === true;
+	try {
+		let raw = runtime.fs.readfile('/var/run/miclash/guard-bootstrap.json');
+		if (type(raw) != 'string' || length(raw) > 4096) return { state: 'unknown' };
+		let observed = json(raw);
+		if (observed?.schema_version != 1 || type(observed?.enabled) != 'bool' ||
+		    type(observed?.installed) != 'bool' || observed.enabled != enabled)
+			return { state: 'failed' };
+		if (enabled)
+			return { state: observed.installed ? 'enabled' : 'failed' };
+		return { state: observed.installed ? 'failed' : 'disabled' };
+	}
+	catch (error) { return { state: 'unknown' }; }
+};
+
+export function observed_component_status(runtime, network_domain, service, settings) {
+	let observed;
+	try {
+		let read = type(network_domain.component_status) == 'function'
+			? network_domain.component_status : network_domain.observe_components;
+		observed = read();
+	}
+	catch (error) { observed = {}; }
+	let service_state = service?.running === true ? 'running' :
+		(service?.state == 'stopped' || service?.state == 'missing_kernel' ? 'stopped' : 'unknown');
+	let guard = guard_component_status(runtime, settings), result = { guard };
+	for (let name in [ 'dns', 'firewall', 'routing' ]) {
+		let ownership = observed?.[name]?.state ?? 'unknown', state = 'unknown';
+		if (service_state == 'running')
+			state = ownership == 'active' ? 'ready' :
+				(ownership == 'unknown' ? 'unknown' : 'failed');
+		else if (service_state == 'stopped') {
+			if (ownership == 'system') {
+				if (name == 'firewall' && settings?.guard?.enabled === true)
+					state = guard.state == 'enabled' ? 'guard' : guard.state;
+				else state = 'system';
+			}
+			else state = ownership == 'unknown' ? 'unknown' : 'failed';
+		}
+		result[name] = { state };
+	}
+	return result;
+};
+
 const RULESET_ROOT = '/opt/clash/lst';
 const WHITELIST_RULESET = 'fakeip-whitelist-ipcidr.txt';
 
@@ -446,6 +491,7 @@ export function compose(runtime, overrides) {
 		let device_app = null;
 		let provider_sync_domain = null, provider_candidate = null;
 		let native_network = modules.network.create(runtime);
+		try { native_network.refresh_components?.(); } catch (error) {}
 		let policy_network = {
 			apply: (settings) => {
 				if (device_app == null) errors.fail('HEALTH_FAILED');
@@ -1055,6 +1101,9 @@ export function compose(runtime, overrides) {
 				device_vendors: device_vendor_domain.status(),
 				providers: provider_sync_domain.status() }),
 			settings: settings_domain.get,
+			telegram: telegram_domain.status,
+			network_components: () => observed_component_status(runtime, native_network,
+				app.overview()?.observed?.service, settings_domain.get()),
 			last_repair,
 			config: () => configuration.read_active('config.yaml'),
 			process: () => service_adapter.observe('config.yaml'),

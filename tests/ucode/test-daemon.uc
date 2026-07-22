@@ -58,6 +58,38 @@ assert_true(index(selected_logs, 'clash-hotplug: wan ready') < 0);
 assert_true(index(selected_logs, 'clash: core ready') >= 0);
 assert_true(index(selected_logs, 'mihomo: api ready') >= 0);
 
+function component_status(service, network_state, guard_enabled, guard_document) {
+	let filesystem = fakes.fs(guard_document == null ? {} : {
+		'/var/run/miclash/guard-bootstrap.json': sprintf('%J', guard_document)
+	});
+	return daemon.observed_component_status({ fs: filesystem }, {
+		observe_components: () => network_state
+	}, service, { guard: { enabled: guard_enabled } });
+};
+let system_network = {
+	dns: { state: 'system' }, firewall: { state: 'system' }, routing: { state: 'system' }
+};
+assert_equal(sprintf('%J', component_status({ state: 'stopped', running: false },
+	system_network, false, { schema_version: 1, enabled: false, installed: false })),
+	sprintf('%J', { guard: { state: 'disabled' }, dns: { state: 'system' },
+		firewall: { state: 'system' }, routing: { state: 'system' } }),
+	'clean stopped mode was not exposed as verified OpenWrt ownership');
+assert_equal(component_status({ state: 'stopped', running: false }, system_network, true,
+	{ schema_version: 1, enabled: true, installed: true }).firewall.state, 'guard',
+	'verified fail-closed firewall was not exposed as Guard-owned');
+let active_network = {
+	dns: { state: 'active' }, firewall: { state: 'active' }, routing: { state: 'active' }
+};
+let running_components = component_status({ state: 'running', running: true }, active_network,
+	false, { schema_version: 1, enabled: false, installed: false });
+for (let name in [ 'dns', 'firewall', 'routing' ])
+	assert_equal(running_components[name].state, 'ready');
+let stale_components = component_status({ state: 'stopped', running: false }, active_network,
+	false, { schema_version: 1, enabled: false, installed: false });
+for (let name in [ 'dns', 'firewall', 'routing' ])
+	assert_equal(stale_components[name].state, 'failed',
+		'stale active ' + name + ' ownership was hidden after service stop');
+
 let page_source = 'Mon Jul 20 02:00:00 2026 daemon.info miclash: first\n' +
 	'Mon Jul 20 02:00:01 2026 daemon.info miclash: second\n';
 let page_runtime = {

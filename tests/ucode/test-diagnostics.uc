@@ -73,6 +73,10 @@ let sources = {
 		core: { subscription_url: secrets.subscription_url },
 		telegram: { enabled: true, token: secrets.telegram_token, user_id: '42' }
 	}),
+	telegram: () => ({ running: true, enabled: true, configured: true,
+		last_error: null, failures: 0, token: secrets.telegram_token }),
+	network_components: () => ({ dns: { state: 'active' }, firewall: { state: 'active' },
+		routing: { state: 'active' }, guard: { state: 'enabled' } }),
 	last_repair: () => ({ result: 'success', context:
 		'cookie=' + secrets.cookie }),
 	config: () => report_source('config', 'secret: ' + secrets.api_key + '\n'),
@@ -113,6 +117,13 @@ assert_equal(summary.versions.miclash, 'v0.9.2');
 assert_equal(summary.architecture, 'aarch64_cortex-a53');
 assert_equal(summary.telegram.enabled, true);
 assert_equal(summary.telegram.configured, true);
+assert_equal(summary.telegram.running, true);
+assert_equal(summary.telegram.last_error, null);
+assert_equal(summary.telegram.failures, 0);
+assert_equal(summary.components.dns.state, 'active');
+assert_equal(summary.components.firewall.state, 'active');
+assert_equal(summary.components.routing.state, 'active');
+assert_equal(summary.components.guard.state, 'enabled');
 assert_true(type(summary.state.desired) == 'object');
 assert_true(type(summary.state.observed) == 'object');
 assert_true(type(summary.health.mihomo) == 'object');

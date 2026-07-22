@@ -13,6 +13,11 @@ function unique(values) {
 	return result;
 };
 
+function clone(value) {
+	try { return json(sprintf('%J', value)); }
+	catch (error) { fail('INTERNAL'); }
+};
+
 export function interface_projection(settings, snapshot) {
 	let interfaces = settings?.interfaces;
 	if (type(interfaces) != 'object' ||
@@ -72,6 +77,10 @@ export function create(runtime, injected) {
 	    type(modules.dns.apply) != 'function' || type(modules.dns.recover) != 'function' ||
 	    type(modules.dns.cleanup) != 'function')
 		fail('INVALID_ARGUMENT');
+	let component_state = {
+		dns: { state: 'unknown' }, firewall: { state: 'unknown' },
+		routing: { state: 'unknown' }
+	};
 
 	function apply(settings, additions) {
 		return with_lock(runtime, { barrier: 'normal', wait_ms: 0 }, () => {
@@ -124,8 +133,16 @@ export function create(runtime, injected) {
 				if (touched_routing) try {
 					modules.routing.cleanup(runtime, modules.routing.observe(runtime));
 				} catch (error) { rollback_failed = true; }
+				component_state = {
+					dns: { state: 'unknown' }, firewall: { state: 'unknown' },
+					routing: { state: 'unknown' }
+				};
 				fail(rollback_failed ? 'INTERNAL' : failure);
 			}
+			component_state = {
+				dns: { state: 'active' }, firewall: { state: 'active' },
+				routing: { state: 'active' }
+			};
 			return { changed: true, firewall_generation: firewall.generation };
 		});
 	};
@@ -138,6 +155,61 @@ export function create(runtime, injected) {
 			!length(route_state?.ownership?.committed?.routes ?? []) &&
 			!length(route_state?.ownership?.committed?.rules ?? []) &&
 			dns_state?.ownership?.trusted !== true;
+	};
+
+	function observe_components() {
+		let result = {};
+		try {
+			let observed = modules.dns.observe(runtime);
+			if (length(observed?.conflicts ?? []))
+				result.dns = { state: 'failed' };
+			else if (observed?.ownership?.trusted === true &&
+			         observed.ownership.state == 'active' &&
+			         observed.ownership.transition == null)
+				result.dns = { state: 'active' };
+			else if (observed?.ownership?.trusted !== true)
+				result.dns = { state: 'system' };
+			else
+				result.dns = { state: 'failed' };
+		}
+		catch (error) { result.dns = { state: 'unknown' }; }
+
+		try {
+			let observed = modules.nft.observe(runtime);
+			result.firewall = type(observed?.installed) == 'bool'
+				? { state: observed.installed ? 'active' : 'system' }
+				: { state: 'unknown' };
+		}
+		catch (error) { result.firewall = { state: 'unknown' }; }
+
+		try {
+			let observed = modules.routing.observe(runtime), ownership = observed?.ownership;
+			let committed = length(ownership?.committed?.routes ?? []) +
+				length(ownership?.committed?.rules ?? []);
+			let ambiguous = ownership?.status == 'invalid' || ownership?.transition != null;
+			for (let item in [ ...(observed?.routes ?? []), ...(observed?.rules ?? []) ])
+				if (item?.ambiguous === true) ambiguous = true;
+			let tun = observed?.interfaces?.['clash-tun'] === true;
+			if (ambiguous)
+				result.routing = { state: 'failed' };
+			else if (committed > 0)
+				result.routing = { state: 'active' };
+			else if (!tun)
+				result.routing = { state: 'system' };
+			else
+				result.routing = { state: 'failed' };
+		}
+		catch (error) { result.routing = { state: 'unknown' }; }
+		return result;
+	};
+
+	function refresh_components() {
+		component_state = observe_components();
+		return clone(component_state);
+	};
+
+	function component_status() {
+		return clone(component_state);
 	};
 
 	function cleanup(settings) {
@@ -170,11 +242,20 @@ export function create(runtime, injected) {
 			// and proves one coherent clean terminal state under the same lease.
 			let result = sweep();
 			if (!result.clean || result.reported_failure) result = sweep();
-			if (!result.clean || result.reported_failure)
+			if (!result.clean || result.reported_failure) {
+				component_state = {
+					dns: { state: 'unknown' }, firewall: { state: 'unknown' },
+					routing: { state: 'unknown' }
+				};
 				fail(result.reported_failure ? 'INTERNAL' : 'HEALTH_FAILED');
+			}
+			component_state = {
+				dns: { state: 'system' }, firewall: { state: 'system' },
+				routing: { state: 'system' }
+			};
 			return { clean: true, guard_preserved: settings.guard.enabled };
 		});
 	};
 
-	return { apply, cleanup, is_clean };
+	return { apply, cleanup, is_clean, refresh_components, component_status };
 };

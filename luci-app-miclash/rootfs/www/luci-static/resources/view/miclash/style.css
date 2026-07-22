@@ -1177,16 +1177,19 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
-	font-weight: 700;
+	color: var(--sbox-text);
+	font-weight: 600;
+	text-align: right;
 	white-space: nowrap;
 }
 .sbox-diagnostics-state-icon {
 	font-size: 10px;
+	color: var(--sbox-muted);
 }
-.sbox-diagnostics-state-ok { color: var(--sbox-success); }
-.sbox-diagnostics-state-warning { color: var(--sbox-warn); }
-.sbox-diagnostics-state-error { color: var(--sbox-danger); }
-.sbox-diagnostics-state-unknown { color: var(--sbox-muted); }
+.sbox-diagnostics-state-ok .sbox-diagnostics-state-icon { color: var(--sbox-success); }
+.sbox-diagnostics-state-warning .sbox-diagnostics-state-icon { color: var(--sbox-warn); }
+.sbox-diagnostics-state-error .sbox-diagnostics-state-icon { color: var(--sbox-danger); }
+.sbox-diagnostics-state-unknown .sbox-diagnostics-state-icon { color: var(--sbox-muted); }
 .sbox-diagnostics-actions {
 	display: flex;
 	flex-wrap: wrap;

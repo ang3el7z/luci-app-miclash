@@ -2326,5 +2326,20 @@ msgstr "Запланировано"
 msgid "Updating"
 msgstr "Обновление"
 
+msgid "Provider synchronization"
+msgstr "Синхронизация providers"
+
+msgid "Synchronized"
+msgstr "Синхронизировано"
+
+msgid "Waiting for providers"
+msgstr "Ожидание providers"
+
+msgid "Error"
+msgstr "Ошибка"
+
 msgid "Waiting"
 msgstr "Ожидание"
+
+msgid "OpenWrt"
+msgstr "OpenWrt"

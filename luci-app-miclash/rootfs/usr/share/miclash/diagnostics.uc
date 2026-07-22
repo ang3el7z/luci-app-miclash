@@ -227,7 +227,7 @@ function public_status(settings) {
 function collect_summary(sources) {
 	let result = {};
 	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
-		'updates', 'settings', 'last_repair' ])
+		'updates', 'settings', 'telegram', 'network_components', 'last_repair' ])
 		result[name] = call(sources, name);
 	result.public_status = public_status(result.settings);
 	return sanitize(result);
@@ -273,7 +273,7 @@ function bound_section(name, value, limit) {
 function collect(sources) {
 	let result = {};
 	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
-		'updates', 'settings', 'last_repair' ])
+		'updates', 'settings', 'telegram', 'network_components', 'last_repair' ])
 		result[name] = call(sources, name);
 	let sections = {};
 	for (let name in [ 'config', 'process', 'logs', 'uci', 'operations' ]) {
@@ -331,6 +331,19 @@ function report_issues(safe) {
 			safe.last_repair.message ?? safe.last_repair.error);
 	return issues;
 };
+function compact_telegram(public_status, live) {
+	let status = type(public_status) == 'object' ? public_status : {
+		enabled: false, configured: false
+	};
+	return {
+		enabled: status.enabled === true,
+		configured: status.configured === true,
+		running: live?.running === true,
+		last_error: type(live?.last_error) == 'string' ? live.last_error :
+			(live?.code == 'UNAVAILABLE' ? 'UNAVAILABLE' : null),
+		failures: type(live?.failures) == 'int' && live.failures >= 0 ? live.failures : 0
+	};
+};
 function make_summary(safe, now) {
 	return {
 		schema_version: 1,
@@ -342,9 +355,10 @@ function make_summary(safe, now) {
 			observed: safe.state?.observed ?? {}
 		},
 		health: safe.health,
+		components: safe.network_components,
 		memory: safe.memory,
 		updates: safe.updates,
-		telegram: safe.public_status.telegram,
+		telegram: compact_telegram(safe.public_status.telegram, safe.telegram),
 		subscription: safe.public_status.subscription,
 		last_repair: safe.last_repair
 	};
@@ -514,7 +528,7 @@ export function create(dependencies) {
 		runtime?.paths?.tmp != '/tmp/miclash' || type(sources) != 'object')
 		invalid();
 	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
-		'updates', 'settings', 'last_repair', 'config', 'process', 'logs', 'uci',
+		'updates', 'settings', 'telegram', 'last_repair', 'config', 'process', 'logs', 'uci',
 		'operations' ])
 		if (type(sources[name]) != 'function') invalid();
 	ensure_directory(runtime, runtime.paths.tmp);

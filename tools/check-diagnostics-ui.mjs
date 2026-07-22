@@ -47,6 +47,10 @@ assert.match(css, /@supports[^}]*color-mix[\s\S]*\.sbox-overview-card[^}]*color-
 assert.match(css,
 	/color-mix\(in srgb, var\(--sbox-panel\) 92%, var\(--sbox-text\) 8%\)/,
 	'overview cards must remain theme-aware while using the approved brighter surface');
+assert.match(css, /\.sbox-diagnostics-state\s*\{[^}]*color:\s*var\(--sbox-text\)/s,
+	'component values must use the same readable value color as adjacent overview cards');
+assert.match(css, /\.sbox-diagnostics-state-ok\s+\.sbox-diagnostics-state-icon\s*\{[^}]*var\(--sbox-success\)/s,
+	'only the component indicator dot should carry the semantic success color');
 assert.match(css,
 	/@media \(max-width: 1050px\)[\s\S]*?\.sbox-overview-protection \.sbox-diagnostics-facts\s*\{[^}]*grid-template-columns:\s*repeat\(2,/,
 	'medium-width Memory Guard facts must form a balanced two-column grid');
@@ -220,10 +224,15 @@ const replies = {
 			routing: { state: 'ok', code: 'READY', message: 'Routes ready', details: { mark: '0x162' } },
 			guard: { state: 'ok', code: 'ENABLED', message: 'Fail closed', details: { enabled: true } }
 		},
+		components: {
+			dns: { state: 'ready' }, firewall: { state: 'ready' },
+			routing: { state: 'ready' }, guard: { state: 'enabled' }
+		},
 		memory: { enabled: true, current_rss_kb: 102400, baseline_rss_kb: 81920,
 			phase: 'monitoring', cooldown_until: 1710000200000 },
 		last_repair: { component: 'firewall', action: 'reconcile', result: 'success', at: 1710000000 },
 		updates: {
+			providers: { running: false, reason: 'synchronized', last_success: 1710000000000 },
 			automatic_config: { running: true, enabled: true, reason: null,
 				next_attempt: 1710000300000, failure_count: 0, last_failure_code: null },
 			automatic_miclash: { running: true, enabled: true, local_time_valid: true,
@@ -231,7 +240,7 @@ const replies = {
 				next_check: 1710000300000, last_error_code: 'ASSETS_PENDING' }
 		},
 		subscription: { configured: true, transport: 'https', insecure: false },
-		telegram: { enabled: true, configured: true }
+		telegram: { running: true, enabled: true, configured: true, failures: 0, last_error: null }
 	}
 };
 const api = {
@@ -272,11 +281,12 @@ assert.deepEqual(calls.map((call) => call[0]),
 	['diagnosticsSummary'], 'summary refresh must use one cached diagnostics RPC');
 const summaryText = host.textContent;
 for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Memory monitoring', 'Mihomo memory (RSS)',
-	'Status', 'Baseline', 'Last action', 'Config auto-update', 'MiClash auto-update',
+	'Status', 'Baseline', 'Last action', 'Telegram', 'Provider synchronization',
+	'Config auto-update', 'MiClash auto-update',
 	'Download diagnostic report'])
 	assert.ok(summaryText.includes(label), `summary is missing ${label}`);
-assert.doesNotMatch(summaryText, /Subscription|Telegram/,
-	'configuration and optional integrations must not be presented as components');
+assert.doesNotMatch(summaryText, /Subscription/,
+	'configuration data must not be presented as a component');
 for (const obsolete of ['Pressure', 'Cooldown', 'Recovery'])
 	assert.doesNotMatch(summaryText, new RegExp(obsolete), `memory overview still exposes ${obsolete}`);
 assert.doesNotMatch(summaryText, /Details|Route test/,
@@ -299,16 +309,19 @@ assert.equal(host.querySelector('a[data-action="download-report"]'), null,
 assert.doesNotMatch(summaryText, /Guard●(?:Enabled|Disabled)/,
 	'overview must not duplicate the Guard state already shown in the page header');
 assert.match(summaryText, /Mihomo memory \(RSS\)100\.0 MiB/);
-assert.match(summaryText, /StatusMonitoring/);
+assert.match(summaryText, /Status●Monitoring/);
 assert.match(summaryText, /Baseline80\.0 MiB/);
 assert.match(summaryText, /Last actionNot required/);
+assert.match(summaryText,
+	/Telegram●Ready[\s\S]*Provider synchronization●Synchronized[\s\S]*Config auto-update/,
+	'integration component rows must precede the existing update schedulers');
 assert.ok(summaryText.indexOf('Status') < summaryText.indexOf('Mihomo memory (RSS)'),
 	'Memory Guard status must be its first fact');
 assert.match(summaryText, /Config auto-update●Scheduled/,
 	'healthy config scheduler must expose its scheduled wait');
 assert.match(summaryText, /MiClash auto-update●Waiting/,
 	'publication wait must not be presented as a failure');
-assert.equal(host.querySelectorAll('.sbox-diagnostics-state-warning').length >= 3, true,
+assert.equal(host.querySelectorAll('.sbox-diagnostics-state-warning').length >= 2, true,
 	'scheduled update rows must use the warning/waiting color without becoming errors');
 assert.equal(host.querySelector('img'), null, 'summary created an unexpected element');
 const statusFallback = panel.renderSummary({
@@ -322,6 +335,10 @@ const arrayHealth = panel.renderSummary({ status: replies.status, health: {}, su
 assert.match(arrayHealth, /Mihomo●Degraded/, 'component arrays must normalize safely');
 const stoppedHealth = panel.renderSummary({ summary: {
 	...replies.summary,
+	components: {
+		dns: { state: 'system' }, firewall: { state: 'system' },
+		routing: { state: 'system' }, guard: { state: 'disabled' }
+	},
 	health: {},
 	state: {
 		observed: {
@@ -331,10 +348,23 @@ const stoppedHealth = panel.renderSummary({ summary: {
 	}
 } });
 assert.match(stoppedHealth.textContent,
-	/Mihomo●Stopped[\s\S]*DNS●Inactive[\s\S]*Firewall●Inactive[\s\S]*Routing●Inactive/,
-	'an intentionally stopped Mihomo must not be presented as four component failures');
+	/Mihomo●Stopped[\s\S]*DNS●OpenWrt[\s\S]*Firewall●OpenWrt[\s\S]*Routing●OpenWrt/,
+	'a clean stopped mode must identify verified OpenWrt ownership');
 assert.equal(stoppedHealth.querySelectorAll('.sbox-diagnostics-state-error').length, 0,
 	'inactive component dependencies must use a neutral state');
+const guardedStoppedHealth = panel.renderSummary({ summary: {
+	...replies.summary,
+	components: {
+		dns: { state: 'system' }, firewall: { state: 'guard' },
+		routing: { state: 'system' }, guard: { state: 'enabled' }
+	},
+	health: {},
+	state: { observed: { service: { state: 'stopped', running: false } } }
+} });
+assert.match(guardedStoppedHealth.textContent, /Firewall●Guard/,
+	'a verified fail-closed firewall must be distinguishable from plain OpenWrt');
+assert.match(stoppedHealth.textContent, /Mihomo memory \(RSS\)Inactive/,
+	'a stopped Mihomo must not expose a stale RSS sample');
 const readinessHealth = panel.renderSummary({ summary: {
 	...replies.summary,
 	health: {},
@@ -382,6 +412,32 @@ const schedulerFailure = panel.renderSummary({ summary: { ...replies.summary,
 assert.equal(schedulerFailure.querySelectorAll('.sbox-diagnostics-state-error').length >= 2, true,
 	'real scheduler failures must use the error color');
 
+const integrationStates = [
+	[{ running: false, enabled: false, configured: false },
+		{ running: false, reason: 'pending' },
+		/Telegram●Disabled[\s\S]*Provider synchronization●Scheduled/],
+	[{ running: false, enabled: true, configured: false },
+		{ running: true, reason: 'pending' },
+		/Telegram●Not configured[\s\S]*Provider synchronization●Updating/],
+	[{ running: true, enabled: true, configured: true, failures: 2, last_error: 'NETWORK' },
+		{ running: false, reason: 'waiting_for_mihomo' },
+		/Telegram●Failed[\s\S]*Provider synchronization●Waiting for Mihomo/],
+	[{ running: false, enabled: true, configured: true, failures: 0, last_error: null },
+		{ running: false, reason: 'waiting_for_providers' },
+		/Telegram●Failed[\s\S]*Provider synchronization●Waiting for providers/],
+	[{ running: true, enabled: true, configured: true, failures: 0, last_error: null },
+		{ running: false, reason: 'HEALTH_FAILED' },
+		/Telegram●Ready[\s\S]*Provider synchronization●Failed/]
+];
+for (const [telegram, providers, expected] of integrationStates) {
+	const rendered = panel.renderSummary({ summary: {
+		...replies.summary,
+		telegram,
+		updates: { ...replies.summary.updates, providers }
+	} });
+	assert.match(rendered.textContent, expected);
+}
+
 const disabledMemory = panel.renderSummary({ summary: {
 	...replies.summary,
 	memory: { enabled: false, current_rss_kb: 102400, baseline_rss_kb: 81920,
@@ -390,9 +446,24 @@ const disabledMemory = panel.renderSummary({ summary: {
 } }).textContent;
 assert.match(disabledMemory, /Mihomo memory \(RSS\)100\.0 MiB/,
 	'live RSS must remain visible while Memory Guard is disabled');
-assert.match(disabledMemory, /StatusDisabled/);
+assert.match(disabledMemory, /Status●Disabled/);
 assert.match(disabledMemory, /BaselineInactive/);
 assert.match(disabledMemory, /Last actionNot required/);
+
+const unavailableRss = panel.renderSummary({ summary: {
+	...replies.summary,
+	memory: { enabled: true, current_rss_kb: null, phase: 'monitoring' },
+	state: { observed: { service: { state: 'running', running: true } } }
+} }).textContent;
+assert.match(unavailableRss, /Mihomo memory \(RSS\)Error/,
+	'a running Mihomo without readable metrics must expose an RSS error');
+const unknownRss = panel.renderSummary({ summary: {
+	...replies.summary,
+	memory: { enabled: true, current_rss_kb: null, phase: 'waiting_for_mihomo' },
+	state: { observed: { service: { state: 'unknown' } } }
+} }).textContent;
+assert.match(unknownRss, /Mihomo memory \(RSS\)Unknown/,
+	'an indeterminate service state must not be mislabeled as inactive or failed');
 
 const memoryPhases = {
 	waiting_for_mihomo: 'Waiting for Mihomo', warming_up: 'Warming up',
@@ -401,21 +472,33 @@ const memoryPhases = {
 	recovery_deferred: 'Recovery postponed', failure_rearm_wait: 'Waiting to resume monitoring'
 };
 for (const [phase, label] of Object.entries(memoryPhases)) {
-	const text = panel.renderSummary({ summary: {
+	const rendered = panel.renderSummary({ summary: {
 		...replies.summary, memory: { enabled: true, current_rss_kb: 102400,
 			baseline_rss_kb: phase === 'learning_baseline' ? null : 81920, phase }
-	} }).textContent;
-	assert.match(text, new RegExp('Status' + label), `memory phase ${phase} is not user friendly`);
+	} });
+	const text = rendered.textContent;
+	assert.match(text, new RegExp('Status●' + label), `memory phase ${phase} is not user friendly`);
+	const status = rendered.querySelector('.sbox-overview-protection')?.querySelector('.sbox-diagnostics-state');
+	const expectedClass = phase === 'monitoring' ? 'sbox-diagnostics-state-ok' :
+		phase === 'waiting_for_mihomo' ? 'sbox-diagnostics-state-unknown' :
+		'sbox-diagnostics-state-warning';
+	assert.match(status?.className || '', new RegExp(expectedClass),
+		`memory phase ${phase} has the wrong semantic indicator`);
 }
 for (const [phase, label] of [
 	['cooldown', 'Cooldown until'],
 	['failure_cooldown', 'Paused after failed recovery until']
 ]) {
-	const text = panel.renderSummary({ summary: {
+	const rendered = panel.renderSummary({ summary: {
 		...replies.summary, memory: { enabled: true, current_rss_kb: 102400,
 			baseline_rss_kb: 81920, phase, cooldown_until: 1710000200000 }
-	} }).textContent;
-	assert.match(text, new RegExp('Status' + label), `memory phase ${phase} lost its deadline`);
+	} });
+	const text = rendered.textContent;
+	assert.match(text, new RegExp('Status●' + label), `memory phase ${phase} lost its deadline`);
+	const status = rendered.querySelector('.sbox-overview-protection')?.querySelector('.sbox-diagnostics-state');
+	assert.match(status?.className || '', new RegExp(phase === 'failure_cooldown' ?
+		'sbox-diagnostics-state-error' : 'sbox-diagnostics-state-warning'),
+		`memory phase ${phase} has the wrong semantic indicator`);
 }
 
 const memoryAction = panel.renderSummary({ summary: {

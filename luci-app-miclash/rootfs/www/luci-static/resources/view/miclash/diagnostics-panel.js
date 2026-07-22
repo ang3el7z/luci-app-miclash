@@ -49,13 +49,15 @@ function stateName(value) {
 	if (state === 'degraded' || state === 'warning') return _('Degraded');
 	if (state === 'stopped') return _('Stopped');
 	if (state === 'inactive') return _('Inactive');
+	if (state === 'system') return _('OpenWrt');
+	if (state === 'guard') return _('Guard');
 	if (state === 'failed' || state === 'error') return _('Failed');
 	return _('Unknown');
 }
 
 function stateClass(value) {
 	const state = String(value || 'unknown').toLowerCase();
-	if (state === 'ok' || state === 'running' || state === 'ready' || state === 'success') return 'sbox-diagnostics-state-ok';
+	if (state === 'ok' || state === 'running' || state === 'ready' || state === 'success' || state === 'guard') return 'sbox-diagnostics-state-ok';
 	if (state === 'degraded' || state === 'warning') return 'sbox-diagnostics-state-warning';
 	if (state === 'failed' || state === 'error') return 'sbox-diagnostics-state-error';
 	return 'sbox-diagnostics-state-unknown';
@@ -100,6 +102,28 @@ function miclashSchedulerState(value) {
 	return { state: 'ready', label: _('Ready') };
 }
 
+function telegramComponentState(value) {
+	if (!value || typeof value !== 'object') return { state: 'unknown', label: _('Unknown') };
+	if (value.enabled !== true) return { state: 'unknown', label: _('Disabled') };
+	if (value.configured !== true) return { state: 'unknown', label: _('Not configured') };
+	if (value.running !== true || value.last_error || Number(value.failures) > 0)
+		return { state: 'error', label: _('Failed') };
+	return { state: 'ready', label: _('Ready') };
+}
+
+function providerSyncState(value) {
+	if (!value || typeof value !== 'object') return { state: 'unknown', label: _('Unknown') };
+	if (value.running === true) return { state: 'warning', label: _('Updating') };
+	if (value.reason === 'synchronized') return { state: 'ready', label: _('Synchronized') };
+	if (value.reason === 'waiting_for_mihomo')
+		return { state: 'unknown', label: _('Waiting for Mihomo') };
+	if (value.reason === 'waiting_for_providers')
+		return { state: 'warning', label: _('Waiting for providers') };
+	if (value.reason === 'pending') return { state: 'warning', label: _('Scheduled') };
+	if (value.reason) return { state: 'error', label: _('Failed') };
+	return { state: 'unknown', label: _('Unknown') };
+}
+
 function valueRow(label, value, className) {
 	return E('div', { 'class': 'sbox-diagnostics-row ' + (className || '') }, [
 		E('span', { 'class': 'sbox-diagnostics-label' }, label),
@@ -119,6 +143,14 @@ function memoryBytes(memory, bytesName, kbName) {
 	if (memory && memory[bytesName] != null) return bytes(memory[bytesName]);
 	if (memory && memory[kbName] != null) return bytes(Number(memory[kbName]) * 1024);
 	return '-';
+}
+
+function memoryRssValue(memory, serviceState) {
+	if (serviceState === 'stopped') return _('Inactive');
+	if (serviceState !== 'running') return _('Unknown');
+	let value = memoryBytes(memory, 'rss_bytes', 'current_rss_kb');
+	if (value === '-') value = memoryBytes(memory, 'rss_bytes', 'rss_kb');
+	return value === '-' ? _('Error') : value;
 }
 
 function normalizedGraph(value) {
@@ -216,6 +248,17 @@ function memoryPhaseValue(memory) {
 	return labels[memory?.phase] || _('Inactive');
 }
 
+function memoryPhaseState(memory) {
+	if (memory?.enabled !== true) return 'inactive';
+	if (memory?.phase === 'monitoring') return 'ready';
+	if (memory?.phase === 'failure_cooldown') return 'error';
+	if ([
+		'warming_up', 'learning_baseline', 'recovery_queued', 'recovering',
+		'recovery_deferred', 'failure_rearm_wait', 'cooldown'
+	].includes(memory?.phase)) return 'warning';
+	return 'unknown';
+}
+
 function memoryBaselineValue(memory) {
 	if (memory?.enabled !== true) return _('Inactive');
 	const baseline = memoryBytes(memory, 'baseline_bytes', 'baseline_rss_kb');
@@ -295,7 +338,7 @@ function create(options) {
 		return E('div', { 'class': 'sbox-diagnostics-card-grid' }, [
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-health sbox-overview-components' }, [
 				E('h4', {}, _('Components')),
-				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 6 })
+				view_miclash_ui_shell.loadingBlock({ kind: 'compact', lines: 8 })
 			]),
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
 				E('h4', {}, _('Memory monitoring')),
@@ -316,7 +359,7 @@ function create(options) {
 			status.observed?.service?.state ?? status.state?.observed?.service?.state ??
 			(typeof serviceRunning === 'boolean' ? (serviceRunning ? 'running' : 'stopped') : 'unknown')).toLowerCase();
 		const componentRows = COMPONENTS.filter(([ name ]) => name !== 'guard').map(([ name, label ]) => {
-			let componentState = health[name]?.state;
+			let componentState = summary.components?.[name]?.state ?? health[name]?.state;
 			if (name === 'mihomo' && !componentState && typeof serviceRunning === 'boolean')
 				componentState = serviceRunning ? 'running' : 'stopped';
 			if (name !== 'mihomo' && !componentState && serviceState === 'stopped')
@@ -327,6 +370,8 @@ function create(options) {
 			]);
 		});
 		for (const [ label, presentation ] of [
+			[ _('Telegram'), telegramComponentState(summary.telegram) ],
+			[ _('Provider synchronization'), providerSyncState(summary.updates?.providers) ],
 			[ _('Config auto-update'), configSchedulerState(summary.updates?.automatic_config) ],
 			[ _('MiClash auto-update'), miclashSchedulerState(summary.updates?.automatic_miclash) ]
 		]) componentRows.push(E('div', { 'class': 'sbox-diagnostics-row' }, [
@@ -344,9 +389,11 @@ function create(options) {
 			E('article', { 'class': 'sbox-settings-card sbox-overview-card sbox-overview-protection' }, [
 				E('h4', {}, _('Memory monitoring')),
 				E('div', { 'class': 'sbox-diagnostics-facts' }, [
-					valueRow(_('Status'), memoryPhaseValue(memory)),
-					valueRow(_('Mihomo memory (RSS)'), memoryBytes(memory, 'rss_bytes', 'current_rss_kb') !== '-'
-						? memoryBytes(memory, 'rss_bytes', 'current_rss_kb') : memoryBytes(memory, 'rss_bytes', 'rss_kb')),
+					E('div', { 'class': 'sbox-diagnostics-row' }, [
+						E('span', { 'class': 'sbox-diagnostics-label' }, _('Status')),
+						statusNode(_('Status'), memoryPhaseState(memory), memoryPhaseValue(memory))
+					]),
+					valueRow(_('Mihomo memory (RSS)'), memoryRssValue(memory, serviceState)),
 					valueRow(_('Baseline'), memoryBaselineValue(memory)),
 					valueRow(_('Last action'), memoryActionValue(memory), 'sbox-diagnostics-row-nowrap')
 				])
