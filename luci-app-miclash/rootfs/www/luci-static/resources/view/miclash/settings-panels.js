@@ -188,7 +188,7 @@ function create(options) {
 			label(_('Allowed Telegram user IDs'), userInput),
 			userInput,
 			E('p', { 'class': 'sbox-muted', 'data-telegram-id-hint': 'true' },
-				_('List IDs separated by commas, for example: 5818132224, 5818132223.'))
+				_('List IDs separated by commas.'))
 		]);
 		const pollTimeout = Number.isInteger(desired.poll_timeout_seconds) ? desired.poll_timeout_seconds : 25;
 		const timeoutField = field('sbox-telegram-poll-timeout', _('Telegram polling timeout (seconds)'), E('input', {

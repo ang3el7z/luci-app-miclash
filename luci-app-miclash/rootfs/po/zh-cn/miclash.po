@@ -1685,8 +1685,8 @@ msgstr "Telegram 轮询超时（秒）"
 msgid "Telegram polling timeout"
 msgstr "Telegram 轮询超时"
 
-msgid "List IDs separated by commas, for example: 5818132224, 5818132223."
-msgstr "请用逗号分隔 ID，例如：5818132224, 5818132223。"
+msgid "List IDs separated by commas."
+msgstr "请用逗号分隔 ID。"
 
 msgid "Backup and restore"
 msgstr "备份与恢复"
