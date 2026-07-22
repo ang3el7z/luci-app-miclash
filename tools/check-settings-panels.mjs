@@ -24,6 +24,12 @@ for (const [name, source] of Object.entries({ settings, devices })) {
 		`${name} panel bypasses the typed ubus API`);
 	assert.doesNotMatch(source, /(?:innerHTML|outerHTML|insertAdjacentHTML|document\.write)/,
 		`${name} panel renders untrusted values as HTML`);
+	assert.match(source, /let active = false/,
+		`${name} panel must track tab visibility independently`);
+	assert.match(source, /function setActive\(value\)/,
+		`${name} panel must expose visible-only polling control`);
+	assert.match(source, /return \{[^}]*setActive/s,
+		`${name} panel does not export its active lifecycle`);
 }
 
 for (const token of [

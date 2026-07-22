@@ -5,26 +5,34 @@
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const SYSLOG_APP_RE = /\w+\.(\w+)\s+(clash|miclash|mihomo)(?:\[\d+\])?:\s*(.*)$/;
 const LOG_FILTER_RE = /\b(?:clash|miclash|mihomo)(?:\[\d+\])?:/i;
+let readerState = { generation: '', cursor: 0, lines: [] };
+
+function reset() {
+	readerState = { generation: '', cursor: 0, lines: [] };
+}
 
 async function readRaw() {
 	const api = view_miclash_api.create();
-	const lines = [];
-	let generation = '', cursor = 0, restarts = 0;
+	let restarts = 0;
 	try {
-		for (let page = 0; page < 8 && lines.length < 1000; page++) {
-			const reply = await api.logs_read(generation, cursor, 200);
+		for (let page = 0; page < 8; page++) {
+			const reply = await api.logs_read(readerState.generation, readerState.cursor, 200);
 			if (reply?.stale === true && restarts++ < 1) {
-				generation = ''; cursor = 0; lines.length = 0; page = -1; continue;
+				reset(); page = -1; continue;
 			}
-			if (!reply || reply.cursor !== cursor || !Array.isArray(reply.lines)) break;
-			if (generation !== '' && reply.generation !== generation) break;
-			if (generation === '' && typeof reply.generation === 'string') generation = reply.generation;
-			reply.lines.slice(0, 200).forEach((line) => lines.push(String(line || '')));
+			if (!reply || reply.cursor !== readerState.cursor || !Array.isArray(reply.lines)) break;
+			if (readerState.generation && reply.generation !== readerState.generation) break;
+			if (!readerState.generation && typeof reply.generation === 'string')
+				readerState.generation = reply.generation;
+			reply.lines.slice(0, 200).forEach((line) => readerState.lines.push(String(line || '')));
+			if (readerState.lines.length > 1000)
+				readerState.lines.splice(0, readerState.lines.length - 1000);
+			if (Number.isInteger(reply.next_cursor) && reply.next_cursor >= readerState.cursor)
+				readerState.cursor = reply.next_cursor;
 			if (!reply.has_more) break;
-			if (!Number.isInteger(reply.next_cursor) || reply.next_cursor <= cursor) break;
-			cursor = reply.next_cursor;
+			if (!Number.isInteger(reply.next_cursor) || reply.next_cursor <= reply.cursor) break;
 		}
-		return lines.join('\n').trim();
+		return readerState.lines.join('\n').trim();
 	} finally {
 		api.destroy();
 	}
@@ -98,5 +106,6 @@ function formatLine(line) {
 
 return L.Class.extend({
 	readRaw: readRaw,
+	reset: reset,
 	formatLine: formatLine
 });

@@ -345,6 +345,23 @@ export function load(runtime) {
 	return load_cursor(cursor(runtime));
 };
 
+function clone(value) {
+	try { return json(sprintf('%J', value)); }
+	catch (error) { fail('INTERNAL'); }
+};
+
+function config_signature(runtime) {
+	let stat = runtime.fs?.lstat?.('/etc/config/' + CONFIG);
+	if (stat == null)
+		return 'absent';
+	return sprintf('%J', {
+		type: stat.type,
+		inode: stat.inode,
+		size: stat.size,
+		mtime: stat.mtime
+	});
+};
+
 export function validate_patch(patch) {
 	if (type(patch) != 'object')
 		invalid();
@@ -413,4 +430,29 @@ export function save(runtime, patch) {
 	return exists(normalized_patch, 'guard')
 		? with_lock(runtime, { barrier: 'normal', wait_ms: 0 }, persist)
 		: persist();
+};
+
+export function create(runtime) {
+	let cached = null, signature = null;
+	return {
+		get: () => {
+			let current = config_signature(runtime);
+			if (cached == null || current != signature) {
+				cached = load(runtime);
+				signature = current;
+			}
+			return clone(cached);
+		},
+		validate: (patch) => validate_patch(patch),
+		set: (patch) => {
+			cached = save(runtime, patch);
+			signature = config_signature(runtime);
+			return clone(cached);
+		},
+		invalidate: () => {
+			cached = null;
+			signature = null;
+			return true;
+		}
+	};
 };

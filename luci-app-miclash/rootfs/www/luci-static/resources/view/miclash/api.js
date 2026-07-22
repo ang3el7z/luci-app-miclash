@@ -4,6 +4,7 @@
 
 const METHOD_SPECS = [
 	{ name: 'status', params: [], operation: false, access: 'read' },
+	{ name: 'overview', params: [], operation: false, access: 'read' },
 	{ name: 'health', params: [], operation: false, access: 'read' },
 	{ name: 'operation_get', params: ['operation_id'], operation: false, access: 'read' },
 	{ name: 'operation_list', params: ['state', 'kind', 'source'], operation: false, access: 'read' },

@@ -105,6 +105,8 @@ export function create(dependencies) {
 
 	return {
 		status: () => dependencies.state.snapshot(),
+		overview: () => type(dependencies.state.current) == 'function'
+			? dependencies.state.current() : dependencies.state.snapshot(),
 		health: () => dependencies.state.health(),
 		operation_get: (id) => dependencies.operations.get(id),
 		operation_list: (filter) => dependencies.operations.list(filter),

@@ -33,6 +33,14 @@ assert.ok(!daemon.includes('clash(-rules|-hotplug)'),
 	'backend log reader must not retain removed legacy producers');
 assert.ok(!/catch \(e\) \{\s*return '';\s*\}/.test(logs),
 	'transient RPC errors must not be converted into a successful empty log response');
+assert.match(logs, /let readerState = \{ generation: '', cursor: 0, lines: \[\] \}/,
+	'log reader must retain its page-session cursor');
+assert.match(logs, /api\.logs_read\(readerState\.generation, readerState\.cursor, 200\)/,
+	'subsequent log refreshes must request only appended records');
+assert.match(logs, /reset: reset/,
+	'route unload must be able to clear the page-session log cursor');
+assert.match(config, /view_miclash_logs\.reset\(\)/,
+	'route unload must reset incremental log state');
 const tabs = config.slice(config.indexOf('function bindTabEvents()'), config.indexOf('\nreturn view.extend'));
 assert.match(tabs, /if \(name !== 'logs'\) stopLogPolling\(\)/,
 	'log polling must stop whenever the Logs tab is not active');

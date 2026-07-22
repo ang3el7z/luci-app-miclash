@@ -111,25 +111,65 @@ export function bounded_logs(runtime) {
 	return join('\n', selected);
 };
 
-function bounded_log_page(runtime, arguments) {
-	let generation = arguments?.generation, cursor = arguments?.cursor ?? 0,
-		limit = arguments?.limit ?? 100;
-	if (type(cursor) != 'int' || cursor < 0 || type(limit) != 'int' || limit < 1 || limit > 200)
-		errors.fail('INVALID_ARGUMENT');
-	let source = bounded_logs(runtime);
-	let lines = length(source) ? split(source, '\n') : [];
-	if (cursor > length(lines)) cursor = length(lines);
-	let page = slice(lines, cursor, min(length(lines), cursor + limit));
-	let next = cursor + length(page);
-	let digest = runtime.digest.sha256(source);
-	if (type(digest) != 'string' || !match(digest, /^[0-9a-f]{64}$/))
-		errors.fail('INTERNAL');
-	let current_generation = 'log_' + substr(digest, 0, 16);
-	if (generation != null && generation != current_generation)
-		return { generation: current_generation, cursor: 0, next_cursor: 0,
-			lines: [], has_more: length(lines) > 0, stale: true };
-	return { generation: current_generation, cursor,
-		next_cursor: next, lines: page, has_more: next < length(lines), stale: false };
+export function create_log_reader(runtime) {
+	if (type(runtime?.digest?.sha256) != 'function') errors.fail('INVALID_ARGUMENT');
+	let generation = null, lines = [], base = 0;
+
+	function same_range(left, left_start, right, right_start, count) {
+		for (let index = 0; index < count; index++)
+			if (left[left_start + index] != right[right_start + index]) return false;
+		return true;
+	};
+
+	function reset(source, next_lines) {
+		let digest = runtime.digest.sha256(source + '|' + (generation ?? 'initial'));
+		if (type(digest) != 'string' || !match(digest, /^[0-9a-f]{64}$/))
+			errors.fail('INTERNAL');
+		generation = 'log_' + substr(digest, 0, 16);
+		lines = next_lines;
+		base = 0;
+	};
+
+	function refresh() {
+		let source = bounded_logs(runtime);
+		let next_lines = length(source) ? split(source, '\n') : [];
+		if (generation == null) return reset(source, next_lines);
+		if (length(next_lines) >= length(lines) &&
+		    same_range(lines, 0, next_lines, 0, length(lines))) {
+			lines = next_lines;
+			return;
+		}
+		let overlap = min(length(lines), length(next_lines));
+		while (overlap > 0 &&
+		       !same_range(lines, length(lines) - overlap, next_lines, 0, overlap))
+			overlap--;
+		if (overlap > 0) {
+			base += length(lines) - overlap;
+			lines = next_lines;
+			return;
+		}
+		reset(source, next_lines);
+	};
+
+	return { read: (arguments) => {
+		let wanted_generation = arguments?.generation,
+			cursor = arguments?.cursor ?? 0, limit = arguments?.limit ?? 100;
+		if (type(cursor) != 'int' || cursor < 0 || type(limit) != 'int' ||
+		    limit < 1 || limit > 200)
+			errors.fail('INVALID_ARGUMENT');
+		refresh();
+		if (wanted_generation != null && wanted_generation != generation)
+			return { generation, cursor: 0, next_cursor: 0, lines: [],
+				has_more: length(lines) > 0, stale: true };
+		if (wanted_generation != null && (cursor < base || cursor > base + length(lines)))
+			return { generation, cursor: 0, next_cursor: 0, lines: [],
+				has_more: length(lines) > 0, stale: true };
+		let offset = wanted_generation == null ? 0 : cursor - base;
+		let page = slice(lines, offset, min(length(lines), offset + limit));
+		let next = base + offset + length(page);
+		return { generation, cursor, next_cursor: next, lines: page,
+			has_more: offset + length(page) < length(lines), stale: false };
+	} };
 };
 
 function bounded_file(runtime, path, limit) {
@@ -401,11 +441,7 @@ export function compose(runtime, overrides) {
 		let service_adapter = modules.service.create(runtime);
 		runtime.service = service_adapter;
 		let configuration = modules.config.create(runtime, operation_manager);
-		let settings_domain = {
-			get: () => modules.settings.load(runtime),
-			validate: (patch) => modules.settings.validate_patch(patch),
-			set: (patch) => modules.settings.save(runtime, patch)
-		};
+		let settings_domain = modules.settings.create(runtime);
 		let desired = effective_network_settings(runtime, settings_domain.get());
 		let device_app = null;
 		let provider_sync_domain = null, provider_candidate = null;
@@ -702,7 +738,7 @@ export function compose(runtime, overrides) {
 		};
 		let memory_domain = {
 			status: () => modules.memory.live_status(guard, memory_enabled,
-				state_model?.snapshot()?.observed?.service),
+				state_model?.current()?.observed?.service),
 			settings: () => ({ enabled: memory_enabled, ...guard.settings() }),
 			reset_baseline: () => guard.reset_baseline(),
 			prepare: prepare_memory_settings,
@@ -972,7 +1008,8 @@ export function compose(runtime, overrides) {
 		push(close_domains, device_vendor_domain);
 		if (device_vendor_domain.start() !== true)
 			errors.fail('INTERNAL');
-		app.logs_read = (arguments) => bounded_log_page(runtime, arguments);
+		let log_reader = create_log_reader(runtime);
+		app.logs_read = (arguments) => log_reader.read(arguments);
 		app.system_info = () => bounded_system_info(runtime);
 		app.network_interfaces = () => bounded_network_interfaces(runtime, settings_domain);
 		app.ruleset_list = () => ruleset_list(runtime);
@@ -1005,19 +1042,13 @@ export function compose(runtime, overrides) {
 		app.config_external_adopt = (arguments) => configuration.adopt_external(
 			arguments.profile, arguments.source);
 		function last_repair() {
-			let records = operation_manager.list(), result = { state: 'none' };
-			for (let index = length(records) - 1; index >= 0; index--)
-				if (records[index]?.kind == 'system.reconcile' ||
-				    records[index]?.kind == 'memory.recovery') {
-					result = records[index]; break;
-				}
-			return result;
+			return state_model.last_repair();
 		};
 		let diagnostics_domain = modules.diagnostics.create({ runtime, sources: {
 			versions: () => { let info = bounded_system_info(runtime); return {
 				miclash: info.app_version, mihomo: info.mihomo.version }; },
 			architecture: () => bounded_system_info(runtime).architecture,
-			state: app.status, health: app.health, memory: app.memory_status,
+			state: app.overview, health: app.health, memory: app.memory_status,
 			updates: () => ({ ...updates_domain.status(),
 				automatic_config: subscription_scheduler_domain.status(),
 				automatic_miclash: app_update_domain.status(),

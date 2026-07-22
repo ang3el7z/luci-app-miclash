@@ -77,6 +77,27 @@ assert_equal(defaults.telegram.enabled, false);
 assert_equal(defaults.telegram.poll_timeout_seconds, 25);
 assert_equal(defaults.meta.schema_version, 1);
 
+let cached_env = fake_runtime({ miclash: {
+	core: { '.type': 'core', proxy_mode: 'tproxy' }
+} });
+cached_env.rt.fs.writefile('/etc/config/miclash', 'config miclash\n');
+cached_env.rt.fs.set_mtime('/etc/config/miclash', 1);
+let cached_cursor_calls = 0;
+cached_env.rt.uci.cursor = () => { cached_cursor_calls++; return cached_env.cursor.cursor(); };
+let cached_settings = settings.create(cached_env.rt);
+assert_equal(cached_settings.get().core.proxy_mode, 'tproxy');
+assert_equal(cached_settings.get().core.proxy_mode, 'tproxy');
+assert_equal(cached_cursor_calls, 1);
+let external_cursor = cached_env.cursor.cursor();
+external_cursor.set('miclash', 'core', 'proxy_mode', 'tun');
+external_cursor.commit('miclash');
+cached_env.rt.fs.set_mtime('/etc/config/miclash', 2);
+assert_equal(cached_settings.get().core.proxy_mode, 'tun');
+assert_equal(cached_cursor_calls, 2);
+cached_settings.set({ core: { proxy_mode: 'mixed' } });
+assert_equal(cached_settings.get().core.proxy_mode, 'mixed');
+assert_equal(cached_cursor_calls, 3);
+
 let legacy = settings.load(fake_runtime({ miclash: {
 	notifications: { '.type': 'notifications', auto_hide: '0',
 		channels: 'telegram,syslog', events: 'failure,recovery' }

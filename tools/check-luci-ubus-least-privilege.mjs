@@ -8,7 +8,7 @@ const aclPath = 'luci-app-miclash/rootfs/usr/share/rpcd/acl.d/luci-app-miclash.j
 const menuPath = 'luci-app-miclash/rootfs/usr/share/luci/menu.d/luci-app-miclash.json';
 const makefilePath = 'luci-app-miclash/Makefile';
 
-const expectedNames = 'status,health,operation_get,operation_list,' +
+const expectedNames = 'status,overview,health,operation_get,operation_list,' +
 	'service_start,service_stop,service_reload,service_restart,config_list,config_read,' +
 	'config_validate,config_apply,' +
 	'operational_settings_apply,config_swap,config_external_adopt,settings_get,settings_set,' +
@@ -23,7 +23,7 @@ const expectedNames = 'status,health,operation_get,operation_list,' +
 	'ruleset_apply_whitelist,transfer_begin,transfer_write,transfer_read,transfer_finish,' +
 	'transfer_abort';
 const expectedRead = new Set([
-	'status', 'health', 'operation_get', 'operation_list', 'config_list', 'settings_get',
+	'status', 'overview', 'health', 'operation_get', 'operation_list', 'config_list', 'settings_get',
 	'subscription_get', 'update_release', 'memory_status', 'memory_settings',
 	'diagnostics_summary', 'telegram_status', 'telegram_settings',
 	'devices_list', 'devices_timezones', 'devices_policy_list', 'notifications_settings',

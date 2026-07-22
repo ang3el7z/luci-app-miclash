@@ -4,7 +4,7 @@
     "read": {
       "ubus": {
         "miclash": [
-          "status", "health", "operation_get", "operation_list",
+          "status", "overview", "health", "operation_get", "operation_list",
           "config_list", "settings_get", "subscription_get",
           "update_release", "memory_status", "memory_settings",
           "diagnostics_summary", "telegram_status", "telegram_settings",

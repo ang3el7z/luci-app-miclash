@@ -69,6 +69,7 @@ let config = {
 };
 let state = {
 	snapshot: () => ({ status: 'safe' }),
+	current: () => ({ status: 'current' }),
 	health: () => ({ health: 'safe' }),
 	set_desired: (value) => desired = value
 };
@@ -108,6 +109,7 @@ let app = application.create({
 });
 
 assert_equal(app.status().status, 'safe');
+assert_equal(app.overview().status, 'current');
 assert_equal(app.health().health, 'safe');
 assert_equal(app.operation_get('id').id, 'id');
 assert_equal(app.operation_list({})[0].id, 'listed');

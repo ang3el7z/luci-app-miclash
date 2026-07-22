@@ -8,7 +8,8 @@ function operation(kind) {
 
 let last_notification_arguments = null, last_log_arguments = null;
 let app = {
-	status: () => ({ state: 'ready' }), health: () => ({ ok: true }),
+	status: () => ({ state: 'ready' }), overview: () => ({ state: 'current' }),
+	health: () => ({ ok: true }),
 	operation_get: (id) => ({ id, state: 'success', context: { token: 'secret' } }),
 	operation_list: () => [],
 	service_start: () => operation('service.start'), service_stop: () => operation('service.stop'),
@@ -77,6 +78,7 @@ for (let removed in [ 'config_read_draft', 'config_save_draft', 'history_list',
 	assert_equal(methods[removed], null);
 
 assert_equal(methods.status.call({ args: {} }).state, 'ready');
+assert_equal(methods.overview.call({ args: {} }).state, 'current');
 assert_equal(methods.config_read.call({ args: { profile: 'config.yaml' } }).content, 'mode: rule\n');
 assert_true(type(methods.config_apply.call({ args: {
 	profile: 'config.yaml', content: 'mode: rule\n', source: 'luci'

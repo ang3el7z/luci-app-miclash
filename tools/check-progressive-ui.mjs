@@ -17,12 +17,18 @@ if (/getVersions|getMihomoStatus|detectCurrentProxyMode/.test(loadBody))
 	throw new Error('Initial runtime hydration must not duplicate system or settings RPC calls.');
 if (/loadOperationalSettings|system_info/.test(loadBody))
 	throw new Error('The initial LuCI shell must derive settings from status and defer system metadata.');
-if (!/readMiClashServiceState/.test(loadBody) || !/getNetworkSnapshot/.test(loadBody) ||
-	!/operationalSettingsFromTyped/.test(loadBody))
-	throw new Error('Initial LuCI load must use one status snapshot plus the detected interface snapshot.');
+if (/readMiClashServiceState|getNetworkSnapshot|operationalSettingsFromTyped/.test(loadBody))
+	throw new Error('The LuCI load hook must not block the initial shell on router RPCs.');
 
 requirePattern(/render:\s*function\(data\)/, 'render() must return the page synchronously.');
 requirePattern(/async function hydrateConfigWorkspace\(/, 'Missing progressive config hydration.');
+const configHydration = source.match(/async function hydrateConfigWorkspace\(generation\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+if ((configHydration.match(/readConfigFileByName\(MAIN_CONFIG_NAME\)/g) || []).length !== 1)
+	throw new Error('Config hydration must read the active YAML only once.');
+requirePattern(/async function hydrateInitialState\(generation\)/,
+	'Fresh service and network state must hydrate independently after render.');
+requirePattern(/api\.overview\(\)/,
+	'Initial service hydration must use the compact overview RPC.');
 requirePattern(/beginPageHydration\(/, 'Missing page hydration scheduler.');
 requirePattern(/hydrateSystemMetadata\(generation\)/,
 	'System versions must hydrate after the initial page shell is rendered.');
@@ -47,9 +53,21 @@ requirePattern(/function setConfigWorkspaceReady\(/, 'Missing config-control rea
 requirePattern(/configReady:\s*false/, 'The config workspace must be unavailable before hydration succeeds.');
 requirePattern(/desired:\s*snapshot\?\.desired\s*\|\|\s*null/, 'The service adapter must preserve desired state for Guard rendering.');
 requirePattern(/state\.desired\?\.guard/, 'Service polling must keep the Guard header synchronized.');
-requirePattern(/appState\.detectedLan\s*=\s*appState\.settings\.detectedLan\s*\|\|\s*networkSnapshot\.detectedLan/,
-	'Initial render must merge runtime LAN detection into the settings view.');
-requirePattern(/appState\.detectedWan\s*=\s*appState\.settings\.detectedWan\s*\|\|\s*networkSnapshot\.detectedWan/,
-	'Initial render must merge runtime WAN detection into the settings view.');
+requirePattern(/hydrateInitialState\(generation\)/,
+	'Initial state hydration must start after the page shell exists.');
+requirePattern(/managementOwner\.setActive\(name === 'settings'\)/,
+	'Only the visible Settings tab may poll its panels.');
+requirePattern(/diagnosticsOwner\.setActive\(name === 'settings'\)/,
+	'Diagnostics polling must follow Settings tab visibility.');
+requirePattern(/startControlPolling\(\)[\s\S]*if \(document\.hidden \|\| controlPollBusy\) return/,
+	'Hidden LuCI pages must not issue recurring service overview polls.');
+requirePattern(/name === 'logs'[\s\S]*refreshLogs\(\)/,
+	'Returning to Logs must request one immediate silent refresh.');
+const serviceResumeBody = source.match(/async function resumeMiClashServiceJobStatus\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+if (!serviceResumeBody) throw new Error('Unable to locate service-operation resume logic.');
+if (/readMiClashServiceState\(true\)|api\.status\(\)/.test(serviceResumeBody))
+	throw new Error('Ordinary page entry must not scan full operation history to resume a service job.');
+requirePattern(/resumeMiClashServiceJobStatus\(\)[\s\S]*getStoredOperationToken\('service'\)/,
+	'Only a service operation started by this page session may be resumed.');
 
 console.log('Progressive MiClash UI checks passed.');

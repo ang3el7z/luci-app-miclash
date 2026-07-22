@@ -95,6 +95,7 @@ function create(options) {
 		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
 		dirty = false, retryMs = POLL_MS;
+	let active = false;
 	let hydrated = false;
 	let notificationTab = 'luci';
 	let state = { desired: {}, memory: {}, memorySettings: {}, telegram: {}, telegramSettings: {}, notifications: {} };
@@ -117,7 +118,7 @@ function create(options) {
 	function clearTimer() { if (timer != null) win.clearTimeout(timer); timer = null; }
 	function schedule(delay) {
 		clearTimer();
-		if (destroyed || doc.hidden || !host) return;
+		if (destroyed || !active || doc.hidden || !host) return;
 		timer = win.setTimeout(() => { timer = null; backgroundRefresh.run(() => refresh()); }, delay || retryMs);
 	}
 	function awaitOperation(reply, title) {
@@ -428,7 +429,7 @@ function create(options) {
 	}
 
 	async function refresh(force, replaceForm) {
-		if (destroyed || doc.hidden && !force) return;
+		if (destroyed || !active && !force || doc.hidden && !force) return;
 		const token = ++generation;
 		try {
 			const replies = await Promise.all([ api.settings_get(), api.memoryStatus(), api.telegram_status() ]);
@@ -445,8 +446,22 @@ function create(options) {
 		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
 		finally { if (!destroyed && token === generation) schedule(); }
 	}
-	function visibilitychange() { if (doc.hidden) clearTimer(); else backgroundRefresh.run(() => refresh()); }
-	function mount(node) { host = node; destroyed = false; hydrated = false; paintLoading(); backgroundRefresh.run(() => refresh()); return host; }
+	function visibilitychange() {
+		if (doc.hidden) clearTimer();
+		else if (active) backgroundRefresh.run(() => refresh());
+	}
+	function mount(node) {
+		host = node; destroyed = false;
+		if (hydrated) paint(); else paintLoading();
+		if (active) backgroundRefresh.run(() => refresh());
+		return host;
+	}
+	function setActive(value) {
+		active = value === true;
+		if (!active) { clearTimer(); return false; }
+		if (!destroyed && !doc.hidden) backgroundRefresh.run(() => refresh());
+		return true;
+	}
 	function destroy() {
 		if (destroyed) return; destroyed = true; generation++; clearTimer();
 		doc.removeEventListener('visibilitychange', visibilitychange);
@@ -454,7 +469,7 @@ function create(options) {
 		if (typeof api.destroy === 'function') api.destroy(); host = null;
 	}
 	doc.addEventListener('visibilitychange', visibilitychange);
-	return { mount, refresh, destroy, collectPatch, markSaved, ready: () => hydrated,
+	return { mount, refresh, setActive, destroy, collectPatch, markSaved, ready: () => hydrated,
 		exactTelegramId, exactTelegramToken };
 }
 

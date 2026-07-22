@@ -112,6 +112,7 @@ function create(options) {
 		typeof api.setDevicePolicy !== 'function' || typeof api.deleteDevicePolicy !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed devices API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, modalGeneration = 0;
+	let active = false;
 	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, pendingMac = '', retryMs = POLL_MS;
 	let hydrated = false;
 	let vendorDatabase = null, vendorLoadState = 'idle';
@@ -136,7 +137,7 @@ function create(options) {
 	function progress(message, record) { if (typeof options.onProgress === 'function') options.onProgress(message, record || null); }
 	function clearTimer() { if (timer != null) win.clearTimeout(timer); timer = null; }
 	function schedule(delay) {
-		clearTimer(); if (destroyed || doc.hidden || !host) return;
+		clearTimer(); if (destroyed || !active || doc.hidden || !host) return;
 		timer = win.setTimeout(() => { timer = null; backgroundRefresh.run(() => refresh()); }, delay || retryMs);
 	}
 	function wait(reply, message) {
@@ -353,7 +354,7 @@ function create(options) {
 		finally { busy = false; pendingMac = ''; paint(); }
 	}
 	async function refresh(force) {
-		if (destroyed || doc.hidden && !force) return;
+		if (destroyed || !active && !force || doc.hidden && !force) return;
 		const token = ++generation;
 		try {
 			const replies = await Promise.all([ api.devicesList(), api.devicePolicies(), api.deviceTimezones() ]);
@@ -369,8 +370,21 @@ function create(options) {
 		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
 		finally { if (!destroyed && token === generation) schedule(); }
 	}
-	function visibilitychange() { if (doc.hidden) clearTimer(); else backgroundRefresh.run(() => refresh()); }
-	function mount(node) { host = node; destroyed = false; hydrated = false; paint(); backgroundRefresh.run(() => refresh()); return host; }
+	function visibilitychange() {
+		if (doc.hidden) clearTimer();
+		else if (active) backgroundRefresh.run(() => refresh());
+	}
+	function mount(node) {
+		host = node; destroyed = false; paint();
+		if (active) backgroundRefresh.run(() => refresh());
+		return host;
+	}
+	function setActive(value) {
+		active = value === true;
+		if (!active) { clearTimer(); return false; }
+		if (!destroyed && !doc.hidden) backgroundRefresh.run(() => refresh());
+		return true;
+	}
 	function destroy() {
 		if (destroyed) return; destroyed = true; generation++; modalGeneration++; clearTimer();
 		doc.removeEventListener('visibilitychange', visibilitychange);
@@ -378,7 +392,7 @@ function create(options) {
 		if (typeof api.destroy === 'function') api.destroy(); host = null;
 	}
 	doc.addEventListener('visibilitychange', visibilitychange);
-	return { mount, refresh, destroy, openEditor, policyFromEditor, ready: () => hydrated };
+	return { mount, refresh, setActive, destroy, openEditor, policyFromEditor, ready: () => hydrated };
 }
 
 return baseclass.extend({

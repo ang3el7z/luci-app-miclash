@@ -139,12 +139,18 @@ const managementOwner = (() => {
 		if (panels && typeof panels[0]?.markSaved === 'function')
 			await panels[0].markSaved();
 	}
-	function refresh() {
+	function refresh(force) {
 		if (!panels) return;
 		for (const panel of panels)
-			if (typeof panel.refresh === 'function') panel.refresh().catch(() => {});
+			if (typeof panel.refresh === 'function') panel.refresh(force === true).catch(() => {});
 	}
-	return { replace, mount, destroy, collectPatch, markSaved, refresh,
+	function setActive(active) {
+		if (!panels) return false;
+		for (const panel of panels)
+			if (typeof panel.setActive === 'function') panel.setActive(active);
+		return true;
+	}
+	return { replace, mount, destroy, collectPatch, markSaved, refresh, setActive,
 		ready: () => panels != null };
 })();
 view_miclash_utils.bumpRpcTimeout();
@@ -636,55 +642,13 @@ function isRpcReconnectLikeError(message) {
 	return false;
 }
 
-function parseKeyValueStatus(raw) {
-	const status = {};
-	String(raw || '').split(/\r?\n/).forEach((line) => {
-		const idx = line.indexOf('=');
-		if (idx <= 0) return;
-		status[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-	});
-	if (!status.state) status.state = 'idle';
-	return status;
-}
-
-function parseMiClashUpdateStatus(raw) {
-	return parseKeyValueStatus(raw);
-}
-
-function parseMiClashServiceStatus(raw) {
-	return parseKeyValueStatus(raw);
-}
-
-async function readMiClashUpdateStatus() {
-	const reply = await typedCall((api) => api.operation_list(null, null, 'luci'));
-	const operations = Array.isArray(reply?.operations) ? reply.operations : [];
-	const current = selectActiveOperation(operations, 'updates.');
-	return current ? { state: 'running', phase: current.stage || '', operation_id: current.id } : { state: 'idle' };
-}
-
-function formatMiClashUpdateStatus(status, fallback) {
-	const phase = String(status && status.phase || '').trim();
-	const labels = {
-		queued: _('Starting update job...'),
-		dependencies: _('Installing dependencies...'),
-		download: _('Downloading package...'),
-		install: _('Installing package...'),
-		restart: _('Restarting Clash service...'),
-		done: _('Update completed.')
-	};
-	const translated = labels[phase];
-	if (translated) return translated;
-
-	const message = String(status && status.message || '').trim();
-	return message || fallback || _('Updating MiClash...');
-}
-
 async function clearMiClashUpdateStatus() {
 	appState.pendingUpdateOperation = null;
+	clearStoredOperationToken('update');
 }
 
 async function readMiClashServiceState() {
-	const snapshot = await typedCall((api) => api.status());
+	const snapshot = await typedCall((api) => api.overview());
 	const observed = snapshot?.observed || {};
 	const service = observed.service || {};
 	const readiness = observed.readiness || {};
@@ -694,6 +658,7 @@ async function readMiClashServiceState() {
 		service: running ? 'running' : 'stopped',
 		health: running ? (readiness.ok === true ? 'ready' : 'not_ready') : 'stopped',
 		operation: current ? 'running' : 'idle', phase: current?.stage || '',
+		operation_id: current?.id || null,
 		message: readiness?.message || '',
 		desired: snapshot?.desired || null
 	};
@@ -717,31 +682,6 @@ function applyServiceState(status) {
 		appState.settings.internetOnlyMiclash = state.desired.guard.enabled === true;
 
 	return state;
-}
-
-function formatMiClashServiceStatus(status, fallback) {
-	const phase = String(status && status.phase || '').trim();
-	const action = String(status && status.action || '').trim();
-	const labels = {
-		queued: _('Starting service job...'),
-		start: _('Starting Clash service...'),
-		stop: _('Stopping Clash service...'),
-		restart: _('Restarting Clash service...'),
-		reload: _('Reloading Mihomo configuration...'),
-		process: _('Checking Clash service process...'),
-		api: _('Checking Clash API...'),
-		dns: _('Checking DNS...'),
-		tun: _('Checking TUN interface...'),
-		policy: _('Checking routing policy...'),
-		forward: _('Checking forwarding rules...'),
-		stopped: _('Checking stopped state...'),
-		done: _('Service operation completed.')
-	};
-	const translated = labels[phase] || labels[action];
-	if (translated) return translated;
-
-	const message = String(status && status.message || '').trim();
-	return message || fallback || _('Updating service status...');
 }
 
 async function clearMiClashServiceStatus() {
@@ -770,17 +710,12 @@ function clearStoredOperationToken(kind, token) {
 	} catch (e) {}
 }
 
-function createOperationToken(kind) {
-	const token = String(kind || 'operation') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+function setStoredOperationToken(kind, operation) {
+	const token = String(operation?.operation_id || operation?.id || '').trim();
+	if (!token) return;
 	try {
 		window.sessionStorage.setItem(getOperationTokenStorageKey(kind), token);
 	} catch (e) {}
-	return token;
-}
-
-function isCurrentOperationToken(kind, status) {
-	const token = String(status && status.token || '').trim();
-	return !!token && getStoredOperationToken(kind) === token;
 }
 
 async function startMiClashUpdateJob(kind, args) {
@@ -791,6 +726,7 @@ async function startMiClashUpdateJob(kind, args) {
 		: await configApi.update_miclash(normalizeReleaseChannel(
 			appState.settings?.miclashReleaseChannel), 'luci');
 	appState.pendingUpdateOperation = reply;
+	setStoredOperationToken('update', reply);
 	return true;
 }
 
@@ -799,6 +735,7 @@ async function startMiClashServiceJob(action) {
 	const method = configApi['service_' + action];
 	if (typeof method !== 'function') throw new Error('Unsupported service action');
 	appState.pendingServiceOperation = await method('config.yaml', 'luci');
+	setStoredOperationToken('service', appState.pendingServiceOperation);
 	return true;
 }
 
@@ -810,6 +747,7 @@ async function pollMiClashUpdateJob(initialMessage, options) {
 
 	try {
 		await awaitTypedOperation(appState.pendingUpdateOperation, fallback);
+		clearStoredOperationToken('update');
 		clearOperationStatus();
 		return { state: 'success', phase: 'done', message: '' };
 	} finally {
@@ -826,6 +764,7 @@ async function pollMiClashServiceJob(initialMessage, options) {
 
 	try {
 		await awaitTypedOperation(appState.pendingServiceOperation, fallback);
+		clearStoredOperationToken('service');
 		const status = await refreshServiceState();
 		clearOperationStatus();
 		return status;
@@ -841,48 +780,31 @@ async function runMiClashServiceJob(action, initialMessage) {
 }
 
 async function resumeMiClashUpdateJobStatus() {
-	const status = await readMiClashUpdateStatus();
-	const state = String(status.state || 'idle');
-
-	if (state === 'running') {
-		appState.pendingUpdateOperation = { operation_id: status.operation_id };
-		await pollMiClashUpdateJob(formatMiClashUpdateStatus(status, _('Updating MiClash...')));
-		return;
-	}
-	if (state === 'failed' || state === 'success') {
-		if (state === 'failed' && isCurrentOperationToken('update', status)) {
-			setOperationError(new Error(status.message || _('Update failed.')));
-			clearStoredOperationToken('update', status.token);
-			await clearMiClashUpdateStatus();
-			return;
-		}
-		await clearMiClashUpdateStatus();
+	const operationId = getStoredOperationToken('update');
+	if (!operationId) return;
+	appState.pendingUpdateOperation = { operation_id: operationId };
+	try {
+		await pollMiClashUpdateJob(_('Updating MiClash...'));
 		clearOperationStatus();
+	} catch (error) {
+		setOperationError(error);
+	} finally {
+		await clearMiClashUpdateStatus();
 	}
 }
 
 async function resumeMiClashServiceJobStatus() {
-	const status = await readMiClashServiceState();
-	applyServiceState(status);
-	const state = getServiceOperationState(status);
-
-	if (state === 'running') {
-		const snapshot = await typedCall((api) => api.status());
-		const current = selectActiveOperation(snapshot?.recent_operations, 'service.');
-		appState.pendingServiceOperation = { operation_id: current?.id };
-		await pollMiClashServiceJob(formatMiClashServiceStatus(status, _('Updating service status...')));
-		return;
-	}
-	if (state === 'failed' || state === 'success') {
-		if (state === 'failed' && isCurrentOperationToken('service', status)) {
-			setOperationError(new Error(status.message || _('Service operation failed.')));
-			clearStoredOperationToken('service', status.token);
-			await clearMiClashServiceStatus();
-			return;
-		}
-		await refreshServiceState();
-		await clearMiClashServiceStatus();
+	const operationId = getStoredOperationToken('service');
+	if (!operationId) return;
+	appState.pendingServiceOperation = { operation_id: operationId };
+	try {
+		await pollMiClashServiceJob(_('Updating service status...'));
 		clearOperationStatus();
+	} catch (error) {
+		setOperationError(error);
+	} finally {
+		await clearMiClashServiceStatus();
+		clearStoredOperationToken('service', operationId);
 	}
 }
 
@@ -1556,15 +1478,12 @@ function setConfigWorkspaceReady(ready) {
 }
 
 async function hydrateConfigWorkspace(generation) {
-	const mainContent = await readConfigFileByName(MAIN_CONFIG_NAME);
+	const content = await readConfigFileByName(MAIN_CONFIG_NAME);
 	if (generation !== pageGeneration || !pageRoot) return;
-	await ensureConfigProfilesReady(mainContent || '');
+	await ensureConfigProfilesReady(content || '');
 	if (generation !== pageGeneration || !pageRoot) return;
 
-	const [ content, subscriptionUrl ] = await Promise.all([
-		readConfigFileByName(MAIN_CONFIG_NAME),
-		readSubscriptionUrl(MAIN_CONFIG_NAME)
-	]);
+	const subscriptionUrl = await readSubscriptionUrl(MAIN_CONFIG_NAME);
 	if (generation !== pageGeneration || !pageRoot) return;
 
 	appState.configProfiles = CONFIG_PROFILES.slice();
@@ -1604,8 +1523,28 @@ async function hydrateSystemMetadata(generation) {
 	updateHeaderAndControlDom();
 }
 
+async function hydrateInitialState(generation) {
+	const [ serviceState, networkSnapshot ] = await Promise.all([
+		readMiClashServiceState(),
+		getNetworkSnapshot()
+	]);
+	if (generation !== pageGeneration || !pageRoot) return;
+	if (serviceState?.desired)
+		appState.settings = view_miclash_settings_model.operationalSettingsFromTyped(serviceState.desired);
+	appState.settings ||= {};
+	appState.interfaces = Array.isArray(networkSnapshot?.interfaces) ? networkSnapshot.interfaces : [];
+	appState.selectedInterfaces = (appState.settings.mode === 'explicit'
+		? appState.settings.includedInterfaces : appState.settings.excludedInterfaces) || [];
+	appState.detectedLan = appState.settings.detectedLan || networkSnapshot?.detectedLan || '';
+	appState.detectedWan = appState.settings.detectedWan || networkSnapshot?.detectedWan || '';
+	appState.proxyMode = normalizeProxyMode(appState.settings.proxyMode || 'tproxy');
+	applyServiceState(serviceState);
+	updateHeaderAndControlDom();
+}
+
 function releaseConfigRuntime() {
 	pageGeneration++;
+	view_miclash_logs.reset();
 	appState.configReady = false;
 	subscriptionUpdateBusy = false;
 	logsLoaded = false;
@@ -2445,13 +2384,14 @@ function renderSettingsPane() {
 	if (!pageRoot) return;
 	const pane = pageRoot.querySelector('#sbox-pane-settings');
 	if (!pane) return;
-	if (!managementOwner.ready?.()) {
+	if (pane.getAttribute('data-settings-mounted') !== 'true') {
 		pane.innerHTML = buildSettingsPaneHtml();
 		bindSettingsPaneEvents();
 		const diagnosticsHost = pane.querySelector('#sbox-diagnostics-summary');
 		if (diagnosticsHost) diagnosticsOwner.mount(diagnosticsHost);
-		managementOwner.replace();
+		if (!managementOwner.ready?.()) managementOwner.replace();
 		managementOwner.mount(pane);
+		pane.setAttribute('data-settings-mounted', 'true');
 	} else managementOwner.refresh();
 }
 
@@ -2695,7 +2635,7 @@ function stopLogPolling() {
 
 function startControlPolling() {
 	controlPollTimer = view_miclash_ui_shell.startInterval(controlPollTimer, async () => {
-		if (controlPollBusy) return;
+		if (document.hidden || controlPollBusy) return;
 		controlPollBusy = true;
 		try {
 			await refreshServiceState();
@@ -3174,11 +3114,13 @@ function bindTabEvents() {
 		},
 		onChange: (name) => {
 			appState.activeCfgTab = name;
+			managementOwner.setActive(name === 'settings');
+			diagnosticsOwner.setActive(name === 'settings');
 			if (name !== 'logs') stopLogPolling();
 			if (name === 'settings') {
 				renderSettingsPane();
 			} else if (name === 'logs') {
-				if (!logsLoaded) refreshLogs().catch(() => {});
+				refreshLogs().catch(() => {});
 				startLogPolling();
 			} else {
 				resizeConfigEditor();
@@ -3193,15 +3135,7 @@ return view.extend({
 	handleReset: null,
 
 	load: function() {
-		return Promise.all([
-			L.resolveDefault(readMiClashServiceState(), null),
-			L.resolveDefault(getNetworkSnapshot(), { interfaces: [], detectedLan: '', detectedWan: '' })
-		]).then(([ serviceState, networkSnapshot ]) => [
-			view_miclash_settings_model.operationalSettingsFromTyped(serviceState?.desired || {}),
-			networkSnapshot,
-			null,
-			serviceState
-		]);
+		return [ {}, { interfaces: [], detectedLan: '', detectedWan: '' }, null, null ];
 	},
 
 	render: function(data) {
@@ -3252,11 +3186,11 @@ return view.extend({
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
 		configApi = view_miclash_api.create();
 
+		diagnosticsOwner.replace();
+		managementOwner.replace();
 		bindControlAndHeaderEvents();
 		bindConfigEvents();
 		bindTabEvents();
-		diagnosticsOwner.replace();
-		notificationOwner.replace();
 		if (appState.activeCfgTab === 'settings') renderSettingsPane();
 		if (appState.activeCfgTab === 'logs') {
 			refreshLogs().catch(() => {});
@@ -3280,12 +3214,23 @@ return view.extend({
 			}
 		};
 		document.addEventListener('visibilitychange', visibilityChangeHandler);
-		beginPageHydration(generation).finally(() => {
+		const configHydration = beginPageHydration(generation).finally(() => {
 			if (generation === pageGeneration && pageRoot && !document.hidden)
 				refreshReleaseMeta({ force: true }).catch(() => {});
 		});
 		hydrateSystemMetadata(generation).catch((error) => {
 			if (generation === pageGeneration) console.error('[MiClash] Failed to hydrate system metadata:', error);
+		});
+		const initialHydration = hydrateInitialState(generation).catch((error) => {
+			if (generation === pageGeneration) console.error('[MiClash] Failed to hydrate initial state:', error);
+		});
+		Promise.allSettled([ configHydration, initialHydration ]).then(() => {
+			window.setTimeout(() => {
+				if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+				notificationOwner.replace();
+				managementOwner.refresh(true);
+				if (!logsLoaded) refreshLogs().catch(() => {});
+			}, 0);
 		});
 
 		return pageRoot;

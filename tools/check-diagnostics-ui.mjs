@@ -9,6 +9,10 @@ const cssPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/
 assert.ok(existsSync(panelPath), `missing diagnostics panel: ${panelPath}`);
 
 const panelSource = readFileSync(panelPath, 'utf8');
+assert.match(panelSource, /let active = false/,
+	'diagnostics panel must track Settings tab visibility');
+assert.match(panelSource, /function setActive\(value\)/,
+	'diagnostics panel must expose visible-only polling control');
 const backgroundRefreshSource = readFileSync(
 	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/background-refresh.js', 'utf8');
 const apiSource = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/api.js', 'utf8');
@@ -252,7 +256,7 @@ const api = {
 };
 
 const panel = moduleApi.create({ api, document: documentMock, window: windowMock, pollInterval: 30000 });
-for (const method of ['renderSummary', 'downloadReport', 'openRouteTest', 'mount', 'destroy'])
+for (const method of ['renderSummary', 'downloadReport', 'openRouteTest', 'mount', 'setActive', 'destroy'])
 	assert.equal(typeof panel[method], 'function', `missing public method ${method}`);
 assert.equal(panel.openDetails, undefined, 'redundant details modal must not remain public');
 
@@ -260,6 +264,7 @@ const host = new MiniNode('div', { id: 'sbox-diagnostics-summary' });
 panel.mount(host);
 assert.equal(host.querySelectorAll('.sbox-loading-surface').length, 2,
 	'initial mount must show one independent shimmer per overview card');
+panel.setActive(true);
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(host.querySelectorAll('.sbox-loading-surface').length, 0,
 	'first valid summary must replace both overview shimmers');
@@ -585,6 +590,7 @@ const typedProducer = typedApi.create({ eventTarget: windowMock });
 const eventPanel = moduleApi.create({ api: typedReader, document: documentMock, window: windowMock, pollInterval: 30000 });
 const eventHost = new MiniNode('div');
 eventPanel.mount(eventHost);
+eventPanel.setActive(true);
 await new Promise((resolve) => setImmediate(resolve));
 const readsBeforeMutation = rpcCalls.filter((call) => ['status', 'health', 'diagnostics_summary'].includes(call.method)).length;
 await typedProducer.service_restart('config.yaml', 'luci');

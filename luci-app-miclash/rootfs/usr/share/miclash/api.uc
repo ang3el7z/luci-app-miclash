@@ -503,7 +503,7 @@ export function create_transfers(dependencies) {
 
 export function method_table(app, transfers) {
 	for (let name in [
-		'status', 'health', 'operation_get', 'operation_list',
+		'status', 'overview', 'health', 'operation_get', 'operation_list',
 		'service_start', 'service_stop', 'service_reload', 'service_restart',
 		'config_list', 'config_read',
 		'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
@@ -533,6 +533,10 @@ export function method_table(app, transfers) {
 		status: method(empty, (arguments) => {
 			exact(arguments, {});
 			return app.status();
+		}),
+		overview: method(empty, (arguments) => {
+			exact(arguments, {});
+			return app.overview();
 		}),
 		health: method(empty, (arguments) => {
 			exact(arguments, {});

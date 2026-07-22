@@ -58,6 +58,14 @@ export function create(dependencies) {
 		}));
 	};
 
+	function current_snapshot() {
+		return clone(redact.value('state', {
+			desired,
+			observed,
+			observed_at
+		}));
+	};
+
 	function publish() {
 		let snapshot = safe_snapshot();
 		for (let subscription in subscribers) {
@@ -85,10 +93,18 @@ export function create(dependencies) {
 
 	let model = {};
 	model.snapshot = safe_snapshot;
+	model.current = current_snapshot;
 	model.health = () => clone(redact.value('health', {
 		observed,
 		observed_at
 	}));
+	model.last_repair = () => {
+		for (let index = length(recent) - 1; index >= 0; index--)
+			if (recent[index]?.kind == 'system.reconcile' ||
+			    recent[index]?.kind == 'memory.recovery')
+				return clone(recent[index]);
+		return { state: 'none' };
+	};
 	model.refresh_desired = () => {
 		desired = redact.value('settings', dependencies.settings.get());
 		publish();

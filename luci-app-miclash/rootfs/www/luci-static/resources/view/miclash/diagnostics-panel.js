@@ -259,6 +259,7 @@ function create(options) {
 	let refreshing = false;
 	let refreshPending = false;
 	let destroyed = false;
+	let active = false;
 	let hasGoodSummary = false;
 	const objectUrls = new Set();
 	const backgroundRefresh = view_miclash_background_refresh.create((error) => showError(error));
@@ -272,7 +273,7 @@ function create(options) {
 
 	function schedulePoll() {
 		clearTimer('poll');
-		if (destroyed || doc.hidden) return;
+		if (destroyed || !active || doc.hidden) return;
 		pollTimer = win.setTimeout(() => {
 			pollTimer = null;
 			backgroundRefresh.run(() => refresh());
@@ -351,7 +352,7 @@ function create(options) {
 	}
 
 	async function refresh() {
-		if (destroyed || doc.hidden) return;
+		if (destroyed || !active || doc.hidden) return;
 		if (refreshing) { refreshPending = true; return; }
 		refreshing = true;
 		try {
@@ -503,11 +504,11 @@ function create(options) {
 		if (doc.hidden) {
 			clearTimer('poll');
 			clearTimer('event');
-		} else backgroundRefresh.run(() => refresh());
+		} else if (active) backgroundRefresh.run(() => refresh());
 	}
 
 	function ubusEvent(event) {
-		if (destroyed || doc.hidden || event?.detail?.object && event.detail.object !== 'miclash') return;
+		if (destroyed || !active || doc.hidden || event?.detail?.object && event.detail.object !== 'miclash') return;
 		clearTimer('event');
 		eventTimer = win.setTimeout(() => {
 			eventTimer = null;
@@ -519,8 +520,19 @@ function create(options) {
 		host = node;
 		if (hasGoodSummary) paint();
 		else host.replaceChildren(renderLoading());
-		if (!destroyed && !doc.hidden) backgroundRefresh.run(() => refresh());
+		if (!destroyed && active && !doc.hidden) backgroundRefresh.run(() => refresh());
 		return host;
+	}
+
+	function setActive(value) {
+		active = value === true;
+		if (!active) {
+			clearTimer('poll');
+			clearTimer('event');
+			return false;
+		}
+		if (!destroyed && !doc.hidden) backgroundRefresh.run(() => refresh());
+		return true;
 	}
 
 	function destroy() {
@@ -539,7 +551,7 @@ function create(options) {
 	doc.addEventListener('visibilitychange', visibilityChanged);
 	win.addEventListener('miclash:ubus-event', ubusEvent);
 
-	return { renderSummary, downloadReport, openRouteTest, mount, refresh, destroy };
+	return { renderSummary, downloadReport, openRouteTest, mount, refresh, setActive, destroy };
 }
 
 function createOwner(options) {
@@ -565,6 +577,14 @@ function createOwner(options) {
 		openRouteTest() {
 			if (!panel || typeof panel.openRouteTest !== 'function') return null;
 			return panel.openRouteTest();
+		},
+		refresh() {
+			if (!panel || typeof panel.refresh !== 'function') return null;
+			return panel.refresh();
+		},
+		setActive(value) {
+			if (!panel || typeof panel.setActive !== 'function') return false;
+			return panel.setActive(value);
 		},
 		destroy() {
 			if (!panel) return false;

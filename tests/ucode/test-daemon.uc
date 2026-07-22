@@ -58,6 +58,32 @@ assert_true(index(selected_logs, 'clash-hotplug: wan ready') < 0);
 assert_true(index(selected_logs, 'clash: core ready') >= 0);
 assert_true(index(selected_logs, 'mihomo: api ready') >= 0);
 
+let page_source = 'Mon Jul 20 02:00:00 2026 daemon.info miclash: first\n' +
+	'Mon Jul 20 02:00:01 2026 daemon.info miclash: second\n';
+let page_runtime = {
+	digest: fakes.digest(fakes.fs()),
+	fs: { popen: (command, mode) => {
+		let read = false;
+		return { read: (amount) => { if (read) return ''; read = true; return page_source; },
+			close: () => 0 };
+	} }
+};
+let log_reader = daemon.create_log_reader(page_runtime);
+let first_page = log_reader.read({ generation: null, cursor: 0, limit: 200 });
+assert_equal(length(first_page.lines), 2);
+assert_equal(first_page.next_cursor, 2);
+page_source += 'Mon Jul 20 02:00:02 2026 daemon.info miclash: third\n';
+let appended_page = log_reader.read({ generation: first_page.generation,
+	cursor: first_page.next_cursor, limit: 200 });
+assert_equal(appended_page.stale, false);
+assert_equal(length(appended_page.lines), 1);
+assert_true(index(appended_page.lines[0], 'third') >= 0);
+page_source = 'Mon Jul 20 02:01:00 2026 daemon.info miclash: after rotation\n';
+let rotated_page = log_reader.read({ generation: first_page.generation,
+	cursor: appended_page.next_cursor, limit: 200 });
+assert_equal(rotated_page.stale, true);
+assert_true(rotated_page.generation != first_page.generation);
+
 assert_throws(() => daemon.compose({}, {}), 'INVALID_ARGUMENT');
 assert_throws(() => daemon.compose({
 	ubus: { connect: () => null }, clock: { now: () => 0 }, paths: { tmp: '/tmp/miclash' }
