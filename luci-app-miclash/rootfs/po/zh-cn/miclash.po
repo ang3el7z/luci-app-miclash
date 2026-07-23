@@ -2382,3 +2382,78 @@ msgid "MiClash removal started."
 msgstr "MiClash 移除已开始。"
 msgid "MiClash events"
 msgstr "MiClash 事件"
+
+msgid "Choose how much information to include in the diagnostic report."
+msgstr "选择诊断报告中要包含的信息量。"
+
+msgid "Collecting configuration"
+msgstr "正在收集配置"
+
+msgid "Collecting logs"
+msgstr "正在收集日志"
+
+msgid "Collecting network state"
+msgstr "正在收集网络状态"
+
+msgid "Collecting operations"
+msgstr "正在收集操作记录"
+
+msgid "Collecting provider state"
+msgstr "正在收集提供程序状态"
+
+msgid "Collecting system state"
+msgstr "正在收集系统状态"
+
+msgid "Confirm Full diagnostic report"
+msgstr "确认完整诊断报告"
+
+msgid "Creating report"
+msgstr "正在创建报告"
+
+msgid "Download Full"
+msgstr "下载完整报告"
+
+msgid "Download Lite"
+msgstr "下载精简报告"
+
+msgid "Download Silent"
+msgstr "下载静默报告"
+
+msgid "Finalizing report"
+msgstr "正在完成报告"
+
+msgid "Full"
+msgstr "完整"
+
+msgid "Full reports may include secrets such as subscription credentials and private configuration."
+msgstr "完整报告可能包含订阅凭据和私有配置等机密信息。"
+
+msgid "I understand, download Full"
+msgstr "我已了解，下载完整报告"
+
+msgid "Includes private configuration and secrets. Use only with trusted support."
+msgstr "包含私有配置和机密信息。仅应与受信任的支持人员使用。"
+
+msgid "Lite"
+msgstr "精简"
+
+msgid "Lite is recommended for most support requests."
+msgstr "大多数支持请求建议使用精简报告。"
+
+msgid "Minimal system health only. Best for public issue reports."
+msgstr "仅包含最少的系统健康信息，最适合公开问题报告。"
+
+msgid "Preparing report"
+msgstr "正在准备报告"
+
+msgid "Redacted diagnostics, configuration summary, and recent events."
+msgstr "已脱敏的诊断信息、配置摘要和最近事件。"
+
+msgid "Silent"
+msgstr "静默"
+
+msgid "Store this report safely and share it only with trusted support."
+msgstr "请安全保存此报告，并且只与受信任的支持人员分享。"
+
+msgid "Validating report"
+msgstr "正在验证报告"

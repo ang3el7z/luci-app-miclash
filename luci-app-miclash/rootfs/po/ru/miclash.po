@@ -2429,3 +2429,78 @@ msgid "MiClash removal started."
 msgstr "Удаление MiClash запущено."
 msgid "MiClash events"
 msgstr "События MiClash"
+
+msgid "Choose how much information to include in the diagnostic report."
+msgstr "Выберите объём данных для включения в диагностический отчёт."
+
+msgid "Collecting configuration"
+msgstr "Сбор конфигурации"
+
+msgid "Collecting logs"
+msgstr "Сбор журналов"
+
+msgid "Collecting network state"
+msgstr "Сбор состояния сети"
+
+msgid "Collecting operations"
+msgstr "Сбор операций"
+
+msgid "Collecting provider state"
+msgstr "Сбор состояния провайдеров"
+
+msgid "Collecting system state"
+msgstr "Сбор состояния системы"
+
+msgid "Confirm Full diagnostic report"
+msgstr "Подтвердить полный диагностический отчёт"
+
+msgid "Creating report"
+msgstr "Создание отчёта"
+
+msgid "Download Full"
+msgstr "Скачать полный"
+
+msgid "Download Lite"
+msgstr "Скачать Lite"
+
+msgid "Download Silent"
+msgstr "Скачать Silent"
+
+msgid "Finalizing report"
+msgstr "Завершение отчёта"
+
+msgid "Full"
+msgstr "Полный"
+
+msgid "Full reports may include secrets such as subscription credentials and private configuration."
+msgstr "Полные отчёты могут содержать секреты, включая учётные данные подписки и приватную конфигурацию."
+
+msgid "I understand, download Full"
+msgstr "Я понимаю, скачать полный"
+
+msgid "Includes private configuration and secrets. Use only with trusted support."
+msgstr "Включает приватную конфигурацию и секреты. Используйте только с доверенной поддержкой."
+
+msgid "Lite"
+msgstr "Lite"
+
+msgid "Lite is recommended for most support requests."
+msgstr "Lite рекомендуется для большинства обращений в поддержку."
+
+msgid "Minimal system health only. Best for public issue reports."
+msgstr "Только минимальное состояние системы. Лучше всего для публичных сообщений об ошибках."
+
+msgid "Preparing report"
+msgstr "Подготовка отчёта"
+
+msgid "Redacted diagnostics, configuration summary, and recent events."
+msgstr "Диагностика с редактированием данных, сводка конфигурации и недавние события."
+
+msgid "Silent"
+msgstr "Silent"
+
+msgid "Store this report safely and share it only with trusted support."
+msgstr "Храните этот отчёт безопасно и передавайте его только доверенной поддержке."
+
+msgid "Validating report"
+msgstr "Проверка отчёта"

@@ -1347,6 +1347,35 @@
 .sbox-diagnostics-modal h4 {
 	margin: 10px 0 6px;
 }
+.sbox-diagnostic-mode-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+}
+.sbox-diagnostic-mode-card {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px;
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+	background: var(--sbox-panel-soft);
+}
+.sbox-diagnostic-mode-card h4,
+.sbox-diagnostic-mode-card p {
+	margin: 0;
+}
+.sbox-diagnostic-mode-card .cbi-button {
+	margin-top: auto;
+}
+.sbox-report-confirmation {
+	max-width: min(560px, 92vw);
+}
+@media (max-width: 640px) {
+	.sbox-diagnostic-mode-grid {
+		grid-template-columns: 1fr;
+	}
+}
 .sbox-diagnostics-evidence,
 .sbox-route-steps {
 	margin: 6px 0 12px;

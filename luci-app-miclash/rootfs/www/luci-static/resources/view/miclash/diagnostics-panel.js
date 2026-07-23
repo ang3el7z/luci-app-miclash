@@ -12,6 +12,11 @@ const COMPONENTS = [
 	[ 'guard', () => _('Guard') ]
 ];
 const SECRET_NAME = /(?:authorization|cookie|password|secret|token|subscription[_-]?url)/i;
+const MODES = {
+	silent: { button: 'cbi-button-positive', label: _('Download Silent') },
+	lite: { button: 'cbi-button-action', label: _('Download Lite') },
+	full: { button: 'cbi-button-negative', label: _('Download Full') }
+};
 
 function text(value) {
 	return String(value == null || value === '' ? '-' : value);
@@ -330,7 +335,7 @@ function create(options) {
 		const button = E('button', { 'type': 'button',
 			'class': 'cbi-button cbi-button-neutral', 'data-action': action }, label);
 		button.addEventListener('click', () => {
-			if (action === 'download-report') downloadReport(button).catch(showError);
+			if (action === 'download-report') openReportModal();
 		});
 		return button;
 	}
@@ -448,7 +453,26 @@ function create(options) {
 		return error;
 	}
 
-	function waitForOperation(operationId) {
+	function reportStageLabel(stage) {
+		const labels = {
+			preflight: _('Preparing report'), system: _('Collecting system state'),
+			configuration: _('Collecting configuration'), network: _('Collecting network state'),
+			providers: _('Collecting provider state'), operations: _('Collecting operations'),
+			logs: _('Collecting logs'), validation: _('Validating report'),
+			complete: _('Finalizing report')
+		};
+		return labels[stage] || _('Creating report');
+	}
+
+	function timestampedReportName(mode) {
+		const now = new Date();
+		const pad = (value) => String(value).padStart(2, '0');
+		return 'miclash-diagnostic-' + mode + '-' + now.getFullYear() +
+			pad(now.getMonth() + 1) + pad(now.getDate()) + '-' +
+			pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds()) + '.json';
+	}
+
+	function waitForOperation(operationId, onProgress) {
 		if (typeof api.watchOperation !== 'function' ||
 			typeof operationId !== 'string' ||
 			!/^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$/.test(operationId))
@@ -468,10 +492,11 @@ function create(options) {
 				cancel = api.watchOperation(operationId, (record, error) => {
 					if (destroyed) return stop();
 					if (error) return done(reject, error);
+					if (typeof onProgress === 'function') onProgress(record || {});
 					if (record?.state === 'success') return done(resolve, record);
 					if (record?.state === 'failure' || record?.state === 'interrupted')
 						return done(reject, operationError(record));
-				});
+				}, 1000);
 			} catch (error) {
 				return done(reject, error);
 			}
@@ -483,18 +508,66 @@ function create(options) {
 		});
 	}
 
-	async function downloadReport(button) {
+	function setReportButtonsDisabled(button, disabled) {
+		const modal = button?.parentNode?.parentNode;
+		for (const sibling of modal?.querySelectorAll('button[data-report-mode]') || [])
+			sibling.disabled = disabled;
+	}
+
+	function openFullReportModal() {
+		const confirm = E('button', { 'type': 'button',
+			'class': 'cbi-button cbi-button-negative', 'data-action': 'confirm-full-report' }, _('I understand, download Full'));
+		confirm.addEventListener('click', () => generateReport('full', true, confirm).catch(showError));
+		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-modal-responsive sbox-report-confirmation' }, [
+			E('p', {}, _('Full reports may include secrets such as subscription credentials and private configuration.')),
+			E('p', { 'class': 'sbox-muted' }, _('Store this report safely and share it only with trusted support.'))
+		]);
+		ui.showModal(_('Confirm Full diagnostic report'), body, [ closeButton(), confirm ]);
+		return body;
+	}
+
+	function openReportModal() {
+		const descriptions = {
+			silent: _('Minimal system health only. Best for public issue reports.'),
+			lite: _('Redacted diagnostics, configuration summary, and recent events.'),
+			full: _('Includes private configuration and secrets. Use only with trusted support.')
+		};
+		const cards = Object.keys(MODES).map((mode) => {
+			const button = E('button', { 'type': 'button',
+				'class': 'cbi-button ' + MODES[mode].button, 'data-report-mode': mode }, MODES[mode].label);
+			button.addEventListener('click', () => {
+				if (mode === 'full') openFullReportModal();
+				else generateReport(mode, false, button).catch(showError);
+			});
+			return E('article', { 'class': 'sbox-diagnostic-mode-card sbox-diagnostic-mode-' + mode }, [
+				E('h4', {}, mode === 'silent' ? _('Silent') : mode === 'lite' ? _('Lite') : _('Full')),
+				E('p', {}, descriptions[mode]), button
+			]);
+		});
+		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-modal-responsive sbox-report-modal' }, [
+			E('p', {}, _('Choose how much information to include in the diagnostic report.')),
+			E('p', { 'class': 'sbox-muted' }, _('Lite is recommended for most support requests.')),
+			E('div', { 'class': 'sbox-diagnostic-mode-grid' }, cards)
+		]);
+		ui.showModal(_('Download diagnostic report'), body, [ closeButton() ]);
+		return body;
+	}
+
+	async function generateReport(mode, acknowledged, button) {
 		if (destroyed) return;
+		if (!MODES[mode]) throw new Error(_('Invalid diagnostic report response'));
+		const acknowledge_secrets = acknowledged === true;
 		const originalLabel = button ? button.textContent : null;
 		const originalDisabled = button ? button.disabled : false;
 		if (button) {
+			setReportButtonsDisabled(button, true);
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
 			button.replaceChildren(E('span', { 'class': 'sbox-spinner', 'aria-hidden': 'true' }),
 				' ' + _('Creating...'));
 		}
 		try {
-			const created = await api.createDiagnosticReport('lite', false, 'luci');
+			const created = await api.createDiagnosticReport(mode, acknowledge_secrets, 'luci');
 			if (destroyed) return;
 			const operationId = created && created.operation_id;
 			const reportId = created && created.report_id;
@@ -505,7 +578,13 @@ function create(options) {
 				error.code = 'INVALID_RESPONSE';
 				throw error;
 			}
-			await waitForOperation(operationId);
+			await waitForOperation(operationId, (record) => {
+				if (!button || destroyed) return;
+				const progress = Number(record?.progress);
+				const suffix = Number.isFinite(progress) ? ' (' + Math.round(progress) + '%)' : '';
+				button.replaceChildren(E('span', { 'class': 'sbox-spinner', 'aria-hidden': 'true' }),
+					' ' + reportStageLabel(record?.stage) + suffix);
+			});
 			if (destroyed) return;
 			const payload = await api.downloadChunks('report', reportId, {});
 			if (destroyed) return;
@@ -515,7 +594,7 @@ function create(options) {
 			try {
 				const anchor = doc.createElement('a');
 				anchor.href = url;
-				anchor.download = 'miclash-diagnostic-report.json';
+				anchor.download = timestampedReportName(mode);
 				anchor.setAttribute('aria-hidden', 'true');
 				anchor.click();
 				anchor.remove();
@@ -525,11 +604,16 @@ function create(options) {
 			}
 		} finally {
 			if (button) {
+				setReportButtonsDisabled(button, false);
 				button.disabled = originalDisabled;
 				button.removeAttribute('aria-busy');
-				button.replaceChildren(originalLabel || _('Download diagnostic report'));
+				button.replaceChildren(originalLabel || MODES[mode].label);
 			}
 		}
+	}
+
+	function downloadReport(button) {
+		return generateReport('lite', false, button);
 	}
 
 	function routeError(container, error) {
@@ -654,7 +738,7 @@ function create(options) {
 	doc.addEventListener('visibilitychange', visibilityChanged);
 	win.addEventListener('miclash:ubus-event', ubusEvent);
 
-	return { renderSummary, downloadReport, openRouteTest, mount, refresh, setActive, destroy };
+	return { renderSummary, downloadReport, openReportModal, generateReport, openRouteTest, mount, refresh, setActive, destroy };
 }
 
 function createOwner(options) {

@@ -57,6 +57,24 @@ assert.match(css,
 assert.match(panelSource,
 	/sbox-overview-health sbox-overview-components[\s\S]*?_\('Components'\)/,
 	'the loaded Components card must use its spacing class and concise title');
+assert.match(panelSource, /const MODES\s*=\s*\{[\s\S]*?silent[\s\S]*?lite[\s\S]*?full/,
+	'diagnostic reports must expose Silent, Lite, and Full privacy modes');
+assert.match(panelSource, /function openReportModal\(\)/,
+	'diagnostic reports must open a privacy chooser before creation');
+assert.match(panelSource, /function generateReport\(mode, acknowledged, button\)/,
+	'diagnostic reports must generate the selected privacy mode explicitly');
+assert.match(panelSource, /cbi-button-positive[\s\S]*?cbi-button-action[\s\S]*?cbi-button-negative/,
+	'privacy mode actions must retain their green, blue, and red semantics');
+assert.match(panelSource, /acknowledge_secrets[\s\S]*true/,
+	'Full reports must require a separate secret acknowledgement');
+assert.match(panelSource, /api\.watchOperation\(operationId,[\s\S]*?,\s*1000\)/,
+	'report progress must use the bounded one-second operation watcher');
+assert.match(panelSource, /miclash-diagnostic-' \+ mode \+ '-[\s\S]*?\.json/,
+	'downloaded report filenames must contain the selected mode and timestamp');
+assert.match(css, /\.sbox-diagnostic-mode-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s,
+	'privacy cards must form a three-column desktop layout');
+assert.match(css, /@media \(max-width: 640px\)[\s\S]*?\.sbox-diagnostic-mode-grid\s*\{[^}]*grid-template-columns:\s*1fr/s,
+	'privacy cards must stack on narrow viewports');
 
 class MiniNode {
 	constructor(tag, attrs = {}) {
@@ -191,7 +209,7 @@ documentMock.createElement = (tag) => {
 const modalCalls = [];
 const notifications = [];
 const ui = {
-	showModal(title, body) { modalCalls.push({ title, body }); },
+	showModal(title, body, buttons) { modalCalls.push({ title, body, buttons: buttons || [] }); },
 	hideModal() {},
 	addNotification(_title, body, type) { notifications.push({ type, text: body?.textContent || '' }); }
 };
@@ -269,8 +287,8 @@ const api = {
 		calls.push(['recoverNetwork', ...args]);
 		return { operation_id: 'op_recover_1' };
 	},
-	watchOperation(operationId, callback) {
-		calls.push(['watchOperation', operationId]);
+	watchOperation(operationId, callback, interval) {
+		calls.push(['watchOperation', operationId, interval]);
 		reportWatcher = callback;
 		return () => calls.push(['stopOperationWatch', operationId]);
 	},
@@ -278,7 +296,7 @@ const api = {
 };
 
 const panel = moduleApi.create({ api, document: documentMock, window: windowMock, pollInterval: 30000 });
-for (const method of ['renderSummary', 'downloadReport', 'openRouteTest', 'mount', 'setActive', 'destroy'])
+for (const method of ['renderSummary', 'downloadReport', 'openReportModal', 'generateReport', 'openRouteTest', 'mount', 'setActive', 'destroy'])
 	assert.equal(typeof panel[method], 'function', `missing public method ${method}`);
 assert.equal(panel.openDetails, undefined, 'redundant details modal must not remain public');
 
@@ -578,33 +596,70 @@ assert.ok(calls.length > callsBeforeEvent, 'ubus event refresh did not call type
 let releaseReport;
 reportGate = new Promise((resolve) => { releaseReport = resolve; });
 reportButton.click();
+let reportModal = modalCalls.at(-1);
+assert.equal(reportModal.title, 'Download diagnostic report');
+assert.equal(reportModal.body.querySelectorAll('.sbox-diagnostic-mode-card').length, 3,
+	'privacy chooser must render all three report cards');
+assert.match(reportModal.body.textContent, /Lite is recommended/,
+	'privacy chooser must present the muted Lite recommendation');
+const silentButton = reportModal.body.querySelector('[data-report-mode="silent"]');
+const liteButton = reportModal.body.querySelector('[data-report-mode="lite"]');
+const fullButton = reportModal.body.querySelector('[data-report-mode="full"]');
+assert.match(silentButton.className, /cbi-button-positive/);
+assert.match(liteButton.className, /cbi-button-action/);
+assert.match(fullButton.className, /cbi-button-negative/);
+fullButton.click();
+const fullConfirmation = modalCalls.at(-1);
+assert.equal(fullConfirmation.title, 'Confirm Full diagnostic report');
+assert.match(fullConfirmation.body.textContent, /may include secrets/);
+assert.equal(calls.some((call) => call[0] === 'createDiagnosticReport'), false,
+	'opening Full confirmation must not create a report');
+liteButton.click();
 await new Promise((resolve) => setImmediate(resolve));
-assert.equal(reportButton.disabled, true, 'report button must lock during report creation');
-assert.equal(reportButton.getAttribute('aria-busy'), 'true');
-assert.ok(reportButton.querySelector('.sbox-spinner'), 'report button must show the shared spinner');
-assert.match(reportButton.textContent, /Creating/);
+assert.equal(liteButton.disabled, true, 'selected report action must lock during report creation');
+assert.equal(silentButton.disabled, true, 'sibling report actions must lock during report creation');
+assert.equal(fullButton.disabled, true, 'sibling report actions must lock during report creation');
+assert.equal(liteButton.getAttribute('aria-busy'), 'true');
+assert.ok(liteButton.querySelector('.sbox-spinner'), 'report button must show the shared spinner');
+assert.match(liteButton.textContent, /Creating/);
 releaseReport(); reportGate = null;
 await new Promise((resolve) => setImmediate(resolve));
 assert.deepEqual(calls.find((call) => call[0] === 'createDiagnosticReport')?.slice(1),
 	['lite', false, 'luci'], 'report creation must use the Lite LuCI contract');
 assert.deepEqual(calls.find((call) => call[0] === 'watchOperation')?.slice(1),
-	['1900000000000-00000001-0123456789abcdef']);
+	['1900000000000-00000001-0123456789abcdef', 1000]);
 assert.equal(calls.some((call) => call[0] === 'downloadChunks'), false,
 	'report download must wait for successful operation completion');
-assert.equal(reportButton.disabled, true, 'report button must remain locked while collection runs');
-reportWatcher({ state: 'success' });
+assert.equal(liteButton.disabled, true, 'report button must remain locked while collection runs');
+reportWatcher({ state: 'running', stage: 'configuration', progress: 30 });
+assert.match(liteButton.textContent, /Collecting configuration \(30%\)/,
+	'report action must render the translated operation stage and progress');
+reportWatcher({ state: 'success', stage: 'complete', progress: 100 });
 await new Promise((resolve) => setImmediate(resolve));
 await new Promise((resolve) => setImmediate(resolve));
-assert.equal(reportButton.disabled, false, 'report button must unlock after download');
-assert.equal(reportButton.getAttribute('aria-busy'), null);
-assert.equal(reportButton.textContent, 'Download diagnostic report');
+assert.equal(liteButton.disabled, false, 'report button must unlock after download');
+assert.equal(silentButton.disabled, false, 'sibling buttons must unlock after download');
+assert.equal(liteButton.getAttribute('aria-busy'), null);
+assert.equal(liteButton.textContent, 'Download Lite');
 assert.deepEqual(calls.find((call) => call[0] === 'downloadChunks')?.slice(1),
 	['report', 'rpt_' + 'a'.repeat(32), {}]);
 assert.equal(createdUrls.length, 1);
-assert.equal(clickedDownloads[0].download, 'miclash-diagnostic-report.json');
+assert.match(clickedDownloads[0].download, /^miclash-diagnostic-lite-\d{8}-\d{6}\.json$/);
 assert.deepEqual(revoked, [createdUrls[0].value], 'object URL must always be revoked');
 
+const confirmFullButton = fullConfirmation.buttons.find((button) =>
+	button.getAttribute('data-action') === 'confirm-full-report');
+confirmFullButton.click();
+await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(calls.filter((call) => call[0] === 'createDiagnosticReport').at(-1).slice(1),
+	['full', true, 'luci'], 'Full reports must send the explicit acknowledgement only after confirmation');
+reportWatcher({ state: 'success', stage: 'complete', progress: 100 });
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setImmediate(resolve));
+assert.match(clickedDownloads.at(-1).download, /^miclash-diagnostic-full-\d{8}-\d{6}\.json$/);
+
 const failedReportButton = E('button', {}, 'Download diagnostic report');
+let failedWatchCancelled = 0;
 const failedReportPanel = moduleApi.create({ api: { ...api,
 	async createDiagnosticReport() {
 		return {
@@ -616,7 +671,7 @@ const failedReportPanel = moduleApi.create({ api: { ...api,
 		queueMicrotask(() => callback({
 			state: 'failure', error: { code: 'INTERNAL', message: 'report failed' }
 		}));
-		return () => {};
+		return () => { failedWatchCancelled++; };
 	},
 	async downloadChunks() { throw new Error('download must not start'); },
 	destroy() {}
@@ -625,7 +680,25 @@ await assert.rejects(failedReportPanel.downloadReport(failedReportButton), /repo
 assert.equal(failedReportButton.disabled, false, 'failed report must restore the button');
 assert.equal(failedReportButton.getAttribute('aria-busy'), null);
 assert.equal(failedReportButton.textContent, 'Download diagnostic report');
+assert.equal(failedWatchCancelled, 1, 'failed reports must stop their operation watcher');
 failedReportPanel.destroy();
+
+let destroyWatchCancelled = 0;
+const destroyedReportPanel = moduleApi.create({ api: { ...api,
+	async createDiagnosticReport() {
+		return {
+			operation_id: '1900000000000-00000003-0123456789abcdef',
+			report_id: 'rpt_' + 'c'.repeat(32)
+		};
+	},
+	watchOperation(_operationId, _callback) { return () => { destroyWatchCancelled++; }; },
+	destroy() {}
+}, document: documentMock, window: windowMock, pollInterval: 30000 });
+const pendingDestroyReport = destroyedReportPanel.downloadReport(E('button', {}, 'Download diagnostic report'));
+await new Promise((resolve) => setImmediate(resolve));
+destroyedReportPanel.destroy();
+await assert.rejects(pendingDestroyReport, /CANCELLED/);
+assert.equal(destroyWatchCancelled, 1, 'destroying a panel must stop its report watcher');
 
 panel.openRouteTest();
 let modal = modalCalls.at(-1);
