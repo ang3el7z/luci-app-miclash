@@ -738,7 +738,7 @@ function create(options) {
 	doc.addEventListener('visibilitychange', visibilityChanged);
 	win.addEventListener('miclash:ubus-event', ubusEvent);
 
-	return { renderSummary, downloadReport, openReportModal, generateReport, openRouteTest, mount, refresh, setActive, destroy };
+	return { renderSummary, downloadReport: generateReport, openReportModal, generateReport, openRouteTest, mount, refresh, setActive, destroy };
 }
 
 function createOwner(options) {
