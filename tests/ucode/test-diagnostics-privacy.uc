@@ -114,3 +114,26 @@ assert_true(index(runtime_lite, runtime_host) >= 0, 'lite retains provider domai
 let status_url = 'https://status.provider.example/health';
 assert_equal(privacy.create('lite', []).text([], status_url), status_url,
 	'lite retains harmless provider status URLs');
+
+// Subscription URLs remain unsafe in every encoded transport representation.
+for (let mode in [ 'silent', 'lite' ]) {
+	for (let probe in [ percent_encoded(runtime_url), lower_percent_encoded(runtime_url),
+		independent_base64(runtime_url), independent_base64url(runtime_url) ]) {
+		let output = privacy.create(mode, []).text([], 'subscription=' + probe);
+		assert_absent(output, [ runtime_url, probe, runtime_host, 'runtime-token' ],
+			mode + ' encoded subscription URL');
+	}
+}
+
+// Typed labels are shared by object and text transforms within one report.
+let typed_source = { hostname: runtime_host, mac: runtime_mac,
+	device_name: runtime_device, uuid: runtime_uuid };
+let typed_privacy = privacy.create('silent', []);
+let typed_object = typed_privacy.value([], typed_source);
+assert_equal(typed_object.hostname, '[HOST-1]');
+assert_equal(typed_object.mac, '[DEVICE-1]');
+assert_equal(typed_object.device_name, '[DEVICE-2]');
+assert_equal(typed_object.uuid, '[ID-1]');
+let typed_text = typed_privacy.text([], runtime_host + ' ' + runtime_mac + ' device=' +
+	runtime_device + ' uuid=' + runtime_uuid);
+assert_match(typed_text, /\[HOST-1\].*\[DEVICE-1\].*\[DEVICE-2\].*\[ID-1\]/);

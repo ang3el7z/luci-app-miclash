@@ -28,11 +28,17 @@ function trim_token(value) {
 	return value;
 };
 
-function classified(key, value) {
+function typed_kind(key) {
 	let normalized = redact.normalized_key(key);
-	if (redact.secret_name(key) || match(normalized, /(^|_)(device|hostname|host_name|ssid|uuid|user_id|chat_id|telegram_id|mac)($|_)/))
-		return true;
-	return match(value, /^[0-9]{5,}:[^[:space:]]+$/);
+	if (match(normalized, /(^|_)(hostname|host_name)($|_)/)) return 'hosts';
+	if (match(normalized, /(^|_)(device|ssid|mac)($|_)/)) return 'devices';
+	if (match(normalized, /(^|_)(uuid|user_id|chat_id|telegram_id)($|_)/)) return 'ids';
+	return null;
+};
+
+function classified(key, value) {
+	return typed_kind(key) == null &&
+		(redact.secret_name(key) || match(value, /^[0-9]{5,}:[^[:space:]]+$/));
 };
 
 function add_variant(values, value) {
@@ -142,7 +148,9 @@ function discover(seed_values) {
 		else if (kind == 'object')
 			for (let key, value in item.value) push(stack, { value, key });
 		else if (kind == 'string') {
-			if (classified(item.key, item.value)) catalog_add(catalog, 'secret', item.value);
+			let typed = typed_kind(item.key);
+			if (typed != null) catalog_add(catalog, typed, item.value);
+			else if (classified(item.key, item.value)) catalog_add(catalog, 'secret', item.value);
 			discover_text(catalog, item.value);
 		}
 	}
@@ -217,7 +225,8 @@ function subscription_url(value) {
 function replace_urls(input, values, labels, mode) {
 	for (let value in values)
 		if (mode == 'silent' || subscription_url(value))
-			input = replace_all(input, value, mode == 'silent' ? label(labels, 'URL', value) : MASK);
+			input = replace_variants(input, [ value ], labels, 'URL',
+				mode == 'silent' ? null : MASK);
 	return input;
 };
 
@@ -248,11 +257,17 @@ function transform(mode, catalog, labels, path, value) {
 		let output = {};
 		for (let key, item in value) {
 			let key_path = [ ...path, key ];
-			if (classified(key, item)) {
+			let typed = typed_kind(key);
+			if (typed != null) {
 				if (mode == 'silent' && type(item) == 'string') {
-					let kind = match(redact.normalized_key(key), /device|ssid|mac|host/) ? 'DEVICE' :
-						match(redact.normalized_key(key), /id|uuid/) ? 'ID' : 'REDACTED';
-					output[key] = kind == 'REDACTED' ? MASK : label(labels, kind, item);
+					let kind = typed == 'hosts' ? 'HOST' : typed == 'devices' ? 'DEVICE' : 'ID';
+					output[key] = label(labels, kind, item);
+				}
+				else output[key] = MASK;
+			}
+			else if (classified(key, item)) {
+				if (mode == 'silent' && type(item) == 'string') {
+					output[key] = MASK;
 				}
 				else output[key] = MASK;
 			}
