@@ -160,23 +160,111 @@ function collect_dns(runtime) {
 	return present('ubus', { interfaces });
 };
 
-function owned_iptables_lines(output) {
-	let lines = [];
-	for (let raw in split(output, '\n')) {
-		let line = trim(raw);
-		if (length(lines) >= MAX_RECORDS) break;
-		if (length(line) <= 4096 && index(line, 'MCL_') >= 0) push(lines, line);
-	}
-	return lines;
+const IPTABLES_ANCHORS = {
+	MCL_AN_PR: { table: 'mangle', hook: 'PREROUTING', prefix: 'MCL_PR_' },
+	MCL_AN_OU: { table: 'mangle', hook: 'OUTPUT', prefix: 'MCL_OU_' },
+	MCL_AN_TI: { table: 'filter', hook: 'INPUT', prefix: 'MCL_TI_' },
+	MCL_AN_TF: { table: 'filter', hook: 'FORWARD', prefix: 'MCL_TF_' }
 };
 
-function owned_ipset_lines(output) {
+function generation_chain(name) {
+	let found = match(name ?? '', /^MCL_(PR|PX|OU|TI|TF)_([0-9a-f]{12})$/);
+	return found ? { prefix: 'MCL_' + found[1] + '_', id: found[2] } : null;
+};
+
+function iptables_rule(line) {
+	let source = match(line, /^-A ([A-Za-z0-9_.:-]+)[ \t]+/);
+	if (!source) return null;
+	let verdict = match(line,
+		/(^|[ \t])(-j|--jump|-g|--goto)[ \t]+([A-Za-z0-9_.:-]+)([ \t]|$)/);
+	return { line, source: source[1], target: verdict ? verdict[3] : null };
+};
+
+function owned_iptables_document(output, table) {
+	let entries = [], declaration_counts = {}, rules = [];
+	for (let raw in split(output, '\n')) {
+		let line = trim(raw);
+		if (!length(line) || length(line) > 4096) continue;
+		let declaration = match(line,
+			/^:(MCL_AN_(PR|OU|TI|TF)|MCL_(PR|PX|OU|TI|TF)_[0-9a-f]{12}) - \[[0-9]+:[0-9]+\]$/);
+		if (declaration) {
+			declaration_counts[declaration[1]] =
+				(declaration_counts[declaration[1]] ?? 0) + 1;
+			push(entries, { kind: 'declaration', name: declaration[1], line });
+			continue;
+		}
+		let rule = iptables_rule(line);
+		if (rule != null) {
+			push(rules, rule);
+			push(entries, { kind: 'rule', value: rule, line });
+		}
+	}
+
+	let anchors = {}, active_ids = {}, reachable = {};
+	for (let name in IPTABLES_ANCHORS) {
+		let contract = IPTABLES_ANCHORS[name];
+		if (contract.table != table || declaration_counts[name] != 1) continue;
+		let hook_line = '-A ' + contract.hook + ' -j ' + name;
+		let anchor_rules = [], hook_rules = [];
+		for (let rule in rules) {
+			if (rule.source == name) push(anchor_rules, rule);
+			if (rule.source == contract.hook && rule.target == name) push(hook_rules, rule);
+		}
+		if (length(hook_rules) != 1 || hook_rules[0].line != hook_line ||
+		    length(anchor_rules) != 1) continue;
+		let target = anchor_rules[0].target;
+		let generation = generation_chain(target);
+		let anchor_line = '-A ' + name + ' -j ' + target;
+		if (generation == null || generation.prefix != contract.prefix ||
+		    declaration_counts[target] != 1 || anchor_rules[0].line != anchor_line) continue;
+		anchors[name] = { hook_line, anchor_line, target };
+		active_ids[generation.id] = true;
+		reachable[target] = true;
+	}
+
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let rule in rules) {
+			if (!reachable[rule.source] || rule.target == null || reachable[rule.target]) continue;
+			let source = generation_chain(rule.source), target = generation_chain(rule.target);
+			if (source != null && target != null && source.id == target.id &&
+			    active_ids[target.id] && declaration_counts[rule.target] == 1) {
+				reachable[rule.target] = true;
+				changed = true;
+			}
+		}
+	}
+
+	let lines = [];
+	for (let entry in entries) {
+		if (length(lines) >= MAX_RECORDS) break;
+		if (entry.kind == 'declaration') {
+			if (anchors[entry.name] != null || reachable[entry.name]) push(lines, entry.line);
+			continue;
+		}
+		let rule = entry.value, owned = false;
+		for (let name in anchors)
+			if (rule.line == anchors[name].hook_line || rule.line == anchors[name].anchor_line)
+				owned = true;
+		if (!owned && reachable[rule.source]) {
+			let target_generation = generation_chain(rule.target);
+			owned = rule.target == null || index(rule.target, 'MCL_') != 0 ||
+				(target_generation != null && reachable[rule.target]);
+		}
+		if (owned) push(lines, rule.line);
+	}
+	return { lines, active_ids };
+};
+
+function owned_ipset_lines(output, active_ids) {
 	let lines = [];
 	for (let raw in split(output, '\n')) {
 		let line = trim(raw);
 		if (length(lines) >= MAX_RECORDS) break;
-		if (length(line) <= 4096 &&
-		    match(line, /^(create|add) MCL_(L4|F4|L6|F6)_[0-9a-f]{12}( |$)/))
+		let owned = match(line,
+			/^(create|add) MCL_(L4|F4|L6|F6)_([0-9a-f]{12})( |$)/);
+		if (length(line) <= 4096 && owned && active_ids[owned[3]])
 			push(lines, line);
 	}
 	return lines;
@@ -189,16 +277,18 @@ function collect_firewall(runtime) {
 		if (document?.state != 'unavailable' && type(document.nftables) == 'array')
 			return present('nft', { backend: 'nft', table: document });
 	}
-	let documents = [], available = false, last_failure = nft;
+	let documents = [], available = false, last_failure = nft, active_ids = {};
 	for (let executable in [ '/usr/sbin/iptables-save', '/usr/sbin/ip6tables-save' ])
 		for (let table in [ 'mangle', 'filter' ]) {
 			let result = capture(runtime, executable + ' -t ' + table, SECTION_LIMIT);
 			if (result.ok !== true) { last_failure = result; continue; }
 			available = true;
+			let owned = owned_iptables_document(result.output, table);
+			for (let id in owned.active_ids) active_ids[id] = true;
 			push(documents, {
 				family: executable == '/usr/sbin/ip6tables-save' ? 'ipv6' : 'ipv4',
 				table,
-				lines: owned_iptables_lines(result.output)
+				lines: owned.lines
 			});
 		}
 	if (available) {
@@ -207,7 +297,7 @@ function collect_firewall(runtime) {
 			return present('iptables', {
 				backend: 'iptables',
 				documents,
-				sets: owned_ipset_lines(sets.output)
+				sets: owned_ipset_lines(sets.output, active_ids)
 			});
 		return {
 			...unavailable('firewall', sets),
@@ -237,32 +327,14 @@ function capture_json_array(runtime, name, command) {
 	}
 };
 
-function owned_rule(item) {
-	if (type(item) != 'object') return false;
-	return item.table == 100 || item.table == 101 || item.protocol == 242 ||
-		item.protocol == 'miclash' || item.fwmark == '0x1' || item.fwmark == 1;
-};
-
 function collect_routes(runtime) {
-	let routes = [], rules = [];
-	for (let family in [ '-4', '-6' ]) {
-		let rule_result = capture_json_array(runtime, 'routes',
-			'/sbin/ip -j ' + family + ' rule show');
-		if (rule_result.error != null) return rule_result.error;
-		for (let item in rule_result.values)
-			if (owned_rule(item) && length(rules) < MAX_RECORDS)
-				push(rules, { family: family == '-4' ? 'ipv4' : 'ipv6', ...item });
-		for (let table in [ 100, 101 ]) {
-			let route_result = capture_json_array(runtime, 'routes',
-				'/sbin/ip -j ' + family + ' route show table ' + table);
-			if (route_result.error != null) return route_result.error;
-			for (let item in route_result.values)
-				if (type(item) == 'object' && length(routes) < MAX_RECORDS)
-					push(routes, { family: family == '-4' ? 'ipv4' : 'ipv6',
-						table, ...item });
-		}
-	}
-	return present('iproute2', { routes, rules });
+	return {
+		...unavailable('routes', {
+			code: 'OWNERSHIP_UNVERIFIED',
+			message: 'Verified MiClash routing ownership evidence is unavailable'
+		}),
+		source: 'routing-ownership'
+	};
 };
 
 function collect_interfaces(runtime) {
@@ -329,12 +401,46 @@ function default_section(runtime, name) {
 	return unavailable(name, { message: name + ' domain adapter is unavailable' });
 };
 
+function routing_projection(name, value) {
+	if (value?.state == 'unavailable') return value;
+	if (type(value?.routes) != 'array' || type(value?.rules) != 'array')
+		return unavailable(name, {
+			code: 'OWNERSHIP_UNVERIFIED',
+			message: 'Verified MiClash routing ownership evidence is unavailable'
+		});
+	if (value.ownership?.trusted !== true || value.ownership?.status != 'trusted')
+		return unavailable(name, {
+			code: 'OWNERSHIP_UNVERIFIED',
+			message: 'MiClash routing ownership is not trusted'
+		});
+	return {
+		state: 'present',
+		source: value.source ?? 'routing-ownership',
+		routes: filter(value.routes, (item) => item?.owned === true),
+		rules: filter(value.rules, (item) => item?.owned === true),
+		ownership: {
+			status: 'trusted',
+			trusted: true,
+			transition_state: value.ownership.transition_state ?? null
+		}
+	};
+};
+
 function section_value(runtime, name, collector) {
 	if (type(collector) != 'function') return default_section(runtime, name);
 	try {
 		let value = collector();
-		return value == null ? unavailable(name, null) :
-			(type(value) == 'object' ? value : present('domain', { data: value }));
+		if (value == null) return unavailable(name, null);
+		if (type(value) != 'object') return present('domain', { data: value });
+		if (name == 'routes') return routing_projection(name, value);
+		if (name == 'tun_tproxy' && type(value.routes) == 'array' &&
+		    type(value.rules) == 'array') {
+			let routing = routing_projection(name, value);
+			if (routing.state == 'unavailable') return routing;
+			return { ...value, routes: routing.routes, rules: routing.rules,
+				ownership: routing.ownership };
+		}
+		return value;
 	}
 	catch (error) {
 		return unavailable(name, {

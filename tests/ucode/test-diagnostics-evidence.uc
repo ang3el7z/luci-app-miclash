@@ -102,7 +102,15 @@ let adapter_runtime = { fs: { popen: (command, mode) => {
 	};
 } } };
 let adapters = evidence_module.create(adapter_runtime, {
-	routes: () => ({ state: 'present', routes: [], rules: [], ownership: { status: 'trusted' } }),
+	routes: () => ({ state: 'present', routes: [
+		{ family: 'ipv4', table: 100, protocol: 242, owned: true },
+		{ family: 'ipv4', table: 100, protocol: 242, owned: false,
+			comment: 'counterfeit reserved-table route' }
+	], rules: [
+		{ family: 'ipv4', table: 100, fwmark: '0x1', protocol: 242, owned: true },
+		{ family: 'ipv4', table: 100, fwmark: '0x1', protocol: 242, owned: false,
+			comment: 'counterfeit reserved-table rule' }
+	], ownership: { status: 'trusted', trusted: true } }),
 	interfaces: () => ({ state: 'present', interfaces: [ { name: 'wan', up: true } ] }),
 	tun_tproxy: () => ({ state: 'present', tun: { present: false }, tproxy_rules: [] }),
 	guard: () => ({ state: 'disabled', latched: false }),
@@ -123,6 +131,11 @@ assert_equal(find_section(adapter_sections, 'firewall').table.nftables[0].table.
 assert_equal(find_section(adapter_sections, 'memory').mem_total_kib, 262144);
 assert_equal(find_section(adapter_sections, 'memory').mem_available_kib, 131072);
 assert_equal(find_section(adapter_sections, 'routes').ownership.status, 'trusted');
+assert_equal(length(find_section(adapter_sections, 'routes').routes), 1);
+assert_equal(length(find_section(adapter_sections, 'routes').rules), 1);
+assert_true(index(sprintf('%J', find_section(adapter_sections, 'routes')),
+	'counterfeit reserved-table') < 0,
+	'verified routing adapters cannot leak foreign reserved-table state');
 assert_equal(find_section(adapter_sections, 'operations').records[0].id, 'op-1');
 assert_true(index(adapter_commands, '/usr/sbin/nft list ruleset') < 0,
 	'firewall evidence never captures the whole nft ruleset');
@@ -135,11 +148,24 @@ let iptables_replies = {
 	'/usr/sbin/nft -j list table inet miclash': {
 		output: 'Error: No such file or directory\n', close: 1 },
 	'/usr/sbin/iptables-save -t mangle': {
-		output: '*mangle\n:PREROUTING ACCEPT [0:0]\n:MCL_PR_abcdefabcdef - [0:0]\n' +
-			'-A PREROUTING -j unrelated\n-A MCL_PR_abcdefabcdef -j TPROXY\nCOMMIT\n',
+		output: '*mangle\n:PREROUTING ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\n' +
+			':MCL_AN_PR - [0:0]\n:MCL_PR_abcdefabcdef - [0:0]\n' +
+			'-A PREROUTING -j MCL_AN_PR\n' +
+			'-A MCL_AN_PR -j MCL_PR_abcdefabcdef\n' +
+			'-A MCL_PR_abcdefabcdef -j TPROXY\n' +
+			':MCL_COUNTERFEIT - [0:0]\n' +
+			'-A MCL_COUNTERFEIT -j MCL_PR_abcdefabcdef\n' +
+			':MCL_PR_deadbeefdead - [0:0]\n' +
+			'-A MCL_PR_deadbeefdead -j TPROXY\n' +
+			':MCL_PR_abcdefabcdef_extra - [0:0]\n' +
+			'-A MCL_PR_abcdefabcdef_extra -j TPROXY\n' +
+			'-A PREROUTING -m comment --comment MCL_PR_abcdefabcdef -j unrelated\n' +
+			'-A unrelated -j MCL_PR_abcdefabcdef\nCOMMIT\n',
 		close: 0 },
 	'/usr/sbin/iptables-save -t filter': {
-		output: '*filter\n:MCL_TI_abcdefabcdef - [0:0]\n-A INPUT -j unrelated\n' +
+		output: '*filter\n:INPUT ACCEPT [0:0]\n:MCL_AN_TI - [0:0]\n' +
+			':MCL_TI_abcdefabcdef - [0:0]\n' +
+			'-A INPUT -j MCL_AN_TI\n-A MCL_AN_TI -j MCL_TI_abcdefabcdef\n' +
 			'-A MCL_TI_abcdefabcdef -j ACCEPT\nCOMMIT\n',
 		close: 0 },
 	'/usr/sbin/ip6tables-save -t mangle': { output: '*mangle\nCOMMIT\n', close: 0 },
@@ -170,17 +196,66 @@ let iptables_sections = evidence_module.create(iptables_runtime, {
 let iptables_firewall = find_section(iptables_sections, 'firewall');
 assert_equal(iptables_firewall.backend, 'iptables');
 assert_equal(iptables_firewall.documents[0].lines[0],
-	':MCL_PR_abcdefabcdef - [0:0]');
+	':MCL_AN_PR - [0:0]');
 assert_equal(iptables_firewall.documents[0].lines[1],
+	':MCL_PR_abcdefabcdef - [0:0]');
+assert_equal(iptables_firewall.documents[0].lines[2],
+	'-A PREROUTING -j MCL_AN_PR');
+assert_equal(iptables_firewall.documents[0].lines[3],
+	'-A MCL_AN_PR -j MCL_PR_abcdefabcdef');
+assert_equal(iptables_firewall.documents[0].lines[4],
 	'-A MCL_PR_abcdefabcdef -j TPROXY');
-assert_equal(length(iptables_firewall.documents[0].lines), 2,
-	'unrelated iptables rules are excluded');
+assert_equal(length(iptables_firewall.documents[0].lines), 5,
+	'only the exact hooked anchor and reachable generation are emitted');
+assert_true(index(sprintf('%J', iptables_firewall.documents),
+	'MCL_COUNTERFEIT') < 0, 'counterfeit MCL chain declarations are excluded');
+assert_true(index(sprintf('%J', iptables_firewall.documents),
+	'MCL_PR_deadbeefdead') < 0,
+	'an exact-looking but unanchored generation chain is excluded');
+assert_true(index(sprintf('%J', iptables_firewall.documents),
+	'MCL_PR_abcdefabcdef_extra') < 0,
+	'a prefix counterfeit generation chain is excluded');
+assert_true(index(sprintf('%J', iptables_firewall.documents),
+	'--comment MCL_PR_abcdefabcdef') < 0,
+	'counterfeit MCL comment text in a foreign rule is excluded');
+assert_true(index(sprintf('%J', iptables_firewall.documents),
+	'-A unrelated -j MCL_PR_abcdefabcdef') < 0,
+	'foreign rules targeting an owned-looking chain are excluded');
 assert_equal(iptables_firewall.sets[0],
 	'create MCL_L4_abcdefabcdef hash:net family inet');
 assert_equal(iptables_firewall.sets[1],
 	'add MCL_L4_abcdefabcdef 198.51.100.0/24');
 assert_equal(length(iptables_firewall.sets), 2,
 	'unrelated ipset objects are excluded');
+
+let counterfeit_route_commands = [];
+let counterfeit_routes = evidence_module.create({ fs: { popen: (command, mode) => {
+	push(counterfeit_route_commands, command);
+	let read = false;
+	return {
+		read: () => {
+			if (read) return '';
+			read = true;
+			if (index(command, ' rule show') >= 0)
+				return '[{"priority":1000,"fwmark":"0x1","table":100,"protocol":242}]\n';
+			if (index(command, ' route show table 100') >= 0)
+				return '[{"type":"local","dst":"default","dev":"lo","table":100,"protocol":242}]\n';
+			return '[]\n';
+		},
+		close: () => 0
+	};
+} } }, {
+	procd: domain_present, packages: domain_present, dns: domain_present,
+	firewall: domain_present, interfaces: domain_present, tun_tproxy: domain_present,
+	guard: domain_present, schedulers: domain_present, memory: domain_present,
+	operations: domain_present, recovery: domain_present
+}).sections();
+let counterfeit_routes_section = find_section(counterfeit_routes, 'routes');
+assert_equal(counterfeit_routes_section.state, 'unavailable');
+assert_equal(counterfeit_routes_section.code, 'OWNERSHIP_UNVERIFIED');
+assert_true(counterfeit_routes_section.routes == null &&
+	counterfeit_routes_section.rules == null,
+	'foreign reserved table/protocol/mark tuples are never emitted as MiClash evidence');
 
 let bin_opkg_commands = [];
 let bin_opkg_runtime = { fs: { popen: (command, mode) => {
