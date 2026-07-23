@@ -1,4 +1,6 @@
 import * as errors from 'miclash.errors';
+import * as diagnostics_json from 'miclash.diagnostics-json';
+import * as privacy from 'miclash.diagnostics-privacy';
 import * as telegram_format from 'miclash.telegram-format';
 import * as redact from 'miclash.redact';
 
@@ -1049,9 +1051,11 @@ export function create_store(runtime) {
 				errors.fail(code);
 			};
 			return {
+				size: report.size,
+				sha256: report.sha256,
 				read: (amount) => {
 					if (reader_closed) errors.fail('NOT_FOUND');
-					if (type(amount) != 'int' || amount < 1 || amount > 4096)
+					if (type(amount) != 'int' || amount < 1 || amount > 49152)
 						reader_terminal('INVALID_ARGUMENT');
 					let chunk = null;
 					try { chunk = runtime.fs.read(handle, amount); }
@@ -1080,17 +1084,37 @@ export function create_store(runtime) {
 					catch (error) { reader_terminal('INTERNAL'); }
 					discard(report);
 					return true;
+				},
+				release: () => {
+					if (reader_closed) errors.fail('NOT_FOUND');
+					let after = null, close_result = null;
+					try {
+						after = runtime.fs.fstat(handle);
+						close_result = runtime.fs.close(handle);
+						reader_closed = true;
+						let current = safe_file(runtime, report.path, report.identity);
+						if (close_result !== true || reader_failure != null ||
+							!same_node(opened, after) || !same_node(file, current) ||
+							runtime.digest.sha256_file(report.path) != report.sha256 ||
+							!same_node(current, runtime.fs.lstat(report.path)))
+							reader_terminal('INTERNAL');
+					}
+					catch (error) { reader_terminal('INTERNAL'); }
+					report.downloaded = false;
+					return true;
 				}
 			};
 		}
 	};
 };
 export function create(dependencies) {
-	let runtime = dependencies?.runtime, sources = dependencies?.sources;
+	let runtime = dependencies?.runtime, sources = dependencies?.sources,
+		operation_manager = dependencies?.operations;
 	if (type(runtime?.fs) != 'object' || type(runtime?.clock?.now) != 'function' ||
 		type(runtime?.random?.hex) != 'function' || type(runtime?.digest?.sha256) != 'function' ||
 		type(runtime?.digest?.sha256_file) != 'function' ||
-		runtime?.paths?.tmp != '/tmp/miclash' || type(sources) != 'object')
+		runtime?.paths?.tmp != '/tmp/miclash' || type(sources) != 'object' ||
+		(operation_manager != null && type(operation_manager?.submit_observation) != 'function'))
 		invalid();
 	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
 		'updates', 'settings', 'telegram', 'last_repair', 'config', 'process', 'logs', 'uci',
@@ -1100,6 +1124,7 @@ export function create(dependencies) {
 	let root = ensure_directory(runtime, ROOT);
 	recover_reports(runtime, root);
 	let reports = {}, report_order = [];
+	let stream_store = operation_manager == null ? null : create_store(runtime);
 	function forget(id) {
 		let next = [];
 		for (let existing in report_order)
@@ -1136,6 +1161,221 @@ export function create(dependencies) {
 			if (reports[id]?.expires_at <= now) remove_report(id);
 		while (length(report_order) >= RETENTION)
 			remove_report(report_order[0]);
+	};
+	function submit_stream_report(options) {
+		if (stream_store == null || type(options) != 'object' || length(keys(options)) != 3 ||
+			!exists(options, 'mode') || !exists(options, 'acknowledge_secrets') ||
+			!exists(options, 'source') ||
+			(options.mode != 'silent' && options.mode != 'lite' && options.mode != 'full') ||
+			type(options.acknowledge_secrets) != 'bool' ||
+			index([ 'luci', 'telegram', 'auto', 'system' ], options.source) < 0)
+			invalid();
+		if (options.mode == 'full' &&
+			(options.source != 'luci' || options.acknowledge_secrets !== true))
+			errors.fail('PERMISSION_DENIED');
+
+		let staged = stream_store.begin({
+			mode: options.mode,
+			required_bytes: REPORT_MAX_INPUT
+		});
+		let operation = null;
+		try {
+			operation = operation_manager.submit_observation('diagnostics.report', options.source,
+				{ report_id: staged.id, mode: options.mode }, (ctx) => {
+					let raw = {}, sections = {}, raw_config = null, finished = false;
+					function fail(error) {
+						if (finished) return;
+						finished = true;
+						try { staged.handle.abort(); } catch (abort_error) {}
+						ctx.complete(error);
+					};
+					function schedule(next) {
+						runtime.clock.set_timeout(0, () => {
+							try { next(); }
+							catch (error) { fail(error); }
+						});
+					};
+					function stage(name, progress, collect_next, next) {
+						ctx.stage(name, progress, '');
+						collect_next();
+						schedule(next);
+					};
+					function complete_report() {
+						let profile = privacy.create(options.mode, [ raw, raw_config ]);
+						let safe = {};
+						for (let name, value in raw) {
+							if (name == 'collection')
+								continue;
+							if (type(value) == 'array') {
+								safe[name] = [];
+								for (let index, item in value)
+									push(safe[name], profile.value([ name, index ], item));
+							}
+							else safe[name] = profile.value([ name ], value);
+						}
+						safe.collection = {
+							sections: clone(sections),
+							evidence: safe.evidence
+						};
+						let now = runtime.clock.now();
+						let report = {
+							schema_version: 4,
+							generated_at: now,
+							privacy: profile.metadata(),
+							summary: make_summary(safe, now),
+							issues: report_issues(safe),
+							collection: safe.collection,
+							details: {
+								config: safe.config,
+								process: safe.process,
+								logs: safe.logs,
+								uci: safe.uci,
+								operations: safe.operations,
+								evidence: safe.evidence
+							}
+						};
+						let writer = diagnostics_json.create(runtime, staged.handle);
+						writer.begin_object();
+						for (let name in [ 'schema_version', 'generated_at', 'privacy', 'summary',
+							'issues', 'collection', 'details' ])
+							writer.field(name, report[name]);
+						writer.end_object();
+						stream_store.finish(staged.id, writer.finish());
+					};
+					function finish_logs(selected, original) {
+						raw.logs = selected;
+						let included = serialized_size(selected);
+						sections.logs = {
+							truncated: original > included,
+							original_bytes: original,
+							included_bytes: included
+						};
+						raw.public_status = public_status(raw.settings);
+						raw.collection = { sections, evidence: raw.evidence };
+						schedule(() => stage('validation', 95, complete_report,
+							() => {
+								ctx.stage('complete', 100, '');
+								finished = true;
+								ctx.complete();
+							}));
+					};
+					function collect_logs() {
+						let source_logs = log_entries(call(sources, 'logs'));
+						if (type(source_logs) != 'array') {
+							let bounded = bound_section('logs', source_logs, REPORT_SECTION_LIMITS.logs);
+							finish_logs(bounded.value, bounded.metadata.original_bytes);
+							return;
+						}
+						let original = serialized_size(source_logs), selected = [],
+							index = length(source_logs) - 1, included = 2;
+						function collect_chunk() {
+							let processed = 0;
+							while (index >= 0) {
+								let item = source_logs[index--];
+								let bytes = serialized_size(item) + (length(selected) ? 1 : 0);
+								if (included + bytes > REPORT_SECTION_LIMITS.logs) {
+									index = -1;
+									break;
+								}
+								selected = [ item, ...selected ];
+								included += bytes;
+								processed += bytes;
+								if (processed >= 65536) {
+									schedule(collect_chunk);
+									return;
+								}
+							}
+							finish_logs(selected, original);
+						};
+						collect_chunk();
+					};
+					function collect_operations() {
+						let bounded = bound_section('operations', call(sources, 'operations'),
+							REPORT_SECTION_LIMITS.operations);
+						raw.operations = bounded.value;
+						sections.operations = bounded.metadata;
+					};
+					function collect_providers() {
+						let bounded = bound_section('process', call(sources, 'process'),
+							REPORT_SECTION_LIMITS.process);
+						raw.process = bounded.value;
+						sections.process = bounded.metadata;
+						raw.evidence = type(sources.evidence) == 'function' ?
+							call(sources, 'evidence') : [];
+					};
+					function collect_configuration() {
+						raw_config = call(sources, 'config');
+						raw.config = summarize_config(raw_config, runtime);
+						sections.config = {
+							truncated: false,
+							summarized: true,
+							original_bytes: type(raw_config) == 'string' ?
+								length(raw_config) : serialized_size(raw_config),
+							included_bytes: serialized_size(raw.config)
+						};
+						let bounded = bound_section('uci', call(sources, 'uci'),
+							REPORT_SECTION_LIMITS.uci);
+						raw.uci = bounded.value;
+						sections.uci = bounded.metadata;
+					};
+					function collect_system() {
+						for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
+							'updates', 'settings', 'telegram', 'last_repair' ])
+							raw[name] = call(sources, name);
+					};
+					try {
+						ctx.stage('preflight', 5, '');
+						schedule(() => stage('system', 15, collect_system,
+							() => stage('configuration', 30, collect_configuration,
+								() => stage('network', 45,
+									() => raw.network_components = call(sources, 'network_components'),
+									() => stage('providers', 60, collect_providers,
+										() => stage('operations', 70, collect_operations,
+											() => {
+												ctx.stage('logs', 80, '');
+												collect_logs();
+											}))))));
+						return false;
+					}
+					catch (error) {
+						fail(error);
+						return false;
+					}
+				});
+		}
+		catch (error) {
+			try { staged.handle.abort(); } catch (abort_error) {}
+			errors.fail(errors.normalize(error).code);
+		}
+		return { operation, report_id: staged.id };
+	};
+	function open_stream_report(id) {
+		if (stream_store == null) invalid();
+		let reader = stream_store.open_report(id), offset = 0, closed = false;
+		return {
+			size: reader.size,
+			sha256: reader.sha256,
+			read: (wanted_offset, amount) => {
+				if (closed || type(wanted_offset) != 'int' || wanted_offset != offset ||
+					type(amount) != 'int' || amount < 1 || amount > 49152)
+					invalid();
+				let chunk = reader.read(amount);
+				offset += length(chunk);
+				return chunk;
+			},
+			finish: () => {
+				if (closed || offset != reader.size) errors.fail('VALIDATION_FAILED');
+				reader.close();
+				closed = true;
+				return { size: reader.size, sha256: reader.sha256 };
+			},
+			close: () => {
+				if (closed) errors.fail('NOT_FOUND');
+				reader.release();
+				closed = true;
+				return true;
+			}
+		};
 	};
 	return {
 		summary: (...args) => {
@@ -1262,6 +1502,8 @@ export function create(dependencies) {
 			return { id: options.id, format: options.format,
 				content: read_file(runtime, report.directory, report.files[options.format]),
 				expires_at: report.expires_at };
-		}
+		},
+		submit_report: submit_stream_report,
+		open_report: open_stream_report
 	};
 };

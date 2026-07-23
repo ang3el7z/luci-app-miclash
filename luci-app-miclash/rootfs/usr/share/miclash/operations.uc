@@ -268,8 +268,11 @@ export function create(runtime) {
 	let records = {};
 	let live_contexts = {};
 	let mutation_queue = [];
+	let observation_queue = [];
 	let active_mutation = null;
+	let active_observation = null;
 	let mutation_timer_pending = false;
+	let observation_timer_pending = false;
 	let scheduler_frozen = false;
 	let live_started = false;
 	let recovery_done = false;
@@ -351,6 +354,17 @@ export function create(runtime) {
 				start(shift(mutation_queue), true);
 		});
 	};
+	function schedule_observation() {
+		if (scheduler_frozen || active_observation != null || observation_timer_pending ||
+		    !length(observation_queue))
+			return;
+		observation_timer_pending = true;
+		runtime.clock.set_timeout(0, () => {
+			observation_timer_pending = false;
+			if (active_observation == null && length(observation_queue))
+				start(shift(observation_queue), false);
+		});
+	};
 
 	function stable_error(error) {
 		let normalized = errors.normalize(error);
@@ -385,6 +399,10 @@ export function create(runtime) {
 			active_mutation = null;
 			schedule_mutation();
 		}
+		if (active_observation == entry.id) {
+			active_observation = null;
+			schedule_observation();
+		}
 		try { prune(); } catch (prune_error) {}
 		return true;
 	};
@@ -395,6 +413,8 @@ export function create(runtime) {
 			return;
 		if (mutation)
 			active_mutation = entry.id;
+		else
+			active_observation = entry.id;
 		let running = clone(record);
 		running.state = 'running';
 		running.updated_at = runtime.clock.now();
@@ -469,7 +489,7 @@ export function create(runtime) {
 			return false;
 		return live_contexts[ctx.id] === ctx && records[ctx.id]?.state == 'running';
 	};
-	manager.submit = (kind, source, context, worker, pre_enqueue) => {
+	function submit(kind, source, context, worker, observation, pre_enqueue) {
 		kind = safe_kind(kind);
 		source = safe_source(source);
 		if (type(context) != 'object' || type(worker) != 'function' ||
@@ -505,10 +525,20 @@ export function create(runtime) {
 				return public_record(records[id]);
 			}
 		}
-		push(mutation_queue, entry);
-		schedule_mutation();
+		if (observation) {
+			push(observation_queue, entry);
+			schedule_observation();
+		}
+		else {
+			push(mutation_queue, entry);
+			schedule_mutation();
+		}
 		return public_record(records[id]);
 	};
+	manager.submit = (kind, source, context, worker, pre_enqueue) =>
+		submit(kind, source, context, worker, false, pre_enqueue);
+	manager.submit_observation = (kind, source, context, worker) =>
+		submit(kind, source, context, worker, true, null);
 	manager.get = (id) => {
 		id = schema.operation_id(id);
 		return public_record(records[id]);

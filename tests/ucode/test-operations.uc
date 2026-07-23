@@ -29,6 +29,28 @@ let manager = operations.create(env.rt);
 assert_equal(env.fs.mode('/tmp/miclash'), 0o700);
 assert_equal(env.fs.mode('/tmp/miclash/operations'), 0o700);
 
+// Observations serialize with each other but never occupy the mutation lane.
+let observation_release = null, observation_order = [];
+let observation = manager.submit_observation('diagnostics.report', 'luci', {}, (ctx) => {
+	push(observation_order, 'observation');
+	ctx.stage('logs', 80, '');
+	observation_release = ctx.complete;
+	return false;
+});
+let queued_observation = manager.submit_observation('diagnostics.report', 'luci', {}, () =>
+	push(observation_order, 'queued-observation'));
+let concurrent_mutation = manager.submit('settings.set', 'luci', {}, () =>
+	push(observation_order, 'mutation'));
+env.clock.advance(0);
+assert_equal(manager.get(observation.id).state, 'running');
+assert_equal(manager.get(queued_observation.id).state, 'queued');
+assert_equal(manager.get(concurrent_mutation.id).state, 'success',
+	'diagnostic collection must not block mutations');
+assert_equal(join(',', observation_order), 'observation,mutation');
+observation_release();
+env.clock.advance(0);
+assert_equal(manager.get(queued_observation.id).state, 'success');
+
 // Operational logs describe durable boundaries without logging contexts or stage noise.
 let logging_env = environment();
 let operational_logs = fakes.events();
@@ -242,6 +264,10 @@ let restart = environment();
 let old_manager = operations.create(restart.rt);
 let running = old_manager.submit('config.apply', 'luci', {}, (ctx) => false);
 let queued = old_manager.submit('service.restart', 'luci', {}, () => die('must not resume'));
+let running_observation = old_manager.submit_observation(
+	'diagnostics.report', 'luci', {}, (ctx) => false);
+let queued_observation_restart = old_manager.submit_observation(
+	'diagnostics.report', 'luci', {}, () => die('must not resume'));
 restart.clock.advance(0);
 let recovered_env = {
 	fs: restart.fs,
@@ -251,9 +277,10 @@ let recovered_env = {
 	paths: { tmp: '/tmp/miclash', run: '/var/run/miclash' }
 };
 let recovered = operations.create(recovered_env);
-assert_equal(recovered.recover_interrupted(), 2);
+assert_equal(recovered.recover_interrupted(), 4);
 assert_equal(recovered.recover_interrupted(), 0);
-for (let id in [ running.id, queued.id ]) {
+for (let id in [ running.id, queued.id, running_observation.id,
+	queued_observation_restart.id ]) {
 	let record = recovered.get(id);
 	assert_equal(record.state, 'interrupted');
 	assert_equal(record.error.code, 'INTERRUPTED');

@@ -15,6 +15,8 @@ const packageRemove = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/p
 const subscription = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/subscription.uc'), 'utf8');
 const miclashd = fs.readFileSync(path.join(pkg, 'rootfs/usr/sbin/miclashd'), 'utf8');
 const daemon = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/daemon.uc'), 'utf8');
+const operations = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/operations.uc'), 'utf8');
+const api = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/api.uc'), 'utf8');
 const nft = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/firewall/nft.uc'), 'utf8');
 const installer = fs.readFileSync(path.join(root, 'install-miclash.sh'), 'utf8');
 
@@ -89,6 +91,15 @@ requireMatch(runtime, /capture\('\/sbin\/ip -j '/,
 forbid(runtime, /\/usr\/sbin\/ip/, 'device observation still uses a missing OpenWrt 25 path');
 requireMatch(daemon, /\/sbin\/logread 2>\/dev\/null[\s\S]*miclash\|mihomo\|clash/,
 	'LuCI logs must scan the complete ring through the source allowlist');
+requireMatch(operations, /observation_queue[\s\S]*manager\.submit_observation/,
+	'diagnostic reports require a journaled observation lane independent from mutations');
+requireMatch(daemon,
+	/downloads:\s*\{[\s\S]*report:\s*\(id\)\s*=>\s*diagnostics_domain\.open_report\(id\)/,
+	'report downloads must stream directly from the diagnostics file store');
+forbid(daemon, /memory_download|diagnostics_domain\.read_report\(\{\s*id/,
+	'report downloads must not materialize report content in daemon memory');
+requireMatch(api, /const REPORT_MAX = TRANSFER_MAX;/,
+	'report transfers must use the existing 16 MiB transfer ceiling');
 const observeStart = nft.indexOf('export function observe(runtime)');
 const observeEnd = nft.indexOf('function write_all', observeStart);
 forbid(nft.slice(observeStart, observeEnd), /runtime\.process\.run/,

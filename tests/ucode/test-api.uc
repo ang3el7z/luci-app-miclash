@@ -1,4 +1,4 @@
-import { assert_equal, assert_true } from 'testlib';
+import { assert_equal, assert_match, assert_true } from 'testlib';
 import * as api from 'miclash.api';
 
 let sequence = 0;
@@ -34,7 +34,10 @@ let app = {
 	update_mihomo: () => operation('updates.mihomo'), update_rollback_mihomo: () => operation('updates.rollback'),
 	memory_status: () => ({ phase: 'monitoring' }), memory_settings: () => ({ enabled: true }),
 	memory_reset_baseline: () => operation('memory.reset'), diagnostics_summary: () => ({ ok: true }),
-	diagnostics_create_report: () => ({ report_id: 'rpt_' + sprintf('%032x', 1) }),
+	diagnostics_create_report: () => ({
+		operation_id: '0000000001000-00000001-0123456789abcdef',
+		report_id: 'rpt_' + sprintf('%032x', 1)
+	}),
 	diagnostics_route_test: () => ({ decision: 'proxy' }),
 	telegram_status: () => ({ running: true }), telegram_settings: () => ({ token: '123:secret' }),
 	telegram_token_reveal: () => ({ token: '123:secret' }),
@@ -103,6 +106,18 @@ assert_equal(methods.logs_read.call({ args: {
 	generation: '', cursor: 0, limit: 200
 } }).lines[0], 'ready');
 assert_equal(last_log_arguments.generation, null);
+
+let created_report = methods.diagnostics_create_report.call({ args: {
+	mode: 'lite', acknowledge_secrets: false, source: 'luci'
+} });
+assert_match(created_report.operation_id, /^[0-9]{13}-/);
+assert_match(created_report.report_id, /^rpt_[0-9a-f]{32}$/);
+assert_equal(methods.diagnostics_create_report.call({ args: {
+	mode: 'full', acknowledge_secrets: false, source: 'luci'
+} }).error.code, 'PERMISSION_DENIED');
+assert_equal(methods.diagnostics_create_report.call({ args: {
+	mode: 'full', acknowledge_secrets: true, source: 'telegram'
+} }).error.code, 'PERMISSION_DENIED');
 
 let transfer = methods.transfer_begin.call({ args: {
 	direction: 'download', kind: 'report', object_id: 'rpt_' + sprintf('%032x', 1),

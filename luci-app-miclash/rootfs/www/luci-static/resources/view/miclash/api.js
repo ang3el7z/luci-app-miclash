@@ -35,7 +35,7 @@ const METHOD_SPECS = [
 	{ name: 'memory_reset_baseline', params: ['source'], operation: true, access: 'write' },
 	{ name: 'memory_settings', params: [], operation: false, access: 'read' },
 	{ name: 'diagnostics_summary', params: [], operation: false, access: 'read' },
-	{ name: 'diagnostics_create_report', params: [], operation: false, access: 'write' },
+	{ name: 'diagnostics_create_report', params: ['mode', 'acknowledge_secrets', 'source'], operation: true, access: 'write' },
 	{ name: 'diagnostics_route_test', params: ['target', 'device', 'interface'], operation: false, access: 'write' },
 	{ name: 'telegram_status', params: [], operation: false, access: 'read' },
 	{ name: 'telegram_settings', params: [], operation: false, access: 'read' },

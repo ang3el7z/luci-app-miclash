@@ -12,7 +12,7 @@ const TRANSFER_CHUNK = 49152;
 const TRANSFER_LIMIT = 8;
 const TRANSFER_UPLOAD_LIMIT = 1;
 const TRANSFER_MAX = 16777216;
-const REPORT_MAX = 262144;
+const REPORT_MAX = TRANSFER_MAX;
 
 function canonical_error(error) {
 	let normalized = errors.normalize(error);
@@ -708,9 +708,29 @@ export function method_table(app, transfers) {
 			exact(arguments, {});
 			return domain_read('diagnostics_summary', {});
 		}),
-		diagnostics_create_report: method(empty, (arguments) => {
-			exact(arguments, {});
-			return domain_read('diagnostics_create_report', {});
+		diagnostics_create_report: method({
+			mode: '', acknowledge_secrets: false, source: ''
+		}, (arguments) => {
+			exact(arguments, {
+				mode: { type: 'string', required: true },
+				acknowledge_secrets: { type: 'bool', required: true },
+				source: { type: 'string' }
+			});
+			let mode = schema.enum_value(arguments.mode, [ 'silent', 'lite', 'full' ]);
+			let requested_source = source(arguments);
+			if (mode == 'full' &&
+				(requested_source != 'luci' || arguments.acknowledge_secrets !== true))
+				errors.fail('PERMISSION_DENIED');
+			let result = domain_read('diagnostics_create_report', {
+				mode,
+				acknowledge_secrets: arguments.acknowledge_secrets,
+				source: requested_source
+			});
+			if (type(result) != 'object' || length(keys(result)) != 2 ||
+				!match(result.operation_id, /^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$/) ||
+				!match(result.report_id, /^rpt_[0-9a-f]{32}$/))
+				errors.fail('INVALID_RESPONSE');
+			return result;
 		}),
 		diagnostics_route_test: method({ target: '', device: '', interface: '' }, (arguments) => {
 			exact(arguments, { target: { type: 'string', required: true },

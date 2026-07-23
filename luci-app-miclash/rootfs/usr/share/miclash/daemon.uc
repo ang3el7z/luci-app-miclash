@@ -37,26 +37,6 @@ function clone(value) {
 	catch (error) { errors.fail('INVALID_ARGUMENT'); }
 };
 
-function memory_download(runtime, content) {
-	if (type(content) != 'string') errors.fail('INVALID_RESPONSE');
-	let size = length(content), sha256 = runtime.digest.sha256(content), closed = false;
-	if (!match(sha256, /^[0-9a-f]{64}$/)) errors.fail('INTERNAL');
-	return {
-		size, sha256,
-		read: (offset, amount) => {
-			if (closed || type(offset) != 'int' || type(amount) != 'int' || offset < 0 ||
-			    amount < 0 || offset > size || amount > size - offset)
-				errors.fail('INVALID_ARGUMENT');
-			return substr(content, offset, amount);
-		},
-		finish: () => {
-			if (closed || runtime.digest.sha256(content) != sha256) errors.fail('CORRUPT_STATE');
-			return { size, sha256 };
-		},
-		close: () => { if (closed) return false; closed = true; content = null; return true; }
-	};
-};
-
 function same(left, right) {
 	try { return sprintf('%J', left) == sprintf('%J', right); }
 	catch (error) { errors.fail('INVALID_ARGUMENT'); }
@@ -1170,7 +1150,10 @@ export function compose(runtime, overrides) {
 				last_repair: last_repair()
 			})
 		});
-		let diagnostics_domain = modules.diagnostics.create({ runtime, sources: {
+		let diagnostics_domain = modules.diagnostics.create({
+			runtime,
+			operations: operation_manager,
+			sources: {
 			versions: () => { let info = bounded_system_info(runtime); return {
 				miclash: info.app_version, mihomo: info.mihomo.version }; },
 			architecture: () => bounded_system_info(runtime).architecture,
@@ -1190,10 +1173,14 @@ export function compose(runtime, overrides) {
 			process: () => service_adapter.diagnostics('config.yaml'),
 			logs: () => evidence_domain.logs(), evidence: evidence_domain.sections,
 			uci: settings_domain.get,
-			operations: () => operation_manager.list()
-		} });
+				operations: () => operation_manager.list()
+			}
+		});
 		app.diagnostics_summary = () => diagnostics_domain.summary();
-		app.diagnostics_create_report = () => diagnostics_domain.create_report();
+		app.diagnostics_create_report = (arguments) => {
+			let job = diagnostics_domain.submit_report(arguments);
+			return { operation_id: job.operation.id, report_id: job.report_id };
+		};
 		app.diagnostics_route_test = (arguments) => {
 			let persisted = settings_domain.get(), snapshot = modules.interface_scope.detect(runtime, persisted),
 				projection = modules.interface_scope.resolve(persisted, snapshot),
@@ -1362,11 +1349,7 @@ export function compose(runtime, overrides) {
 			runtime,
 			uploads: {},
 			downloads: {
-				report: (id, metadata) => {
-					let report = diagnostics_domain.read_report({ id,
-						format: metadata?.format ?? 'json' });
-					return memory_download(runtime, report.content);
-				}
+				report: (id) => diagnostics_domain.open_report(id)
 			}
 		});
 		let published = modules.api.register(connection, app, transfers);

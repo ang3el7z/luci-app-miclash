@@ -1,5 +1,6 @@
 import { assert_equal, assert_match, assert_throws, assert_true } from 'testlib';
 import * as diagnostics from 'miclash.diagnostics';
+import * as operations from 'miclash.operations';
 import * as route_test from 'miclash.route-test';
 import * as fakes from 'fakes';
 
@@ -846,5 +847,76 @@ for (let failure in [ 'mkdir-crash', 'chmod', 'verify', 'open', 'write-crash' ])
 	assert_equal(length(interrupted.fs.lsdir('/tmp/miclash/diagnostics')), 0,
 		failure + ' is restart recoverable');
 }
+
+// New report generation is an asynchronous observation operation backed by a
+// single-use streamed file. Aborting a transfer retains it until TTL.
+let async_fs = fakes.fs({});
+for (let directory in [ '/tmp', '/tmp/miclash', '/tmp/miclash/operations' ])
+	async_fs.mkdir(directory);
+async_fs.chmod('/tmp/miclash', 0o700);
+async_fs.chmod('/tmp/miclash/operations', 0o700);
+let async_runtime = {
+	fs: async_fs,
+	clock: fakes.clock(1900000000000),
+	random: fakes.entropy(),
+	digest: fakes.digest(async_fs),
+	storage: { free_blocks: () => 2048 },
+	paths: { tmp: '/tmp/miclash' }
+};
+let async_operations = operations.create(async_runtime);
+let async_logs = [ 'connected hostname=beta-router.local' ];
+for (let index = 0; index < 128; index++)
+	push(async_logs, sprintf('diagnostic-line-%03d %64s', index, 'x'));
+let async_sources = {
+	...sources,
+	state: () => ({ desired: {
+		primary_hostname: 'alpha-router.local',
+		backup_hostname: 'beta-router.local'
+	}, observed: {} }),
+	logs: () => async_logs
+};
+let async_center = diagnostics.create({
+	runtime: async_runtime, sources: async_sources, operations: async_operations
+});
+for (let method in [ 'submit_report', 'open_report' ])
+	assert_equal(type(async_center[method]), 'function', method + ' is exported');
+let asynchronous = async_center.submit_report({
+	mode: 'silent', acknowledge_secrets: false, source: 'luci'
+});
+assert_match(asynchronous.report_id, /^rpt_[0-9a-f]{32}$/);
+assert_match(asynchronous.operation.id, /^[0-9]{13}-/);
+async_runtime.clock.advance(0);
+let asynchronous_record = async_operations.get(asynchronous.operation.id);
+assert_equal(asynchronous_record.state, 'success');
+assert_equal(join(',', map(asynchronous_record.timeline, (item) => item.stage)),
+	'queued,preflight,system,configuration,network,providers,operations,logs,validation,complete');
+let streamed = async_center.open_report(asynchronous.report_id);
+assert_true(streamed.size > 4096);
+assert_match(streamed.sha256, /^[0-9a-f]{64}$/);
+let first_chunk = streamed.read(0, min(49152, streamed.size));
+assert_true(length(first_chunk) > 0);
+assert_equal(streamed.close(), true);
+let resumed = async_center.open_report(asynchronous.report_id);
+let content = '', offset = 0;
+while (offset < resumed.size) {
+	let chunk = resumed.read(offset, min(257, resumed.size - offset));
+	content += chunk;
+	offset += length(chunk);
+}
+assert_equal(resumed.finish().size, resumed.size);
+assert_true(index(content, secrets.telegram_token) < 0,
+	'silent asynchronous report must apply the privacy profile');
+let async_payload = json(content);
+assert_equal(async_payload.summary.state.desired.primary_hostname, '[HOST-1]');
+assert_equal(async_payload.summary.state.desired.backup_hostname, '[HOST-2]');
+assert_true(index(async_payload.details.logs[0], '[HOST-2]') >= 0,
+	'report-local host labels must stay stable across sections');
+assert_throws(() => async_center.open_report(asynchronous.report_id), 'NOT_FOUND');
+assert_throws(() => async_center.submit_report({
+	mode: 'full', acknowledge_secrets: false, source: 'luci'
+}), 'PERMISSION_DENIED');
+assert_throws(() => async_center.submit_report({
+	mode: 'full', acknowledge_secrets: true, source: 'telegram'
+}), 'PERMISSION_DENIED');
 
 print('diagnostics tests passed\n');
