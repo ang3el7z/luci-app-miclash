@@ -474,10 +474,17 @@ function recover_reports(runtime, root) {
 	let names = runtime.fs.lsdir(ROOT);
 	if (type(names) != 'array') errors.fail('INTERNAL');
 	if (length(names) > MAX_ROOT_ENTRIES) errors.fail('RESPONSE_TOO_LARGE');
-	for (let name in names)
-		if (match(name, /^report-[0-9a-f]{32}$/)) remove_scanned(runtime, root, name);
-		else if (match(name, /^\.stage-[0-9a-f]{32}$/)) remove_staging(runtime, root, name);
-		else errors.fail('CORRUPT_STATE');
+	for (let name in names) {
+		if (!match(name, /^(\.stage-|report-)[0-9a-f]{32}$/))
+			errors.fail('CORRUPT_STATE');
+		let entries = runtime.fs.lsdir(ROOT + '/' + name);
+		if (type(entries) != 'array') errors.fail('CORRUPT_STATE');
+		// One-file reports belong to create_store(); legacy recovery must not
+		// interpret or remove them in the shared diagnostics namespace.
+		if (length(entries) == 1 && entries[0] == 'report.json') continue;
+		if (match(name, /^report-/)) remove_scanned(runtime, root, name);
+		else remove_staging(runtime, root, name);
+	}
 };
 function cleanup_creation(runtime, root, stage_name, final_name) {
 	let failure = null;
@@ -555,12 +562,15 @@ function read_file(runtime, directory, record) {
 	verify_directory(runtime, directory.path, directory.identity);
 	return content;
 };
-function remove_stream_directory(runtime, root, path) {
-	let directory = verify_directory(runtime, path, null);
+function remove_stream_directory(runtime, root, path, expected_directory) {
+	let directory = verify_directory(runtime, path, expected_directory);
 	let entries = runtime.fs.lsdir(path);
 	if (type(entries) != 'array' || length(entries) != 1 || entries[0] != 'report.json')
 		errors.fail('CORRUPT_STATE');
-	let file = path + '/report.json', identity = safe_file(runtime, file, null);
+	let file = path + '/report.json', identity = runtime.fs.lstat(file);
+	if (identity?.type == 'file') safe_file(runtime, file, identity);
+	else if (identity?.type != 'link') errors.fail('CORRUPT_STATE');
+	verify_directory(runtime, path, directory);
 	verify_directory(runtime, ROOT, root);
 	if (!same_node(identity, runtime.fs.lstat(file)) || runtime.fs.unlink(file) !== true)
 		errors.fail('INTERNAL');
@@ -582,7 +592,7 @@ function recover_stream_store(runtime, root) {
 		if (type(entries) == 'array' && length(entries) == 2 && index(entries, 'report.json') >= 0 &&
 			index(entries, 'report.txt') >= 0)
 			continue;
-		remove_stream_directory(runtime, root, path);
+		remove_stream_directory(runtime, root, path, null);
 	}
 };
 function storage_free_blocks(runtime) {
@@ -620,7 +630,42 @@ function validate_stream_json(runtime, directory, path, expected_size, expected_
 		errors.fail('RESPONSE_TOO_LARGE');
 	let handle = runtime.fs.open(path, 're');
 	if (handle == null) errors.fail('INTERNAL');
-	let consumed = 0, depth = 0, quoted = false, escaped = false, failure = null;
+	let opened = runtime.fs.fstat(handle);
+	if (!same_node(identity, opened)) { runtime.fs.close(handle); errors.fail('INTERNAL'); }
+	let consumed = 0, stack = [], root_state = 'value', token = null;
+	let nodes = 0, string_bytes = 0, failure = null;
+	function context() {
+		return length(stack) ? stack[length(stack) - 1] : null;
+	};
+	function state() {
+		let current = context();
+		return current == null ? root_state : current.state;
+	};
+	function set_state(value) {
+		let current = context();
+		if (current == null) root_state = value;
+		else current.state = value;
+	};
+	function accept_value() {
+		let expected = state();
+		if (expected != 'value' && expected != 'value_or_end')
+			errors.fail('INVALID_RESPONSE');
+		if (++nodes > REPORT_MAX_NODES) errors.fail('RESPONSE_TOO_LARGE');
+		let current = context();
+		if (current == null) root_state = 'end';
+		else current.state = 'comma_or_end';
+	};
+	function begin_container(kind) {
+		accept_value();
+		if (length(stack) >= REPORT_MAX_DEPTH) errors.fail('RESPONSE_TOO_LARGE');
+		push(stack, { kind, state: kind == 'object' ? 'key_or_end' : 'value_or_end' });
+	};
+	function finish_number() {
+		if (token.phase != 'zero' && token.phase != 'int' && token.phase != 'frac' &&
+			token.phase != 'exp_digits')
+			errors.fail('INVALID_RESPONSE');
+		token = null;
+	};
 	try {
 		while (consumed <= REPORT_MAX_INPUT) {
 			let chunk = runtime.fs.read(handle, 4096);
@@ -629,23 +674,123 @@ function validate_stream_json(runtime, directory, path, expected_size, expected_
 			consumed += length(chunk);
 			for (let offset = 0; offset < length(chunk); offset++) {
 				let character = substr(chunk, offset, 1);
-				if (quoted) {
-					if (escaped) escaped = false;
-					else if (character == '\\') escaped = true;
-					else if (character == '"') quoted = false;
+				if (token?.kind == 'string') {
+					string_bytes++;
+					if (string_bytes > REPORT_MAX_INPUT) errors.fail('RESPONSE_TOO_LARGE');
+					if (token.unicode > 0) {
+						if (!match(character, /^[0-9a-fA-F]$/)) errors.fail('INVALID_RESPONSE');
+						if (!--token.unicode) token.escaped = false;
+					}
+					else if (token.escaped) {
+						if (character == 'u') token.unicode = 4;
+						else if (!match(character, /^["\\\/bfnrt]$/))
+							errors.fail('INVALID_RESPONSE');
+						else token.escaped = false;
+					}
+					else if (character == '\\') token.escaped = true;
+					else if (character == '"') {
+						if (token.role == 'key') set_state('colon');
+						token = null;
+					}
+					else if (ord(character) < 0x20) errors.fail('INVALID_RESPONSE');
+					continue;
 				}
-				else if (character == '"') quoted = true;
-				else if (character == '{' || character == '[') depth++;
-				else if (character == '}' || character == ']') {
-					if (--depth < 0) errors.fail('INVALID_RESPONSE');
+				if (token?.kind == 'literal') {
+					if (character != substr(token.text, token.offset++, 1))
+						errors.fail('INVALID_RESPONSE');
+					if (token.offset == length(token.text)) token = null;
+					continue;
 				}
+				if (token?.kind == 'number') {
+					let digit = match(character, /^[0-9]$/);
+					if (token.phase == 'minus') {
+						if (character == '0') token.phase = 'zero';
+						else if (match(character, /^[1-9]$/)) token.phase = 'int';
+						else errors.fail('INVALID_RESPONSE');
+						continue;
+					}
+					if (token.phase == 'zero' || token.phase == 'int') {
+						if (digit) {
+							if (token.phase == 'zero') errors.fail('INVALID_RESPONSE');
+							continue;
+						}
+						if (character == '.') { token.phase = 'dot'; continue; }
+						if (character == 'e' || character == 'E') { token.phase = 'exp'; continue; }
+					}
+					else if (token.phase == 'dot') {
+						if (!digit) errors.fail('INVALID_RESPONSE');
+						token.phase = 'frac'; continue;
+					}
+					else if (token.phase == 'frac') {
+						if (digit) continue;
+						if (character == 'e' || character == 'E') { token.phase = 'exp'; continue; }
+					}
+					else if (token.phase == 'exp') {
+						if (character == '+' || character == '-') { token.phase = 'exp_sign'; continue; }
+						if (digit) { token.phase = 'exp_digits'; continue; }
+						errors.fail('INVALID_RESPONSE');
+					}
+					else if (token.phase == 'exp_sign') {
+						if (!digit) errors.fail('INVALID_RESPONSE');
+						token.phase = 'exp_digits'; continue;
+					}
+					else if (token.phase == 'exp_digits' && digit) continue;
+					finish_number();
+					offset--;
+					continue;
+				}
+				if (match(character, /^[ \t\r\n]$/)) continue;
+				let expected = state(), current = context();
+				if (character == '{') { begin_container('object'); continue; }
+				if (character == '[') { begin_container('array'); continue; }
+				if (character == '"') {
+					let role = 'value';
+					if (expected == 'key' || expected == 'key_or_end') role = 'key';
+					else accept_value();
+					string_bytes = 0;
+					token = { kind: 'string', role, escaped: false, unicode: 0 };
+					continue;
+				}
+				if (character == 't' || character == 'f' || character == 'n') {
+					accept_value();
+					let literal = character == 't' ? 'true' : character == 'f' ? 'false' : 'null';
+					token = { kind: 'literal', text: literal, offset: 1 };
+					continue;
+				}
+				if (character == '-' || match(character, /^[0-9]$/)) {
+					accept_value();
+					token = { kind: 'number', phase: character == '-' ? 'minus' :
+						character == '0' ? 'zero' : 'int' };
+					continue;
+				}
+				if (character == ':') {
+					if (expected != 'colon') errors.fail('INVALID_RESPONSE');
+					set_state('value'); continue;
+				}
+				if (character == ',') {
+					if (expected != 'comma_or_end' || current == null)
+						errors.fail('INVALID_RESPONSE');
+					current.state = current.kind == 'object' ? 'key' : 'value';
+					continue;
+				}
+				if (character == '}' || character == ']') {
+					if (current == null || (character == '}' && current.kind != 'object') ||
+						(character == ']' && current.kind != 'array') ||
+						(current.state != 'comma_or_end' &&
+						 current.state != (current.kind == 'object' ? 'key_or_end' : 'value_or_end')))
+						errors.fail('INVALID_RESPONSE');
+					pop(stack); continue;
+				}
+				errors.fail('INVALID_RESPONSE');
 			}
 		}
-		if (consumed != expected_size || quoted || escaped || depth != 0)
+		if (token?.kind == 'number') finish_number();
+		if (consumed != expected_size || token != null || length(stack) || root_state != 'end')
 			errors.fail('INVALID_RESPONSE');
 	}
-	catch (error) { failure = 'INVALID_RESPONSE'; }
-	if (runtime.fs.close(handle) !== true) failure = 'INTERNAL';
+	catch (error) { failure = errors.normalize(error).code; }
+	let final_handle = runtime.fs.fstat(handle);
+	if (!same_node(opened, final_handle) || runtime.fs.close(handle) !== true) failure = 'INTERNAL';
 	let current = runtime.fs.lstat(path);
 	if (failure != null || !same_node(identity, current) || current?.size != expected_size ||
 		runtime.fs.realpath(path) != path)
@@ -667,7 +812,7 @@ export function create_store(runtime) {
 	recover_stream_store(runtime, root);
 	function discard(report) {
 		if (report != null && runtime.fs.lstat(report.directory.path) != null)
-			remove_stream_directory(runtime, root, report.directory.path);
+			remove_stream_directory(runtime, root, report.directory.path, report.directory.identity);
 		delete reports[report?.id];
 	};
 	function expire() {
@@ -676,12 +821,13 @@ export function create_store(runtime) {
 			if (report.expires_at <= now) discard(report);
 	};
 	function cleanup_pending(id, stage, final_path) {
+		let directory_identity = pending[id]?.directory?.identity;
 		delete pending[id];
 		let failure = null;
 		for (let path in [ stage, final_path ]) {
 			try {
 				if (runtime.fs.lstat(path) != null)
-					remove_stream_directory(runtime, root, path);
+					remove_stream_directory(runtime, root, path, directory_identity);
 			}
 			catch (error) { failure = 'INTERNAL'; }
 		}
@@ -752,6 +898,10 @@ export function create_store(runtime) {
 				let final_directory = { path: final_path,
 					identity: verify_directory(runtime, final_path, directory.identity) };
 				let final_file = safe_file(runtime, final_path + '/report.json', file);
+				if (final_file.size != result.size ||
+					runtime.digest.sha256_file(final_path + '/report.json') != result.sha256 ||
+					!same_node(final_file, runtime.fs.lstat(final_path + '/report.json')))
+					errors.fail('INTERNAL');
 				let report = { id, mode: pending_report.mode, path: final_path + '/report.json', size: result.size,
 					sha256: result.sha256, created_at: pending_report.created_at,
 					expires_at: pending_report.expires_at, downloaded: false,
@@ -782,25 +932,45 @@ export function create_store(runtime) {
 			if (handle == null) { discard(report); errors.fail('INTERNAL'); }
 			let opened = runtime.fs.fstat(handle);
 			if (!same_node(file, opened)) { runtime.fs.close(handle); discard(report); errors.fail('INTERNAL'); }
-			let content = '', reader_failure = null;
+			let consumed = 0, reader_failure = null, reader_closed = false;
+			function reader_terminal(code) {
+				if (!reader_closed) {
+					try { runtime.fs.close(handle); } catch (error) {}
+					reader_closed = true;
+				}
+				discard(report);
+				errors.fail(code);
+			};
 			return {
 				read: (amount) => {
-					let chunk = runtime.fs.read(handle, amount);
-					if (type(chunk) != 'string' || length(content) + length(chunk) > report.size) {
-						reader_failure = 'INTERNAL'; discard(report); errors.fail('INTERNAL');
+					if (reader_closed) errors.fail('NOT_FOUND');
+					if (type(amount) != 'int' || amount < 1 || amount > 4096)
+						reader_terminal('INVALID_ARGUMENT');
+					let chunk = null;
+					try { chunk = runtime.fs.read(handle, amount); }
+					catch (error) { reader_failure = 'INTERNAL'; reader_terminal('INTERNAL'); }
+					if (type(chunk) != 'string' || consumed + length(chunk) > report.size) {
+						reader_failure = 'INTERNAL'; reader_terminal('INTERNAL');
 					}
-					content += chunk;
+					consumed += length(chunk);
 					return chunk;
 				},
 				close: () => {
-					let closed = runtime.fs.close(handle);
-					if (closed !== true) { discard(report); errors.fail('INTERNAL'); }
-					let after = runtime.fs.fstat(handle);
-					let current = safe_file(runtime, report.path, report.identity);
-					if (reader_failure != null || !same_node(opened, after) || !same_node(file, current) ||
-						length(content) != report.size || runtime.digest.sha256(content) != report.sha256) {
-						discard(report); errors.fail('INTERNAL');
+					if (reader_closed) errors.fail('NOT_FOUND');
+					let after = null, close_result = null;
+					try {
+						after = runtime.fs.fstat(handle);
+						close_result = runtime.fs.close(handle);
+						reader_closed = true;
+						if (close_result !== true) reader_terminal('INTERNAL');
+						let current = safe_file(runtime, report.path, report.identity);
+						if (reader_failure != null || !same_node(opened, after) || !same_node(file, current) ||
+							consumed != report.size ||
+							runtime.digest.sha256_file(report.path) != report.sha256 ||
+							!same_node(current, runtime.fs.lstat(report.path)))
+							reader_terminal('INTERNAL');
 					}
+					catch (error) { reader_terminal('INTERNAL'); }
 					discard(report);
 					return true;
 				}
