@@ -259,3 +259,75 @@ for (let mode in [ 'silent', 'lite' ]) {
 	assert_equal(bounded_profile.text([], 'https://status.provider.example/health'),
 		'[REDACTED]', mode + ' saturated profile remains fail closed');
 }
+
+// Subscription context, not URL spelling, determines whether an opaque URL is
+// unsafe in Lite. Every probe is runtime-only and uses an empty seed catalog.
+let opaque_subscription_url = 'https://opaque.provider.example/cfg/A9z7Yx6Wv5';
+let opaque_percent_url = percent_encoded(opaque_subscription_url);
+let opaque_base64_url = independent_base64(opaque_subscription_url);
+let opaque_base64url_url = independent_base64url(opaque_subscription_url);
+let lite_subscription_probes = [
+	[ privacy.create('lite', []).text([], 'subscription: ' + opaque_subscription_url),
+		[ opaque_subscription_url ] ],
+	[ privacy.create('lite', []).value([], { subscription: opaque_subscription_url }),
+		[ opaque_subscription_url ] ],
+	[ privacy.create('lite', []).value([ 'subscriptions', 0, 'url' ],
+		opaque_subscription_url), [ opaque_subscription_url ] ],
+	[ privacy.create('lite', []).value([ 'subscriptions', 0, 'url' ],
+		opaque_percent_url), [ opaque_percent_url, opaque_subscription_url ] ],
+	[ privacy.create('lite', []).value([], { subscription: opaque_base64_url }),
+		[ opaque_base64_url, opaque_subscription_url ] ],
+	[ privacy.create('lite', []).text([], 'subscription=' + opaque_percent_url),
+		[ opaque_percent_url, opaque_subscription_url ] ],
+	[ privacy.create('lite', []).text([], 'subscription=' + opaque_base64_url),
+		[ opaque_base64_url, opaque_subscription_url ] ],
+	[ privacy.create('lite', []).text([], 'subscription=' + opaque_base64url_url),
+		[ opaque_base64url_url, opaque_subscription_url ] ]
+];
+for (let probe in lite_subscription_probes)
+	assert_absent(probe[0], probe[1], 'lite opaque subscription URL');
+
+// Credential query names make the whole URL unsafe; a normal provider status
+// endpoint remains visible in Lite.
+for (let name in [ 'credential', 'credentials', 'password', 'passwd', 'auth',
+	'session', 'access_key', 'api_key', 'signing_key', 'client_secret' ]) {
+	let credential_url = 'https://status.provider.example/health?' + name +
+		'=query-only-' + name;
+	assert_absent(privacy.create('lite', []).text([], credential_url),
+		[ credential_url, 'query-only-' + name ], 'lite credential-bearing URL');
+	for (let encoded_url in [ percent_encoded(credential_url),
+		independent_base64(credential_url), independent_base64url(credential_url) ])
+		assert_absent(privacy.create('lite', []).text([], encoded_url),
+			[ encoded_url, credential_url, 'query-only-' + name ],
+			'lite encoded credential-bearing URL');
+}
+assert_equal(privacy.create('lite', []).value([], {
+	url: 'https://status.provider.example/health'
+}).url, 'https://status.provider.example/health',
+	'lite retains harmless structured provider status URL');
+
+// A route/network `device` exception accepts interface names, not arbitrary
+// network identifiers that happen to fit the old interface character class.
+assert_equal(privacy.create('lite', []).value([ 'network' ], {
+	device: 'eth0'
+}).device, 'eth0', 'lite retains a valid interface name');
+for (let identifier in [ '192.0.2.10', '192.0.2.0/24', '2001:db8::10',
+	'0A:1B:2C:3D:4E:5F', 'https://router.invalid', 'router.example' ])
+	assert_equal(privacy.create('lite', []).value([ 'network' ], {
+		device: identifier
+	}).device, '[REDACTED]', 'lite rejects non-interface device identifier ' + identifier);
+
+// Silent URL typing wins over generic secret-key classification, and an
+// equivalent URL has one report-local typed label through every API surface.
+let equivalent_url = 'https://typed-url.invalid/opaque/A1b2C3d4';
+let silent_url_profile = privacy.create('silent', []);
+let silent_url_fields = silent_url_profile.value([], {
+	subscription_url: equivalent_url,
+	url: equivalent_url,
+	password: equivalent_url
+});
+assert_equal(silent_url_fields.subscription_url, '[URL-1]');
+assert_equal(silent_url_fields.url, '[URL-1]');
+assert_equal(silent_url_fields.password, '[URL-1]');
+assert_equal(silent_url_profile.text([], 'observed=' + equivalent_url),
+	'observed=[URL-1]');

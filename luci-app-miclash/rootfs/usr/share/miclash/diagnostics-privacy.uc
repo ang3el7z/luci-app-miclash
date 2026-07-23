@@ -64,6 +64,17 @@ function typed_kind(key) {
 	return null;
 };
 
+function subscription_context(path) {
+	for (let segment in path) {
+		if (type(segment) != 'string')
+			continue;
+		let normalized = redact.normalized_key(segment);
+		if (match(normalized, /(^|_)subscriptions?($|_)/))
+			return true;
+	}
+	return false;
+};
+
 function classified(key, value) {
 	return typed_kind(key) == null &&
 		(redact.secret_name(key) || match(value, /^[0-9]{5,}:[^[:space:]]+$/));
@@ -181,6 +192,47 @@ function base64_decoded(input) {
 	}
 };
 
+function canonical_url(value) {
+	if (type(value) != 'string')
+		return null;
+	let spelling = trim_token(value);
+	if (match(spelling, /^https?:\/\/[^[:space:]]+$/))
+		return spelling;
+	let decoded = percent_decoded(spelling);
+	if (decoded != null && match(decoded, /^https?:\/\/[^[:space:]]+$/))
+		return decoded;
+	let decoded64 = base64_decoded(spelling);
+	return decoded64 != null && match(decoded64, /^https?:\/\/[^[:space:]]+$/) ?
+		decoded64 : null;
+};
+
+function credential_query_url(value) {
+	let query_start = index(value, '?');
+	if (query_start < 0)
+		return false;
+	let fragment_start = index(value, '#');
+	let query_end = fragment_start >= 0 ? fragment_start : length(value);
+	let query = replace(substr(value, query_start + 1,
+		query_end - query_start - 1), /;/g, '&');
+	for (let parameter in split(query, '&')) {
+		let separator = index(parameter, '=');
+		if (separator < 1)
+			continue;
+		let key = substr(parameter, 0, separator);
+		let normalized = redact.normalized_key(key);
+		if (redact.secret_name(key) || normalized == 'credentials')
+			return true;
+	}
+	return false;
+};
+
+function sensitive_url(value) {
+	let lowered = lc(value);
+	return index(lowered, 'token=') >= 0 || index(lowered, 'subscribe') >= 0 ||
+		index(lowered, 'subscription') >= 0 || credential_query_url(value) ||
+		match(value, /^https?:\/\/[^\/@]+:[^\/@]+@/);
+};
+
 function credential_add(catalog, input) {
 	input = trim_token(input);
 	if (!length(input))
@@ -251,6 +303,52 @@ function marked_secret_values(catalog, input, marker) {
 		}
 		if (end > cursor)
 			credential_add(catalog, substr(input, cursor, end - cursor));
+		offset = max(end + 1, found + length(marker));
+	}
+};
+
+function marked_url_values(catalog, input, marker) {
+	let lowered = lc(input), offset = 0;
+	while (offset < length(input) && !catalog.failed_closed) {
+		let relative = index(substr(lowered, offset), marker);
+		if (relative < 0)
+			return;
+		let found = offset + relative, cursor = found + length(marker);
+		if (!marker_boundary(input, found)) {
+			offset = cursor;
+			continue;
+		}
+		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+			cursor++;
+		if (cursor >= length(input) ||
+		    (substr(input, cursor, 1) != ':' && substr(input, cursor, 1) != '=')) {
+			offset = found + length(marker);
+			continue;
+		}
+		cursor++;
+		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+			cursor++;
+		let quote = cursor < length(input) &&
+			(substr(input, cursor, 1) == '"' || substr(input, cursor, 1) == "'") ?
+			substr(input, cursor++, 1) : null;
+		let end = cursor;
+		while (end < length(input)) {
+			let character = substr(input, end, 1);
+			if ((quote != null && character == quote) ||
+			    (quote == null && match(character, /^[[:space:],;'"<>]$/)))
+				break;
+			end++;
+		}
+		if (end > cursor) {
+			let spelling = substr(input, cursor, end - cursor);
+			if (length(spelling) > MAX_TOKEN_LENGTH) {
+				fail_closed(catalog);
+				return;
+			}
+			let canonical = canonical_url(spelling);
+			if (canonical != null)
+				catalog_url(catalog, spelling, canonical, true);
+		}
 		offset = max(end + 1, found + length(marker));
 	}
 };
@@ -399,6 +497,8 @@ function discover_tokens(catalog, input) {
 function discover_text(catalog, input) {
 	if (type(input) != 'string' || length(input) > MAX_TEXT_INPUT)
 		return fail_closed(catalog);
+	for (let name in [ 'subscription', 'subscriptions', 'subscription_url' ])
+		marked_url_values(catalog, input, name);
 	for (let name in [
 		'token', 'access_token', 'refresh_token', 'secret', 'password', 'passwd',
 		'credential', 'authorization', 'api_key', 'api-key', 'private_key',
@@ -422,8 +522,16 @@ function discover_text(catalog, input) {
 	return discover_tokens(catalog, input);
 };
 
-function discover_into(catalog, seed_values) {
-	let stack = [ { value: seed_values, key: '', depth: 0 } ];
+function discover_into(catalog, seed_values, base_path) {
+	base_path = base_path ?? [];
+	let initial_key = '';
+	for (let offset = length(base_path) - 1; offset >= 0; offset--)
+		if (type(base_path[offset]) == 'string') {
+			initial_key = base_path[offset];
+			break;
+		}
+	let stack = [ { value: seed_values, key: initial_key,
+		path: base_path, depth: 0 } ];
 	let nodes = 0, aggregate = 0;
 	while (length(stack) && !catalog.failed_closed) {
 		let item = pop(stack), kind = type(item.value);
@@ -432,12 +540,13 @@ function discover_into(catalog, seed_values) {
 			break;
 		}
 		if (kind == 'array')
-			for (let value in item.value) {
+			for (let index, value in item.value) {
 				if (length(stack) >= MAX_VALUE_NODES) {
 					fail_closed(catalog);
 					break;
 				}
-				push(stack, { value, key: item.key, depth: item.depth + 1 });
+				push(stack, { value, key: item.key,
+					path: [ ...item.path, index ], depth: item.depth + 1 });
 			}
 		else if (kind == 'object')
 			for (let key, value in item.value) {
@@ -450,7 +559,8 @@ function discover_into(catalog, seed_values) {
 					fail_closed(catalog);
 					break;
 				}
-				push(stack, { value, key, depth: item.depth + 1 });
+				push(stack, { value, key, path: [ ...item.path, key ],
+					depth: item.depth + 1 });
 			}
 		else if (kind == 'string') {
 			aggregate += length(item.value);
@@ -458,8 +568,12 @@ function discover_into(catalog, seed_values) {
 				fail_closed(catalog);
 				break;
 			}
+			let url = canonical_url(item.value);
 			let typed = typed_kind(item.key);
-			if (typed != null) catalog_add(catalog, typed, item.value);
+			if (url != null)
+				catalog_url(catalog, item.value, url,
+					subscription_context(item.path) || sensitive_url(url));
+			else if (typed != null) catalog_add(catalog, typed, item.value);
 			else if (classified(item.key, item.value)) catalog_add(catalog, 'secret', item.value);
 			discover_text(catalog, item.value);
 		}
@@ -475,7 +589,7 @@ function discover(seed_values) {
 		ips: [], hosts: [], devices: [], ids: [],
 		count: 0, bytes: 0, failed_closed: false
 	};
-	discover_into(catalog, seed_values);
+	discover_into(catalog, seed_values, []);
 	return catalog;
 };
 
@@ -571,14 +685,9 @@ function replace_variants(input, values, labels, kind, replacement, work) {
 	return input;
 };
 
-function subscription_url(value) {
-	return index(lc(value), 'token=') >= 0 || index(lc(value), 'subscribe') >= 0 ||
-		index(lc(value), 'subscription') >= 0 || match(value, /^https?:\/\/[^\/@]+:[^\/@]+@/);
-};
-
 function replace_url_aliases(input, aliases, sensitive_urls, labels, mode, work) {
 	for (let alias in aliases)
-		if (mode == 'silent' || subscription_url(alias.canonical) ||
+		if (mode == 'silent' || sensitive_url(alias.canonical) ||
 		    contains(sensitive_urls, alias.canonical)) {
 			input = replace_all(input, alias.spelling,
 				mode == 'silent' ? label(labels, 'URL', alias.canonical) : MASK, work);
@@ -590,7 +699,7 @@ function replace_url_aliases(input, aliases, sensitive_urls, labels, mode, work)
 
 function replace_urls(input, values, sensitive_urls, labels, mode, work) {
 	for (let value in values)
-		if (mode == 'silent' || subscription_url(value) ||
+		if (mode == 'silent' || sensitive_url(value) ||
 		    contains(sensitive_urls, value)) {
 			input = replace_variants(input, [ value ], labels, 'URL',
 				mode == 'silent' ? null : MASK, work);
@@ -655,6 +764,12 @@ function lite_system_interface(path, key, value) {
 	    length(value) < 1 || length(value) > 15 ||
 	    !match(value, /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/))
 		return false;
+	if (canonical_url(value) != null ||
+	    match(value, /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/) ||
+	    match(value, /^[0-9]{1,3}(\.[0-9]{1,3}){3}(\/[0-9]{1,2})?$/) ||
+	    match(value, /^[0-9A-Fa-f:]+(:[0-9A-Fa-f:]+)+(\/[0-9]{1,3})?$/) ||
+	    match(value, /^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$/))
+		return false;
 	let parent = length(path) ? redact.normalized_key(path[-1]) : '';
 	return parent == 'route' || parent == 'routes' || parent == 'routing' ||
 		parent == 'network' || parent == 'networks';
@@ -673,7 +788,18 @@ function transform(mode, catalog, labels, path, value, work) {
 		for (let key, item in value) {
 			let key_path = [ ...path, key ];
 			let typed = typed_kind(key);
-			if (typed != null) {
+			let url = canonical_url(item);
+			if (url != null) {
+				let unsafe = subscription_context(key_path) || sensitive_url(url) ||
+					classified(key, item) || typed == 'devices' || typed == 'ids';
+				if (!catalog_url(catalog, item, url, unsafe))
+					output[key] = MASK;
+				else if (mode == 'silent')
+					output[key] = label(labels, 'URL', url);
+				else
+					output[key] = unsafe ? MASK : item;
+			}
+			else if (typed != null) {
 				if (mode == 'lite' && typed == 'devices' &&
 				    lite_system_interface(path, key, item)) {
 					output[key] = item;
@@ -685,14 +811,23 @@ function transform(mode, catalog, labels, path, value, work) {
 				else output[key] = MASK;
 			}
 			else if (classified(key, item)) {
-				if (mode == 'silent' && type(item) == 'string') {
-					output[key] = MASK;
-				}
-				else output[key] = MASK;
+				output[key] = MASK;
 			}
 			else output[key] = transform(mode, catalog, labels, key_path, item, work);
 		}
 		return output;
+	}
+	if (type(value) == 'string') {
+		let url = canonical_url(value);
+		if (url != null) {
+			let unsafe = subscription_context(path) || sensitive_url(url);
+			if (!catalog_url(catalog, value, url, unsafe))
+				return MASK;
+			if (mode == 'silent')
+				return label(labels, 'URL', url);
+			if (unsafe)
+				return MASK;
+		}
 	}
 	return transform_text(mode, catalog, labels, value, work);
 };
@@ -704,7 +839,7 @@ export function create(mode, seed_values) {
 		value: (path, value) => {
 			if (mode == 'full')
 				return value;
-			if (catalog.failed_closed || !discover_into(catalog, value))
+			if (catalog.failed_closed || !discover_into(catalog, value, path))
 				return MASK;
 			let work = replacement_work();
 			let output = transform(mode, catalog, labels, path, value, work);
