@@ -62,14 +62,74 @@ function catalog_add(catalog, kind, value) {
 		add(catalog[kind], value);
 };
 
+function percent_decoded(input) {
+	let output = '';
+	for (let offset = 0; offset < length(input); offset++) {
+		if (substr(input, offset, 1) == '%' && offset + 2 < length(input) &&
+		    match(substr(input, offset + 1, 2), /^[0-9A-Fa-f]{2}$/)) {
+			output += chr(int(substr(input, offset + 1, 2), 16));
+			offset += 2;
+		}
+		else output += substr(input, offset, 1);
+	}
+	return output;
+};
+
 function classify_token(catalog, token) {
 	token = trim_token(token);
 	if (match(token, /^https?:\/\/[^[:space:]]+$/)) catalog_add(catalog, 'urls', token);
+	else if (match(token, /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/)) catalog_add(catalog, 'devices', token);
 	else if (match(token, /^[0-9]{1,3}(\.[0-9]{1,3}){3}(\/[0-9]{1,2})?$/) ||
 	         match(token, /^[0-9A-Fa-f:]+(:[0-9A-Fa-f:]+)+(\/[0-9]{1,3})?$/)) catalog_add(catalog, 'ips', token);
-	else if (match(token, /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/)) catalog_add(catalog, 'devices', token);
 	else if (match(token, /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/)) catalog_add(catalog, 'ids', token);
 	else if (match(token, /^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$/)) catalog_add(catalog, 'hosts', token);
+};
+
+function marker_values(catalog, input, marker, kind) {
+	let offset = 0, lowered = lc(input), wanted = lc(marker) + '=';
+	while (offset < length(input)) {
+		let relative = index(substr(lowered, offset), wanted);
+		if (relative < 0) return;
+		let start = offset + relative + length(wanted), end = length(input);
+		for (let cursor = start; cursor < length(input); cursor++) {
+			if (!match(substr(input, cursor, 1), /^[[:space:]]$/)) continue;
+			let next = cursor + 1;
+			while (next < length(input) && match(substr(input, next, 1), /^[[:space:]]$/)) next++;
+			let equals = index(substr(input, next), '=');
+			let space = index(substr(input, next), ' ');
+			if (equals >= 0 && (space < 0 || equals < space)) {
+				end = cursor;
+				break;
+			}
+		}
+		catalog_add(catalog, kind, substr(input, start, end - start));
+		offset = max(end + 1, start);
+	}
+};
+
+function discover_text(catalog, input) {
+	for (let name in [ 'token', 'secret', 'password', 'cookie', 'authorization', 'bearer' ])
+		marker_values(catalog, input, name, 'secret');
+	for (let name in [ 'device', 'device_name', 'ssid', 'hostname' ])
+		marker_values(catalog, input, name, 'devices');
+	for (let name in [ 'uuid', 'id', 'user_id', 'chat_id' ])
+		marker_values(catalog, input, name, 'ids');
+	for (let word in split(replace(input, /[[:space:]]/g, ' '), ' '))
+		classify_token(catalog, word);
+	let words = split(replace(input, /[[:space:],;=]/g, ' '), ' ');
+	for (let word in words) {
+		classify_token(catalog, word);
+		let decoded = percent_decoded(word);
+		if (decoded != word) classify_token(catalog, decoded);
+		try {
+			let base64 = replace(replace(word, /-/g, '+'), /_/g, '/');
+			let padding = length(base64) % 4;
+			if (padding) base64 += padding == 2 ? '==' : '=';
+			let decoded64 = b64dec(base64);
+			if (decoded64 != null) classify_token(catalog, decoded64);
+		}
+		catch (error) {}
+	}
 };
 
 function discover(seed_values) {
@@ -83,8 +143,7 @@ function discover(seed_values) {
 			for (let key, value in item.value) push(stack, { value, key });
 		else if (kind == 'string') {
 			if (classified(item.key, item.value)) catalog_add(catalog, 'secret', item.value);
-			let words = split(replace(item.value, /[[:space:],;=]/g, ' '), ' ');
-			for (let word in words) classify_token(catalog, word);
+			discover_text(catalog, item.value);
 		}
 	}
 	for (let name in [ 'secrets', 'urls', 'ips', 'hosts', 'devices', 'ids' ])
@@ -104,11 +163,11 @@ function replace_all(input, wanted, replacement) {
 };
 
 function label(labels, kind, value) {
-	let key = kind + '\u0000' + value;
+	let key = kind + '::' + value;
 	if (labels[key] == null) {
 		let count = 0;
 		for (let existing in labels)
-			if (substr(existing, 0, length(kind) + 1) == kind + '\u0000') count++;
+			if (substr(existing, 0, length(kind) + 2) == kind + '::') count++;
 		labels[key] = '[' + kind + '-' + (count + 1) + ']';
 	}
 	return labels[key];
@@ -120,20 +179,62 @@ function replace_catalog(input, values, labels, kind, replacement) {
 	return input;
 };
 
+function encoded(value, all) {
+	let output = '';
+	for (let offset = 0; offset < length(value); offset++) {
+		let character = substr(value, offset, 1);
+		output += !all && match(character, /^[A-Za-z0-9_.~-]$/) ? character :
+			sprintf('%%%02X', ord(value, offset));
+	}
+	return output;
+};
+
+function replace_variants(input, values, labels, kind, replacement) {
+	for (let value in values) {
+		let output = replacement == null ? label(labels, kind, value) : replacement;
+		input = replace_all(input, value, output);
+		input = replace_all(input, encoded(value, false), output);
+		input = replace_all(input, lc(encoded(value, false)), output);
+		input = replace_all(input, encoded(value, true), output);
+		input = replace_all(input, lc(encoded(value, true)), output);
+		try {
+			let base64 = b64enc(value), urlsafe = replace(replace(base64, /\+/g, '-'), /\//g, '_');
+			input = replace_all(input, base64, output);
+			input = replace_all(input, urlsafe, output);
+			input = replace_all(input, replace(base64, /=+$/, ''), output);
+			input = replace_all(input, replace(urlsafe, /=+$/, ''), output);
+		}
+		catch (error) {}
+	}
+	return input;
+};
+
+function subscription_url(value) {
+	return index(lc(value), 'token=') >= 0 || index(lc(value), 'subscribe') >= 0 ||
+		index(lc(value), 'subscription') >= 0 || match(value, /^https?:\/\/[^\/@]+:[^\/@]+@/);
+};
+
+function replace_urls(input, values, labels, mode) {
+	for (let value in values)
+		if (mode == 'silent' || subscription_url(value))
+			input = replace_all(input, value, mode == 'silent' ? label(labels, 'URL', value) : MASK);
+	return input;
+};
+
 function transform_text(mode, catalog, labels, value) {
 	if (type(value) != 'string' || mode == 'full') return value;
-	value = replace_catalog(value, catalog.secrets, labels, 'REDACTED', MASK);
+	discover_text(catalog, value);
+	value = replace_urls(value, catalog.urls, labels, mode);
+	value = replace_variants(value, catalog.secrets, labels, 'REDACTED', MASK);
 	if (mode == 'lite') {
-		value = replace_catalog(value, catalog.urls, labels, 'URL', MASK);
-		value = replace_catalog(value, catalog.ips, labels, 'IP', MASK);
-		value = replace_catalog(value, catalog.devices, labels, 'DEVICE', MASK);
-		return replace_catalog(value, catalog.ids, labels, 'ID', MASK);
+		value = replace_variants(value, catalog.ips, labels, 'IP', MASK);
+		value = replace_variants(value, catalog.devices, labels, 'DEVICE', MASK);
+		return replace_variants(value, catalog.ids, labels, 'ID', MASK);
 	}
-	value = replace_catalog(value, catalog.urls, labels, 'URL');
-	value = replace_catalog(value, catalog.ips, labels, 'IP');
-	value = replace_catalog(value, catalog.hosts, labels, 'HOST');
-	value = replace_catalog(value, catalog.devices, labels, 'DEVICE');
-	return replace_catalog(value, catalog.ids, labels, 'ID');
+	value = replace_variants(value, catalog.ips, labels, 'IP');
+	value = replace_variants(value, catalog.hosts, labels, 'HOST');
+	value = replace_variants(value, catalog.devices, labels, 'DEVICE');
+	return replace_variants(value, catalog.ids, labels, 'ID');
 };
 
 function transform(mode, catalog, labels, path, value) {
