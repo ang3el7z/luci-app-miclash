@@ -117,8 +117,10 @@ assert_throws(() => diagnostics.create({
 	runtime: { ...runtime, digest: { sha256: runtime.digest.sha256 } }, sources
 }), 'INVALID_ARGUMENT');
 let center = diagnostics.create({ runtime, sources });
-for (let method in [ 'summary', 'create_report', 'read_report' ])
+for (let method in [ 'summary', 'submit_report', 'open_report' ])
 	assert_equal(type(center[method]), 'function', method + ' is exported');
+for (let method in [ 'create_report', 'read_report' ])
+	assert_true(center[method] == null, method + ' is not publicly reachable');
 
 function assert_no_secrets(value, label) {
 	let text = type(value) == 'string' ? value : sprintf('%J', value);
@@ -168,107 +170,11 @@ assert_equal(status_summary.subscription.configured, true);
 assert_equal(status_summary.subscription.transport, 'http');
 assert_equal(status_summary.subscription.insecure, true);
 
-// Redaction is a closed, bounded boundary: all secret occurrences and safe
-// encodings disappear from both keys and values before serialization.
-let encoded_secret = 'encoded/secret+value=';
-let overlap_short = 'overlap-secret';
-let overlap_long = 'overlap-secret-tail';
-let bearer_first = 'first-bearer-secret';
-let bearer_late = 'late-bearer-secret';
-let long_secret = repeated('long-secret-', 500) + 'end';
-let adversarial_sources = { ...sources,
-	settings: () => ({ core: { subscription_url: '' }, telegram: {
-		enabled: true, token: encoded_secret, user_id: '42' } }),
-	uci: () => ({ auth: { password: long_secret, api_key: overlap_short,
-		access_token: overlap_long } }),
-	state: () => ({ desired: { [encoded_secret]: 'key-value' }, observed: {} }),
-	logs: () => [
-		'Bearer ' + bearer_first + ' ignored Bearer ' + bearer_late,
-		'percent=' + percent_encoded(encoded_secret),
-		'base64=' + b64enc(encoded_secret),
-		'overlap=' + overlap_long + ' and ' + overlap_short,
-		'long=' + long_secret
-	],
-	process: () => ({ stderr: 'Bearer ' + bearer_first }),
-	operations: () => [ { authorization: 'Bearer ' + bearer_first } ]
-};
-let adversarial_center = diagnostics.create({ runtime, sources: adversarial_sources });
-let adversarial_report = adversarial_center.read_report({
-	id: adversarial_center.create_report().id, format: 'json'
-});
-for (let secret in [ encoded_secret, percent_encoded(encoded_secret),
-	b64enc(encoded_secret), bearer_first, bearer_late, long_secret,
-	overlap_short, overlap_long, '-tail' ])
-	assert_true(index(adversarial_report.content, secret) < 0,
-		'adversarial report leaked ' + substr(secret, 0, 32));
-assert_true(index(adversarial_report.content, encoded_secret) < 0,
-	'object key secret is scrubbed');
-
-// Every project-sensitive key and HTTP text form contributes aliases to the
-// same closed redaction set, including values nested below secret containers.
-let auth_secret = 'direct-auth-secret';
-let bearer_key_secret = 'direct-bearer-secret';
-let session_secret = 'direct-session-secret';
-let private_key_secret = 'private-key-secret';
-let access_key_secret = 'access-key-secret';
-let nested_secret = 'nested-container-secret';
-let basic_secret = 'basic-header-secret';
-let cookie_first = 'cookie-first-secret';
-let cookie_second = 'cookie-second-secret';
-let percent_secret = 'fully-percent-secret';
-let urlsafe_secret = 'url-safe-secret-??>>';
-let camel_api_secret = 'camel-api-secret';
-let camel_proxy_password = 'camel-proxy-password';
-let acronym_api_key = 'acronym-api-key';
-let compound_authorization = 'compound-authorization-header';
-let text_only_private_key = 'text-only-private-key-secret';
-let boundary_sources = { ...sources,
-	settings: () => ({ core: { subscription_url: '' }, telegram: {
-		enabled: false, token: '', user_id: '' } }),
-	uci: () => ({ direct: {
-		auth: auth_secret,
-		bearer: bearer_key_secret,
-		session: session_secret,
-		private_key: private_key_secret,
-		access_key: access_key_secret,
-		apiSecret: camel_api_secret,
-		proxyPassword: camel_proxy_password,
-		xAPIKey: acronym_api_key,
-		authorizationHeader: compound_authorization,
-		credential: { nested: [ nested_secret ] },
-		token: [ percent_secret, urlsafe_secret ]
-	} }),
-	health: () => ({ headers:
-		'Authorization: Basic ' + basic_secret + '\n' +
-		'Cookie: sid=' + cookie_first + '; csrf="' + cookie_second + '"' }),
-	logs: () => [
-		'aliases=' + join(',', [ auth_secret, bearer_key_secret, session_secret,
-			private_key_secret, access_key_secret, nested_secret, camel_api_secret,
-			camel_proxy_password, acronym_api_key, compound_authorization ]),
-		'basic-alias=' + basic_secret,
-		'cookie-aliases=' + cookie_first + ',' + cookie_second,
-		'fully-percent=' + full_percent_lower(percent_secret),
-		'urlsafe-unpadded=' + urlsafe_unpadded_base64(urlsafe_secret),
-		'private-key: ' + text_only_private_key
-	]
-};
-let boundary_center = diagnostics.create({ runtime, sources: boundary_sources });
-let boundary_report = boundary_center.read_report({
-	id: boundary_center.create_report().id, format: 'json'
-});
-for (let secret in [ auth_secret, bearer_key_secret, session_secret,
-	private_key_secret, access_key_secret, nested_secret, basic_secret,
-	camel_api_secret, camel_proxy_password, acronym_api_key, compound_authorization,
-	cookie_first, cookie_second, full_percent_lower(percent_secret),
-	urlsafe_unpadded_base64(urlsafe_secret), text_only_private_key ])
-	assert_true(index(boundary_report.content, secret) < 0,
-		'redaction boundary leaked ' + secret);
-
 let collision_sources = { ...sources,
 	settings: () => ({ core: { subscription_url: '' }, telegram: {
-		enabled: true, token: encoded_secret, user_id: '42' } }),
+		enabled: true, token: 'collision-secret', user_id: '42' } }),
 	state: () => ({ desired: {
-		[encoded_secret]: 'one',
+		'collision-secret': 'one',
 		'[REDACTED]': 'two'
 	}, observed: {} })
 };
@@ -311,112 +217,6 @@ let huge_center = diagnostics.create({ runtime: huge_runtime,
 		last_repair: () => ({ state: 'none' }) } });
 assert_equal(huge_center.summary().schema_version, 1,
 	'summary must not collect report-only logs');
-let huge_created = huge_center.create_report();
-let huge_report = json(huge_center.read_report({ id: huge_created.id, format: 'json' }).content);
-assert_equal(huge_report.schema_version, 4);
-assert_equal(huge_report.collection.evidence[0].name, 'procd');
-assert_equal(huge_report.collection.evidence[1].name, 'interfaces');
-assert_equal(huge_report.collection.evidence[2].name, 'firewall');
-assert_equal(huge_report.collection.evidence[3].name, 'logs');
-assert_equal(huge_report.issues[length(huge_report.issues) - 4].component, 'procd');
-assert_equal(huge_report.issues[length(huge_report.issues) - 3].component, 'interfaces');
-assert_equal(huge_report.issues[length(huge_report.issues) - 2].component, 'firewall');
-assert_equal(huge_report.issues[length(huge_report.issues) - 1].component, 'logs');
-assert_equal(huge_report.issues[length(huge_report.issues) - 1].code,
-	'COLLECTION_UNAVAILABLE');
-assert_equal(huge_report.issues[length(huge_report.issues) - 2].message,
-	'Complete iptables fallback evidence is unavailable');
-assert_true(type(huge_report.issues) == 'array');
-assert_equal(length(huge_report.issues), 6);
-assert_equal(huge_report.issues[0].component, 'dns');
-assert_equal(huge_report.issues[0].severity, 'error');
-assert_equal(huge_report.issues[1].component, 'subscription.update');
-assert_equal(huge_report.issues[1].severity, 'error');
-assert_equal(huge_report.collection.sections.config.truncated, false);
-assert_equal(huge_report.collection.sections.config.summarized, true);
-assert_equal(huge_report.collection.sections.logs.truncated, true);
-assert_true(huge_report.collection.sections.config.original_bytes >
-	huge_report.collection.sections.config.included_bytes);
-assert_true(huge_report.collection.sections.logs.original_bytes >
-	huge_report.collection.sections.logs.included_bytes);
-assert_equal(huge_report.details.config.state, 'present');
-assert_equal(huge_report.details.config.bytes, 70000);
-assert_true(match(huge_report.details.config.sha256, /^[0-9a-f]{64}$/));
-assert_equal(type(huge_report.details.logs), 'array');
-assert_true(length(sprintf('%J', huge_report.details.logs)) <= 262144);
-assert_match(huge_report.details.logs[0], /^line-[0-9]{4}/);
-assert_match(huge_report.details.logs[length(huge_report.details.logs) - 1], /^line-0999 /,
-	'truncated report did not preserve the newest syslog entry');
-huge_runtime.clock.advance(900000);
-assert_throws(() => huge_center.read_report({ id: huge_created.id, format: 'json' }),
-	'NOT_FOUND');
-
-for (let name in report_source_calls) report_source_calls[name] = 0;
-let created = center.create_report();
-for (let name in report_source_calls)
-	assert_true(report_source_calls[name] > 0,
-		'full report must collect source ' + name);
-assert_true(match(created.id, /^rpt_[0-9a-f]{32}$/));
-assert_equal(created.created_at, 1700000000000);
-assert_true(created.expires_at > created.created_at);
-assert_equal(length(created.files), 2);
-assert_equal(created.files[0], 'report.json');
-assert_equal(created.files[1], 'report.txt');
-assert_true(index(sprintf('%J', created), '/tmp/') < 0,
-	'report capability must not expose a path');
-
-let json_report = center.read_report({ id: created.id, format: 'json' });
-assert_equal(json_report.id, created.id);
-assert_equal(json_report.format, 'json');
-assert_true(index(json_report.content, '\n  "summary": {') >= 0,
-	'JSON report must use readable indentation');
-let parsed_report = json(json_report.content);
-assert_true(type(parsed_report.summary) == 'object');
-assert_equal(type(parsed_report.details.logs), 'array');
-assert_true(index(json_report.content, '\n    "logs": [\n') >= 0,
-	'JSON report must format one syslog entry per array line');
-assert_equal(type(parsed_report.details.config), 'object',
-	'diagnostic report must summarize rather than embed the active YAML');
-assert_equal(parsed_report.details.config.state, 'present');
-assert_true(parsed_report.details.config.bytes > 0);
-assert_true(match(parsed_report.details.config.sha256, /^[0-9a-f]{64}$/));
-assert_true(index(json_report.content, config_private_key) < 0);
-assert_true(index(json_report.content, config_uuid) < 0);
-assert_no_secrets(json_report, 'json report');
-let text_report = center.read_report({ id: created.id, format: 'text' });
-assert_equal(text_report.format, 'text');
-assert_true(index(text_report.content, 'MiClash diagnostic report') >= 0);
-assert_no_secrets(text_report, 'text report');
-
-// Expiry revokes the opaque capability and removes only its owned directory.
-runtime.clock.advance(900000);
-assert_throws(() => center.read_report({ id: created.id, format: 'json' }),
-	'NOT_FOUND');
-assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
-	'expired report directory is removed');
-
-// Retention is bounded, and a daemon restart invalidates and cleans all old IDs.
-let retained = [];
-for (let index = 0; index < 6; index++) {
-	runtime.clock.advance(1);
-	push(retained, center.create_report());
-}
-assert_throws(() => center.read_report({ id: retained[0].id, format: 'json' }),
-	'NOT_FOUND');
-assert_true(length(filesystem.lsdir('/tmp/miclash/diagnostics')) <= 5);
-let restarted = diagnostics.create({ runtime, sources });
-assert_throws(() => restarted.read_report({
-	id: retained[5].id, format: 'json'
-}), 'NOT_FOUND');
-assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
-	'restart cleanup leaves no hidden inaccessible reports');
-
-assert_throws(() => center.read_report({
-	id: created.id, format: 'json', path: '/etc/shadow'
-}), 'INVALID_ARGUMENT');
-assert_throws(() => center.read_report({
-	id: '../../etc/shadow', format: 'json'
-}), 'INVALID_ARGUMENT');
 
 // Route diagnostics derive bypass destinations from the active Mihomo config.
 assert_equal(join(',', route_test.proxy_servers(
@@ -713,141 +513,6 @@ for (let input in [
 ])
 	assert_throws(() => invalid_route.run(input), 'INVALID_ARGUMENT');
 
-function report_environment(random) {
-	let fs = fakes.fs({});
-	for (let directory in [ '/tmp', '/tmp/miclash' ])
-		if (fs.lstat(directory) == null) fs.mkdir(directory);
-	fs.chmod('/tmp/miclash', 0o700);
-	let clock = fakes.clock(1800000000000);
-	let runtime = { fs, clock, random: random ?? fakes.entropy(),
-		digest: fakes.digest(fs), paths: { tmp: '/tmp/miclash' } };
-	return { fs, clock, runtime,
-		center: () => diagnostics.create({ runtime, sources }) };
-};
-
-// Foreign and malformed restart debris is never followed or silently deleted.
-let foreign = report_environment();
-foreign.fs.mkdir('/tmp/miclash/diagnostics');
-foreign.fs.chmod('/tmp/miclash/diagnostics', 0o700);
-foreign.fs.writefile('/tmp/miclash/diagnostics/foreign-entry', 'foreign');
-assert_throws(() => foreign.center(), 'CORRUPT_STATE');
-assert_equal(foreign.fs.readfile('/tmp/miclash/diagnostics/foreign-entry'), 'foreign');
-
-let linked_directory = report_environment();
-linked_directory.fs.mkdir('/tmp/miclash/diagnostics');
-linked_directory.fs.chmod('/tmp/miclash/diagnostics', 0o700);
-linked_directory.fs.set_symlink(
-	'/tmp/miclash/diagnostics/report-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '/tmp');
-assert_throws(() => linked_directory.center(), 'CORRUPT_STATE');
-assert_equal(linked_directory.fs.lstat(
-	'/tmp/miclash/diagnostics/report-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa').type, 'link');
-
-let incomplete = report_environment();
-incomplete.fs.mkdir('/tmp/miclash/diagnostics');
-incomplete.fs.chmod('/tmp/miclash/diagnostics', 0o700);
-incomplete.fs.mkdir('/tmp/miclash/diagnostics/report-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
-incomplete.fs.chmod(
-	'/tmp/miclash/diagnostics/report-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 0o700);
-assert_throws(() => incomplete.center(), 'CORRUPT_STATE');
-assert_true(incomplete.fs.lstat(
-	'/tmp/miclash/diagnostics/report-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') != null);
-
-// Authenticated reads detect a leaf identity swap before returning bytes.
-let raced = report_environment();
-let raced_center = raced.center();
-let raced_report = raced_center.create_report();
-let raced_dir = raced.fs.lsdir('/tmp/miclash/diagnostics')[0];
-let raced_json = '/tmp/miclash/diagnostics/' + raced_dir + '/report.json';
-let swapped = false;
-raced.fs.on_lstat = (path, count) => {
-	if (!swapped && path == raced_json) {
-		swapped = true;
-		raced.fs.bump_inode(path);
-	}
-};
-assert_throws(() => raced_center.read_report({
-	id: raced_report.id, format: 'json'
-}), 'INTERNAL');
-raced.fs.on_lstat = null;
-diagnostics.create({ runtime: raced.runtime, sources });
-assert_equal(length(raced.fs.lsdir('/tmp/miclash/diagnostics')), 0);
-
-// ID and directory collisions are retried without exposing a path.
-let values = [
-	'11111111111111111111111111111111',
-	'22222222222222222222222222222222',
-	'11111111111111111111111111111111',
-	'33333333333333333333333333333333',
-	'44444444444444444444444444444444'
-];
-let collision_random = { hex: (bytes) => shift(values) };
-let collision = report_environment(collision_random);
-let collision_center = collision.center();
-let first_collision = collision_center.create_report();
-let second_collision = collision_center.create_report();
-assert_true(first_collision.id != second_collision.id);
-assert_equal(length(collision.fs.lsdir('/tmp/miclash/diagnostics')), 2);
-
-// Real directories may have multiple links; only report files require nlink=1.
-let directory_links = report_environment();
-directory_links.fs.set_nlink('/tmp/miclash', 2);
-directory_links.fs.on_mkdir = (path) => {
-	if (path == '/tmp/miclash/diagnostics' ||
-	    match(path, /^\/tmp\/miclash\/diagnostics\/report-/))
-		directory_links.fs.set_nlink(path, 2);
-};
-let linked_center = directory_links.center();
-let linked_report = linked_center.create_report();
-assert_equal(linked_center.read_report({
-	id: linked_report.id, format: 'json'
-}).id, linked_report.id);
-
-// Every failed publication removes its exact owned partial staging tree.
-for (let failure in [ 'write', 'second-file-open' ]) {
-	let partial = report_environment();
-	let partial_center = partial.center();
-	if (failure == 'write') partial.fs.fail_on = 'write';
-	else partial.fs.fail_open_once_matching = 'report.txt';
-	assert_throws(() => partial_center.create_report(), 'INTERNAL');
-	partial.fs.fail_on = null;
-	assert_equal(length(partial.fs.lsdir('/tmp/miclash/diagnostics')), 0,
-		failure + ' leaves no hidden staging directory');
-	assert_equal(type(partial_center.summary()), 'object');
-}
-
-// The creation capability begins before mkdir. Every injected failure is
-// either cleaned immediately or recognized and cleaned by a fresh daemon.
-for (let failure in [ 'mkdir-crash', 'chmod', 'verify', 'open', 'write-crash' ]) {
-	let interrupted = report_environment();
-	let interrupted_center = interrupted.center();
-	let injected = false;
-	interrupted.fs.on_mkdir = (path) => {
-		if (injected || !match(path, /\/diagnostics\/(\.stage-|report-)/)) return;
-		if (failure == 'verify') return;
-		injected = true;
-		if (failure == 'mkdir-crash') die('INTERNAL');
-		if (failure == 'chmod') interrupted.fs.fail_on = 'chmod';
-		if (failure == 'write-crash') interrupted.fs.fail_on = 'write';
-	};
-	if (failure == 'verify')
-		interrupted.fs.on_lstat = (path, count) => {
-			if (!injected && match(path, /\/diagnostics\/(\.stage-|report-)/) && count >= 2) {
-				injected = true;
-				die('INTERNAL');
-			}
-		};
-	if (failure == 'open')
-		interrupted.fs.fail_open_once_matching = 'report.json';
-	assert_throws(() => interrupted_center.create_report(), 'INTERNAL');
-	interrupted.fs.on_mkdir = null;
-	interrupted.fs.on_lstat = null;
-	interrupted.fs.fail_on = null;
-	let recovered_center = interrupted.center();
-	assert_equal(type(recovered_center.summary()), 'object');
-	assert_equal(length(interrupted.fs.lsdir('/tmp/miclash/diagnostics')), 0,
-		failure + ' is restart recoverable');
-}
-
 // New report generation is an asynchronous observation operation backed by a
 // single-use streamed file. Aborting a transfer retains it until TTL.
 let async_fs = fakes.fs({});
@@ -918,5 +583,50 @@ assert_throws(() => async_center.submit_report({
 assert_throws(() => async_center.submit_report({
 	mode: 'full', acknowledge_secrets: true, source: 'telegram'
 }), 'PERMISSION_DENIED');
+
+// Publishing the file is not success until the terminal operation record is
+// durable. Either final journal boundary must discard the published report.
+function terminal_publication_failure(boundary) {
+	let failure_fs = fakes.fs({});
+	for (let directory in [ '/tmp', '/tmp/miclash', '/tmp/miclash/operations' ])
+		failure_fs.mkdir(directory);
+	failure_fs.chmod('/tmp/miclash', 0o700);
+	failure_fs.chmod('/tmp/miclash/operations', 0o700);
+	let failure_runtime = {
+		fs: failure_fs,
+		clock: fakes.clock(1950000000000),
+		random: fakes.entropy(),
+		digest: fakes.digest(failure_fs),
+		storage: { free_blocks: () => 2048 },
+		paths: { tmp: '/tmp/miclash' }
+	};
+	let failure_operations = operations.create(failure_runtime);
+	let failure_center = diagnostics.create({
+		runtime: failure_runtime, sources: async_sources, operations: failure_operations
+	});
+	let published = false;
+	failure_fs.on_rename = (from, to) => {
+		if (index(to, '/tmp/miclash/diagnostics/stream-report-') == 0) {
+			published = true;
+			if (boundary == 'stage') failure_fs.fail_rename_once = true;
+			return;
+		}
+		if (boundary == 'complete' && published &&
+			index(to, '/tmp/miclash/operations/') == 0) {
+			let record = json(failure_fs.readfile(to));
+			if (record?.state == 'running' && record?.stage == 'complete')
+				failure_fs.fail_rename_once = true;
+		}
+	};
+	let submitted = failure_center.submit_report({
+		mode: 'lite', acknowledge_secrets: false, source: 'luci'
+	});
+	failure_runtime.clock.advance(0);
+	assert_equal(failure_operations.get(submitted.operation.id).state, 'failure',
+		boundary + ' terminal journal failure must fail the report operation');
+	assert_throws(() => failure_center.open_report(submitted.report_id), 'NOT_FOUND');
+}
+terminal_publication_failure('stage');
+terminal_publication_failure('complete');
 
 print('diagnostics tests passed\n');

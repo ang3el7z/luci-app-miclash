@@ -211,6 +211,7 @@ const moduleApi = new Function('baseclass', 'ui', 'E', '_', 'window', 'document'
 const calls = [];
 let destroyedApi = 0;
 let reportGate = null;
+let reportWatcher = null;
 const malicious = '<img src=x onerror=alert(1)>';
 const replies = {
 	status: { desired: { guard: { enabled: true } }, observed: { service: { running: true } } },
@@ -247,10 +248,13 @@ const api = {
 	async status() { calls.push(['status']); return replies.status; },
 	async health() { calls.push(['health']); return replies.health; },
 	async diagnosticsSummary() { calls.push(['diagnosticsSummary']); return replies.summary; },
-	async createDiagnosticReport() {
-		calls.push(['createDiagnosticReport']);
+	async createDiagnosticReport(...args) {
+		calls.push(['createDiagnosticReport', ...args]);
 		if (reportGate) await reportGate;
-		return { id: 'rpt_' + 'a'.repeat(32) };
+		return {
+			operation_id: '1900000000000-00000001-0123456789abcdef',
+			report_id: 'rpt_' + 'a'.repeat(32)
+		};
 	},
 	async downloadChunks(...args) { calls.push(['downloadChunks', ...args]); return new TextEncoder().encode('{"safe":true}\n'); },
 	async routeTest(...args) {
@@ -267,7 +271,7 @@ const api = {
 	},
 	watchOperation(operationId, callback) {
 		calls.push(['watchOperation', operationId]);
-		queueMicrotask(() => callback({ state: 'success', result: { restored: true } }));
+		reportWatcher = callback;
 		return () => calls.push(['stopOperationWatch', operationId]);
 	},
 	destroy() { destroyedApi++; }
@@ -581,19 +585,40 @@ assert.ok(reportButton.querySelector('.sbox-spinner'), 'report button must show 
 assert.match(reportButton.textContent, /Creating/);
 releaseReport(); reportGate = null;
 await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(calls.find((call) => call[0] === 'createDiagnosticReport')?.slice(1),
+	['lite', false, 'luci'], 'report creation must use the Lite LuCI contract');
+assert.deepEqual(calls.find((call) => call[0] === 'watchOperation')?.slice(1),
+	['1900000000000-00000001-0123456789abcdef']);
+assert.equal(calls.some((call) => call[0] === 'downloadChunks'), false,
+	'report download must wait for successful operation completion');
+assert.equal(reportButton.disabled, true, 'report button must remain locked while collection runs');
+reportWatcher({ state: 'success' });
+await new Promise((resolve) => setImmediate(resolve));
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(reportButton.disabled, false, 'report button must unlock after download');
 assert.equal(reportButton.getAttribute('aria-busy'), null);
 assert.equal(reportButton.textContent, 'Download diagnostic report');
 assert.deepEqual(calls.find((call) => call[0] === 'downloadChunks')?.slice(1),
-	['report', 'rpt_' + 'a'.repeat(32), { format: 'json' }]);
+	['report', 'rpt_' + 'a'.repeat(32), {}]);
 assert.equal(createdUrls.length, 1);
 assert.equal(clickedDownloads[0].download, 'miclash-diagnostic-report.json');
 assert.deepEqual(revoked, [createdUrls[0].value], 'object URL must always be revoked');
 
 const failedReportButton = E('button', {}, 'Download diagnostic report');
 const failedReportPanel = moduleApi.create({ api: { ...api,
-	async createDiagnosticReport() { throw new Error('report failed'); },
+	async createDiagnosticReport() {
+		return {
+			operation_id: '1900000000000-00000002-fedcba9876543210',
+			report_id: 'rpt_' + 'b'.repeat(32)
+		};
+	},
+	watchOperation(operationId, callback) {
+		queueMicrotask(() => callback({
+			state: 'failure', error: { code: 'INTERNAL', message: 'report failed' }
+		}));
+		return () => {};
+	},
+	async downloadChunks() { throw new Error('download must not start'); },
 	destroy() {}
 }, document: documentMock, window: windowMock, pollInterval: 30000 });
 await assert.rejects(failedReportPanel.downloadReport(failedReportButton), /report failed/);

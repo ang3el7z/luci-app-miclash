@@ -307,6 +307,7 @@ function create(options) {
 	let active = false;
 	let hasGoodSummary = false;
 	const objectUrls = new Set();
+	const operationCancels = new Set();
 	const backgroundRefresh = view_miclash_background_refresh.create((error) => showError(error));
 
 	function clearTimer(name) {
@@ -441,6 +442,47 @@ function create(options) {
 		return button;
 	}
 
+	function operationError(record) {
+		const error = new Error(record?.error?.message || _('Unknown error'));
+		error.code = record?.error?.code || 'INTERNAL';
+		return error;
+	}
+
+	function waitForOperation(operationId) {
+		if (typeof api.watchOperation !== 'function' ||
+			typeof operationId !== 'string' ||
+			!/^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$/.test(operationId))
+			return Promise.reject(Object.assign(
+				new Error(_('Invalid diagnostic report response')), { code: 'INVALID_RESPONSE' }));
+		return new Promise((resolve, reject) => {
+			let settled = false, cancel = null, stop = null;
+			const done = (callback, value) => {
+				if (settled) return;
+				settled = true;
+				if (stop) operationCancels.delete(stop);
+				if (typeof cancel === 'function') cancel();
+				callback(value);
+			};
+			stop = () => done(reject, Object.assign(new Error('CANCELLED'), { code: 'CANCELLED' }));
+			try {
+				cancel = api.watchOperation(operationId, (record, error) => {
+					if (destroyed) return stop();
+					if (error) return done(reject, error);
+					if (record?.state === 'success') return done(resolve, record);
+					if (record?.state === 'failure' || record?.state === 'interrupted')
+						return done(reject, operationError(record));
+				});
+			} catch (error) {
+				return done(reject, error);
+			}
+			if (typeof cancel !== 'function')
+				return done(reject, Object.assign(
+					new Error(_('Invalid diagnostic report response')), { code: 'INVALID_RESPONSE' }));
+			if (settled) cancel();
+			else operationCancels.add(stop);
+		});
+	}
+
 	async function downloadReport(button) {
 		if (destroyed) return;
 		const originalLabel = button ? button.textContent : null;
@@ -452,15 +494,20 @@ function create(options) {
 				' ' + _('Creating...'));
 		}
 		try {
-			const created = await api.createDiagnosticReport();
+			const created = await api.createDiagnosticReport('lite', false, 'luci');
 			if (destroyed) return;
-			const id = created && created.id;
-			if (typeof id !== 'string' || !/^rpt_[0-9a-f]{32}$/.test(id)) {
+			const operationId = created && created.operation_id;
+			const reportId = created && created.report_id;
+			if (typeof operationId !== 'string' ||
+				!/^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$/.test(operationId) ||
+				typeof reportId !== 'string' || !/^rpt_[0-9a-f]{32}$/.test(reportId)) {
 				const error = new Error(_('Invalid diagnostic report response'));
 				error.code = 'INVALID_RESPONSE';
 				throw error;
 			}
-			const payload = await api.downloadChunks('report', id, { format: 'json' });
+			await waitForOperation(operationId);
+			if (destroyed) return;
+			const payload = await api.downloadChunks('report', reportId, {});
 			if (destroyed) return;
 			const blob = new Blob([ payload ], { type: 'application/json;charset=utf-8' });
 			const url = win.URL.createObjectURL(blob);
@@ -598,6 +645,8 @@ function create(options) {
 		win.removeEventListener('miclash:ubus-event', ubusEvent);
 		for (const url of objectUrls) win.URL.revokeObjectURL(url);
 		objectUrls.clear();
+		for (const cancel of operationCancels) cancel();
+		operationCancels.clear();
 		if (typeof api.destroy === 'function') api.destroy();
 		host = null;
 	}

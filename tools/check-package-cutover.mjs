@@ -16,6 +16,7 @@ const subscription = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/su
 const miclashd = fs.readFileSync(path.join(pkg, 'rootfs/usr/sbin/miclashd'), 'utf8');
 const daemon = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/daemon.uc'), 'utf8');
 const operations = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/operations.uc'), 'utf8');
+const diagnostics = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/diagnostics.uc'), 'utf8');
 const api = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/api.uc'), 'utf8');
 const nft = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/firewall/nft.uc'), 'utf8');
 const installer = fs.readFileSync(path.join(root, 'install-miclash.sh'), 'utf8');
@@ -98,6 +99,8 @@ requireMatch(daemon,
 	'report downloads must stream directly from the diagnostics file store');
 forbid(daemon, /memory_download|diagnostics_domain\.read_report\(\{\s*id/,
 	'report downloads must not materialize report content in daemon memory');
+forbid(diagnostics, /\b(?:create_report|read_report)\s*:/,
+	'diagnostics domain must not expose synchronous full-memory reports');
 requireMatch(api, /const REPORT_MAX = TRANSFER_MAX;/,
 	'report transfers must use the existing 16 MiB transfer ceiling');
 const observeStart = nft.indexOf('export function observe(runtime)');

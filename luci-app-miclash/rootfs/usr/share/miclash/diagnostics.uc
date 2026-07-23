@@ -1014,6 +1014,14 @@ export function create_store(runtime) {
 				errors.fail(code);
 			}
 		},
+		discard_report: (id) => {
+			if (type(id) != 'string' || !match(id, /^rpt_[0-9a-f]{32}$/))
+				invalid();
+			let report = reports[id];
+			if (report == null) return false;
+			discard(report);
+			return true;
+		},
 		open_report: (id) => {
 			expire();
 			let report = reports[id];
@@ -1182,12 +1190,21 @@ export function create(dependencies) {
 		try {
 			operation = operation_manager.submit_observation('diagnostics.report', options.source,
 				{ report_id: staged.id, mode: options.mode }, (ctx) => {
-					let raw = {}, sections = {}, raw_config = null, finished = false;
+					let raw = {}, sections = {}, raw_config = null, finished = false,
+						published = false;
 					function fail(error) {
 						if (finished) return;
 						finished = true;
-						try { staged.handle.abort(); } catch (abort_error) {}
-						ctx.complete(error);
+						let failure = error;
+						if (published) {
+							try {
+								stream_store.discard_report(staged.id);
+								published = false;
+							}
+							catch (discard_error) { failure = discard_error; }
+						}
+						else try { staged.handle.abort(); } catch (abort_error) {}
+						ctx.complete(failure);
 					};
 					function schedule(next) {
 						runtime.clock.set_timeout(0, () => {
@@ -1241,6 +1258,7 @@ export function create(dependencies) {
 							writer.field(name, report[name]);
 						writer.end_object();
 						stream_store.finish(staged.id, writer.finish());
+						published = true;
 					};
 					function finish_logs(selected, original) {
 						raw.logs = selected;
@@ -1255,8 +1273,8 @@ export function create(dependencies) {
 						schedule(() => stage('validation', 95, complete_report,
 							() => {
 								ctx.stage('complete', 100, '');
-								finished = true;
 								ctx.complete();
+								finished = true;
 							}));
 					};
 					function collect_logs() {
@@ -1381,127 +1399,6 @@ export function create(dependencies) {
 		summary: (...args) => {
 			if (length(args)) invalid();
 			return clone(make_summary(collect_summary(sources), runtime.clock.now()));
-		},
-		create_report: (...args) => {
-			if (length(args)) invalid();
-			prune();
-			ensure_directory(runtime, runtime.paths.tmp);
-			root = verify_directory(runtime, ROOT, root);
-			if (runtime.fs.realpath(ROOT) != ROOT || !same_node(root, runtime.fs.lstat(ROOT)))
-				errors.fail('INTERNAL');
-			let id = null;
-			for (let attempt = 0; attempt < 16 && id == null; attempt++) {
-				let candidate = 'rpt_' + runtime.random.hex(16);
-				if (!match(candidate, /^rpt_[0-9a-f]{32}$/)) errors.fail('INTERNAL');
-				if (reports[candidate] == null) id = candidate;
-			}
-			if (id == null) errors.fail('INTERNAL');
-			let stage_name = null, final_name = null, path = null, stage_created = false;
-			let creation_failure = null;
-			for (let attempt = 0; attempt < 16 && path == null; attempt++) {
-				let token = runtime.random.hex(16);
-				if (!match(token, /^[0-9a-f]{32}$/)) errors.fail('INTERNAL');
-				stage_name = '.stage-' + token;
-				final_name = 'report-' + token;
-				let candidate = ROOT + '/' + stage_name;
-				if (runtime.fs.lstat(candidate) != null ||
-				    runtime.fs.lstat(ROOT + '/' + final_name) != null) continue;
-				try {
-					if (runtime.fs.mkdir(candidate) !== true) {
-						if (runtime.fs.lstat(candidate) != null) continue;
-						errors.fail('INTERNAL');
-					}
-					stage_created = true;
-					path = candidate;
-				}
-				catch (error) {
-					creation_failure = errors.normalize(error).code;
-					try { stage_created = runtime.fs.lstat(candidate) != null; }
-					catch (capture_error) { stage_created = false; }
-					path = candidate;
-					break;
-				}
-			}
-			if (path == null) errors.fail('INTERNAL');
-			if (creation_failure != null) {
-				if (stage_created)
-					try { cleanup_creation(runtime, root, stage_name, final_name); }
-					catch (cleanup_error) { creation_failure = 'INTERNAL'; }
-				errors.fail(creation_failure);
-			}
-			let directory = null;
-			let now = runtime.clock.now(), files = {}, failure = null;
-			try {
-				let initial = runtime.fs.lstat(path);
-				if (initial?.type != 'directory' || (initial.uid != null && initial.uid != 0) ||
-					(initial.mode & 0o022) != 0 || runtime.fs.realpath(path) != path)
-					errors.fail('INTERNAL');
-				if (runtime.fs.chmod(path, 0o700) !== true) errors.fail('INTERNAL');
-				directory = { path, identity: verify_directory(runtime, path, initial) };
-				let safe = collect(sources, runtime);
-				let summary = make_summary(safe, now);
-				let report = { schema_version: 4, generated_at: now, summary,
-					issues: report_issues(safe), collection: safe.collection,
-					details: { config: safe.config, process: safe.process, logs: safe.logs,
-						uci: safe.uci, operations: safe.operations, evidence: safe.evidence } };
-				let json_text = telegram_format.pretty_json(report) + '\n';
-				let text = 'MiClash diagnostic report\nGenerated: ' + now + '\n' +
-					'Architecture: ' + summary.architecture + '\n' +
-					'Mihomo health: ' + (summary.health?.mihomo?.state ?? 'unknown') + '\n';
-				if (length(json_text) + length(text) > MAX_REPORT)
-					errors.fail('RESPONSE_TOO_LARGE');
-				files.json = write_file(runtime, directory, path + '/report.json', json_text);
-				files.text = write_file(runtime, directory, path + '/report.txt', text);
-				verify_directory(runtime, ROOT, root);
-				verify_directory(runtime, directory.path, directory.identity);
-				if (runtime.fs.lstat(ROOT + '/' + final_name) != null ||
-					runtime.fs.rename(path, ROOT + '/' + final_name) !== true)
-					errors.fail('INTERNAL');
-				let final_path = ROOT + '/' + final_name;
-				let final_identity = runtime.fs.lstat(final_path);
-				if (!same_node(directory.identity, final_identity) ||
-					runtime.fs.realpath(final_path) != final_path || runtime.fs.lstat(path) != null)
-					errors.fail('INTERNAL');
-				directory = { path: final_path,
-					identity: verify_directory(runtime, final_path, final_identity) };
-				for (let format in [ 'json', 'text' ]) {
-					let name = format == 'json' ? 'report.json' : 'report.txt';
-					let final_file = final_path + '/' + name;
-					let identity = safe_file(runtime, final_file, files[format].identity);
-					if (runtime.digest.sha256_file(final_file) != files[format].hash)
-						errors.fail('INTERNAL');
-					files[format].path = final_file;
-					files[format].identity = identity;
-				}
-			}
-			catch (error) { failure = errors.normalize(error).code; }
-			if (failure != null) {
-				try { cleanup_creation(runtime, root, stage_name, final_name); }
-				catch (cleanup_error) { failure = 'INTERNAL'; }
-				errors.fail(failure);
-			}
-			reports[id] = { directory, files, created_at: now, expires_at: now + TTL };
-			push(report_order, id);
-			return { id, created_at: now, expires_at: now + TTL,
-				files: [ 'report.json', 'report.txt' ] };
-		},
-		read_report: (...args) => {
-			if (length(args) != 1) invalid();
-			let options = args[0];
-			if (type(options) != 'object' || length(keys(options)) != 2 ||
-				!exists(options, 'id') || !exists(options, 'format') ||
-				type(options.id) != 'string' || !match(options.id, /^rpt_[0-9a-f]{32}$/) ||
-				(options.format != 'json' && options.format != 'text')) invalid();
-			let report = reports[options.id];
-			if (report != null && runtime.clock.now() >= report.expires_at) {
-				remove_report(options.id);
-				report = null;
-			}
-			if (report == null)
-				errors.fail('NOT_FOUND');
-			return { id: options.id, format: options.format,
-				content: read_file(runtime, report.directory, report.files[options.format]),
-				expires_at: report.expires_at };
 		},
 		submit_report: submit_stream_report,
 		open_report: open_stream_report
