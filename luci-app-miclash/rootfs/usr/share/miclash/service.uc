@@ -14,7 +14,7 @@ function component(name, state, detail) {
 export function create(runtime) {
 	if (type(runtime?.fs?.lstat) != 'function' || type(runtime?.ubus?.connect) != 'function' ||
 	    type(runtime?.clock?.now) != 'function' || type(runtime?.clock?.sleep) != 'function' ||
-	    type(runtime?.http?.request) != 'function')
+	    type(runtime?.http?.request) != 'function' || type(runtime?.process?.run) != 'function')
 		fail('INVALID_ARGUMENT');
 	let poll_interval = runtime.service_options?.poll_interval_ms ?? 100;
 	if (type(poll_interval) != 'int' || poll_interval < 1 || poll_interval > 1000)
@@ -36,9 +36,16 @@ export function create(runtime) {
 		try { reply = connection().call('service', 'list', { name: SERVICE, verbose: true }); }
 		catch (error) { return { state: 'unknown', running: false, registered: false,
 			instances: [] }; }
-		let registered = reply?.[SERVICE];
-		if (type(registered) != 'object')
+		if (type(reply) != 'object')
 			return { state: 'unknown', running: false, registered: false, instances: [] };
+		let registered = reply?.[SERVICE];
+		if (type(registered) != 'object') {
+			let kernel = runtime.fs.lstat('/opt/clash/bin/clash');
+			return {
+				state: kernel?.type == 'file' && kernel.nlink == 1 ? 'stopped' : 'missing_kernel',
+				running: false, registered: false, instances: []
+			};
+		}
 		let instances = registered.instances;
 		if (instances != null && type(instances) != 'object')
 			return { state: 'unknown', running: false, registered: true, instances: [] };
@@ -82,9 +89,21 @@ export function create(runtime) {
 		return { state: result.state, running: result.running,
 			pid: result.pid ?? null };
 	};
-	function service_state(spawn) {
-		try { connection().call('service', 'state', { name: SERVICE, spawn }); }
+	function stop_service() {
+		try { connection().call('service', 'state', { name: SERVICE, spawn: false }); }
 		catch (error) { fail('HEALTH_FAILED'); }
+	};
+	function start_service() {
+		let result;
+		try {
+			result = runtime.process.run({
+				command: '/etc/init.d/clash',
+				args: [ 'start' ]
+			});
+		}
+		catch (error) { fail('HEALTH_FAILED'); }
+		if (result?.code != 0)
+			fail('HEALTH_FAILED');
 	};
 	function start(value) {
 		value = profile(value);
@@ -95,7 +114,11 @@ export function create(runtime) {
 			return { changed: false, state: 'running' };
 		if (observed.state != 'stopped')
 			fail('HEALTH_FAILED');
-		service_state(true);
+		// The package manager invokes this init script once with a secure
+		// no-autostart marker. That invocation intentionally registers no procd
+		// instance. A later explicit start must therefore enter rc.common again;
+		// `service state spawn=true` cannot spawn an instance that does not exist.
+		start_service();
 		return { changed: true, state: 'starting' };
 	};
 	function stop(value) {
@@ -105,7 +128,7 @@ export function create(runtime) {
 			return { changed: false, state: 'stopped' };
 		if (observed.state != 'running')
 			fail('HEALTH_FAILED');
-		service_state(false);
+		stop_service();
 		return { changed: true, state: 'stopping' };
 	};
 	function reload(value, controller_config) {
@@ -135,10 +158,10 @@ export function create(runtime) {
 			fail('NOT_FOUND');
 		if (observed.state == 'unknown')
 			fail('HEALTH_FAILED');
-		service_state(false);
+		stop_service();
 		if (!wait_stopped(value, runtime.clock.now() + 5000))
 			fail('HEALTH_FAILED');
-		service_state(true);
+		start_service();
 		return { changed: true, state: 'restarting' };
 	};
 	function observer_record(name, argument) {

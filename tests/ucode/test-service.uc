@@ -264,7 +264,9 @@ let oversized_config = '';
 for (let i = 0; i < 257; i++) oversized_config += sprintf('%4096s', 'x');
 assert_throws(() => transition_service.reload('config.yaml', oversized_config), 'INVALID_ARGUMENT');
 
-// Observation and lifecycle are idempotent and only use procd's ubus service methods.
+// Observation is authoritative through procd. Starting goes through the fixed
+// init entrypoint so a package-install suppression that left no procd instance
+// can register one before the daemon waits for readiness.
 let missing = env();
 missing.filesystem.unlink('/opt/clash/bin/clash');
 let missing_service = service.create(missing.rt);
@@ -309,10 +311,38 @@ let apk_stopped_ubus = { connect: () => ({
 }) };
 let apk_stopped = env({ ubus: apk_stopped_ubus });
 assert_equal(service.create(apk_stopped.rt).observe('config.yaml').state, 'stopped');
+assert_equal(service.create(apk_stopped.rt).start('config.yaml').changed, true);
+assert_equal(apk_stopped.rt.process.calls[0].command, '/etc/init.d/clash');
+assert_equal(join(' ', apk_stopped.rt.process.calls[0].args), 'start');
 
+// A complete rc.common stop removes the service registration. A successful,
+// empty service-list reply still proves that Mihomo is stopped and can be
+// registered again through the init entrypoint.
+let absent_ubus = { connect: () => ({
+	call: (object, method, data) => {
+		if (object == 'service' && method == 'list') return {};
+		die('unexpected ubus method');
+	}
+}) };
+let absent = env({ ubus: absent_ubus });
+assert_equal(service.create(absent.rt).diagnostics('config.yaml').state, 'stopped');
+assert_equal(service.create(absent.rt).diagnostics('config.yaml').registered, false);
+assert_equal(service.create(absent.rt).start('config.yaml').changed, true);
+absent.filesystem.unlink('/opt/clash/bin/clash');
+assert_equal(service.create(absent.rt).observe('config.yaml').state, 'missing_kernel');
+
+let init_failure = env({ process: fakes.process({
+	'/etc/init.d/clash:start': { code: 1 }
+}) });
+assert_throws(() => service.create(init_failure.rt).start('config.yaml'), 'HEALTH_FAILED');
+
+stopped.rt.process.on_run = (request) => {
+	if (request.command == '/etc/init.d/clash' && request.args[0] == 'start')
+		stopped.ubus.running = true;
+};
 assert_equal(adapter.start('config.yaml').changed, true);
-assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].method, 'state');
-assert_equal(stopped.ubus.calls[length(stopped.ubus.calls) - 1].data.spawn, true);
+assert_equal(stopped.rt.process.calls[0].command, '/etc/init.d/clash');
+assert_equal(stopped.rt.process.calls[0].args[0], 'start');
 assert_equal(adapter.start('config.yaml').changed, false);
 assert_equal(stopped.ubus.calls[2].data.name, 'clash');
 assert_equal(adapter.stop('config.yaml').changed, true);
@@ -323,6 +353,10 @@ for (let call in stopped.ubus.calls)
 	assert_equal(call.object, 'service');
 
 let actions = env({ running: true });
+actions.rt.process.on_run = (request) => {
+	if (request.command == '/etc/init.d/clash' && request.args[0] == 'start')
+		actions.ubus.running = true;
+};
 let actions_service = service.create(actions.rt);
 assert_equal(actions_service.reload('config.yaml').ok, true);
 assert_equal(actions.http.calls[0].method, 'PUT');
@@ -335,9 +369,10 @@ assert_equal(actions_service.restart_service('config.yaml').changed, true);
 let state_calls = [];
 for (let call in actions.ubus.calls)
 	if (call.method == 'state') push(state_calls, call);
-assert_equal(length(state_calls), 2);
+assert_equal(length(state_calls), 1);
 assert_equal(state_calls[0].data.spawn, false);
-assert_equal(state_calls[1].data.spawn, true);
+assert_equal(actions.rt.process.calls[length(actions.rt.process.calls) - 1].command,
+	'/etc/init.d/clash');
 assert_throws(() => actions_service.reload('config4.yaml'), 'INVALID_ARGUMENT');
 
 // Bounded recovery always attempts the least disruptive action first and
@@ -368,15 +403,20 @@ assert_equal(join(',', core_http.calls),
 
 let service_http = recovery_http([ 503, 503, 200 ]);
 let service_recovery = env({ running: true, http: service_http });
+service_recovery.rt.process.on_run = (request) => {
+	if (request.command == '/etc/init.d/clash' && request.args[0] == 'start')
+		service_recovery.ubus.running = true;
+};
 let service_result = service.create(service_recovery.rt).recover('config.yaml');
 assert_equal(service_result.ok, true);
 assert_equal(service_result.stage, 'restart_service');
 assert_equal(join(',', service_http.calls),
 	'PUT:/configs?force=true,POST:/restart,GET:/version');
 let recovery_state_calls = filter(service_recovery.ubus.calls, (call) => call.method == 'state');
-assert_equal(length(recovery_state_calls), 2);
+assert_equal(length(recovery_state_calls), 1);
 assert_equal(recovery_state_calls[0].data.spawn, false);
-assert_equal(recovery_state_calls[1].data.spawn, true);
+assert_equal(service_recovery.rt.process.calls[length(service_recovery.rt.process.calls) - 1].command,
+	'/etc/init.d/clash');
 
 let unknown_service_env = env();
 unknown_service_env.ubus.list_error = true;

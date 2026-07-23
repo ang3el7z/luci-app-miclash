@@ -6,6 +6,7 @@ const pkg = path.join(root, 'luci-app-miclash');
 const makefile = fs.readFileSync(path.join(pkg, 'Makefile'), 'utf8');
 const runtime = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/runtime.uc'), 'utf8');
 const clash = fs.readFileSync(path.join(pkg, 'rootfs/etc/init.d/clash'), 'utf8');
+const service = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/service.uc'), 'utf8');
 const network = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/network.uc'), 'utf8');
 const reconcile = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/reconcile-adapter.uc'), 'utf8');
 const dns = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/dns.uc'), 'utf8');
@@ -36,6 +37,11 @@ if (packageMarkerGate < 0 || missingKernelGate < 0 || packageMarkerGate > missin
 requireMatch(clash,
 	/stat -c '%u:%a:%h'[\s\S]*0:600:1[\s\S]*rm -f "\$NO_AUTOSTART_MARKER"/,
 	'package-install autostart marker must be authenticated and consumed atomically');
+requireMatch(service,
+	/command: '\/etc\/init\.d\/clash'[\s\S]*args: \[ 'start' \]/,
+	'explicit Mihomo start must re-enter rc.common to register a suppressed procd instance');
+forbid(service, /spawn:\s*true/,
+	'Mihomo start must not spawn a procd instance that package installation may have suppressed');
 requireMatch(makefile, /LUCI_DEPENDS:=[\s\S]*\+ip-full/,
 	'full iproute2 is required for owned route proto and rule protocol syntax');
 requireMatch(makefile, /LUCI_DEPENDS:=[^\n]*\+kmod-nft-tproxy/,
