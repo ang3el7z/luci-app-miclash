@@ -30,6 +30,7 @@ import * as app_update_scheduler from 'miclash.app-update-scheduler';
 import * as device_vendor_update from 'miclash.device-vendor-update';
 import * as provider_data from 'miclash.provider-data';
 import * as provider_sync from 'miclash.provider-sync';
+import * as diagnostics_evidence from 'miclash.diagnostics-evidence';
 
 function clone(value) {
 	try { return json(sprintf('%J', value)); }
@@ -455,6 +456,7 @@ export function compose(runtime, overrides) {
 		api, memory, devices, notify, notification_settings, telegram, mutation_lock,
 		reconcile_adapter, network, interface_scope, subscription, scheduler, updates, http, diagnostics, route_test, routing,
 		mihomo_api, app_update_scheduler, device_vendor_update, provider_data, provider_sync,
+		diagnostics_evidence,
 		...(overrides ?? {})
 	};
 	let operation_manager = modules.operations.create(runtime);
@@ -1107,6 +1109,7 @@ export function compose(runtime, overrides) {
 		function last_repair() {
 			return state_model.last_repair();
 		};
+		let evidence_domain = modules.diagnostics_evidence.create(runtime);
 		let diagnostics_domain = modules.diagnostics.create({ runtime, sources: {
 			versions: () => { let info = bounded_system_info(runtime); return {
 				miclash: info.app_version, mihomo: info.mihomo.version }; },
@@ -1116,7 +1119,8 @@ export function compose(runtime, overrides) {
 				automatic_config: subscription_scheduler_domain.status(),
 				automatic_miclash: app_update_domain.status(),
 				device_vendors: device_vendor_domain.status(),
-				providers: provider_sync_domain.status() }),
+				providers: { ...provider_sync_domain.status(),
+					diagnostics: provider_sync_domain.diagnostics() } }),
 			settings: settings_domain.get,
 			telegram: telegram_domain.status,
 			network_components: () => observed_component_status(runtime, native_network,
@@ -1124,7 +1128,8 @@ export function compose(runtime, overrides) {
 			last_repair,
 			config: () => configuration.read_active('config.yaml'),
 			process: () => service_adapter.diagnostics('config.yaml'),
-			logs: () => bounded_logs(runtime), uci: settings_domain.get,
+			logs: () => evidence_domain.logs(), evidence: evidence_domain.sections,
+			uci: settings_domain.get,
 			operations: () => operation_manager.list()
 		} });
 		app.diagnostics_summary = () => diagnostics_domain.summary();

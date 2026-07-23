@@ -93,7 +93,9 @@ let sources = {
 	uci: () => report_source('uci', { telegram: { token: secrets.telegram_token },
 		remote: { api_key: secrets.api_key } }),
 	operations: () => report_source('operations', [ { id: 'safe-operation', context:
-		'cookie=' + secrets.cookie + ' password=' + secrets.password } ])
+		'cookie=' + secrets.cookie + ' password=' + secrets.password } ]),
+	evidence: () => [ { name: 'interfaces', value: {
+		state: 'unavailable', code: 'UNAVAILABLE', message: 'interface collector unavailable' } } ]
 };
 
 assert_equal(type(diagnostics.create), 'function');
@@ -298,9 +300,11 @@ assert_equal(huge_center.summary().schema_version, 1,
 	'summary must not collect report-only logs');
 let huge_created = huge_center.create_report();
 let huge_report = json(huge_center.read_report({ id: huge_created.id, format: 'json' }).content);
-assert_equal(huge_report.schema_version, 3);
+assert_equal(huge_report.schema_version, 4);
+assert_equal(huge_report.collection.evidence[0].name, 'interfaces');
+assert_equal(huge_report.issues[length(huge_report.issues) - 1].component, 'interfaces');
 assert_true(type(huge_report.issues) == 'array');
-assert_equal(length(huge_report.issues), 2);
+assert_equal(length(huge_report.issues), 3);
 assert_equal(huge_report.issues[0].component, 'dns');
 assert_equal(huge_report.issues[0].severity, 'error');
 assert_equal(huge_report.issues[1].component, 'subscription.update');

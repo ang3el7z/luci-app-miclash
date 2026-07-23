@@ -316,8 +316,9 @@ function collect(sources, runtime) {
 		REPORT_SECTION_LIMITS.logs);
 	result.logs = bounded_logs.value;
 	sections.logs = bounded_logs.metadata;
+	result.evidence = type(sources.evidence) == 'function' ? call(sources, 'evidence') : [];
 	result.public_status = public_status(result.settings);
-	result.collection = { sections };
+	result.collection = { sections, evidence: result.evidence };
 	return sanitize(result, {
 		max_depth: REPORT_MAX_DEPTH,
 		max_nodes: REPORT_MAX_NODES,
@@ -364,6 +365,11 @@ function report_issues(safe) {
 		add('automatic_recovery', safe.last_repair.component, safe.last_repair.state ??
 			safe.last_repair.result ?? safe.last_repair.outcome, safe.last_repair.code,
 			safe.last_repair.message ?? safe.last_repair.error);
+	if (type(safe.evidence) == 'array')
+		for (let entry in safe.evidence)
+			if (type(entry) == 'object' && type(entry.value) == 'object')
+				add('collection', entry.name, entry.value.state, entry.value.code,
+					entry.value.message);
 	return issues;
 };
 function compact_telegram(public_status, live) {
@@ -1192,10 +1198,10 @@ export function create(dependencies) {
 				directory = { path, identity: verify_directory(runtime, path, initial) };
 				let safe = collect(sources, runtime);
 				let summary = make_summary(safe, now);
-				let report = { schema_version: 3, generated_at: now, summary,
+				let report = { schema_version: 4, generated_at: now, summary,
 					issues: report_issues(safe), collection: safe.collection,
 					details: { config: safe.config, process: safe.process, logs: safe.logs,
-						uci: safe.uci, operations: safe.operations } };
+						uci: safe.uci, operations: safe.operations, evidence: safe.evidence } };
 				let json_text = telegram_format.pretty_json(report) + '\n';
 				let text = 'MiClash diagnostic report\nGenerated: ' + now + '\n' +
 					'Architecture: ' + summary.architecture + '\n' +

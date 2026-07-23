@@ -166,19 +166,25 @@ export function collect(runtime, config_content, options) {
 			push(endpoints, endpoint);
 		}
 	}
-	let server_ips = [], server_seen = {};
+	let server_ips = [], server_seen = {}, observations = [], resolution_count = 0, skipped = 0;
 	for (let endpoint in endpoints) {
 		if (firewall_common.valid_ip(endpoint)) {
 			append_unique(server_ips, server_seen, endpoint);
 			continue;
 		}
-		let resolved = options.resolve(endpoint);
-		if (type(resolved) != 'array') errors.fail('INVALID_RESPONSE');
-		if (!length(resolved)) continue;
-		for (let address in resolved) {
+		let resolution = options.resolve(endpoint);
+		if (type(resolution) != 'array') errors.fail('INVALID_RESPONSE');
+		let addresses = [], address_seen = {};
+		for (let address in resolution) {
 			if (!firewall_common.valid_ip(address)) errors.fail('INVALID_RESPONSE');
+			append_unique(addresses, address_seen, address);
 			append_unique(server_ips, server_seen, address);
 		}
+		if (length(addresses)) resolution_count++;
+		else skipped++;
+		if (length(observations) >= MAX_VALUES) errors.fail('RESPONSE_TOO_LARGE');
+		push(observations, { host: endpoint, result: length(addresses) ? 'resolved' : 'dns_no_records',
+			addresses: sort(addresses) });
 	}
 
 	let fakeip_cidrs = [], cidr_seen = {}, mode = fakeip_mode(config_content);
@@ -200,5 +206,8 @@ export function collect(runtime, config_content, options) {
 				fakeip_cidrs, cidr_seen);
 		}
 	}
-	return { server_ips: sort(server_ips), fakeip_cidrs: sort(fakeip_cidrs) };
+	return { server_ips: sort(server_ips), fakeip_cidrs: sort(fakeip_cidrs), evidence: {
+		checked_at: runtime.clock?.now?.() ?? 0, endpoints_total: length(observations),
+		resolved: resolution_count, skipped, endpoints: observations
+	} };
 };

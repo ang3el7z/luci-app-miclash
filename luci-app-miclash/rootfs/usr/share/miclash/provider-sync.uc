@@ -8,6 +8,9 @@ const RETRY = 5 * 60 * 1000;
 
 function clone(value) { return json(sprintf('%J', value)); };
 function empty_snapshot() { return { server_ips: [], fakeip_cidrs: [] }; };
+function empty_diagnostics() {
+	return { checked_at: null, endpoints_total: 0, resolved: 0, skipped: 0, endpoints: [] };
+};
 function validate_snapshot(value) {
 	if (type(value) != 'object' || type(value.server_ips) != 'array' ||
 	    type(value.fakeip_cidrs) != 'array' || length(value.server_ips) > 256 ||
@@ -15,9 +18,28 @@ function validate_snapshot(value) {
 		errors.fail('CORRUPT_STATE');
 	for (let ip in value.server_ips) if (!firewall_common.valid_ip(ip)) errors.fail('CORRUPT_STATE');
 	for (let cidr in value.fakeip_cidrs) if (!firewall_common.valid_cidr(cidr)) errors.fail('CORRUPT_STATE');
-	return value;
+	return { server_ips: value.server_ips, fakeip_cidrs: value.fakeip_cidrs };
 };
 function same(left, right) { return sprintf('%J', left) == sprintf('%J', right); };
+function validate_diagnostics(value) {
+	if (type(value) != 'object' || (value.checked_at != null && type(value.checked_at) != 'int') ||
+		type(value.endpoints_total) != 'int' || type(value.resolved) != 'int' ||
+		type(value.skipped) != 'int' || type(value.endpoints) != 'array' ||
+		value.endpoints_total < 0 || value.resolved < 0 || value.skipped < 0 ||
+		value.endpoints_total != value.resolved + value.skipped ||
+		length(value.endpoints) != value.endpoints_total || length(value.endpoints) > 256)
+		errors.fail('INVALID_RESPONSE');
+	for (let endpoint in value.endpoints) {
+		if (type(endpoint) != 'object' || type(endpoint.host) != 'string' ||
+			!match(endpoint.host, /^[A-Za-z0-9._-]{1,253}$/) ||
+			(endpoint.result != 'resolved' && endpoint.result != 'dns_no_records') ||
+			type(endpoint.addresses) != 'array' || length(endpoint.addresses) > 256)
+			errors.fail('INVALID_RESPONSE');
+		for (let address in endpoint.addresses)
+			if (!firewall_common.valid_ip(address)) errors.fail('INVALID_RESPONSE');
+	}
+	return value;
+};
 function same_file(left, right) {
 	return left?.type == 'file' && right?.type == 'file' && left.inode == right.inode &&
 		left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor &&
@@ -50,7 +72,8 @@ export function create(app) {
 	    type(app?.runtime?.digest?.sha256_file) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 	let runtime = app.runtime, current = empty_snapshot(), started = false,
-		timer = null, running = false, last_success = null, reason = 'pending', tick;
+		timer = null, running = false, last_success = null, reason = 'pending',
+		diagnostic = empty_diagnostics(), tick;
 	function log(level, message) {
 		try { app.logger?.[level]?.('provider-sync: ' + message); } catch (error) {}
 	};
@@ -73,8 +96,9 @@ export function create(app) {
 				reason = 'waiting_for_mihomo';
 				running = false; arm(RETRY); return false;
 			}
-			let previous_reason = reason;
-			let candidate = validate_snapshot(app.collect());
+			let previous_reason = reason, collected = app.collect();
+			let candidate = validate_snapshot(collected);
+			diagnostic = validate_diagnostics(collected?.evidence ?? empty_diagnostics());
 			if (!same(candidate, current)) {
 				if (app.apply(clone(candidate)) !== true) errors.fail('HEALTH_FAILED');
 				storage.write_json(runtime, STATE_PATH, candidate, 0o600);
@@ -106,7 +130,8 @@ export function create(app) {
 		stop: () => { if (!started) return false; started = false;
 			try { timer?.cancel?.(); } catch (error) {} timer = null; return true; },
 		current: () => clone(current),
-		status: () => ({ running, reason, last_success })
+		status: () => ({ running, reason, last_success }),
+		diagnostics: () => clone(diagnostic)
 	};
 	return api;
 };

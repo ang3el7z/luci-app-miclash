@@ -66,6 +66,9 @@ let partial_snapshot = provider_data.collect({ fs: filesystem }, CONFIG, {
 	auto_fakeip_whitelist: true, resolve: () => [], convert_mrs: () => ''
 });
 assert_equal(join(',', partial_snapshot.server_ips), '192.0.2.10');
+assert_equal(partial_snapshot.evidence.skipped, 1);
+assert_equal(partial_snapshot.evidence.endpoints[0].host, 'edge.example.test');
+assert_equal(partial_snapshot.evidence.endpoints[0].result, 'dns_no_records');
 filesystem.set_symlink('/opt/clash/proxy_providers/remote.yaml',
 	'/opt/clash/ruleset/routed.yaml');
 assert_throws(() => provider_data.collect({ fs: filesystem }, CONFIG, {
@@ -117,7 +120,10 @@ assert_equal(length(providers_pending.logs), 0);
 assert_equal(providers_pending.machine.status().reason, 'waiting_for_providers');
 
 let normal = environment([
-	{ server_ips: [ '192.0.2.1' ], fakeip_cidrs: [] },
+	{ server_ips: [ '192.0.2.1' ], fakeip_cidrs: [], evidence: {
+		checked_at: 1700000000000, endpoints_total: 1, resolved: 0, skipped: 1,
+		endpoints: [ { host: 'await.akira.click', result: 'dns_no_records', addresses: [] } ]
+	} },
 	{ server_ips: [ '192.0.2.1' ], fakeip_cidrs: [] },
 	{ server_ips: [ '192.0.2.2' ], fakeip_cidrs: [] }
 ]);
@@ -127,6 +133,11 @@ assert_equal(length(normal.applied), 1);
 assert_equal(normal.logs[0].message,
 	'provider-sync: synchronized endpoints=1 fakeip_cidrs=0');
 assert_equal(normal.machine.status().reason, 'synchronized');
+let diagnostic = normal.machine.diagnostics();
+assert_equal(diagnostic.skipped, 1);
+assert_equal(diagnostic.endpoints[0].host, 'await.akira.click');
+assert_equal(normal.machine.status().reason, 'synchronized',
+	'diagnostic DNS observations do not alter provider health');
 assert_equal(normal.clock.timers[length(normal.clock.timers) - 1].due,
 	normal.clock.now() + 30 * 60 * 1000);
 normal.machine.refresh();
