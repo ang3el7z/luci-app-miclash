@@ -14,19 +14,27 @@ function write_all(runtime, handle, value) {
 	}
 };
 
-export function create(runtime, handle) {
+export function create(runtime, target) {
+	let handle = target?.resource ?? target;
+	let path = target?.path ?? handle?.path;
+	let abort_target = target?.resource != null ? target : handle;
 	if (type(runtime?.fs?.write) != 'function' || type(runtime?.fs?.flush) != 'function' ||
 		type(runtime?.fs?.close) != 'function' || type(runtime?.fs?.fstat) != 'function' ||
 		type(runtime?.fs?.lstat) != 'function' || type(runtime?.fs?.realpath) != 'function' ||
-		type(runtime?.digest?.sha256_file) != 'function' || type(handle) != 'object' ||
-		type(handle.path) != 'string' || !length(handle.path))
+		type(runtime?.digest?.sha256_file) != 'function' ||
+		(type(handle) != 'object' && type(handle) != 'resource') ||
+		type(path) != 'string' || !length(path))
 		errors.fail('INVALID_ARGUMENT');
 
-	let path = handle.path, stack = [], closed = false, bytes = 0, roots = 0, aborted = false;
+	let stack = [], closed = false, bytes = 0, roots = 0, aborted = false;
 	function abort() {
 		if (aborted) return;
 		aborted = true;
-		try { if (type(handle.abort) == 'function') handle.abort(); } catch (error) {}
+		try {
+			if (type(abort_target?.abort) == 'function')
+				abort_target.abort();
+		}
+		catch (error) {}
 	};
 	function terminal() {
 		if (!closed) {
@@ -66,6 +74,9 @@ export function create(runtime, handle) {
 			if (length(stack)) array_value();
 			else if (roots++) terminal();
 			write('{'); push(stack, { kind: 'object', count: 0 });
+		},
+		begin_object_field: (name) => {
+			object_member(name); write('{'); push(stack, { kind: 'object', count: 0 });
 		},
 		field: (name, value) => {
 			object_member(name); write(sprintf('%J', value));

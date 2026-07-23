@@ -46,9 +46,18 @@ let evidence = evidence_module.create(runtime, {
 	interfaces: () => null
 });
 
-let logs = [];
-for (let entry in evidence.logs()) push(logs, entry);
+let logs = [], log_reader = evidence.logs(), log_batches = 0;
+assert_equal(type(log_reader.read), 'function',
+	'log collection exposes a bounded pull reader instead of a complete record array');
+while (true) {
+	let batch = log_reader.read(64);
+	log_batches++;
+	assert_true(length(batch.records) <= 64, 'each log pull is bounded');
+	for (let entry in batch.records) push(logs, entry);
+	if (batch.done) break;
+}
 assert_equal(length(logs), 1212, 'all available relevant log lines are yielded');
+assert_true(log_batches > 40, 'large log sources require multiple bounded pulls');
 assert_equal(logs[0].timestamp, 'Thu Jul 23 01:00:00 2026');
 assert_equal(logs[0].facility, 'daemon');
 assert_equal(logs[0].severity, 'info');
@@ -120,7 +129,9 @@ let failed_logs = evidence_module.create({ fs: { popen: (command, mode) => {
 		close: () => 1
 	};
 } } }, {});
-assert_equal(length(failed_logs.logs()), 0);
+let failed_batch = failed_logs.logs().read(64);
+assert_equal(length(failed_batch.records), 0);
+assert_equal(failed_batch.done, true);
 let failed_status = failed_logs.logs_status();
 assert_equal(failed_status.state, 'unavailable');
 assert_equal(failed_status.code, 'COLLECTION_UNAVAILABLE');

@@ -570,45 +570,100 @@ function relevant_log(line) {
 		index(lowered, 'oops') >= 0 || index(lowered, 'crash') >= 0));
 };
 
-function collect_logs(runtime) {
+function open_logs(runtime, completed) {
 	let popen = runtime?.fs?.popen ?? require('fs').popen;
-	if (type(popen) != 'function')
-		return { error: unavailable('logs', {
+	function failed(message, extra) {
+		let status = unavailable('logs', {
 			code: 'COLLECTION_UNAVAILABLE',
-			message: 'logread collection is unavailable'
-		}) };
-	let pipe = null, records = [];
+			message,
+			...(extra ?? {})
+		});
+		completed(status);
+		return {
+			read: (amount) => {
+				if (type(amount) != 'int' || amount < 1 || amount > 256)
+					errors.fail('INVALID_ARGUMENT');
+				return { records: [], done: true };
+			},
+			close: () => false
+		};
+	};
+	if (type(popen) != 'function')
+		return failed('logread collection is unavailable');
+	let pipe = null;
 	try {
 		pipe = popen('/sbin/logread', 'r');
 		if (pipe == null)
-			return { error: unavailable('logs', {
-				code: 'COLLECTION_UNAVAILABLE',
-				message: 'logread is unavailable'
-			}) };
-		while (true) {
-			let line = pipe.read('line');
-			if (type(line) != 'string' || !length(line)) break;
-			line = replace(line, /\r?\n$/, '');
-			if (length(line) && relevant_log(line))
-				push(records, log_entry(line));
-		}
-		let closed = type(pipe.close) == 'function' ? pipe.close() : null;
-		pipe = null;
-		if (closed != 0)
-			return { error: unavailable('logs', {
-				code: 'COLLECTION_UNAVAILABLE',
-				message: 'logread collection failed',
-				exit_code: closed
-			}) };
-		return { records };
+			return failed('logread is unavailable');
 	}
 	catch (error) {
-		if (pipe != null) try { pipe.close(); } catch (ignored) {}
-		return { error: unavailable('logs', {
-			code: 'COLLECTION_UNAVAILABLE',
-			message: 'logread collection failed'
-		}) };
+		return failed('logread collection failed');
 	}
+	let done = false, count = 0, oldest = null, newest = null;
+	function finish(status) {
+		if (done) return;
+		done = true;
+		completed(status);
+	};
+	return {
+		read: (amount) => {
+			if (type(amount) != 'int' || amount < 1 || amount > 256)
+				errors.fail('INVALID_ARGUMENT');
+			if (done) return { records: [], done: true };
+			let records = [];
+			try {
+				for (let scanned = 0; scanned < amount; scanned++) {
+					let line = pipe.read('line');
+					if (type(line) != 'string') errors.fail('INVALID_RESPONSE');
+					if (!length(line)) {
+						let closed = type(pipe.close) == 'function' ? pipe.close() : null;
+						pipe = null;
+						if (closed != 0) {
+							finish(unavailable('logs', {
+								code: 'COLLECTION_UNAVAILABLE',
+								message: 'logread collection failed',
+								exit_code: closed
+							}));
+							return { records: [], done: true };
+						}
+						finish(present('/sbin/logread', {
+							records: count,
+							oldest_timestamp: oldest,
+							newest_timestamp: newest
+						}));
+						return { records, done: true };
+					}
+					line = replace(line, /\r?\n$/, '');
+					if (!length(line) || !relevant_log(line)) continue;
+					let entry = log_entry(line);
+					if (!count) oldest = entry.timestamp;
+					newest = entry.timestamp;
+					count++;
+					push(records, entry);
+				}
+				return { records, done: false };
+			}
+			catch (error) {
+				if (pipe != null) try { pipe.close(); } catch (ignored) {}
+				pipe = null;
+				finish(unavailable('logs', {
+					code: 'COLLECTION_UNAVAILABLE',
+					message: 'logread collection failed'
+				}));
+				return { records: [], done: true };
+			}
+		},
+		close: () => {
+			if (done) return false;
+			if (pipe != null) try { pipe.close(); } catch (ignored) {}
+			pipe = null;
+			finish(unavailable('logs', {
+				code: 'COLLECTION_UNAVAILABLE',
+				message: 'logread collection interrupted'
+			}));
+			return true;
+		}
+	};
 };
 
 export function create(runtime, collectors) {
@@ -626,20 +681,7 @@ export function create(runtime, collectors) {
 			})),
 			{ name: 'logs', value: clone(log_status) }
 		],
-		logs: () => {
-			let source = collect_logs(runtime);
-			if (source.error != null) {
-				log_status = source.error;
-				return [];
-			}
-			let result = source.records;
-			log_status = present('/sbin/logread', {
-				records: length(result),
-				oldest_timestamp: length(result) ? result[0].timestamp : null,
-				newest_timestamp: length(result) ? result[length(result) - 1].timestamp : null
-			});
-			return result;
-		},
+		logs: () => open_logs(runtime, (status) => log_status = status),
 		logs_status: () => clone(log_status)
 	};
 };

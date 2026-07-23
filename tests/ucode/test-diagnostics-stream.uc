@@ -56,6 +56,35 @@ assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 let store = diagnostics.create_store({ ...runtime,
 	storage: { free_blocks: () => 1024 } });
 
+// Admission reserves the bounded on-disk namespace before creating a stage.
+// A burst cannot create restart state that the recovery scan rejects.
+let capacity_fs = fakes.fs({});
+for (let directory in [ '/tmp', '/tmp/miclash' ]) capacity_fs.mkdir(directory);
+capacity_fs.chmod('/tmp/miclash', 0o700);
+let capacity_runtime = { fs: capacity_fs, clock: fakes.clock(1), random: fakes.entropy(),
+	digest: fakes.digest(capacity_fs), paths: { tmp: '/tmp/miclash' },
+	storage: { free_blocks: () => 65536 } };
+let capacity_store = diagnostics.create_store(capacity_runtime), capacity_stages = [];
+for (let index = 0; index < 32; index++) {
+	let admitted = capacity_store.begin({ mode: 'lite', required_bytes: 4096 });
+	push(capacity_stages, admitted);
+	if (index < 16) {
+		let admitted_writer = diagnostics_json.create(capacity_runtime, admitted.output);
+		admitted_writer.begin_object();
+		admitted_writer.field('index', index);
+		admitted_writer.end_object();
+		capacity_store.finish(admitted.id, admitted_writer.finish());
+	}
+}
+assert_equal(length(capacity_fs.lsdir('/tmp/miclash/diagnostics')), 32);
+assert_throws(() => capacity_store.begin({ mode: 'lite', required_bytes: 4096 }),
+	'RESOURCE_EXHAUSTED');
+assert_equal(length(capacity_fs.lsdir('/tmp/miclash/diagnostics')), 32,
+	'rejected admission never creates a thirty-third stage beside pending and published reports');
+diagnostics.create_store(capacity_runtime);
+assert_equal(length(capacity_fs.lsdir('/tmp/miclash/diagnostics')), 0,
+	'restart safely recovers the maximum mixed concurrent burst');
+
 // A stage is owned as soon as mkdir succeeds, including before report.json
 // exists. Chmod/open failures must remove that exact empty stage.
 for (let failure in [ 'chmod', 'open' ]) {
@@ -83,11 +112,11 @@ assert_true(match(report.path, /\/\.stream-stage-[0-9a-f]{32}$/),
 	'stream stages use a namespace distinct from legacy staging');
 assert_equal(report.mode, 'lite');
 assert_equal(report.downloaded, false);
-let output = diagnostics_json.create(runtime, report.handle);
+let output = diagnostics_json.create(runtime, report.output);
 output.begin_object(); output.field('ok', true); output.end_object();
 let completed = store.finish(report.id, output.finish());
 assert_equal(completed.sha256, runtime.digest.sha256_file(completed.path));
-report.handle.abort();
+report.output.abort();
 assert_throws(() => output.field('after_publication', true), 'INTERNAL');
 let retained_abort_reader = store.open_report(completed.id);
 assert_equal(retained_abort_reader.read(64), '{"ok":true}',
@@ -120,7 +149,7 @@ assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 	'restart removes interrupted staging');
 
 let expiring = restarted.begin({ mode: 'lite', required_bytes: 4096 });
-let expiring_writer = diagnostics_json.create(runtime, expiring.handle);
+let expiring_writer = diagnostics_json.create(runtime, expiring.output);
 expiring_writer.begin_object(); expiring_writer.end_object();
 let expiring_report = restarted.finish(expiring.id, expiring_writer.finish());
 runtime.clock.advance(900000);
@@ -151,7 +180,7 @@ assert_true(match(df_report.id, /^rpt_[0-9a-f]{32}$/));
 
 // Single-use capability is consumed before a second reader can be issued.
 let concurrent_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
-let concurrent_output = diagnostics_json.create(runtime, concurrent_stage.handle);
+let concurrent_output = diagnostics_json.create(runtime, concurrent_stage.output);
 concurrent_output.begin_object(); concurrent_output.field('reader', true); concurrent_output.end_object();
 let concurrent = store.finish(concurrent_stage.id, concurrent_output.finish());
 let first_reader = store.open_report(concurrent.id);
@@ -161,7 +190,7 @@ assert_equal(first_reader.close(), true);
 
 let failing_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
 filesystem.fail_on = 'flush';
-let failing_output = diagnostics_json.create(runtime, failing_stage.handle);
+let failing_output = diagnostics_json.create(runtime, failing_stage.output);
 failing_output.begin_object(); failing_output.end_object();
 assert_throws(() => failing_output.finish(), 'INTERNAL');
 filesystem.fail_on = null;
@@ -212,7 +241,7 @@ for (let malformed in [
 // Every terminal writer error immediately and idempotently removes its stage.
 for (let failure in [ 'write', 'close' ]) {
 	let failed_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
-	let failed_writer = diagnostics_json.create(runtime, failed_stage.handle);
+	let failed_writer = diagnostics_json.create(runtime, failed_stage.output);
 	failed_writer.begin_object();
 	filesystem.fail_on = failure;
 	assert_throws(() => {
@@ -224,7 +253,7 @@ for (let failure in [ 'write', 'close' ]) {
 		failure + ' failure removes staging immediately');
 }
 let overflow_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
-let overflow_writer = diagnostics_json.create(runtime, overflow_stage.handle);
+let overflow_writer = diagnostics_json.create(runtime, overflow_stage.output);
 overflow_writer.begin_object();
 assert_throws(() => overflow_writer.field('oversized', repeated('x', 786432)), 'INTERNAL');
 assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
@@ -248,7 +277,7 @@ assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 	'descriptor substitution removes staging');
 
 let symlink_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
-let symlink_writer = diagnostics_json.create(runtime, symlink_stage.handle);
+let symlink_writer = diagnostics_json.create(runtime, symlink_stage.output);
 symlink_writer.begin_object(); symlink_writer.end_object();
 filesystem.writefile('/tmp/miclash/attacker.json', '{"attacker":true}');
 filesystem.set_symlink(symlink_stage.handle.path, '/tmp/miclash/attacker.json');
@@ -280,7 +309,7 @@ assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 
 // Downloads keep only bounded counters and chunks, and never inspect a closed fd.
 let download_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
-let download_writer = diagnostics_json.create(runtime, download_stage.handle);
+let download_writer = diagnostics_json.create(runtime, download_stage.output);
 download_writer.begin_object();
 download_writer.field('payload', repeated('z', 16384));
 download_writer.end_object();
@@ -304,7 +333,7 @@ assert_equal(length(runtime.digest.calls.data), data_digest_calls,
 	'download does not materialize and hash the complete report');
 
 let read_failure_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
-let read_failure_writer = diagnostics_json.create(runtime, read_failure_stage.handle);
+let read_failure_writer = diagnostics_json.create(runtime, read_failure_stage.output);
 read_failure_writer.begin_object(); read_failure_writer.end_object();
 let read_failure_report = store.finish(read_failure_stage.id, read_failure_writer.finish());
 let read_failure_reader = store.open_report(read_failure_report.id);
@@ -320,7 +349,7 @@ assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 // Every integrity failure consumes the published capability, including checks
 // that fail before a reader descriptor can be opened.
 let mutated_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
-let mutated_writer = diagnostics_json.create(runtime, mutated_stage.handle);
+let mutated_writer = diagnostics_json.create(runtime, mutated_stage.output);
 mutated_writer.begin_object(); mutated_writer.field('safe', true); mutated_writer.end_object();
 let mutated_report = store.finish(mutated_stage.id, mutated_writer.finish());
 filesystem.writefile(mutated_report.path, '{"evil":true}');
@@ -330,7 +359,7 @@ assert_equal(filesystem.lstat(mutated_report.path), null,
 assert_throws(() => store.open_report(mutated_report.id), 'NOT_FOUND');
 
 let substituted_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
-let substituted_writer = diagnostics_json.create(runtime, substituted_stage.handle);
+let substituted_writer = diagnostics_json.create(runtime, substituted_stage.output);
 substituted_writer.begin_object(); substituted_writer.end_object();
 let substituted_report = store.finish(substituted_stage.id, substituted_writer.finish());
 filesystem.bump_inode(substituted_report.path);
@@ -358,7 +387,7 @@ let coexist_stream = diagnostics.create_store({ ...coexist_runtime,
 assert_true(coexist_fs.lstat(legacy_path) != null,
 	'stream initialization preserves legacy reports');
 let coexist_stage = coexist_stream.begin({ mode: 'lite', required_bytes: 4096 });
-let coexist_writer = diagnostics_json.create(coexist_runtime, coexist_stage.handle);
+let coexist_writer = diagnostics_json.create(coexist_runtime, coexist_stage.output);
 coexist_writer.begin_object(); coexist_writer.end_object();
 let coexist_report = coexist_stream.finish(coexist_stage.id, coexist_writer.finish());
 diagnostics.create({ runtime: coexist_runtime, sources: minimal_sources() });

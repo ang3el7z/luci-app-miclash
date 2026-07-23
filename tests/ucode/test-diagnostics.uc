@@ -530,15 +530,33 @@ let async_runtime = {
 };
 let async_operations = operations.create(async_runtime);
 let async_logs = [ 'connected hostname=beta-router.local' ];
-for (let index = 0; index < 128; index++)
-	push(async_logs, sprintf('diagnostic-line-%03d %64s', index, 'x'));
+for (let index = 0; index < 1200; index++)
+	push(async_logs, sprintf('diagnostic-line-%04d %64s', index, 'x'));
+let async_log_offset = 0, async_log_reads = 0, async_logs_complete = false;
 let async_sources = {
 	...sources,
 	state: () => ({ desired: {
 		primary_hostname: 'alpha-router.local',
 		backup_hostname: 'beta-router.local'
 	}, observed: {} }),
-	logs: () => async_logs
+	logs: () => ({
+		read: (amount) => {
+			async_log_reads++;
+			let records = [];
+			for (let count = 0; count < amount && async_log_offset < length(async_logs); count++)
+				push(records, async_logs[async_log_offset++]);
+			let done = async_log_offset >= length(async_logs);
+			if (done) async_logs_complete = true;
+			return { records, done };
+		}
+	}),
+	evidence: () => [ {
+		name: 'logs',
+		value: async_logs_complete ?
+			{ state: 'present', source: 'test-log-stream', records: length(async_logs) } :
+			{ state: 'unavailable', code: 'COLLECTION_UNAVAILABLE',
+				message: 'logs have not finished' }
+	} ]
 };
 let async_center = diagnostics.create({
 	runtime: async_runtime, sources: async_sources, operations: async_operations
@@ -553,6 +571,8 @@ assert_match(asynchronous.operation.id, /^[0-9]{13}-/);
 async_runtime.clock.advance(0);
 let asynchronous_record = async_operations.get(asynchronous.operation.id);
 assert_equal(asynchronous_record.state, 'success');
+assert_true(async_log_reads > 1,
+	'large log sources are consumed through multiple event-loop chunks');
 assert_equal(join(',', map(asynchronous_record.timeline, (item) => item.stage)),
 	'queued,preflight,system,configuration,network,providers,operations,logs,validation,complete');
 let streamed = async_center.open_report(asynchronous.report_id);
@@ -576,6 +596,11 @@ assert_equal(async_payload.summary.state.desired.primary_hostname, '[HOST-1]');
 assert_equal(async_payload.summary.state.desired.backup_hostname, '[HOST-2]');
 assert_true(index(async_payload.details.logs[0], '[HOST-2]') >= 0,
 	'report-local host labels must stay stable across sections');
+assert_equal(length(async_payload.details.logs), length(async_logs),
+	'stream generation preserves every available relevant log record');
+assert_true(length(filter(async_payload.issues,
+	(item) => item.section == 'collection' && item.component == 'logs')) == 0,
+	'collection evidence is captured after a successful live log stream');
 assert_throws(() => async_center.open_report(asynchronous.report_id), 'NOT_FOUND');
 assert_throws(() => async_center.submit_report({
 	mode: 'full', acknowledge_secrets: false, source: 'luci'

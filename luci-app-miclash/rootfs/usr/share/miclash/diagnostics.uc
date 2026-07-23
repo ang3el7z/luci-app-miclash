@@ -18,10 +18,8 @@ const MAX_SECRET_VARIANTS = 256;
 const REPORT_MAX_DEPTH = 16;
 const REPORT_MAX_NODES = 8192;
 const REPORT_MAX_INPUT = 786432;
-const REPORT_MAX_STRING = 131072;
 const REPORT_SECTION_LIMITS = {
 	process: 32768,
-	logs: 262144,
 	uci: 32768,
 	operations: 65536
 };
@@ -287,49 +285,7 @@ function summarize_config(value, runtime) {
 		sha256: runtime.digest.sha256(value)
 	};
 };
-function log_entries(value) {
-	if (type(value) == 'array') return value;
-	if (type(value) != 'string') return value;
-	let entries = [];
-	for (let line in split(value, '\n'))
-		if (length(line)) push(entries, line);
-	return entries;
-};
-function collect(sources, runtime) {
-	let result = {};
-	for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
-		'updates', 'settings', 'telegram', 'network_components', 'last_repair' ])
-		result[name] = call(sources, name);
-	let sections = {};
-	let raw_config = call(sources, 'config');
-	result.config = summarize_config(raw_config, runtime);
-	sections.config = {
-		truncated: false,
-		summarized: true,
-		original_bytes: type(raw_config) == 'string' ? length(raw_config) : serialized_size(raw_config),
-		included_bytes: serialized_size(result.config)
-	};
-	for (let name in [ 'process', 'uci', 'operations' ]) {
-		let bounded = bound_section(name, call(sources, name), REPORT_SECTION_LIMITS[name]);
-		result[name] = bounded.value;
-		sections[name] = bounded.metadata;
-	}
-	let bounded_logs = bound_section('logs', log_entries(call(sources, 'logs')),
-		REPORT_SECTION_LIMITS.logs);
-	result.logs = bounded_logs.value;
-	sections.logs = bounded_logs.metadata;
-	result.evidence = type(sources.evidence) == 'function' ? call(sources, 'evidence') : [];
-	result.public_status = public_status(result.settings);
-	result.collection = { sections, evidence: result.evidence };
-	return sanitize(result, {
-		max_depth: REPORT_MAX_DEPTH,
-		max_nodes: REPORT_MAX_NODES,
-		max_input: REPORT_MAX_INPUT,
-		max_string: REPORT_MAX_STRING,
-		max_output: REPORT_MAX_INPUT
-	});
-};
-function report_issues(safe) {
+function report_issues(view) {
 	let issues = [];
 	function add(section, component, state, code, message) {
 		if (length(issues) >= 64) return;
@@ -352,8 +308,8 @@ function report_issues(safe) {
 			message: message ?? null
 		});
 	};
-	let components = safe.health?.components ?? safe.health?.observed?.readiness?.components ??
-		safe.state?.observed?.readiness?.components ?? safe.health;
+	let components = view.health?.components ?? view.health?.observed?.readiness?.components ??
+		view.state?.observed?.readiness?.components ?? view.health;
 	if (type(components) == 'array')
 		for (let item in components)
 			if (type(item) == 'object') add('components', item.name ?? item.component,
@@ -361,16 +317,16 @@ function report_issues(safe) {
 	else if (type(components) == 'object')
 		for (let name, item in components)
 			if (type(item) == 'object') add('components', name, item.state, item.code, item.message);
-	if (type(safe.operations) == 'array')
-		for (let item in safe.operations)
+	if (type(view.operations) == 'array')
+		for (let item in view.operations)
 			if (type(item) == 'object') add('operations', item.kind ?? item.id,
 				item.state ?? item.result ?? item.outcome, item.code, item.error ?? item.message);
-	if (type(safe.last_repair) == 'object' && length(safe.last_repair))
-		add('automatic_recovery', safe.last_repair.component, safe.last_repair.state ??
-			safe.last_repair.result ?? safe.last_repair.outcome, safe.last_repair.code,
-			safe.last_repair.message ?? safe.last_repair.error);
-	if (type(safe.evidence) == 'array')
-		for (let entry in safe.evidence)
+	if (type(view.last_repair) == 'object' && length(view.last_repair))
+		add('automatic_recovery', view.last_repair.component, view.last_repair.state ??
+			view.last_repair.result ?? view.last_repair.outcome, view.last_repair.code,
+			view.last_repair.message ?? view.last_repair.error);
+	if (type(view.evidence) == 'array')
+		for (let entry in view.evidence)
 			if (type(entry) == 'object' && type(entry.value) == 'object')
 				add('collection', entry.name, entry.value.state, entry.value.code,
 					entry.value.message);
@@ -929,11 +885,16 @@ export function create_store(runtime) {
 				type(options.required_bytes) != 'int' || options.required_bytes < 1 ||
 				options.required_bytes > REPORT_MAX_INPUT) invalid();
 			expire();
+			root = verify_directory(runtime, ROOT, root);
+			let root_entries = runtime.fs.lsdir(ROOT);
+			if (type(root_entries) != 'array') errors.fail('INTERNAL');
+			if (length(keys(pending)) + length(keys(reports)) >= MAX_ROOT_ENTRIES ||
+			    length(root_entries) >= MAX_ROOT_ENTRIES)
+				errors.fail('RESOURCE_EXHAUSTED');
 			// One KiB blocks plus a 64 KiB reserve ensure finalization and cleanup
 			// remain possible even when tmpfs is nearly exhausted.
 			if (storage_free_blocks(runtime) < int((options.required_bytes + 65535) / 1024) + 64)
 				errors.fail('INSUFFICIENT_STORAGE');
-			root = verify_directory(runtime, ROOT, root);
 			for (let attempt = 0; attempt < 16; attempt++) {
 				let token = runtime.random.hex(16);
 				if (!match(token, /^[0-9a-f]{32}$/)) errors.fail('INTERNAL');
@@ -947,21 +908,24 @@ export function create_store(runtime) {
 					if (runtime.fs.chmod(stage, 0o700) !== true)
 						errors.fail('INTERNAL');
 					directory.identity = verify_directory(runtime, stage, directory.identity);
-					handle = runtime.fs.open(stage + '/report.json', 'wx', 0o600);
+					let file_path = stage + '/report.json';
+					handle = runtime.fs.open(file_path, 'wx', 0o600);
 					if (handle == null) errors.fail('INTERNAL');
-					handle.path = stage + '/report.json';
-					opened = safe_file(runtime, handle.path, null);
+					opened = safe_file(runtime, file_path, null);
 					let created_at = runtime.clock.now(), expires_at = created_at + TTL;
 					let pending_report = { mode: options.mode, created_at, expires_at,
 						directory, identity: opened, handle };
 					pending[id] = pending_report;
-					handle.abort = () => {
-						if (pending[id] === pending_report)
+					let output = { resource: handle, path: file_path, abort: () => {
+						if (pending[id] === pending_report) {
+							try { runtime.fs.close(handle); } catch (close_error) {}
 							cleanup_pending(id, stage, ROOT + '/stream-report-' + token);
-					};
+						}
+					} };
+					pending_report.output = output;
 					return { id, mode: options.mode, path: stage, size: 0, sha256: null,
 						created_at, expires_at,
-						downloaded: false, handle, directory, identity: opened };
+						downloaded: false, handle, output, directory, identity: opened };
 				}
 				catch (error) { failure = errors.normalize(error).code; }
 				if (handle != null) try { runtime.fs.close(handle); } catch (error) {}
@@ -1001,7 +965,7 @@ export function create_store(runtime) {
 					sha256: result.sha256, created_at: pending_report.created_at,
 					expires_at: pending_report.expires_at, downloaded: false,
 					directory: final_directory, identity: final_file };
-				pending_report.handle.abort = () => {};
+				pending_report.output.abort = () => {};
 				delete pending[id];
 				reports[id] = report;
 				return { id: report.id, mode: report.mode, path: report.path, size: report.size,
@@ -1190,11 +1154,19 @@ export function create(dependencies) {
 		try {
 			operation = operation_manager.submit_observation('diagnostics.report', options.source,
 				{ report_id: staged.id, mode: options.mode }, (ctx) => {
-					let raw = {}, sections = {}, raw_config = null, finished = false,
-						published = false;
+					let summary_source = {}, summary_view = {}, sections = {},
+						config_source = null, config_view = null, uci_view = null,
+						operations_view = null, evidence_view = [], profile = null,
+						writer = null, log_reader = null, finished = false, published = false;
+					function source_value(name) {
+						try { return sources[name](); }
+						catch (error) { return { state: 'unknown', code: 'UNAVAILABLE' }; }
+					};
 					function fail(error) {
 						if (finished) return;
 						finished = true;
+						if (log_reader?.close != null)
+							try { log_reader.close(); } catch (close_error) {}
 						let failure = error;
 						if (published) {
 							try {
@@ -1203,7 +1175,7 @@ export function create(dependencies) {
 							}
 							catch (discard_error) { failure = discard_error; }
 						}
-						else try { staged.handle.abort(); } catch (abort_error) {}
+						else try { staged.output.abort(); } catch (abort_error) {}
 						ctx.complete(failure);
 					};
 					function schedule(next) {
@@ -1212,141 +1184,169 @@ export function create(dependencies) {
 							catch (error) { fail(error); }
 						});
 					};
-					function stage(name, progress, collect_next, next) {
+					function stage(name, progress, work, next) {
 						ctx.stage(name, progress, '');
-						collect_next();
+						work();
 						schedule(next);
 					};
-					function complete_report() {
-						let profile = privacy.create(options.mode, [ raw, raw_config ]);
-						let safe = {};
-						for (let name, value in raw) {
-							if (name == 'collection')
-								continue;
-							if (type(value) == 'array') {
-								safe[name] = [];
-								for (let index, item in value)
-									push(safe[name], profile.value([ name, index ], item));
-							}
-							else safe[name] = profile.value([ name ], value);
+					function create_log_reader(value) {
+						if (type(value?.read) == 'function') return value;
+						if (type(value) == 'array') {
+							let offset = 0;
+							return {
+								read: (amount) => {
+									let chunk = [];
+									for (let count = 0; count < amount && offset < length(value); count++)
+										push(chunk, value[offset++]);
+									return { records: chunk, done: offset >= length(value) };
+								},
+								close: () => { offset = length(value); return true; }
+							};
 						}
-						safe.collection = {
-							sections: clone(sections),
-							evidence: safe.evidence
+						if (type(value) == 'string') {
+							let offset = 0;
+							return {
+								read: (amount) => {
+									let chunk = [];
+									for (let count = 0; count < amount && offset < length(value); count++) {
+										let relative = index(substr(value, offset), '\n');
+										let end = relative < 0 ? length(value) : offset + relative;
+										let line = substr(value, offset, end - offset);
+										offset = relative < 0 ? length(value) : end + 1;
+										if (length(line)) push(chunk, line);
+									}
+									return { records: chunk, done: offset >= length(value) };
+								},
+								close: () => { offset = length(value); return true; }
+							};
+						}
+						let emitted = false;
+						return {
+							read: (amount) => {
+								if (emitted) return { records: [], done: true };
+								emitted = true;
+								return { records: value == null ? [] : [ value ], done: true };
+							},
+							close: () => { emitted = true; return true; }
 						};
+					};
+					function initialize_writer() {
+						summary_source.public_status = public_status(summary_source.settings);
+						profile = privacy.create(options.mode, [ summary_source, config_source ]);
+						for (let name, value in summary_source)
+							summary_view[name] = profile.value([ name ], value);
+						config_view = profile.value([ 'config' ],
+							summarize_config(config_source, runtime));
+						uci_view = profile.value([ 'uci' ], uci_view);
 						let now = runtime.clock.now();
-						let report = {
-							schema_version: 4,
-							generated_at: now,
-							privacy: profile.metadata(),
-							summary: make_summary(safe, now),
-							issues: report_issues(safe),
-							collection: safe.collection,
-							details: {
-								config: safe.config,
-								process: safe.process,
-								logs: safe.logs,
-								uci: safe.uci,
-								operations: safe.operations,
-								evidence: safe.evidence
-							}
-						};
-						let writer = diagnostics_json.create(runtime, staged.handle);
+						writer = diagnostics_json.create(runtime, staged.output);
 						writer.begin_object();
-						for (let name in [ 'schema_version', 'generated_at', 'privacy', 'summary',
-							'issues', 'collection', 'details' ])
-							writer.field(name, report[name]);
-						writer.end_object();
-						stream_store.finish(staged.id, writer.finish());
-						published = true;
-					};
-					function finish_logs(selected, original) {
-						raw.logs = selected;
-						let included = serialized_size(selected);
-						sections.logs = {
-							truncated: original > included,
-							original_bytes: original,
-							included_bytes: included
-						};
-						raw.public_status = public_status(raw.settings);
-						raw.collection = { sections, evidence: raw.evidence };
-						schedule(() => stage('validation', 95, complete_report,
-							() => {
-								ctx.stage('complete', 100, '');
-								ctx.complete();
-								finished = true;
-							}));
-					};
-					function collect_logs() {
-						let source_logs = log_entries(call(sources, 'logs'));
-						if (type(source_logs) != 'array') {
-							let bounded = bound_section('logs', source_logs, REPORT_SECTION_LIMITS.logs);
-							finish_logs(bounded.value, bounded.metadata.original_bytes);
-							return;
-						}
-						let original = serialized_size(source_logs), selected = [],
-							index = length(source_logs) - 1, included = 2;
-						function collect_chunk() {
-							let processed = 0;
-							while (index >= 0) {
-								let item = source_logs[index--];
-								let bytes = serialized_size(item) + (length(selected) ? 1 : 0);
-								if (included + bytes > REPORT_SECTION_LIMITS.logs) {
-									index = -1;
-									break;
-								}
-								selected = [ item, ...selected ];
-								included += bytes;
-								processed += bytes;
-								if (processed >= 65536) {
-									schedule(collect_chunk);
-									return;
-								}
-							}
-							finish_logs(selected, original);
-						};
-						collect_chunk();
-					};
-					function collect_operations() {
-						let bounded = bound_section('operations', call(sources, 'operations'),
-							REPORT_SECTION_LIMITS.operations);
-						raw.operations = bounded.value;
-						sections.operations = bounded.metadata;
-					};
-					function collect_providers() {
-						let bounded = bound_section('process', call(sources, 'process'),
-							REPORT_SECTION_LIMITS.process);
-						raw.process = bounded.value;
-						sections.process = bounded.metadata;
-						raw.evidence = type(sources.evidence) == 'function' ?
-							call(sources, 'evidence') : [];
-					};
-					function collect_configuration() {
-						raw_config = call(sources, 'config');
-						raw.config = summarize_config(raw_config, runtime);
-						sections.config = {
-							truncated: false,
-							summarized: true,
-							original_bytes: type(raw_config) == 'string' ?
-								length(raw_config) : serialized_size(raw_config),
-							included_bytes: serialized_size(raw.config)
-						};
-						let bounded = bound_section('uci', call(sources, 'uci'),
-							REPORT_SECTION_LIMITS.uci);
-						raw.uci = bounded.value;
-						sections.uci = bounded.metadata;
+						writer.field('schema_version', 4);
+						writer.field('generated_at', now);
+						writer.field('privacy', profile.metadata());
+						writer.field('summary', make_summary(summary_view, now));
+						writer.begin_object_field('details');
+						writer.field('config', config_view);
+						writer.field('uci', uci_view);
 					};
 					function collect_system() {
 						for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
 							'updates', 'settings', 'telegram', 'last_repair' ])
-							raw[name] = call(sources, name);
+							summary_source[name] = source_value(name);
+					};
+					function collect_configuration() {
+						config_source = source_value('config');
+						let config_summary = summarize_config(config_source, runtime);
+						sections.config = {
+							truncated: false,
+							summarized: true,
+							original_bytes: type(config_source) == 'string' ?
+								length(config_source) : serialized_size(config_source),
+							included_bytes: serialized_size(config_summary)
+						};
+						let bounded = bound_section('uci', source_value('uci'),
+							REPORT_SECTION_LIMITS.uci);
+						uci_view = bounded.value;
+						sections.uci = bounded.metadata;
+					};
+					function collect_network() {
+						summary_source.network_components = source_value('network_components');
+						initialize_writer();
+					};
+					function collect_providers() {
+						let bounded = bound_section('process', source_value('process'),
+							REPORT_SECTION_LIMITS.process);
+						sections.process = bounded.metadata;
+						writer.field('process', profile.value([ 'process' ], bounded.value));
+					};
+					function collect_operations() {
+						let bounded = bound_section('operations', source_value('operations'),
+							REPORT_SECTION_LIMITS.operations);
+						sections.operations = bounded.metadata;
+						operations_view = profile.value([ 'operations' ], bounded.value);
+						writer.field('operations', operations_view);
+					};
+					function finalize_report(log_bytes) {
+						writer.end_array();
+						sections.logs = {
+							truncated: false,
+							original_bytes: log_bytes,
+							included_bytes: log_bytes
+						};
+						let evidence_source = type(sources.evidence) == 'function' ?
+							source_value('evidence') : [];
+						evidence_view = profile.value([ 'evidence' ], evidence_source);
+						writer.field('evidence', evidence_view);
+						writer.end_object();
+						writer.field('issues', report_issues({
+							health: summary_view.health,
+							state: summary_view.state,
+							operations: operations_view,
+							last_repair: summary_view.last_repair,
+							evidence: evidence_view
+						}));
+						writer.field('collection', {
+							sections,
+							evidence: evidence_view
+						});
+						writer.end_object();
+						stream_store.finish(staged.id, writer.finish());
+						published = true;
+						ctx.stage('validation', 95, '');
+						schedule(() => {
+							ctx.stage('complete', 100, '');
+							ctx.complete();
+							finished = true;
+						});
+					};
+					function collect_logs() {
+						log_reader = create_log_reader(source_value('logs'));
+						writer.begin_array_field('logs');
+						let bytes = 2, count = 0;
+						function pull() {
+							let batch = log_reader.read(64);
+							if (type(batch) != 'object' || type(batch.records) != 'array' ||
+							    type(batch.done) != 'bool' || length(batch.records) > 64)
+								errors.fail('INVALID_RESPONSE');
+							for (let item in batch.records) {
+								let transformed = profile.value([ 'logs', count++ ], item);
+								writer.item(transformed);
+								bytes += serialized_size(transformed) + (count > 1 ? 1 : 0);
+							}
+							if (batch.done) {
+								log_reader = null;
+								finalize_report(bytes);
+								return;
+							}
+							schedule(pull);
+						};
+						pull();
 					};
 					try {
 						ctx.stage('preflight', 5, '');
 						schedule(() => stage('system', 15, collect_system,
 							() => stage('configuration', 30, collect_configuration,
-								() => stage('network', 45,
-									() => raw.network_components = call(sources, 'network_components'),
+								() => stage('network', 45, collect_network,
 									() => stage('providers', 60, collect_providers,
 										() => stage('operations', 70, collect_operations,
 											() => {
@@ -1362,7 +1362,7 @@ export function create(dependencies) {
 				});
 		}
 		catch (error) {
-			try { staged.handle.abort(); } catch (abort_error) {}
+			try { staged.output.abort(); } catch (abort_error) {}
 			errors.fail(errors.normalize(error).code);
 		}
 		return { operation, report_id: staged.id };
