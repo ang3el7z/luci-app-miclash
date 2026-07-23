@@ -4,6 +4,7 @@ const CONNECT_TIMEOUT_MS = 2000;
 const REQUEST_TIMEOUT_MS = 5000;
 const RESPONSE_LIMIT = 65536;
 const MESSAGE_LIMIT = 4096;
+const DOCUMENT_FILE_LIMIT = 16777216;
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
 
@@ -92,7 +93,7 @@ function document_file(value) {
 	if (type(value) != 'object' || type(value) == 'array' ||
 	    length(keys(value)) != 6 ||
 	    type(value.identity) != 'object' || type(value.identity) == 'array' ||
-	    type(value.size) != 'int' || value.size < 1 || value.size > 1048576 ||
+	    type(value.size) != 'int' || value.size < 1 || value.size > DOCUMENT_FILE_LIMIT ||
 	    type(value.sha256) != 'string' || !match(value.sha256, /^[0-9a-f]{64}$/) ||
 	    type(value.read) != 'function' || type(value.finish) != 'function' ||
 	    type(value.close) != 'function')

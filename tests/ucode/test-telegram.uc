@@ -492,6 +492,20 @@ assert_match(join(',', diagnostics_method_order),
 	/sendMessage,(editMessageText,)+sendDocument,editMessageText,sendMessage/);
 assert_equal(formatted_controller.status().panel_screen, 'diagnostics');
 
+// Lite reports above the legacy HTTP cap still use the 16 MiB diagnostic
+// transfer contract and reach Telegram as document descriptors.
+let large_lite_env = environment({ report_content: sprintf('%1048577s', 'x') });
+let large_lite_controller = telegram.create(large_lite_env.app);
+assert_equal(large_lite_controller.handle_update(update(7051, '/diagnostics')), true);
+large_lite_env.emit_report('success', 'complete', 100);
+let large_lite_request = null;
+for (let request in large_lite_env.requests)
+	if (request_method(request) == 'sendDocument') large_lite_request = request;
+assert_true(large_lite_request != null,
+	'Lite reports above 1 MiB must reach Telegram through sendDocument');
+assert_equal(large_lite_request.body_file.size, 1048577);
+assert_equal(large_lite_env.report_finishes(), 1);
+
 assert_equal(formatted_controller.handle_update(update(706, '/logs')), true);
 let logs_request = formatted_env.requests[length(formatted_env.requests) - 1];
 assert_match(logs_request.body, /parse_mode=MarkdownV2/);
