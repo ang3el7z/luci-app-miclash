@@ -20,7 +20,6 @@ import * as subscription from 'miclash.subscription';
 import * as scheduler from 'miclash.scheduler';
 import * as updates from 'miclash.updates';
 import * as http from 'miclash.http';
-import * as redact from 'miclash.redact';
 import * as mihomo_api from 'miclash.mihomo-api';
 import * as diagnostics from 'miclash.diagnostics';
 import * as route_test from 'miclash.route-test';
@@ -86,7 +85,7 @@ export function bounded_logs(runtime) {
 	let selected = [];
 	for (let line in split(output, '\n'))
 		if (match(lc(line), /(^|[ \t])(clash|miclash|mihomo)(\[[0-9]+\])?:[ \t]/))
-			push(selected, substr(redact.sanitize(line), 0, 2048));
+			push(selected, substr(line, 0, 2048));
 	if (length(selected) > 1000)
 		selected = slice(selected, length(selected) - 1000);
 	return join('\n', selected);

@@ -54,7 +54,7 @@ let app = {
 	logs_read: (arguments) => {
 		last_log_arguments = arguments;
 		return { generation: 'log_' + sprintf('%016x', 1), cursor: arguments.cursor,
-			stale: false, lines: [ 'ready' ], has_more: false };
+			stale: false, lines: [ 'Authorization: Bearer raw-secret' ], has_more: false };
 	},
 	system_info: () => ({ model: 'Router' }), network_interfaces: () => ({ interfaces: [ 'br-lan' ] }),
 	ruleset_list: () => [], ruleset_read: () => ({ content: '' }),
@@ -104,7 +104,7 @@ assert_equal(length(methods.notifications_list.call({ args: {
 assert_equal(last_notification_arguments.generation, null);
 assert_equal(methods.logs_read.call({ args: {
 	generation: '', cursor: 0, limit: 200
-} }).lines[0], 'ready');
+} }).lines[0], 'Authorization: Bearer raw-secret');
 assert_equal(last_log_arguments.generation, null);
 
 let created_report = methods.diagnostics_create_report.call({ args: {

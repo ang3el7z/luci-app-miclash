@@ -8,7 +8,7 @@
         "from": { "id": 42, "is_bot": false, "first_name": "Owner" },
         "chat": { "id": 42, "type": "private" },
         "date": 1710000000,
-        "text": "/status"
+        "text": "/menu"
       }
     },
     {
@@ -18,7 +18,7 @@
         "from": { "id": 42, "is_bot": false, "first_name": "Owner" },
         "chat": { "id": 42, "type": "private" },
         "date": 1710000000,
-        "text": "/health"
+        "text": "/start"
       }
     }
   ]

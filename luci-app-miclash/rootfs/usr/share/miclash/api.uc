@@ -832,7 +832,7 @@ export function method_table(app, transfers) {
 			let safe_lines = [];
 			for (let line in reply.lines) {
 				if (type(line) != 'string' || length(line) > 4096) errors.fail('INVALID_RESPONSE');
-				push(safe_lines, redact.sanitize(line));
+				push(safe_lines, line);
 			}
 			reply.lines = safe_lines;
 			return reply;

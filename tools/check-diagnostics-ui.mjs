@@ -314,7 +314,7 @@ const summaryText = host.textContent;
 for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Memory monitoring', 'Mihomo memory (RSS)',
 	'Status', 'Baseline', 'Last action', 'Telegram', 'Provider synchronization',
 	'Config auto-update', 'MiClash auto-update',
-	'Download diagnostic report'])
+	'Diagnostics'])
 	assert.ok(summaryText.includes(label), `summary is missing ${label}`);
 assert.doesNotMatch(summaryText, /Subscription/,
 	'configuration data must not be presented as a component');
@@ -330,7 +330,7 @@ for (const node of host.querySelectorAll('[role="status"]'))
 	assert.ok(node.getAttribute('aria-label'), 'status icon/text needs an accessible label');
 const reportButton = host.querySelector('button[data-action="download-report"]');
 assert.equal(reportButton?.textContent,
-	'Download diagnostic report', 'report action must use the standard LuCI button');
+	'Diagnostics', 'report action must use the concise LuCI label');
 assert.ok(reportButton);
 for (const action of [ 'details', 'route-test' ])
 	assert.equal(host.querySelector(`button[data-action="${action}"]`), null,
@@ -597,7 +597,7 @@ let releaseReport;
 reportGate = new Promise((resolve) => { releaseReport = resolve; });
 reportButton.click();
 let reportModal = modalCalls.at(-1);
-assert.equal(reportModal.title, 'Download diagnostic report');
+assert.equal(reportModal.title, 'Diagnostics');
 assert.equal(reportModal.body.querySelectorAll('.sbox-diagnostic-mode-card').length, 3,
 	'privacy chooser must render all three report cards');
 assert.match(reportModal.body.textContent, /Lite is recommended/,

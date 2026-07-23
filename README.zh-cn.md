@@ -176,13 +176,10 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-mi
 
 在 **设置 → Telegram** 中启用集成，填写 **BotFather** 提供的 token 和你的数字 user ID。Token 按 secret 保存且不会返回 LuCI；留空会保留已有 token。
 
-Bot 仅使用出站 HTTPS long polling，只接受一个 user ID 的 private chat，校验 sender/chat ID，并拒绝 group、channel、edited message 和重复消息。`/start` 和 `/menu` 会打开本地化的单消息控制面板；按钮会编辑同一条消息，避免刷屏。危险按钮需要确认，而直接 slash 命令会立即执行。操作结果和自动通知会持久排队，直到 Telegram 确认送达。Logs/diagnostics 有大小限制并脱敏，同时受 rate limit 和 backoff 保护。
+Bot 仅使用出站 HTTPS long polling，只接受已授权的 private chat，校验 sender/chat ID，并拒绝 group、channel、edited message 和重复消息。`/start` 和 `/menu` 会打开本地化的单消息控制面板；命令列表仅显示 `/menu`，所有操作均通过按钮完成。危险操作需要确认。操作结果和自动通知会持久排队，直到 Telegram 确认送达。日志以文件下载，内容与 LuCI 中显示的同一份受限原始快照一致。诊断支持 Silent、Lite 和 Full 三种隐私模式。
 
 ```text
-/start /menu /status /health /memory /diagnostics /logs /help
-/start_service /stop_service /reload_service /restart_service /reboot_router
-/subscription URL /update_subscription /update_miclash /update_mihomo
-/guard_on /guard_off
+/start /menu
 ```
 
 ## 诊断

@@ -20,10 +20,7 @@ const RATE_WINDOW_MS = 60000;
 const MAX_BACKOFF_MS = 60000;
 const SUCCESS_DELAY_MS = 3000;
 const MAX_DOCUMENT_ATTEMPTS = 3;
-const HELP = '/start /menu /status /health /memory /diagnostics /logs /help ' +
-	'/start_service /stop_service /restart_service /reload_service /reboot_router ' +
-	'/subscription URL /update_subscription ' +
-	'/update_miclash /update_mihomo /guard_on /guard_off';
+const HELP = '/start /menu';
 
 function invalid() { errors.fail('INVALID_ARGUMENT'); };
 function corrupt() { errors.fail('CORRUPT_STATE'); };
@@ -318,11 +315,6 @@ export function panel_model(app, screen) {
 		memory_baseline: baseline || (memory.enabled === true ? 'not_learned' : 'disabled'),
 		memory_state: memory.enabled === false ? 'disabled' : (memory.phase ?? 'unknown'),
 		last_memory_action: memory.last_action ?? 'not_required',
-		logs: screen == 'logs' ? telegram_format.fenced_code(
-			safe_call(() => app.logs_read(), ''), '') : '',
-		diagnostics: screen == 'diagnostics' ?
-			telegram_format.fenced_code(telegram_format.pretty_json(
-				safe_call(() => app.diagnostics_summary(), {})), 'json') : '',
 		updates: {
 			miclash_installed: info.app_version ?? update_status.miclash?.installed ?? '',
 			miclash_available: update_status.automatic_miclash?.latest_version ??
@@ -366,6 +358,7 @@ export function create(app) {
 	let diagnostic_jobs = {}, diagnostics_unsubscribe = null;
 	let session = {
 		generation: 0, screen: 'main', awaiting: null,
+		user_locale: null,
 		command_locale: null, command_sync_error: null, command_sync_next_at: 0,
 		command_sync_requested: false
 	};
@@ -420,8 +413,12 @@ export function create(app) {
 		}
 	};
 
+	function resolved_locale(language) {
+		return telegram_i18n.locale(app.runtime, language ?? session.user_locale);
+	};
+
 	function show_panel(screen, settings, target) {
-		let locale = telegram_i18n.locale(app.runtime);
+		let locale = resolved_locale(target?.locale);
 		session.generation++;
 		if (session.generation > 999999999) session.generation = 1;
 		let model = panel_model(app, screen);
@@ -430,7 +427,7 @@ export function create(app) {
 		if (screen == 'confirm_admin_remove') model.administrator = session.awaiting?.admin_id ?? '';
 		let rendered = telegram_menu.render(screen, model, locale,
 			session.generation);
-		let parse_mode = (screen == 'logs' || screen == 'diagnostics') ? 'MarkdownV2' : null;
+		let parse_mode = null;
 		// Slash commands pass null and must produce a visible fresh reply. Button
 		// callbacks pass an explicit message identity and continue editing in place.
 		let identity = target, result = null;
@@ -459,9 +456,51 @@ export function create(app) {
 		});
 	};
 
+	function text_document(value) {
+		if (type(value) != 'string' || !length(value))
+			errors.fail('NOT_FOUND');
+		let offset = 0, closed = false;
+		return {
+			identity: { kind: 'telegram-logs', size: length(value) },
+			size: length(value),
+			sha256: app.runtime.digest.sha256(value),
+			read: (amount) => {
+				if (closed || type(amount) != 'int' || amount < 1)
+					errors.fail('INVALID_ARGUMENT');
+				let chunk = substr(value, offset, amount);
+				offset += length(chunk);
+				return chunk;
+			},
+			finish: () => {
+				if (closed || offset != length(value)) errors.fail('VALIDATION_FAILED');
+				closed = true;
+				return true;
+			},
+			close: () => {
+				if (closed) errors.fail('NOT_FOUND');
+				closed = true;
+				return true;
+			}
+		};
+	};
+
+	function send_logs_document(settings, destination) {
+		let logs = app.logs_read();
+		if (type(logs) != 'string' || !length(logs)) {
+			send_message(telegram_i18n.text(destination.locale, 'no_logs'),
+				settings, destination.chat_id);
+			return false;
+		}
+		transport.send_document(settings, destination.chat_id, text_document(logs),
+			'miclash-logs-' + app.runtime.clock.now() + '.log',
+			telegram_i18n.text(destination.locale, 'logs'), 'text/plain');
+		return true;
+	};
+
 	function diagnostic_identity(entry) {
 		return entry.message_id == null ? null :
-			{ chat_id: entry.chat_id, message_id: entry.message_id };
+			{ chat_id: entry.chat_id, message_id: entry.message_id,
+				locale: entry.locale };
 	};
 
 	function forget_diagnostic(entry, retire_receipt) {
@@ -515,7 +554,7 @@ export function create(app) {
 		try {
 			let file = app.diagnostics_open_report(entry.report_id);
 			let result = transport.send_document(settings, entry.chat_id, file,
-				'miclash-diagnostic-lite-' + app.runtime.clock.now() + '.json',
+				'miclash-diagnostic-' + entry.mode + '-' + app.runtime.clock.now() + '.json',
 				telegram_i18n.text(entry.locale, 'diagnostics'));
 			if (result?.limited === true) {
 				if (entry.attempts >= MAX_DOCUMENT_ATTEMPTS) {
@@ -561,16 +600,18 @@ export function create(app) {
 		return true;
 	};
 
-	function start_diagnostics(settings, destination) {
+	function start_diagnostics(settings, destination, mode) {
+		if (index([ 'silent', 'lite', 'full' ], mode) < 0)
+			errors.fail('INVALID_ARGUMENT');
 		if (!show_panel('operation_loading', settings, {
-			chat_id: destination.chat_id, message_id: null
+			chat_id: destination.chat_id, message_id: null, locale: destination.locale
 		}))
 			errors.fail('UNAVAILABLE');
 		let panel = outbox.panel();
 		let job;
 		try {
 			job = app.diagnostics_create_report({
-				mode: 'lite', acknowledge_secrets: false, source: 'telegram'
+				mode, acknowledge_secrets: mode == 'full', source: 'telegram'
 			});
 		}
 		catch (error) {
@@ -585,7 +626,7 @@ export function create(app) {
 		let entry = {
 			operation_id: job.operation_id, report_id: job.report_id,
 			chat_id: destination.chat_id, message_id: panel?.message_id ?? null,
-			locale: destination.locale, attempts: 0, retry_timer: null
+			locale: destination.locale, mode, attempts: 0, retry_timer: null
 		};
 		let record = app.operations.get(entry.operation_id);
 		if (record == null) {
@@ -593,7 +634,8 @@ export function create(app) {
 			errors.fail('INVALID_RESPONSE');
 		}
 		try {
-			operation_bridge.track({ ...record, report_id: entry.report_id }, {
+			operation_bridge.track({ ...record, report_id: entry.report_id,
+				report_mode: entry.mode }, {
 				chat_id: entry.chat_id, message_id: entry.message_id, locale: entry.locale
 			});
 		}
@@ -607,7 +649,7 @@ export function create(app) {
 	};
 
 	function sync_commands(settings) {
-		let locale = telegram_i18n.locale(app.runtime), commands = telegram_menu.commands(locale);
+		let locale = resolved_locale(), commands = telegram_menu.commands(locale);
 		if (transport.set_commands(settings, '', commands) !== true) return false;
 		let language = telegram_i18n.telegram_language(locale);
 		if (length(language) && transport.set_commands(settings, language, commands) !== true)
@@ -623,7 +665,10 @@ export function create(app) {
 			error: record.error?.code ?? null
 		};
 		if (record.kind == 'diagnostics.report')
-			value.report_id = record.report_id ?? previous?.report_id ?? null;
+			value = { ...value,
+				report_id: record.report_id ?? previous?.report_id ?? null,
+				report_mode: record.report_mode ?? previous?.report_mode ?? 'lite'
+			};
 		return value;
 	};
 
@@ -670,7 +715,8 @@ export function create(app) {
 				try {
 					let file = app.diagnostics_open_report(entry.payload.report_id);
 					let result = transport.send_document(settings, entry.chat_id, file,
-						'miclash-diagnostic-lite-' + app.runtime.clock.now() + '.json',
+						'miclash-diagnostic-' + (entry.payload.report_mode ?? 'lite') + '-' +
+							app.runtime.clock.now() + '.json',
 						telegram_i18n.text(entry.locale, 'diagnostics'));
 					if (result?.limited === true) return false;
 					restore_diagnostics(entry, settings, true);
@@ -839,7 +885,8 @@ export function create(app) {
 
 	function callback_identity(query) {
 		return { chat_id: normalized_id(query?.message?.chat?.id),
-			message_id: query?.message?.message_id };
+			message_id: query?.message?.message_id,
+			locale: resolved_locale(query?.from?.language_code) };
 	};
 
 	function execute_callback(target, destination) {
@@ -867,12 +914,17 @@ export function create(app) {
 		if (target == 'update_mihomo') return dispatch({ name: 'update_mihomo', argument: null }, destination);
 		if (target == 'guard_on') return dispatch({ name: 'guard_on', argument: null }, destination);
 		if (target == 'guard_off') return dispatch({ name: 'guard_off', argument: null }, destination);
-		if (target == 'route_check') {
-			if (type(app.diagnostics_route_test) != 'function') errors.fail('NOT_FOUND');
-			return { response: app.diagnostics_route_test({ target: 'one.one.one.one',
-				interface: null, device: null }), record: null };
-		}
 		if (target == 'check_updates') return { response: true, record: null };
+		if (target == 'download_logs') {
+			send_logs_document(configuration(app), destination);
+			return { response: true, record: null, screen: 'logs' };
+		}
+		let diagnostic = match(target, /^diagnostic_(silent|lite|full)$/);
+		if (diagnostic != null) {
+			start_diagnostics(configuration(app), destination, diagnostic[1]);
+			return { response: true, record: null, screen: 'diagnostics',
+				panel_handled: true };
+		}
 		invalid();
 	};
 
@@ -895,6 +947,7 @@ export function create(app) {
 			return { handled: false, retryable: true, error: 'INTERNAL' };
 		}
 		let identity = callback_identity(query);
+		session.user_locale = identity.locale;
 		let action = telegram_menu.parse_callback(query.data, session.generation);
 		if (action == null) {
 			audit('callback', 'stale', update.update_id);
@@ -923,15 +976,17 @@ export function create(app) {
 				let admin_prompt = action.target == 'add_admin' ||
 					(action.target == 'remove_admin' && session.awaiting?.kind != 'confirm_remove_admin');
 				let outcome = execute_callback(action.target, { ...identity,
-					locale: telegram_i18n.locale(app.runtime) });
+					locale: identity.locale });
 				if (admin_prompt) {
 					show_panel('admin_input', settings, identity);
 					return { handled: true, retryable: false };
 				}
+				if (outcome.panel_handled === true)
+					return { handled: true, retryable: false };
 				show_panel(outcome.record != null ?
 					(action.target == 'update_subscription' ? 'subscription_loading' : 'operation_loading') :
-					(action.target == 'check_updates' ? 'updates' :
-					(action.target == 'route_check' ? 'diagnostics' : 'main')),
+					(outcome.screen ?? (action.target == 'check_updates' ? 'updates' :
+					(action.target == 'route_check' ? 'diagnostics' : 'main'))),
 					settings, identity);
 			}
 			else invalid();
@@ -972,7 +1027,7 @@ export function create(app) {
 			operation_bridge.track(record, {
 				chat_id: settings.user_id,
 				message_id: panel?.message_id ?? message.message_id,
-				locale: telegram_i18n.locale(app.runtime)
+				locale: resolved_locale()
 			});
 		}
 		catch (error) {
@@ -1010,7 +1065,7 @@ export function create(app) {
 		let record = app.settings_set({ telegram: { user_id: join(', ', ids) } }, 'telegram');
 		operation_bridge.track(record, { chat_id: awaiting.chat_id,
 			message_id: outbox.panel()?.message_id ?? message.message_id,
-			locale: telegram_i18n.locale(app.runtime) });
+			locale: resolved_locale() });
 		show_panel('operation_loading', settings, outbox.panel());
 		return { handled: true, retryable: false };
 	};
@@ -1032,6 +1087,7 @@ export function create(app) {
 			audit('message', 'rejected', update.update_id);
 			return { handled: false, retryable: false };
 		}
+		session.user_locale = resolved_locale(message.from?.language_code);
 		let input = handle_subscription_input(update, message, settings);
 		if (input != null) return input;
 		input = handle_admin_input(update, message, settings);
@@ -1054,29 +1110,14 @@ export function create(app) {
 		}
 		if (command.name == 'menu') {
 			audit(command.name, 'accepted', update.update_id);
-			show_panel('main', settings, { chat_id: chat, message_id: null });
-			return { handled: true, retryable: false };
-		}
-		if (command.name == 'diagnostics') {
-			try {
-				start_diagnostics(settings, {
-					chat_id: chat, message_id: message.message_id,
-					locale: telegram_i18n.locale(app.runtime)
-				});
-			}
-			catch (error) {
-				audit(command.name, 'failed', update.update_id);
-				send_message(diagnostic_notice(telegram_i18n.locale(app.runtime), false),
-					settings, chat);
-				return { handled: false, retryable: false };
-			}
-			audit(command.name, 'accepted', update.update_id);
+			show_panel('main', settings, { chat_id: chat, message_id: null,
+				locale: session.user_locale });
 			return { handled: true, retryable: false };
 		}
 		let outcome;
 		try { outcome = dispatch(command, {
 			chat_id: chat, message_id: message.message_id,
-			locale: telegram_i18n.locale(app.runtime)
+			locale: session.user_locale
 		}); }
 		catch (error) {
 			audit(command.name, 'failed', update.update_id);
@@ -1165,7 +1206,7 @@ export function create(app) {
 			}
 			try { operation_bridge.recover(); } catch (error) {}
 			try { outbox.attempt(); } catch (error) {}
-			let locale = telegram_i18n.locale(app.runtime);
+			let locale = resolved_locale();
 			if ((session.command_sync_requested ||
 			    (session.command_locale != null && session.command_locale != locale)) &&
 			    app.runtime.clock.now() >= session.command_sync_next_at) {
@@ -1252,7 +1293,7 @@ export function create(app) {
 				id: sprintf('notify.%d.%s', app.runtime.clock.now(),
 					app.runtime.random.hex(8)),
 				audience: 'automatic', kind: 'notify.' + event.type,
-				locale: telegram_i18n.locale(app.runtime), chat_id: settings.user_id,
+				locale: resolved_locale(), chat_id: settings.user_id,
 				message_id: null, operation_id: null, state: 'event',
 				created_at: app.runtime.clock.now(), payload
 			});

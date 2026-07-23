@@ -4,24 +4,20 @@ import * as i18n from 'miclash.telegram-i18n';
 const COMMAND_NAMES = [ 'menu' ];
 
 const SIMPLE_COMMANDS = {
-	start: 'menu', menu: 'menu', status: 'status', health: 'health', memory: 'memory',
-	diagnostics: 'diagnostics', logs: 'logs', help: 'help',
-	start_service: 'start_service', stop_service: 'stop_service',
-	reload_service: 'reload_service', restart_service: 'restart_service',
-	reboot_router: 'reboot_router', update_subscription: 'update_subscription',
-	update_miclash: 'update_miclash', update_mihomo: 'update_mihomo',
-	guard_on: 'guard_on', guard_off: 'guard_off'
+	start: 'menu', menu: 'menu'
 };
 
 const CALLBACKS = {
 	open: [ 'status', 'management', 'subscription', 'updates', 'guard', 'memory',
 		'logs', 'diagnostics', 'settings' ],
 	back: [ 'main', 'management', 'subscription', 'updates', 'guard', 'memory',
-		'logs', 'diagnostics', 'settings' ], refresh: [ 'main', 'status', 'memory', 'logs', 'diagnostics' ],
-	confirm: [ 'stop', 'guard_off', 'reboot', 'update_miclash', 'update_mihomo' ],
+		'logs', 'diagnostics', 'settings' ], refresh: [ 'main', 'status', 'memory' ],
+	confirm: [ 'stop', 'guard_off', 'reboot', 'update_miclash', 'update_mihomo',
+		'diagnostic_full' ],
 	execute: [ 'start', 'stop', 'reload', 'restart', 'guard_on', 'guard_off', 'reboot',
 		'update_subscription', 'replace_subscription', 'check_updates', 'update_miclash',
-		'update_mihomo', 'route_check', 'add_admin', 'remove_admin' ],
+		'update_mihomo', 'add_admin', 'remove_admin', 'download_logs',
+		'diagnostic_silent', 'diagnostic_lite', 'diagnostic_full' ],
 	cancel: [ 'subscription_input' ]
 };
 
@@ -83,8 +79,6 @@ export function parse_command(text) {
 	let found = match(text, /^\/([a-z0-9_]{1,32})(@[A-Za-z0-9_]{1,64})?( ([^[:space:]]+))?$/);
 	if (found == null) return null;
 	let name = found[1], argument = found[4];
-	if (name == 'subscription')
-		return argument == null ? null : { name: 'subscription', argument };
 	if (argument != null || SIMPLE_COMMANDS[name] == null) return null;
 	return { name: SIMPLE_COMMANDS[name], argument: null };
 };
@@ -229,13 +223,23 @@ export function render(screen, model, locale, generation_value) {
 		rows = [ [ button(locale, 'refresh', generation_value, 'refresh', 'memory') ], back(locale, generation_value) ];
 	}
 	else if (screen == 'logs') {
-		text = i18n.text(locale, 'logs_body', { logs: value(model, 'logs', locale) });
-		rows = [ [ button(locale, 'refresh', generation_value, 'refresh', 'logs') ], back(locale, generation_value) ];
+		text = i18n.text(locale, 'logs_body');
+		rows = [ [ button(locale, 'download_logs', generation_value, 'execute', 'download_logs') ],
+			back(locale, generation_value) ];
 	}
 	else if (screen == 'diagnostics') {
-		text = i18n.text(locale, 'diagnostics_body', { diagnostics: value(model, 'diagnostics', locale) });
-		rows = [ [ button(locale, 'run_route_check', generation_value, 'execute', 'route_check') ],
-			[ button(locale, 'refresh', generation_value, 'refresh', 'diagnostics') ], back(locale, generation_value) ];
+		text = i18n.text(locale, 'diagnostics_body');
+		rows = [
+			[ button(locale, 'download_silent_report', generation_value, 'execute', 'diagnostic_silent') ],
+			[ button(locale, 'download_lite_report', generation_value, 'execute', 'diagnostic_lite') ],
+			[ button(locale, 'download_full_report', generation_value, 'confirm', 'diagnostic_full') ],
+			back(locale, generation_value)
+		];
+	}
+	else if (screen == 'confirm_diagnostic_full') {
+		text = i18n.text(locale, 'confirm_diagnostic_full_body');
+		rows = [ [ button(locale, 'confirm', generation_value, 'execute', 'diagnostic_full') ],
+			back(locale, generation_value, 'diagnostics') ];
 	}
 	else if (match(screen, /^confirm_(stop|guard_off|reboot|update_miclash|update_mihomo)$/)) {
 		let target = substr(screen, 8);

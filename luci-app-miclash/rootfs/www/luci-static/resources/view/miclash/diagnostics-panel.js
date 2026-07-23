@@ -364,7 +364,7 @@ function create(options) {
 		const serviceState = String(summary.state?.observed?.service?.state ??
 			status.observed?.service?.state ?? status.state?.observed?.service?.state ??
 			(typeof serviceRunning === 'boolean' ? (serviceRunning ? 'running' : 'stopped') : 'unknown')).toLowerCase();
-		const diagnosticActions = [ actionButton(_('Download diagnostic report'), 'download-report') ];
+		const diagnosticActions = [ actionButton(_('Diagnostics'), 'download-report') ];
 		const componentRows = COMPONENTS.filter(([ name ]) => name !== 'guard').map(([ name, label ]) => {
 			let componentState = summary.components?.[name]?.state ?? health[name]?.state;
 			if (name === 'mihomo' && !componentState && typeof serviceRunning === 'boolean')
@@ -549,7 +549,7 @@ function create(options) {
 			E('p', { 'class': 'sbox-muted' }, _('Lite is recommended for most support requests.')),
 			E('div', { 'class': 'sbox-diagnostic-mode-grid' }, cards)
 		]);
-		ui.showModal(_('Download diagnostic report'), body, [ closeButton() ]);
+		ui.showModal(_('Diagnostics'), body, [ closeButton() ]);
 		return body;
 	}
 

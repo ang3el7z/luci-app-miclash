@@ -2504,3 +2504,5 @@ msgstr "Храните этот отчёт безопасно и передав�
 
 msgid "Validating report"
 msgstr "Проверка отчёта"
+msgid "Diagnostics"
+msgstr "Диагностика"

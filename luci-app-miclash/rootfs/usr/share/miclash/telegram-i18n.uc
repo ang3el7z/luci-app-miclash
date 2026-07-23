@@ -6,6 +6,10 @@ const STRINGS = {
 		main_title: 'MiClash control panel', status: 'Status', management: 'Management',
 		subscription: 'Subscription', updates: 'Updates', guard: 'Guard', memory: 'Memory',
 		logs: 'Logs', diagnostics: 'Diagnostics', reboot_router: 'Reboot router',
+		download_logs: 'Download logs',
+		download_silent_report: 'Download Silent report',
+		download_lite_report: 'Download Lite report',
+		download_full_report: 'Download Full report',
 		settings: 'Settings', add_administrator: 'Add administrator',
 		remove_administrator: 'Remove administrator',
 		settings_body: 'Settings\n\nAdministrators:\n{{administrators}}',
@@ -32,7 +36,10 @@ const STRINGS = {
 		updates_body: 'Updates\n\nMiClash: {{miclash_installed}} → {{miclash_available}}\nMihomo: {{mihomo_installed}} → {{mihomo_available}}',
 		guard_body: 'Guard\n\nConfigured: {{guard_state}}\nObserved: {{guard_observed}}',
 		memory_body: 'Memory\n\nMihomo memory (RSS): {{memory_rss}}\nBaseline: {{memory_baseline}}\nStatus: {{memory_state}}\nLast action: {{last_memory_action}}',
-		logs_body: 'Logs\n\n{{logs}}', diagnostics_body: 'Diagnostics\n\n{{diagnostics}}',
+		logs_body: 'Logs\n\nDownloads the same current log entries shown in the MiClash LuCI Logs tab.',
+		diagnostics_body: 'Diagnostics\n\nSilent — minimal system health only; best for public issue reports.\n\nLite — redacted diagnostics, configuration summary, and recent events. Recommended for most support requests.\n\nFull — includes private configuration and secrets; use only with trusted support.',
+		confirm_diagnostic_full_body: 'The Full report contains private configuration and secrets. Download it only for trusted support?',
+		no_logs: 'No logs yet.',
 		confirm_stop_body: 'Stop MiClash? Devices protected by Guard may lose Internet access.',
 		confirm_guard_off_body: 'Disable Guard? Devices may access the Internet directly if MiClash fails.',
 		confirm_reboot_body: 'Reboot the router now? Network access will be temporarily interrupted.',
@@ -65,6 +72,10 @@ const STRINGS = {
 		main_title: 'Панель управления MiClash', status: 'Состояние', management: 'Управление',
 		subscription: 'Подписка', updates: 'Обновления', guard: 'Защита', memory: 'Память',
 		logs: 'Логи', diagnostics: 'Диагностика', reboot_router: 'Перезагрузить роутер',
+		download_logs: 'Скачать логи',
+		download_silent_report: 'Скачать Silent-отчёт',
+		download_lite_report: 'Скачать Lite-отчёт',
+		download_full_report: 'Скачать Full-отчёт',
 		settings: 'Настройки', add_administrator: 'Добавить администратора',
 		remove_administrator: 'Удалить администратора',
 		settings_body: 'Настройки\n\nАдминистраторы:\n{{administrators}}',
@@ -91,7 +102,10 @@ const STRINGS = {
 		updates_body: 'Обновления\n\nMiClash: {{miclash_installed}} → {{miclash_available}}\nMihomo: {{mihomo_installed}} → {{mihomo_available}}',
 		guard_body: 'Защита\n\nНастройка: {{guard_state}}\nФактическое состояние: {{guard_observed}}',
 		memory_body: 'Память\n\nПамять Mihomo (RSS): {{memory_rss}}\nБазовый уровень: {{memory_baseline}}\nСтатус: {{memory_state}}\nПоследнее действие: {{last_memory_action}}',
-		logs_body: 'Логи\n\n{{logs}}', diagnostics_body: 'Диагностика\n\n{{diagnostics}}',
+		logs_body: 'Логи\n\nСкачивает те же актуальные записи, которые показаны во вкладке «Логи» MiClash в LuCI.',
+		diagnostics_body: 'Диагностика\n\nSilent — только минимальные сведения о состоянии системы; подходит для публичных обращений.\n\nLite — очищенная диагностика, сводка конфигурации и недавние события. Рекомендуется для большинства обращений.\n\nFull — содержит приватную конфигурацию и секреты; используйте только с доверенной поддержкой.',
+		confirm_diagnostic_full_body: 'Full-отчёт содержит приватную конфигурацию и секреты. Скачать его для передачи доверенной поддержке?',
+		no_logs: 'Логов пока нет.',
 		confirm_stop_body: 'Остановить MiClash? Устройства под защитой могут потерять доступ в Интернет.',
 		confirm_guard_off_body: 'Отключить защиту? При сбое MiClash устройства смогут выйти в Интернет напрямую.',
 		confirm_reboot_body: 'Перезагрузить роутер сейчас? Сеть будет временно недоступна.',
@@ -124,6 +138,10 @@ const STRINGS = {
 		main_title: 'MiClash 控制面板', status: '状态', management: '管理',
 		subscription: '订阅', updates: '更新', guard: '保护', memory: '内存',
 		logs: '日志', diagnostics: '诊断', reboot_router: '重启路由器',
+		download_logs: '下载日志',
+		download_silent_report: '下载 Silent 报告',
+		download_lite_report: '下载 Lite 报告',
+		download_full_report: '下载 Full 报告',
 		settings: '设置', add_administrator: '添加管理员', remove_administrator: '删除管理员',
 		settings_body: '设置\n\n管理员：\n{{administrators}}',
 		add_administrator_input: '请发送要添加的 Telegram 数字用户 ID。',
@@ -147,7 +165,10 @@ const STRINGS = {
 		updates_body: '更新\n\nMiClash：{{miclash_installed}} → {{miclash_available}}\nMihomo：{{mihomo_installed}} → {{mihomo_available}}',
 		guard_body: '保护\n\n设置：{{guard_state}}\n实际状态：{{guard_observed}}',
 		memory_body: '内存\n\nMihomo 内存 (RSS)：{{memory_rss}}\n基准：{{memory_baseline}}\n状态：{{memory_state}}\n上次操作：{{last_memory_action}}',
-		logs_body: '日志\n\n{{logs}}', diagnostics_body: '诊断\n\n{{diagnostics}}',
+		logs_body: '日志\n\n下载与 MiClash LuCI“日志”选项卡中相同的当前日志记录。',
+		diagnostics_body: '诊断\n\nSilent — 仅包含最少的系统健康信息，适合公开问题报告。\n\nLite — 包含已脱敏的诊断、配置摘要和近期事件，推荐用于大多数支持请求。\n\nFull — 包含私有配置和密钥，仅可交给可信支持人员。',
+		confirm_diagnostic_full_body: 'Full 报告包含私有配置和密钥。仅在交给可信支持人员时下载，是否继续？',
+		no_logs: '暂无日志。',
 		confirm_stop_body: '停止 MiClash？受保护的设备可能会失去网络连接。',
 		confirm_guard_off_body: '停用保护？MiClash 故障时设备可能会直接访问网络。',
 		confirm_reboot_body: '现在重启路由器？网络连接将暂时中断。',
@@ -186,11 +207,13 @@ function normalize(value) {
 	return 'en';
 };
 
-export function locale(runtime) {
+export function locale(runtime, automatic_locale) {
 	try {
 		let cursor = runtime?.uci?.cursor();
 		if (type(cursor?.get) != 'function') return 'en';
-		return normalize(cursor.get('luci', 'main', 'lang'));
+		let configured = cursor.get('luci', 'main', 'lang');
+		return configured == 'auto' || configured == null || !length(configured) ?
+			normalize(automatic_locale) : normalize(configured);
 	}
 	catch (error) { return 'en'; }
 };

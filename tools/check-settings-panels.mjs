@@ -89,8 +89,8 @@ assert.match(settings, /configured === true[\s\S]*action\(_\('Send test'\), 'not
 	'notification test visibility must depend on persisted channel state');
 assert.match(settings, /\[\s*'telegram-test', 'notification-test'\s*\]\.includes\(actionName\)[\s\S]*withButtons\(button, run\)/,
 	'all test actions need button-local busy feedback');
-assert.match(settings, /E\('span', \{ 'aria-hidden': 'true' \}, '\*'\)/,
-	'Telegram token reveal must have a visible star fallback');
+assert.match(settings, /E\('svg',[\s\S]*viewBox[\s\S]*E\('path'/,
+	'Telegram token reveal must use a centered eye icon');
 assert.match(settings,
 	/const userField = E\('div',[\s\S]*Allowed Telegram user IDs[\s\S]*data-telegram-id-hint[\s\S]*List IDs separated by commas\./,
 	'Telegram ID guidance must sit directly inside the allowed-user field');
@@ -100,8 +100,12 @@ assert.doesNotMatch(settings, /Save management settings|data-action[^\n]*save/,
 	'management panel still owns a separate save button');
 assert.doesNotMatch(settings, /backup_outcome|Backup result/,
 	'removed Backup notification remains in Settings');
-assert.match(settings, /'value': configured \? MASK : ''/,
+assert.match(settings, /'value': configured \? DISPLAY_MASK : ''/,
 	'stored Telegram token must render only as a masked sentinel');
+assert.match(settings, /const DISPLAY_MASK = '\*{8}'/,
+	'stored Telegram token must visibly render as eight stars');
+assert.doesNotMatch(settings, /Poller is running|Poller is stopped/,
+	'Telegram poller implementation status must not clutter Settings');
 assert.match(settings, /await api\.telegram_token_reveal\(\)/,
 	'token reveal must use the dedicated authenticated RPC method');
 assert.doesNotMatch(settings, /Number\([^\n]*user[_-]?id|parseInt\([^\n]*user[_-]?id/i,

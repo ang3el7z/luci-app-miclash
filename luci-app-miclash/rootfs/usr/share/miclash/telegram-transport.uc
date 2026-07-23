@@ -162,8 +162,11 @@ export function create(app) {
 		return plan.complete(response);
 	};
 
-	function document_plan(settings, chat, file, filename, caption) {
+	function document_plan(settings, chat, file, filename, caption, content_type) {
 		let safe = configuration(settings), descriptor = document_file(file);
+		content_type ??= 'application/json';
+		if (content_type != 'application/json' && content_type != 'text/plain')
+			invalid();
 		let fields = { chat_id: normalized_id(chat) };
 		let safe_caption = document_caption(caption);
 		if (safe_caption != null) fields.caption = safe_caption;
@@ -181,7 +184,7 @@ export function create(app) {
 				close: descriptor.close,
 				field: 'document',
 				filename: document_filename(filename),
-				content_type: 'application/json',
+				content_type,
 				fields
 			}
 		};
@@ -271,10 +274,10 @@ export function create(app) {
 				errors.fail('INVALID_RESPONSE');
 			return result;
 		},
-		send_document: (settings, chat, file, filename, caption) => {
+		send_document: (settings, chat, file, filename, caption, content_type) => {
 			let plan = null, settled = false, response, reply;
 			try {
-				plan = document_plan(settings, chat, file, filename, caption);
+				plan = document_plan(settings, chat, file, filename, caption, content_type);
 				response = app.http.request(app.runtime, plan.request);
 				reply = plan.complete(response);
 				if (reply.limited) {

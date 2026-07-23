@@ -13,12 +13,13 @@ function clone(value) {
 	return value == null ? null : json(sprintf('%J', value));
 };
 
-function update(id, text, sender, chat_type) {
+function update(id, text, sender, chat_type, language) {
 	return {
 		update_id: id,
 		message: {
 			message_id: id,
-			from: { id: sender ?? 42, is_bot: false, first_name: 'Owner' },
+			from: { id: sender ?? 42, is_bot: false, first_name: 'Owner',
+				language_code: language },
 			chat: { id: sender ?? 42, type: chat_type ?? 'private' },
 			date: 1710000000,
 			text
@@ -26,12 +27,13 @@ function update(id, text, sender, chat_type) {
 	};
 };
 
-function callback(id, data, message_id, sender) {
+function callback(id, data, message_id, sender, language) {
 	return {
 		update_id: id,
 		callback_query: {
 			id: 'callback-' + id,
-			from: { id: sender ?? 42, is_bot: false, first_name: 'Owner' },
+			from: { id: sender ?? 42, is_bot: false, first_name: 'Owner',
+				language_code: language },
 			message: {
 				message_id: message_id ?? 50,
 				chat: { id: sender ?? 42, type: 'private' }
@@ -39,6 +41,19 @@ function callback(id, data, message_id, sender) {
 			data
 		}
 	};
+};
+
+function request_diagnostic(controller, id, mode) {
+	assert_equal(controller.handle_update(update(id, '/menu')), true);
+	assert_equal(controller.handle_update(callback(id + 1, 'g1:open:diagnostics')), true);
+	if (mode == 'full') {
+		assert_equal(controller.handle_update(
+			callback(id + 2, 'g2:confirm:diagnostic_full')), true);
+		return controller.handle_update(
+			callback(id + 3, 'g3:execute:diagnostic_full'));
+	}
+	return controller.handle_update(
+		callback(id + 2, 'g2:execute:diagnostic_' + mode));
 };
 
 function request_method(request) {
@@ -322,6 +337,13 @@ assert_equal(production_panel.updates.miclash_available, 'v2.0.4');
 
 let offset_path = '/etc/miclash/telegram-offset.json';
 
+let automatic_locale = environment({ locale: 'auto' });
+let automatic_locale_controller = telegram.create(automatic_locale.app);
+assert_equal(automatic_locale_controller.handle_update(
+	update(90, '/menu', 42, 'private', 'ru')), true);
+assert_match(automatic_locale.requests[0].body,
+	/%D0%9F%D0%B0%D0%BD%D0%B5%D0%BB%D1%8C/);
+
 // The command test double must preserve caller arguments instead of manufacturing telegram.
 let source_probe = environment();
 source_probe.app.service_start('config2.yaml', 'luci');
@@ -369,11 +391,11 @@ assert_match(authorized.requests[length(authorized.requests) - 1].url,
 	/\/getUpdates\?offset=109&timeout=25/);
 
 let ingested = authorized_controller.ingest(update(109, '/status'));
-assert_equal(ingested.handled, true);
+assert_equal(ingested.handled, false);
 assert_equal(ingested.retryable, false);
 assert_equal(ingested.last_update_id, 109);
 
-// A handled update is consumed once, including rejected/unsupported updates.
+// Removed slash commands are rejected and never dispatch operations.
 let duplicate = fixture_json('private-authorized-reboot.json');
 assert_equal(authorized_controller.handle_update(duplicate), false,
 	'older update IDs are duplicates after a newer update');
@@ -387,38 +409,18 @@ duplicate_env.app.operations.submit = (kind, source, context, worker) => {
 };
 assert_equal(duplicate_controller.handle_update(duplicate), true);
 assert_equal(duplicate_controller.handle_update(duplicate), false);
-assert_equal(length(duplicate_env.submitted), 1);
-assert_equal(duplicate_env.submitted[0].kind, 'system.reboot');
-assert_equal(duplicate_env.submitted[0].source, 'telegram');
-assert_equal(durable_at_submit.last_update_id, duplicate.update_id,
-	'authorized command dispatched before durable offset persistence');
-duplicate_env.submitted[0].worker({ stage: () => null });
-assert_equal(duplicate_env.domain_calls[0].method, 'reboot');
+assert_equal(length(duplicate_env.submitted), 0);
+assert_equal(durable_at_submit, null);
 
-// Every approved command routes through a domain method and uses source=telegram.
+// Only /start and /menu remain accepted.
 let commands = fixture_json('approved-commands.json');
 let command_id = 1000;
 for (let command in commands) {
 	let env = environment();
 	let controller = telegram.create(env.app);
-	assert_equal(controller.handle_update(update(++command_id, command.text)), true, command.text);
-	if (command.kind != null) {
-		assert_equal(length(env.submitted), 1, command.text);
-		assert_equal(env.submitted[0].kind, command.kind, command.text);
-		assert_equal(env.submitted[0].source, 'telegram', command.text);
-	}
-	else if (command.text != '/diagnostics')
-		assert_equal(length(env.submitted), 0, command.text);
-	if (command.text == '/reboot_router')
-		env.submitted[0].worker({ stage: () => null });
-	let expected_calls = command.call == null || command.text == '/diagnostics' ?
-		[] : [ command.call ];
-	if (command.text != '/start' && command.text != '/menu' && command.text != '/diagnostics')
-		assert_equal(sprintf('%J', env.domain_calls), sprintf('%J', expected_calls), command.text);
-	let output = sprintf('%J', env.requests);
-	for (let secret in [ 'status-secret', 'memory-secret', 'diag-secret',
-		'log-secret', 'url-secret' ])
-		assert_equal(index(output, secret), -1, command.text + ' leaked ' + secret);
+	let accepted = command.text == '/start' || command.text == '/menu';
+	assert_equal(controller.handle_update(update(++command_id, command.text)), accepted, command.text);
+	assert_equal(length(env.submitted), 0, command.text);
 }
 
 // Commands are exact; /subscription alone, extra args, aliases, and bot suffixes reject.
@@ -428,7 +430,7 @@ for (let text in [ '/status now', '/subscription',
 	'/subscription https://one.test/a https://two.test/b', '/unknown', ' /status' ])
 	assert_equal(exact_controller.handle_update(update(++command_id, text)), false, text);
 assert_equal(length(exact_env.submitted), 0);
-assert_equal(exact_controller.handle_update(update(++command_id, '/status@miclash_bot')), true,
+assert_equal(exact_controller.handle_update(update(++command_id, '/menu@miclash_bot')), true,
 	'Telegram bot suffix should address the configured bot command');
 
 // Offset advances atomically under the persistent private authority and survives reboot.
@@ -460,7 +462,7 @@ assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=25/);
 let formatted_env = environment();
 formatted_env.app.logs_read = () => 'line one\nline two';
 let formatted_controller = telegram.create(formatted_env.app);
-assert_equal(formatted_controller.handle_update(update(705, '/diagnostics')), true);
+assert_equal(request_diagnostic(formatted_controller, 705, 'lite'), true);
 assert_equal(formatted_env.report_requests[0].mode, 'lite');
 assert_equal(formatted_env.report_requests[0].source, 'telegram');
 assert_equal(formatted_env.report_requests[0].acknowledge_secrets, false);
@@ -492,11 +494,21 @@ assert_match(join(',', diagnostics_method_order),
 	/sendMessage,(editMessageText,)+sendDocument,editMessageText,sendMessage/);
 assert_equal(formatted_controller.status().panel_screen, 'diagnostics');
 
+let silent_env = environment(), silent_controller = telegram.create(silent_env.app);
+assert_equal(request_diagnostic(silent_controller, 7200, 'silent'), true);
+assert_equal(silent_env.report_requests[0].mode, 'silent');
+assert_equal(silent_env.report_requests[0].acknowledge_secrets, false);
+
+let full_env = environment(), full_controller = telegram.create(full_env.app);
+assert_equal(request_diagnostic(full_controller, 7300, 'full'), true);
+assert_equal(full_env.report_requests[0].mode, 'full');
+assert_equal(full_env.report_requests[0].acknowledge_secrets, true);
+
 // Lite reports above the legacy HTTP cap still use the 16 MiB diagnostic
 // transfer contract and reach Telegram as document descriptors.
 let large_lite_env = environment({ report_content: sprintf('%1048577s', 'x') });
 let large_lite_controller = telegram.create(large_lite_env.app);
-assert_equal(large_lite_controller.handle_update(update(7051, '/diagnostics')), true);
+assert_equal(request_diagnostic(large_lite_controller, 7051, 'lite'), true);
 large_lite_env.emit_report('success', 'complete', 100);
 let large_lite_request = null;
 for (let request in large_lite_env.requests)
@@ -506,10 +518,17 @@ assert_true(large_lite_request != null,
 assert_equal(large_lite_request.body_file.size, 1048577);
 assert_equal(large_lite_env.report_finishes(), 1);
 
-assert_equal(formatted_controller.handle_update(update(706, '/logs')), true);
-let logs_request = formatted_env.requests[length(formatted_env.requests) - 1];
-assert_match(logs_request.body, /parse_mode=MarkdownV2/);
-assert_match(logs_request.body, /text=%60%60%60%0Aline%20one%0Aline%20two%0A%60%60%60/);
+assert_equal(formatted_controller.handle_update(callback(708, 'g4:open:logs')), true);
+assert_equal(formatted_controller.handle_update(
+	callback(709, 'g5:execute:download_logs')), true);
+let logs_request = null;
+for (let request in formatted_env.requests)
+	if (request_method(request) == 'sendDocument' &&
+	    request.body_file?.content_type == 'text/plain') logs_request = request;
+assert_true(logs_request != null);
+assert_equal(request_method(logs_request), 'sendDocument');
+assert_equal(logs_request.body_file.content_type, 'text/plain');
+assert_match(logs_request.body_file.filename, /^miclash-logs-[0-9]+\.log$/);
 
 // Telegram 429 releases the one-shot descriptor, honors retry_after, and opens
 // a fresh daemon capability for the successful retry.
@@ -519,7 +538,7 @@ let document_retry = environment({ document_replies: [
 	{ status: 200, headers: {}, body: '{"ok":true,"result":{"message_id":52}}' }
 ] });
 let document_retry_controller = telegram.create(document_retry.app);
-assert_equal(document_retry_controller.handle_update(update(707, '/diagnostics')), true);
+assert_equal(request_diagnostic(document_retry_controller, 707, 'lite'), true);
 document_retry.emit_report('success', 'complete', 100);
 assert_equal(document_retry.report_opens(), 1);
 assert_equal(document_retry.report_closes(), 1);
@@ -535,7 +554,7 @@ assert_equal(document_retry.report_finishes(), 1);
 // Diagnostics menu, and emits a separate localized failure message.
 let document_failure = environment({ document_failure: true });
 let document_failure_controller = telegram.create(document_failure.app);
-assert_equal(document_failure_controller.handle_update(update(708, '/diagnostics')), true);
+assert_equal(request_diagnostic(document_failure_controller, 708, 'lite'), true);
 document_failure.emit_report('success', 'complete', 100);
 assert_equal(document_failure.report_opens(), 1);
 assert_equal(document_failure.report_finishes(), 0);
@@ -550,7 +569,7 @@ assert_equal(request_method(document_failure.requests[length(document_failure.re
 let interrupted_report = environment();
 let interrupted_controller = telegram.create(interrupted_report.app);
 assert_equal(interrupted_controller.start(), true);
-assert_equal(interrupted_controller.handle_update(update(709, '/diagnostics')), true);
+assert_equal(request_diagnostic(interrupted_controller, 709, 'lite'), true);
 assert_equal(interrupted_controller.stop(), true);
 let interrupted_index = length(interrupted_report.submitted) - 1;
 interrupted_report.submitted[interrupted_index] = {
@@ -573,7 +592,7 @@ let interrupted_delivery_options = {};
 let interrupted_delivery = environment(interrupted_delivery_options);
 let interrupted_delivery_controller = telegram.create(interrupted_delivery.app);
 assert_equal(interrupted_delivery_controller.start(), true);
-assert_equal(interrupted_delivery_controller.handle_update(update(713, '/diagnostics')), true);
+assert_equal(request_diagnostic(interrupted_delivery_controller, 713, 'lite'), true);
 assert_equal(interrupted_delivery_controller.stop(), true);
 let interrupted_delivery_index = length(interrupted_delivery.submitted) - 1;
 interrupted_delivery.submitted[interrupted_delivery_index] = {
@@ -600,7 +619,11 @@ let secondary_restart = environment({ settings: {
 } });
 let secondary_restart_controller = telegram.create(secondary_restart.app);
 assert_equal(secondary_restart_controller.start(), true);
-assert_equal(secondary_restart_controller.handle_update(update(714, '/diagnostics', 84)), true);
+assert_equal(secondary_restart_controller.handle_update(update(714, '/menu', 84)), true);
+assert_equal(secondary_restart_controller.handle_update(
+	callback(715, 'g1:open:diagnostics', 50, 84)), true);
+assert_equal(secondary_restart_controller.handle_update(
+	callback(716, 'g2:execute:diagnostic_lite', 50, 84)), true);
 assert_equal(secondary_restart_controller.stop(), true);
 let secondary_restart_index = length(secondary_restart.submitted) - 1;
 secondary_restart.submitted[secondary_restart_index] = {
@@ -620,7 +643,7 @@ assert_match(secondary_restart.requests[length(secondary_restart.requests) - 1].
 // attempted; the report remains in the TTL-managed store.
 let unavailable_report = environment();
 let unavailable_controller = telegram.create(unavailable_report.app);
-assert_equal(unavailable_controller.handle_update(update(710, '/diagnostics')), true);
+assert_equal(request_diagnostic(unavailable_controller, 710, 'lite'), true);
 unavailable_report.settings.telegram.enabled = false;
 unavailable_report.emit_report('success', 'complete', 100);
 assert_equal(unavailable_report.report_opens(), 0);
@@ -633,12 +656,12 @@ overlay.filesystem.on_rename = (from, to) => {
 	if (to == offset_path) overlay.filesystem.set_device(to, 21);
 };
 let overlay_controller = telegram.create(overlay.app);
-assert_equal(overlay_controller.handle_update(update(703, '/status')), true);
+assert_equal(overlay_controller.handle_update(update(703, '/menu')), true);
 assert_equal(overlay_controller.status().last_update_id, 703);
 assert_equal(json(overlay.filesystem.readfile(offset_path)).last_update_id, 703);
 
-// Simulated reboot clears /var/run but preserves flash state; an approved reboot update
-// is still at-most-once and cannot submit a second system operation after boot.
+// Simulated reboot clears /var/run but preserves flash state; an accepted menu update
+// is still at-most-once after boot.
 let before_reboot = environment();
 let before_reboot_controller = telegram.create(before_reboot.app);
 assert_equal(before_reboot_controller.handle_update(duplicate), true);
@@ -685,7 +708,7 @@ write_authority_swap.filesystem.on_lstat = (path, count) => {
 	if (path == offset_path && count == 4)
 		write_authority_swap.filesystem.bump_inode('/etc/miclash');
 };
-assert_equal(write_authority_swap_controller.handle_update(update(703, '/reboot_router')), false);
+assert_equal(write_authority_swap_controller.handle_update(update(703, '/menu')), false);
 assert_equal(length(write_authority_swap.submitted), 0);
 
 // Directory size is mutable metadata and must not invalidate a stable authority identity.
@@ -701,14 +724,14 @@ resized_authority.filesystem.lstat = (path) => {
 	}
 	return identity;
 };
-assert_equal(resized_authority_controller.handle_update(update(704, '/reboot_router')), true);
-assert_equal(length(resized_authority.submitted), 1);
+assert_equal(resized_authority_controller.handle_update(update(704, '/menu')), true);
+assert_equal(length(resized_authority.submitted), 0);
 assert_equal(json(resized_authority.filesystem.readfile(offset_path)).last_update_id, 704);
 
 // A durable write failure is a batch barrier: later updates wait while N retries.
 let barrier_document = sprintf('%J', {
 	ok: true,
-	result: [ update(800, '/reboot_router'), update(801, '/status', 43) ]
+	result: [ update(800, '/menu'), update(801, '/menu', 43) ]
 });
 let barrier_fs = fakes.fs({ [offset_path]: '{"last_update_id":799}\n' });
 let barrier = environment({
@@ -735,7 +758,7 @@ assert_equal(barrier_controller.poll_once(), true);
 assert_match(barrier.requests[1].url, /\/getUpdates\?offset=800&timeout=25/);
 assert_equal(json(barrier.filesystem.readfile(offset_path)).last_update_id, 800);
 assert_equal(barrier_controller.status().last_update_id, 801);
-assert_equal(length(barrier.submitted), 1);
+assert_equal(length(barrier.submitted), 0);
 assert_equal(barrier_controller.status().retry_after_ms, 0);
 assert_equal(active_timers(barrier.clock), 0);
 
@@ -784,7 +807,7 @@ let diagnostic_retry_race = environment({ document_replies: [
 ] });
 let diagnostic_retry_race_controller = telegram.create(diagnostic_retry_race.app);
 assert_equal(diagnostic_retry_race_controller.start(), true);
-assert_equal(diagnostic_retry_race_controller.handle_update(update(712, '/diagnostics')), true);
+assert_equal(request_diagnostic(diagnostic_retry_race_controller, 712, 'lite'), true);
 diagnostic_retry_race.emit_report('success', 'complete', 100);
 assert_equal(diagnostic_retry_race.report_opens(), 1);
 assert_equal(diagnostic_retry_race_controller.poll_once(), true);
@@ -803,7 +826,7 @@ let diagnostic_stop = environment({ document_replies: [ {
 } ] });
 let diagnostic_stop_controller = telegram.create(diagnostic_stop.app);
 assert_equal(diagnostic_stop_controller.start(), true);
-assert_equal(diagnostic_stop_controller.handle_update(update(711, '/diagnostics')), true);
+assert_equal(request_diagnostic(diagnostic_stop_controller, 711, 'lite'), true);
 diagnostic_stop.emit_report('success', 'complete', 100);
 assert_equal(diagnostic_stop.report_opens(), 1);
 assert_equal(diagnostic_stop.report_closes(), 1);
@@ -824,20 +847,20 @@ assert_equal(length(diagnostic_stop.operation_subscribers), 2);
 let snapshot = environment({ poll_replies: [ {
 	status: 200,
 	headers: {},
-	body: sprintf('%J', { ok: true, result: [ update(900, '/reboot_router') ] })
+	body: sprintf('%J', { ok: true, result: [ update(900, '/menu') ] })
 } ] });
 let snapshot_reads = 0;
 snapshot.app.settings_get = () => {
 	snapshot_reads++;
-	if (snapshot_reads <= 2)
+	if (snapshot_reads <= 3)
 		return clone(snapshot.settings);
 	die('INTERNAL');
 };
 let snapshot_controller = telegram.create(snapshot.app);
 assert_equal(snapshot_controller.start(), true);
 assert_equal(snapshot_controller.poll_once(), true);
-assert_equal(snapshot_reads, 2, 'poll handler reread validated settings');
-assert_equal(length(snapshot.submitted), 1);
+assert_equal(snapshot_reads, 3, 'menu panel reread settings more than once');
+assert_equal(length(snapshot.submitted), 0);
 assert_equal(active_timers(snapshot.clock), 0);
 
 // A controller records disabled/incomplete settings without creating a timer.
@@ -883,7 +906,8 @@ let audit_text = sprintf('%J', rate.audit);
 for (let secret in [ '42', 'telegram-secret', '/status', 'url-secret' ])
 	assert_equal(index(audit_text, secret), -1, 'audit leaked ' + secret);
 
-// Status, settings and logs are redacted at source; sending failures are isolated.
+// Settings, notification payloads, and internal failure logs remain redacted;
+// sending failures are isolated from the controller.
 let masking = environment({ send_failure: true });
 let masking_controller = telegram.create(masking.app);
 assert_equal(masking_controller.test(), false);
@@ -987,8 +1011,8 @@ assert_equal(panel_controller.handle_update(callback(2004, 'g4:execute:stop')), 
 	'duplicate callback executed twice');
 
 let direct_env = environment(), direct_controller = telegram.create(direct_env.app);
-assert_equal(direct_controller.handle_update(update(2100, '/stop_service')), true);
-assert_equal(direct_env.submitted[0].kind, 'service.stop');
+assert_equal(direct_controller.handle_update(update(2100, '/stop_service')), false);
+assert_equal(length(direct_env.submitted), 0);
 assert_equal(direct_controller.handle_update(update(2101, '/stop')), false);
 
 // Every configured administrator receives replies in their own private chat.

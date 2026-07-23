@@ -5,6 +5,7 @@
 'require view.miclash.ui-shell';
 
 const MASK = '[REDACTED]';
+const DISPLAY_MASK = '********';
 const SOURCE = 'luci';
 const POLL_MS = 30000;
 const MAX_POLL_MS = 300000;
@@ -178,12 +179,16 @@ function create(options) {
 		const userId = settings.user_id ? normalizeTelegramIds(settings.user_id) : '';
 		// telegram_settings always redacts the token field, including an empty one;
 		// only the dedicated status flag can tell whether a secret is configured.
-		const configured = status.configured === true;
+		const configured = status.configured === true || settings.token === MASK ||
+			desired.token === MASK;
 		const tokenInput = E('input', { 'id': 'sbox-telegram-token', 'type': 'password', 'class': 'cbi-input-text',
-			'value': configured ? MASK : '', 'autocomplete': 'new-password' });
+			'value': configured ? DISPLAY_MASK : '', 'autocomplete': 'new-password',
+			'data-token-configured': configured ? 'true' : 'false' });
 		const reveal = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral sbox-secret-reveal',
 			'data-action': 'telegram-token-reveal', 'aria-label': _('Show token'), 'aria-pressed': 'false' },
-			[ E('span', { 'aria-hidden': 'true' }, '*') ]);
+			[ E('svg', { 'aria-hidden': 'true', 'viewBox': '0 0 24 24', 'focusable': 'false' }, [
+				E('path', { 'd': 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12zm10 3.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z' })
+			]) ]);
 		const tokenField = E('div', { 'class': 'sbox-management-field' }, [
 			E('label', { 'for': 'sbox-telegram-token' }, _('BotFather token')),
 			E('div', { 'class': 'sbox-secret-input' }, [ tokenInput, reveal ])
@@ -203,8 +208,6 @@ function create(options) {
 		const children = [
 			E('h4', {}, _('Telegram')),
 			check('sbox-telegram-enabled', _('Enable Telegram control'), desired.enabled === true),
-			E('p', { 'class': 'sbox-muted', 'role': 'status', 'data-telegram-status': 'running' },
-				status.running === true ? _('Poller is running') : _('Poller is stopped')),
 			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField, timeoutField ])
 		];
 		if (desired.enabled === true)
@@ -313,16 +316,16 @@ function create(options) {
 		const enabled = !!host.querySelector('#sbox-telegram-enabled')?.checked;
 		const token = String(host.querySelector('#sbox-telegram-token')?.value || '').trim();
 		const userId = normalizeTelegramIds(host.querySelector('#sbox-telegram-user-id')?.value || '');
-		if (token !== MASK && token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
+		if (token !== DISPLAY_MASK && token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
 		const normalizedUserIds = userId ? normalizeTelegramIds(userId) : '';
 		const configured = state.telegram?.configured === true;
-		const hasToken = token === MASK ? configured : exactTelegramToken(token);
+		const hasToken = token === DISPLAY_MASK ? configured : exactTelegramToken(token);
 		if (enabled && !(hasToken && normalizedUserIds))
 			throw new Error(_('Enabling Telegram requires a BotFather token and exact user IDs.'));
 		const telegram = { enabled, user_id: normalizedUserIds };
 		telegram.poll_timeout_seconds = integer(host.querySelector('#sbox-telegram-poll-timeout')?.value,
 			[ 5, 50 ], _('Telegram polling timeout'));
-		if (token !== MASK) telegram.token = token;
+		if (token !== DISPLAY_MASK) telegram.token = token;
 		const notifications = {
 			auto_hide: !!host.querySelector('#sbox-notification-auto-hide')?.checked
 		};
@@ -388,11 +391,13 @@ function create(options) {
 					if (!input) return;
 					if (input.type === 'text') {
 						input.type = 'password';
+						input.value = input.dataset.tokenConfigured === 'true' ? DISPLAY_MASK : '';
+						delete input.dataset.originalTelegramToken;
 						button.setAttribute('aria-label', _('Show token'));
 						button.setAttribute('aria-pressed', 'false');
 						return;
 					}
-					if (input.value === MASK) {
+					if (input.dataset.tokenConfigured === 'true') {
 						const reply = await api.telegram_token_reveal();
 						if (!exactTelegramToken(reply?.token)) throw new Error(_('Telegram token is not configured.'));
 						input.value = reply.token;

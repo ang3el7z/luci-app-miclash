@@ -2457,3 +2457,5 @@ msgstr "请安全保存此报告，并且只与受信任的支持人员分享。
 
 msgid "Validating report"
 msgstr "正在验证报告"
+msgid "Diagnostics"
+msgstr "诊断"

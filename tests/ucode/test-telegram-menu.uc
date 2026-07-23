@@ -23,6 +23,15 @@ assert_equal(locale('zh-cn'), 'zh-cn');
 assert_equal(locale('zh_CN'), 'zh-cn');
 assert_equal(locale('de'), 'en');
 assert_equal(i18n.locale({ uci: { cursor: () => die('unavailable') } }), 'en');
+assert_equal(i18n.locale({ uci: fakes.uci({ luci: { main: {
+	'.type': 'core', lang: 'auto'
+} } }) }, 'ru'), 'ru');
+assert_equal(i18n.locale({ uci: fakes.uci({ luci: { main: {
+	'.type': 'core', lang: 'auto'
+} } }) }, 'zh-CN'), 'zh-cn');
+assert_equal(i18n.locale({ uci: fakes.uci({ luci: { main: {
+	'.type': 'core', lang: 'en'
+} } }) }, 'ru'), 'en');
 assert_equal(i18n.telegram_language('zh-cn'), 'zh');
 assert_equal(i18n.telegram_language('ru'), 'ru');
 assert_equal(i18n.telegram_language('en'), '');
@@ -36,15 +45,12 @@ assert_throws(() => i18n.text('en', 'missing_key'), 'INVALID_ARGUMENT');
 
 assert_equal(menu.parse_command('/start').name, 'menu');
 assert_equal(menu.parse_command('/menu').name, 'menu');
-assert_equal(menu.parse_command('/start_service').name, 'start_service');
-assert_equal(menu.parse_command('/stop_service').name, 'stop_service');
-assert_equal(menu.parse_command('/reload_service').name, 'reload_service');
-assert_equal(menu.parse_command('/restart_service').name, 'restart_service');
-assert_equal(menu.parse_command('/reboot_router').name, 'reboot_router');
-assert_equal(menu.parse_command('/subscription https://example.test/config').argument,
-	'https://example.test/config');
 assert_equal(menu.parse_command('/start@MiClashBot').name, 'menu');
-for (let removed in [ '/start-service', '/stop', '/reload', '/restart', '/reboot' ])
+for (let removed in [ '/start-service', '/stop', '/reload', '/restart', '/reboot',
+	'/start_service', '/stop_service', '/reload_service', '/restart_service',
+	'/reboot_router', '/subscription https://example.test/config', '/diagnostics',
+	'/logs', '/status', '/health', '/memory', '/help', '/update_subscription',
+	'/update_miclash', '/update_mihomo', '/guard_on', '/guard_off' ])
 	assert_equal(menu.parse_command(removed), null, removed + ' must not be accepted');
 assert_equal(menu.parse_command('/unknown'), null);
 assert_equal(menu.parse_command('not a command'), null);
@@ -53,7 +59,6 @@ let commands = menu.commands('ru');
 assert_equal(length(commands), 1);
 assert_equal(commands[0].command, 'menu');
 assert_equal(menu.parse_command('/start').name, 'menu');
-assert_equal(menu.parse_command('/diagnostics').name, 'diagnostics');
 for (let command in commands) {
 	assert_match(command.command, /^[a-z0-9_]{1,32}$/);
 	assert_true(type(command.description) == 'string' &&
@@ -98,7 +103,7 @@ assert_equal(length(completed.reply_markup.inline_keyboard), 0,
 for (let screen in [ 'status', 'management', 'subscription', 'updates', 'guard',
 	'memory', 'logs', 'diagnostics', 'subscription_input', 'confirm_stop', 'confirm_guard_off',
 	'confirm_reboot', 'confirm_update_miclash', 'confirm_update_mihomo', 'settings',
-	'admin_input', 'confirm_admin_remove' ]) {
+	'confirm_diagnostic_full', 'admin_input', 'confirm_admin_remove' ]) {
 	let rendered = menu.render(screen, model, 'en', 7);
 	assert_true(type(rendered.text) == 'string' && length(rendered.text));
 	assert_true(type(rendered.reply_markup.inline_keyboard) == 'array');
@@ -108,6 +113,12 @@ let opened = menu.parse_callback('g7:open:status', 7);
 assert_equal(opened.name, 'open'); assert_equal(opened.target, 'status');
 let confirmed = menu.parse_callback('g7:confirm:stop', 7);
 assert_equal(confirmed.name, 'confirm'); assert_equal(confirmed.target, 'stop');
+assert_equal(menu.parse_callback('g7:execute:diagnostic_silent', 7).target,
+	'diagnostic_silent');
+assert_equal(menu.parse_callback('g7:execute:diagnostic_lite', 7).target,
+	'diagnostic_lite');
+assert_equal(menu.parse_callback('g7:confirm:diagnostic_full', 7).target,
+	'diagnostic_full');
 let executed = menu.parse_callback('g7:execute:reboot', 7);
 assert_equal(executed.name, 'execute'); assert_equal(executed.target, 'reboot');
 let backed = menu.parse_callback('g7:back:main', 7);
