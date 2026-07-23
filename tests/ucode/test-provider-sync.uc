@@ -147,6 +147,43 @@ normal.machine.refresh();
 normal.clock.advance(0);
 assert_equal(length(normal.applied), 2);
 
+let malformed_diagnostics = environment([
+	{ server_ips: [ '192.0.2.31' ], fakeip_cidrs: [], evidence: {
+		checked_at: 'not-a-timestamp', endpoints_total: 1, resolved: 0, skipped: 1,
+		endpoints: [ { host: 'invalid host', result: 'dns_no_records', addresses: [] } ]
+	} },
+	{ server_ips: [ '192.0.2.32' ], fakeip_cidrs: [], evidence: {
+		checked_at: 1700000000000, endpoints_total: 1, resolved: 1, skipped: 0,
+		endpoints: [ { host: 'edge.example.test', result: 'resolved',
+			addresses: [ '198.51.100.32' ] } ]
+	} },
+	{ server_ips: [ '192.0.2.33' ], fakeip_cidrs: [], evidence: {
+		checked_at: 1700000000001, endpoints_total: 2, resolved: 2, skipped: 0,
+		endpoints: []
+	} }
+]);
+malformed_diagnostics.machine.start(); malformed_diagnostics.clock.advance(0);
+assert_equal(join(',', malformed_diagnostics.machine.current().server_ips), '192.0.2.31',
+	'malformed diagnostic evidence cannot prevent snapshot storage');
+assert_equal(malformed_diagnostics.machine.status().reason, 'synchronized',
+	'malformed diagnostic evidence cannot degrade provider health');
+assert_equal(malformed_diagnostics.clock.timers[length(malformed_diagnostics.clock.timers) - 1].due,
+	malformed_diagnostics.clock.now() + 30 * 60 * 1000,
+	'malformed diagnostic evidence cannot select the retry interval');
+assert_equal(malformed_diagnostics.machine.diagnostics().endpoints_total, 0,
+	'invalid diagnostic evidence is dropped');
+malformed_diagnostics.machine.refresh(); malformed_diagnostics.clock.advance(0);
+assert_equal(malformed_diagnostics.machine.diagnostics().endpoints[0].host,
+	'edge.example.test');
+malformed_diagnostics.machine.refresh(); malformed_diagnostics.clock.advance(0);
+assert_equal(join(',', malformed_diagnostics.machine.current().server_ips), '192.0.2.33',
+	'later malformed diagnostic evidence cannot prevent snapshot reconciliation');
+assert_equal(malformed_diagnostics.machine.diagnostics().endpoints[0].host,
+	'edge.example.test', 'last valid diagnostic observation is retained');
+assert_equal(malformed_diagnostics.machine.status().reason, 'synchronized');
+assert_equal(malformed_diagnostics.clock.timers[length(malformed_diagnostics.clock.timers) - 1].due,
+	malformed_diagnostics.clock.now() + 30 * 60 * 1000);
+
 let retained = environment([
 	{ server_ips: [ '192.0.2.1' ], fakeip_cidrs: [ '198.18.0.0/16' ] },
 	'error'

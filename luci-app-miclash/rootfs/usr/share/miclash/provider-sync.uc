@@ -77,6 +77,18 @@ export function create(app) {
 	function log(level, message) {
 		try { app.logger?.[level]?.('provider-sync: ' + message); } catch (error) {}
 	};
+	function observe_diagnostics(value) {
+		try {
+			let candidate = validate_diagnostics(value ?? empty_diagnostics());
+			diagnostic = clone(candidate);
+			return true;
+		}
+		catch (error) {
+			// Endpoint observations are support evidence only. Invalid evidence must
+			// never poison the applied snapshot, its durable state, health, or cadence.
+			return false;
+		}
+	};
 	let stored = secure_read(runtime);
 	if (stored != null) current = validate_snapshot(stored);
 
@@ -98,7 +110,6 @@ export function create(app) {
 			}
 			let previous_reason = reason, collected = app.collect();
 			let candidate = validate_snapshot(collected);
-			diagnostic = validate_diagnostics(collected?.evidence ?? empty_diagnostics());
 			if (!same(candidate, current)) {
 				if (app.apply(clone(candidate)) !== true) errors.fail('HEALTH_FAILED');
 				storage.write_json(runtime, STATE_PATH, candidate, 0o600);
@@ -108,6 +119,7 @@ export function create(app) {
 				log('info', sprintf('synchronized endpoints=%d fakeip_cidrs=%d',
 					length(current.server_ips), length(current.fakeip_cidrs)));
 			}
+			observe_diagnostics(collected?.evidence);
 			last_success = runtime.clock.now(); reason = 'synchronized';
 			if (previous_reason != 'pending' && previous_reason != 'synchronized')
 				log('info', 'recovered');

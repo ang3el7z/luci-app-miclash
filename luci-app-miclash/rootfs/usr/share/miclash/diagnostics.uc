@@ -336,7 +336,9 @@ function report_issues(safe) {
 		if (normalized == 'ok' || normalized == 'ready' || normalized == 'running' ||
 			normalized == 'success' || normalized == 'idle' || normalized == 'completed' ||
 			normalized == 'none' || normalized == 'inactive' || normalized == 'disabled' ||
-			normalized == 'not_required') return;
+			normalized == 'not_required' || normalized == 'present' ||
+			normalized == 'active' || normalized == 'synchronized' ||
+			normalized == 'system' || normalized == 'enabled') return;
 		push(issues, {
 			section,
 			component: sprintf('%s', component ?? 'unknown'),

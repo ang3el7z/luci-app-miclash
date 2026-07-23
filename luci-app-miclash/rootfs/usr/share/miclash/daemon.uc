@@ -1109,7 +1109,67 @@ export function compose(runtime, overrides) {
 		function last_repair() {
 			return state_model.last_repair();
 		};
-		let evidence_domain = modules.diagnostics_evidence.create(runtime);
+		function diagnostic_routing() {
+			let observed = modules.routing.observe(runtime);
+			return {
+				state: 'present',
+				source: 'routing',
+				routes: observed.routes,
+				rules: observed.rules,
+				ownership: observed.ownership,
+				interfaces: observed.interfaces
+			};
+		};
+		let evidence_domain = modules.diagnostics_evidence.create(runtime, {
+			procd: () => ({
+				state: 'present',
+				source: 'procd',
+				service: service_adapter.diagnostics('config.yaml')
+			}),
+			routes: diagnostic_routing,
+			interfaces: () => ({
+				state: 'present',
+				source: 'ubus',
+				interfaces: bounded_network_interfaces(runtime, settings_domain)
+			}),
+			tun_tproxy: () => {
+				let observed = diagnostic_routing();
+				return {
+					state: 'present',
+					source: observed.source,
+					tun: { present: observed.interfaces?.['clash-tun'] === true },
+					routes: observed.routes,
+					rules: observed.rules,
+					ownership: observed.ownership
+				};
+			},
+			guard: () => ({
+				...guard_component_status(runtime, settings_domain.get()),
+				source: 'guard'
+			}),
+			schedulers: () => ({
+				state: 'present',
+				source: 'domains',
+				subscription: subscription_scheduler_domain.status(),
+				miclash: app_update_domain.status(),
+				device_vendors: device_vendor_domain.status()
+			}),
+			memory: () => ({
+				state: 'present',
+				source: 'memory-monitor',
+				status: app.memory_status()
+			}),
+			operations: () => ({
+				state: 'present',
+				source: 'journal',
+				records: operation_manager.list()
+			}),
+			recovery: () => ({
+				state: 'present',
+				source: 'state',
+				last_repair: last_repair()
+			})
+		});
 		let diagnostics_domain = modules.diagnostics.create({ runtime, sources: {
 			versions: () => { let info = bounded_system_info(runtime); return {
 				miclash: info.app_version, mihomo: info.mihomo.version }; },
