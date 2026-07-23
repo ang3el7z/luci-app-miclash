@@ -11,7 +11,15 @@ let log_lines = [
 	'Thu Jul 23 01:00:00 2026 daemon.info dnsmasq[1234]: query[A] example.test from 192.0.2.1\n',
 	'Thu Jul 23 01:00:01 2026 daemon.notice netifd: Interface wan is now up\n',
 	'Thu Jul 23 01:00:02 2026 user.notice firewall: Reloading firewall\n',
-	'Thu Jul 23 01:00:03 2026 kern.warn kernel: TUN device entered promiscuous mode\n'
+	'Thu Jul 23 01:00:03 2026 kern.warn kernel: TUN device entered promiscuous mode\n',
+	'Thu Jul 23 01:00:04 2026 kern.warn kernel: tproxy rule matched local socket\n',
+	'Thu Jul 23 01:00:05 2026 kern.warn kernel: IPv4: routing cache flush\n',
+	'Thu Jul 23 01:00:06 2026 kern.err kernel: Out of memory: Killed process 123 (mihomo)\n',
+	'Thu Jul 23 01:00:07 2026 kern.err kernel: mihomo[456]: segfault at 0 ip 00000000\n',
+	'Thu Jul 23 01:00:08 2026 kern.emerg kernel: Kernel panic - not syncing: Fatal exception\n',
+	'Thu Jul 23 01:00:09 2026 kern.err kernel: Oops: 0000 [#1] SMP\n',
+	'Thu Jul 23 01:00:10 2026 kern.err kernel: crash signature: general protection fault\n',
+	'Thu Jul 23 01:00:11 2026 kern.info kernel: unrelated periodic housekeeping\n'
 ];
 for (let i = 0; i < 1500; i++)
 	push(log_lines, sprintf(
@@ -40,7 +48,7 @@ let evidence = evidence_module.create(runtime, {
 
 let logs = [];
 for (let entry in evidence.logs()) push(logs, entry);
-assert_equal(length(logs), 1205, 'all available relevant log lines are yielded');
+assert_equal(length(logs), 1212, 'all available relevant log lines are yielded');
 assert_equal(logs[0].timestamp, 'Thu Jul 23 01:00:00 2026');
 assert_equal(logs[0].facility, 'daemon');
 assert_equal(logs[0].severity, 'info');
@@ -54,10 +62,19 @@ assert_equal(logs[2].severity, 'notice');
 assert_equal(logs[3].facility, 'kern');
 assert_equal(logs[3].severity, 'warn');
 assert_equal(logs[3].component, 'kernel');
+assert_equal(logs[4].message, 'tproxy rule matched local socket');
+assert_equal(logs[5].message, 'IPv4: routing cache flush');
+assert_equal(logs[6].message, 'Out of memory: Killed process 123 (mihomo)');
+assert_equal(logs[7].message, 'mihomo[456]: segfault at 0 ip 00000000');
+assert_equal(logs[8].message, 'Kernel panic - not syncing: Fatal exception');
+assert_equal(logs[9].message, 'Oops: 0000 [#1] SMP');
+assert_equal(logs[10].message, 'crash signature: general protection fault');
+assert_true(index(sprintf('%J', logs), 'unrelated periodic housekeeping') < 0,
+	'irrelevant native kernel records remain excluded');
 assert_equal(logs[length(logs) - 1].message, 'final relevant record',
 	'relevant records are not subject to a second count truncation');
 assert_equal(evidence.logs_status().state, 'present');
-assert_equal(evidence.logs_status().records, 1205);
+assert_equal(evidence.logs_status().records, 1212);
 assert_true(length(filter(log_read_modes, (mode) => mode != 'line')) == 0,
 	'logread is consumed as a direct record stream, never as a full output buffer');
 let log_command = commands[length(commands) - 1];

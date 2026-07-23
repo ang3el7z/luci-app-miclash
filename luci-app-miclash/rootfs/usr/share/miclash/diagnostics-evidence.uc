@@ -564,8 +564,10 @@ function relevant_log(line) {
 		index(lowered, 'firewall') >= 0 || index(lowered, 'fw4') >= 0 ||
 		(index(lowered, 'kernel:') >= 0 && (index(lowered, 'tun') >= 0 ||
 		index(lowered, 'tproxy') >= 0 || index(lowered, 'route') >= 0 ||
+		index(lowered, 'routing') >= 0 ||
 		index(lowered, 'oom') >= 0 || index(lowered, 'out of memory') >= 0 ||
-		index(lowered, 'crash') >= 0));
+		index(lowered, 'segfault') >= 0 || index(lowered, 'kernel panic') >= 0 ||
+		index(lowered, 'oops') >= 0 || index(lowered, 'crash') >= 0));
 };
 
 function collect_logs(runtime) {
