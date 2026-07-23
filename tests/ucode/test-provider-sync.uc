@@ -62,10 +62,10 @@ assert_equal(join(',', snapshot.server_ips),
 	'192.0.2.10,198.51.100.20,2001:db8::20');
 assert_equal(join(',', snapshot.fakeip_cidrs),
 	'192.0.2.0/24,198.18.0.0/16,2001:db8:1::/48,203.0.113.0/24');
-
-assert_throws(() => provider_data.collect({ fs: filesystem }, CONFIG, {
+let partial_snapshot = provider_data.collect({ fs: filesystem }, CONFIG, {
 	auto_fakeip_whitelist: true, resolve: () => [], convert_mrs: () => ''
-}), 'HEALTH_FAILED');
+});
+assert_equal(join(',', partial_snapshot.server_ips), '192.0.2.10');
 filesystem.set_symlink('/opt/clash/proxy_providers/remote.yaml',
 	'/opt/clash/ruleset/routed.yaml');
 assert_throws(() => provider_data.collect({ fs: filesystem }, CONFIG, {

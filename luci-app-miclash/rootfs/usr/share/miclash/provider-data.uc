@@ -173,7 +173,8 @@ export function collect(runtime, config_content, options) {
 			continue;
 		}
 		let resolved = options.resolve(endpoint);
-		if (type(resolved) != 'array' || !length(resolved)) errors.fail('HEALTH_FAILED');
+		if (type(resolved) != 'array') errors.fail('INVALID_RESPONSE');
+		if (!length(resolved)) continue;
 		for (let address in resolved) {
 			if (!firewall_common.valid_ip(address)) errors.fail('INVALID_RESPONSE');
 			append_unique(server_ips, server_seen, address);
