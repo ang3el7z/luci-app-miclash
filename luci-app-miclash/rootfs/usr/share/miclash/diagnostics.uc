@@ -555,6 +555,227 @@ function read_file(runtime, directory, record) {
 	verify_directory(runtime, directory.path, directory.identity);
 	return content;
 };
+function remove_stream_directory(runtime, root, path) {
+	let directory = verify_directory(runtime, path, null);
+	let entries = runtime.fs.lsdir(path);
+	if (type(entries) != 'array' || length(entries) != 1 || entries[0] != 'report.json')
+		errors.fail('CORRUPT_STATE');
+	let file = path + '/report.json', identity = safe_file(runtime, file, null);
+	verify_directory(runtime, ROOT, root);
+	if (!same_node(identity, runtime.fs.lstat(file)) || runtime.fs.unlink(file) !== true)
+		errors.fail('INTERNAL');
+	verify_directory(runtime, path, directory);
+	verify_directory(runtime, ROOT, root);
+	if (runtime.fs.rmdir(path) !== true) errors.fail('INTERNAL');
+	verify_directory(runtime, ROOT, root);
+};
+function recover_stream_store(runtime, root) {
+	let names = runtime.fs.lsdir(ROOT);
+	if (type(names) != 'array' || length(names) > MAX_ROOT_ENTRIES)
+		errors.fail('CORRUPT_STATE');
+	for (let name in names) {
+		if (!match(name, /^(\.stage-|report-)[0-9a-f]{32}$/))
+			continue;
+		let path = ROOT + '/' + name, entries = runtime.fs.lsdir(path);
+		// Legacy reports are paired report.json/report.txt directories and are
+		// owned by the established diagnostics domain, so leave them untouched.
+		if (type(entries) == 'array' && length(entries) == 2 && index(entries, 'report.json') >= 0 &&
+			index(entries, 'report.txt') >= 0)
+			continue;
+		remove_stream_directory(runtime, root, path);
+	}
+};
+function storage_free_blocks(runtime) {
+	if (type(runtime?.storage?.free_blocks) == 'function') {
+		let blocks = runtime.storage.free_blocks();
+		if (type(blocks) != 'int' || blocks < 0) errors.fail('INTERNAL');
+		return blocks;
+	}
+	if (type(runtime?.fs?.popen) != 'function') errors.fail('INTERNAL');
+	let handle = runtime.fs.popen('/bin/df -Pk /tmp', 'r');
+	if (handle == null) errors.fail('INTERNAL');
+	let output = '', failure = null;
+	try {
+		while (length(output) <= 8192) {
+			let chunk = handle.read(1024);
+			if (type(chunk) != 'string') errors.fail('INTERNAL');
+			if (!length(chunk)) break;
+			output += chunk;
+		}
+	}
+	catch (error) { failure = 'INTERNAL'; }
+	if (handle.close() !== true) failure = 'INTERNAL';
+	if (failure != null || length(output) > 8192) errors.fail('INTERNAL');
+	let lines = split(output, '\n');
+	if (length(lines) < 2) errors.fail('INTERNAL');
+	let fields = split(trim(lines[length(lines) - 2]), /[ \t]+/);
+	if (length(fields) < 4 || !match(fields[3], /^[0-9]+$/)) errors.fail('INTERNAL');
+	return int(fields[3]);
+};
+function validate_stream_json(runtime, directory, path, expected_size) {
+	verify_directory(runtime, directory.path, directory.identity);
+	let identity = safe_file(runtime, path, null);
+	if (identity.size != expected_size || expected_size > REPORT_MAX_INPUT)
+		errors.fail('RESPONSE_TOO_LARGE');
+	let handle = runtime.fs.open(path, 're');
+	if (handle == null) errors.fail('INTERNAL');
+	let content = '', failure = null;
+	try {
+		while (length(content) <= REPORT_MAX_INPUT) {
+			let chunk = runtime.fs.read(handle, 4096);
+			if (type(chunk) != 'string') errors.fail('INTERNAL');
+			if (!length(chunk)) break;
+			content += chunk;
+		}
+		if (length(content) != expected_size) errors.fail('INTERNAL');
+		json(content);
+	}
+	catch (error) { failure = 'INVALID_RESPONSE'; }
+	if (runtime.fs.close(handle) !== true) failure = 'INTERNAL';
+	let current = runtime.fs.lstat(path);
+	if (failure != null || !same_node(identity, current) || current?.size != expected_size ||
+		runtime.fs.realpath(path) != path)
+		errors.fail(failure ?? 'INTERNAL');
+	verify_directory(runtime, directory.path, directory.identity);
+	return current;
+};
+
+// A deliberately small persistence boundary for streamed JSON reports. The
+// existing diagnostics domain continues to own its legacy paired JSON/text
+// reports while newer callers use this one-file, capability-scoped store.
+export function create_store(runtime) {
+	if (type(runtime?.fs) != 'object' || type(runtime?.clock?.now) != 'function' ||
+		type(runtime?.random?.hex) != 'function' || type(runtime?.digest?.sha256_file) != 'function' ||
+		runtime?.paths?.tmp != '/tmp/miclash') invalid();
+	ensure_directory(runtime, runtime.paths.tmp);
+	let root = ensure_directory(runtime, ROOT), reports = {}, pending = {};
+	recover_stream_store(runtime, root);
+	function discard(report) {
+		if (report != null && runtime.fs.lstat(report.directory.path) != null)
+			remove_stream_directory(runtime, root, report.directory.path);
+		delete reports[report?.id];
+	};
+	function expire() {
+		let now = runtime.clock.now();
+		for (let id, report in reports)
+			if (report.expires_at <= now) discard(report);
+	};
+	function cleanup_pending(id, stage, final_path) {
+		delete pending[id];
+		let failure = null;
+		for (let path in [ stage, final_path ]) {
+			try {
+				if (runtime.fs.lstat(path) != null)
+					remove_stream_directory(runtime, root, path);
+			}
+			catch (error) { failure = 'INTERNAL'; }
+		}
+		if (failure != null) errors.fail(failure);
+	};
+	return {
+		begin: (options) => {
+			if (type(options) != 'object' || length(keys(options)) != 2 ||
+				type(options.mode) != 'string' || !match(options.mode, /^[a-z][a-z0-9_-]{0,31}$/) ||
+				type(options.required_bytes) != 'int' || options.required_bytes < 1 ||
+				options.required_bytes > REPORT_MAX_INPUT) invalid();
+			expire();
+			// One KiB blocks plus a 64 KiB reserve ensure finalization and cleanup
+			// remain possible even when tmpfs is nearly exhausted.
+			if (storage_free_blocks(runtime) < int((options.required_bytes + 65535) / 1024) + 64)
+				errors.fail('INSUFFICIENT_STORAGE');
+			root = verify_directory(runtime, ROOT, root);
+			for (let attempt = 0; attempt < 16; attempt++) {
+				let token = runtime.random.hex(16);
+				if (!match(token, /^[0-9a-f]{32}$/)) errors.fail('INTERNAL');
+				let id = 'rpt_' + token, stage = ROOT + '/.stage-' + token;
+				if (reports[id] != null || runtime.fs.lstat(stage) != null ||
+					runtime.fs.lstat(ROOT + '/report-' + token) != null) continue;
+				if (runtime.fs.mkdir(stage) !== true) continue;
+				let directory = { path: stage, identity: runtime.fs.lstat(stage) };
+				let failure = null, handle = null;
+				try {
+					if (runtime.fs.chmod(stage, 0o700) !== true)
+						errors.fail('INTERNAL');
+					directory.identity = verify_directory(runtime, stage, directory.identity);
+					handle = runtime.fs.open(stage + '/report.json', 'wx', 0o600);
+					if (handle == null) errors.fail('INTERNAL');
+					handle.path = stage + '/report.json';
+					let opened = safe_file(runtime, handle.path, null);
+					let created_at = runtime.clock.now(), expires_at = created_at + TTL;
+					pending[id] = { mode: options.mode, created_at, expires_at };
+					return { id, mode: options.mode, path: stage, size: 0, sha256: null,
+						created_at, expires_at,
+						downloaded: false, handle, directory, identity: opened };
+				}
+				catch (error) { failure = errors.normalize(error).code; }
+				if (handle != null) try { runtime.fs.close(handle); } catch (error) {}
+				try { remove_stream_directory(runtime, root, stage); } catch (error) { failure = 'INTERNAL'; }
+				errors.fail(failure);
+			}
+			errors.fail('INTERNAL');
+		},
+		finish: (id, result) => {
+			if (type(id) != 'string' || !match(id, /^rpt_[0-9a-f]{32}$/) ||
+				type(result) != 'object') invalid();
+			let pending_report = pending[id];
+			if (pending_report == null) errors.fail('NOT_FOUND');
+			let stage = ROOT + '/.stage-' + substr(id, 4), final_path = ROOT + '/report-' + substr(id, 4);
+			try {
+				let directory = { path: stage, identity: verify_directory(runtime, stage, null) };
+				let expected = stage + '/report.json';
+				if (result.path != expected || type(result.size) != 'int' || result.size < 1 ||
+					type(result.sha256) != 'string' || !match(result.sha256, /^[0-9a-f]{64}$/)) invalid();
+				let file = validate_stream_json(runtime, directory, expected, result.size);
+				if (runtime.digest.sha256_file(expected) != result.sha256) errors.fail('INTERNAL');
+				verify_directory(runtime, ROOT, root);
+				if (runtime.fs.lstat(final_path) != null || runtime.fs.rename(stage, final_path) !== true)
+					errors.fail('INTERNAL');
+				let final_directory = { path: final_path,
+					identity: verify_directory(runtime, final_path, directory.identity) };
+				let final_file = safe_file(runtime, final_path + '/report.json', file);
+				let report = { id, mode: pending_report.mode, path: final_path + '/report.json', size: result.size,
+					sha256: result.sha256, created_at: pending_report.created_at,
+					expires_at: pending_report.expires_at, downloaded: false,
+					directory: final_directory, identity: final_file };
+				delete pending[id];
+				reports[id] = report;
+				return { id: report.id, mode: report.mode, path: report.path, size: report.size,
+					sha256: report.sha256, created_at: report.created_at, expires_at: report.expires_at,
+					downloaded: report.downloaded };
+			}
+			catch (error) {
+				let code = errors.normalize(error).code;
+				cleanup_pending(id, stage, final_path);
+				errors.fail(code);
+			}
+		},
+		open_report: (id) => {
+			expire();
+			let report = reports[id];
+			if (type(id) != 'string' || report == null || report.downloaded) errors.fail('NOT_FOUND');
+			verify_directory(runtime, ROOT, root);
+			verify_directory(runtime, report.directory.path, report.directory.identity);
+			let file = safe_file(runtime, report.path, report.identity);
+			if (file.size != report.size || runtime.digest.sha256_file(report.path) != report.sha256)
+				errors.fail('INTERNAL');
+			let handle = runtime.fs.open(report.path, 're');
+			if (handle == null) errors.fail('INTERNAL');
+			return {
+				read: (amount) => runtime.fs.read(handle, amount),
+				close: () => {
+					let closed = runtime.fs.close(handle);
+					if (closed !== true) errors.fail('INTERNAL');
+					let current = safe_file(runtime, report.path, report.identity);
+					if (!same_node(file, current) || runtime.digest.sha256_file(report.path) != report.sha256)
+						errors.fail('INTERNAL');
+					report.downloaded = true;
+					discard(report);
+					return true;
+				}
+			};
+		}
+	};
+};
 export function create(dependencies) {
 	let runtime = dependencies?.runtime, sources = dependencies?.sources;
 	if (type(runtime?.fs) != 'object' || type(runtime?.clock?.now) != 'function' ||
