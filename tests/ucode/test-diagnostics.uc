@@ -95,9 +95,15 @@ let sources = {
 	operations: () => report_source('operations', [ { id: 'safe-operation', context:
 		'cookie=' + secrets.cookie + ' password=' + secrets.password } ]),
 	evidence: () => [
+		{ name: 'procd', value: {
+			state: 'unavailable', code: 'COLLECTION_UNAVAILABLE',
+			message: 'procd service status is unavailable' } },
 		{ name: 'interfaces', value: {
 			state: 'unavailable', code: 'COLLECTION_UNAVAILABLE',
-			message: 'interface collector unavailable' } },
+			message: 'interface topology is unavailable' } },
+		{ name: 'firewall', value: {
+			state: 'unavailable', code: 'COLLECTION_UNAVAILABLE',
+			message: 'Complete iptables fallback evidence is unavailable' } },
 		{ name: 'logs', value: {
 			state: 'unavailable', code: 'COLLECTION_UNAVAILABLE',
 			message: 'logread collection unavailable' } }
@@ -307,14 +313,20 @@ assert_equal(huge_center.summary().schema_version, 1,
 let huge_created = huge_center.create_report();
 let huge_report = json(huge_center.read_report({ id: huge_created.id, format: 'json' }).content);
 assert_equal(huge_report.schema_version, 4);
-assert_equal(huge_report.collection.evidence[0].name, 'interfaces');
-assert_equal(huge_report.collection.evidence[1].name, 'logs');
-assert_equal(huge_report.issues[length(huge_report.issues) - 2].component, 'interfaces');
+assert_equal(huge_report.collection.evidence[0].name, 'procd');
+assert_equal(huge_report.collection.evidence[1].name, 'interfaces');
+assert_equal(huge_report.collection.evidence[2].name, 'firewall');
+assert_equal(huge_report.collection.evidence[3].name, 'logs');
+assert_equal(huge_report.issues[length(huge_report.issues) - 4].component, 'procd');
+assert_equal(huge_report.issues[length(huge_report.issues) - 3].component, 'interfaces');
+assert_equal(huge_report.issues[length(huge_report.issues) - 2].component, 'firewall');
 assert_equal(huge_report.issues[length(huge_report.issues) - 1].component, 'logs');
 assert_equal(huge_report.issues[length(huge_report.issues) - 1].code,
 	'COLLECTION_UNAVAILABLE');
+assert_equal(huge_report.issues[length(huge_report.issues) - 2].message,
+	'Complete iptables fallback evidence is unavailable');
 assert_true(type(huge_report.issues) == 'array');
-assert_equal(length(huge_report.issues), 4);
+assert_equal(length(huge_report.issues), 6);
 assert_equal(huge_report.issues[0].component, 'dns');
 assert_equal(huge_report.issues[0].severity, 'error');
 assert_equal(huge_report.issues[1].component, 'subscription.update');

@@ -200,7 +200,7 @@ function owned_iptables_document(output, table) {
 		}
 	}
 
-	let anchors = {}, active_ids = {}, reachable = {};
+	let anchors = {}, anchor_ids = {}, active_ids = {}, reachable = {};
 	for (let name in IPTABLES_ANCHORS) {
 		let contract = IPTABLES_ANCHORS[name];
 		if (contract.table != table || declaration_counts[name] != 1) continue;
@@ -218,6 +218,7 @@ function owned_iptables_document(output, table) {
 		if (generation == null || generation.prefix != contract.prefix ||
 		    declaration_counts[target] != 1 || anchor_rules[0].line != anchor_line) continue;
 		anchors[name] = { hook_line, anchor_line, target };
+		anchor_ids[name] = generation.id;
 		active_ids[generation.id] = true;
 		reachable[target] = true;
 	}
@@ -254,18 +255,49 @@ function owned_iptables_document(output, table) {
 		}
 		if (owned) push(lines, rule.line);
 	}
-	return { lines, active_ids };
+	return { lines, anchor_ids };
 };
 
-function owned_ipset_lines(output, active_ids) {
-	let lines = [];
+function family_generation(anchor_ids) {
+	let generation = null;
+	for (let name in [ 'MCL_AN_PR', 'MCL_AN_OU', 'MCL_AN_TI', 'MCL_AN_TF' ]) {
+		let id = anchor_ids?.[name];
+		if (type(id) != 'string') return null;
+		if (generation == null) generation = id;
+		else if (generation != id) return null;
+	}
+	return generation;
+};
+
+function owned_ipset_lines(output, generations) {
+	let source = [], declaration_counts = {}, valid_declarations = {};
 	for (let raw in split(output, '\n')) {
 		let line = trim(raw);
+		if (!length(line) || length(line) > 4096) continue;
+		push(source, line);
+		let declaration = match(line,
+			/^create (MCL_(L4|F4|L6|F6)_([0-9a-f]{12}))[ \t]+.*[ \t]family[ \t]+(inet|inet6)([ \t]|$)/);
+		if (!declaration) continue;
+		let name = declaration[1], kind = declaration[2];
+		declaration_counts[name] = (declaration_counts[name] ?? 0) + 1;
+		let family = substr(kind, 1, 1) == '4' ? 'ipv4' : 'ipv6';
+		let expected_ipset_family = family == 'ipv4' ? 'inet' : 'inet6';
+		if (generations[family] != null && declaration[3] == generations[family] &&
+		    declaration[4] == expected_ipset_family)
+			valid_declarations[name] = line;
+	}
+	let authorized = {};
+	for (let name in valid_declarations)
+		if (declaration_counts[name] == 1) authorized[name] = true;
+	let lines = [];
+	for (let line in source) {
 		if (length(lines) >= MAX_RECORDS) break;
-		let owned = match(line,
-			/^(create|add) MCL_(L4|F4|L6|F6)_([0-9a-f]{12})( |$)/);
-		if (length(line) <= 4096 && owned && active_ids[owned[3]])
-			push(lines, line);
+		let declaration = match(line,
+			/^create (MCL_(L4|F4|L6|F6)_[0-9a-f]{12})([ \t]|$)/);
+		let member = match(line,
+			/^add (MCL_(L4|F4|L6|F6)_[0-9a-f]{12})([ \t]|$)/);
+		let name = declaration ? declaration[1] : (member ? member[1] : null);
+		if (name != null && authorized[name]) push(lines, line);
 	}
 	return lines;
 };
@@ -277,27 +309,49 @@ function collect_firewall(runtime) {
 		if (document?.state != 'unavailable' && type(document.nftables) == 'array')
 			return present('nft', { backend: 'nft', table: document });
 	}
-	let documents = [], available = false, last_failure = nft, active_ids = {};
+	let documents = [], available = false, incomplete = false, last_failure = nft;
+	let family_anchor_ids = { ipv4: {}, ipv6: {} };
 	for (let executable in [ '/usr/sbin/iptables-save', '/usr/sbin/ip6tables-save' ])
 		for (let table in [ 'mangle', 'filter' ]) {
 			let result = capture(runtime, executable + ' -t ' + table, SECTION_LIMIT);
-			if (result.ok !== true) { last_failure = result; continue; }
+			if (result.ok !== true) {
+				incomplete = true;
+				last_failure = result;
+				continue;
+			}
 			available = true;
 			let owned = owned_iptables_document(result.output, table);
-			for (let id in owned.active_ids) active_ids[id] = true;
+			let family = executable == '/usr/sbin/ip6tables-save' ? 'ipv6' : 'ipv4';
+			for (let name, id in owned.anchor_ids)
+				family_anchor_ids[family][name] = id;
 			push(documents, {
-				family: executable == '/usr/sbin/ip6tables-save' ? 'ipv6' : 'ipv4',
+				family,
 				table,
 				lines: owned.lines
 			});
 		}
 	if (available) {
+		if (incomplete)
+			return {
+				...unavailable('firewall', {
+					code: last_failure?.code ?? 'COLLECTION_UNAVAILABLE',
+					message: 'Complete iptables fallback evidence is unavailable',
+					exit_code: last_failure?.exit_code
+				}),
+				backend: 'iptables',
+				documents,
+				sets: []
+			};
+		let generations = {
+			ipv4: family_generation(family_anchor_ids.ipv4),
+			ipv6: family_generation(family_anchor_ids.ipv6)
+		};
 		let sets = capture(runtime, '/usr/sbin/ipset save', SECTION_LIMIT);
 		if (sets.ok === true)
 			return present('iptables', {
 				backend: 'iptables',
 				documents,
-				sets: owned_ipset_lines(sets.output, active_ids)
+				sets: owned_ipset_lines(sets.output, generations)
 			});
 		return {
 			...unavailable('firewall', sets),
@@ -426,12 +480,32 @@ function routing_projection(name, value) {
 	};
 };
 
+function nested_source_failure(name, value) {
+	if (name == 'procd' &&
+	    (value?.service?.state == 'unknown' || value?.service?.state == 'unavailable'))
+		return unavailable(name, {
+			code: value.service.code ?? 'COLLECTION_UNAVAILABLE',
+			message: value.service.message ?? 'procd service status is unavailable'
+		});
+	if (name == 'interfaces' &&
+	    (value?.interfaces?.available === false ||
+	     value?.interfaces?.state == 'unknown' ||
+	     value?.interfaces?.state == 'unavailable'))
+		return unavailable(name, {
+			code: value.interfaces.code ?? 'COLLECTION_UNAVAILABLE',
+			message: value.interfaces.message ?? 'interface topology is unavailable'
+		});
+	return null;
+};
+
 function section_value(runtime, name, collector) {
 	if (type(collector) != 'function') return default_section(runtime, name);
 	try {
 		let value = collector();
 		if (value == null) return unavailable(name, null);
 		if (type(value) != 'object') return present('domain', { data: value });
+		let nested_failure = nested_source_failure(name, value);
+		if (nested_failure != null) return nested_failure;
 		if (name == 'routes') return routing_projection(name, value);
 		if (name == 'tun_tproxy' && type(value.routes) == 'array' &&
 		    type(value.rules) == 'array') {
@@ -494,6 +568,47 @@ function relevant_log(line) {
 		index(lowered, 'crash') >= 0));
 };
 
+function collect_logs(runtime) {
+	let popen = runtime?.fs?.popen ?? require('fs').popen;
+	if (type(popen) != 'function')
+		return { error: unavailable('logs', {
+			code: 'COLLECTION_UNAVAILABLE',
+			message: 'logread collection is unavailable'
+		}) };
+	let pipe = null, records = [];
+	try {
+		pipe = popen('/sbin/logread', 'r');
+		if (pipe == null)
+			return { error: unavailable('logs', {
+				code: 'COLLECTION_UNAVAILABLE',
+				message: 'logread is unavailable'
+			}) };
+		while (true) {
+			let line = pipe.read('line');
+			if (type(line) != 'string' || !length(line)) break;
+			line = replace(line, /\r?\n$/, '');
+			if (length(line) && relevant_log(line))
+				push(records, log_entry(line));
+		}
+		let closed = type(pipe.close) == 'function' ? pipe.close() : null;
+		pipe = null;
+		if (closed != 0)
+			return { error: unavailable('logs', {
+				code: 'COLLECTION_UNAVAILABLE',
+				message: 'logread collection failed',
+				exit_code: closed
+			}) };
+		return { records };
+	}
+	catch (error) {
+		if (pipe != null) try { pipe.close(); } catch (ignored) {}
+		return { error: unavailable('logs', {
+			code: 'COLLECTION_UNAVAILABLE',
+			message: 'logread collection failed'
+		}) };
+	}
+};
+
 export function create(runtime, collectors) {
 	if (type(runtime) != 'object') errors.fail('INVALID_ARGUMENT');
 	collectors = collectors ?? {};
@@ -510,14 +625,12 @@ export function create(runtime, collectors) {
 			{ name: 'logs', value: clone(log_status) }
 		],
 		logs: () => {
-			let source = capture(runtime, '/sbin/logread', null);
-			if (source.ok !== true) {
-				log_status = unavailable('logs', source);
+			let source = collect_logs(runtime);
+			if (source.error != null) {
+				log_status = source.error;
 				return [];
 			}
-			let result = [];
-			for (let line in split(source.output, '\n'))
-				if (length(line) && relevant_log(line)) push(result, log_entry(line));
+			let result = source.records;
 			log_status = present('/sbin/logread', {
 				records: length(result),
 				oldest_timestamp: length(result) ? result[0].timestamp : null,
