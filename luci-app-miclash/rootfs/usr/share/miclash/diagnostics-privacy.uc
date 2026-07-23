@@ -14,6 +14,7 @@ const MAX_PATH_BYTES = 32768;
 const MAX_REPLACEMENT_PATTERNS = 1024;
 const MAX_REPLACEMENT_MATCHES = 4096;
 const MAX_VARIANT_BYTES = 262144;
+const MAX_MIXED_PERCENT_STEPS = 4194304;
 
 function enum_mode(mode) {
 	if (mode != 'silent' && mode != 'lite' && mode != 'full')
@@ -148,6 +149,64 @@ function percent_decoded(input) {
 	return output;
 };
 
+function ipv4_address(input) {
+	let parts = split(input, '.');
+	if (length(parts) != 4)
+		return false;
+	for (let part in parts)
+		if (!length(part) || !match(part, /^[0-9]+$/) || int(part) > 255)
+			return false;
+	return true;
+};
+
+function ipv6_address(input) {
+	let slash = index(input, '/'), address = input;
+	if (slash >= 0) {
+		let prefix = substr(input, slash + 1);
+		if (!length(prefix) || !match(prefix, /^[0-9]+$/) ||
+		    int(prefix) > 128 || index(substr(input, slash + 1), '/') >= 0)
+			return false;
+		address = substr(input, 0, slash);
+	}
+	if (!length(address) || length(address) > 45)
+		return false;
+	if (index(address, '.') >= 0) {
+		let last_colon = -1;
+		for (let offset = 0; offset < length(address); offset++)
+			if (substr(address, offset, 1) == ':')
+				last_colon = offset;
+		if (last_colon < 0 ||
+		    !ipv4_address(substr(address, last_colon + 1)))
+			return false;
+		address = substr(address, 0, last_colon + 1) + '0:0';
+	}
+	if (length(address) > 39 ||
+	    !match(address, /^[0-9A-Fa-f:]+$/))
+		return false;
+	let compressed = index(address, '::'), groups = 0;
+	if (compressed >= 0) {
+		if (index(address, ':::') >= 0 ||
+		    index(substr(address, compressed + 2), '::') >= 0)
+			return false;
+		let left = substr(address, 0, compressed);
+		let right = substr(address, compressed + 2);
+		for (let side in [ left, right ])
+			if (length(side))
+				for (let part in split(side, ':')) {
+					if (!match(part, /^[0-9A-Fa-f]{1,4}$/))
+						return false;
+					groups++;
+				}
+		return groups < 8;
+	}
+	for (let part in split(address, ':')) {
+		if (!match(part, /^[0-9A-Fa-f]{1,4}$/))
+			return false;
+		groups++;
+	}
+	return groups == 8;
+};
+
 function classify_token(catalog, token, spelling, sensitive) {
 	token = trim_token(token);
 	if (!length(token))
@@ -161,7 +220,7 @@ function classify_token(catalog, token, spelling, sensitive) {
 		return true;
 	}
 	else if (match(token, /^[0-9]{1,3}(\.[0-9]{1,3}){3}(\/[0-9]{1,2})?$/) ||
-	         match(token, /^[0-9A-Fa-f:]+(:[0-9A-Fa-f:]+)+(\/[0-9]{1,3})?$/)) {
+	         ipv6_address(token)) {
 		catalog_add(catalog, 'ips', token);
 		return true;
 	}
@@ -260,7 +319,7 @@ function credential_add(catalog, input) {
 		return fail_closed(catalog);
 	if (decoded != input && !catalog_add(catalog, 'secret', decoded))
 		return false;
-	let decoded64 = base64_decoded(input);
+	let decoded64 = base64_decoded(decoded);
 	if (decoded64 != null && match(decoded64, /^[[:print:]\t]+$/) &&
 	    !catalog_add(catalog, 'secret', decoded64))
 		return false;
@@ -269,6 +328,131 @@ function credential_add(catalog, input) {
 
 function marker_key_character(character) {
 	return match(character, /^[A-Za-z0-9_.-]$/);
+};
+
+function line_end(input, start) {
+	let end = start;
+	while (end < length(input) && substr(input, end, 1) != '\n' &&
+	       substr(input, end, 1) != '\r')
+		end++;
+	return end;
+};
+
+function next_line(input, end) {
+	if (end >= length(input))
+		return end;
+	if (substr(input, end, 1) == '\r' && end + 1 < length(input) &&
+	    substr(input, end + 1, 1) == '\n')
+		return end + 2;
+	return end + 1;
+};
+
+function yaml_block_secret(catalog, input, key_start, marker_start) {
+	let style = substr(input, marker_start, 1);
+	if (style != '|' && style != '>')
+		return null;
+	let cursor = marker_start + 1, chomping = null, explicit_indent = null;
+	for (let count = 0; count < 2 && cursor < length(input); count++) {
+		let character = substr(input, cursor, 1);
+		if ((character == '+' || character == '-') && chomping == null)
+			chomping = character;
+		else if (match(character, /^[1-9]$/) && explicit_indent == null)
+			explicit_indent = int(character);
+		else break;
+		cursor++;
+	}
+	while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+		cursor++;
+	if (cursor < length(input) && substr(input, cursor, 1) == '#')
+		cursor = line_end(input, cursor);
+	if (cursor < length(input) && substr(input, cursor, 1) != '\n' &&
+	    substr(input, cursor, 1) != '\r')
+		return null;
+
+	let header_start = key_start;
+	while (header_start > 0 && substr(input, header_start - 1, 1) != '\n' &&
+	       substr(input, header_start - 1, 1) != '\r')
+		header_start--;
+	let header_indent = 0;
+	while (header_start + header_indent < key_start &&
+	       substr(input, header_start + header_indent, 1) == ' ')
+		header_indent++;
+
+	let content_start = next_line(input, cursor);
+	let position = content_start, block_indent = explicit_indent == null ?
+		null : header_indent + explicit_indent;
+	let lines = [], more_indented = [], raw_end = content_start;
+	while (position < length(input)) {
+		let end = line_end(input, position);
+		let raw_line = substr(input, position, end - position), indent = 0;
+		while (indent < length(raw_line) && substr(raw_line, indent, 1) == ' ')
+			indent++;
+		let blank = length(trim(raw_line)) == 0;
+		if (!blank && indent <= header_indent)
+			break;
+		if (!blank && block_indent == null)
+			block_indent = indent;
+		if (!blank && indent < block_indent)
+			break;
+		push(lines, blank ? '' : substr(raw_line, block_indent ?? indent));
+		push(more_indented, !blank && indent > block_indent);
+		raw_end = end;
+		position = next_line(input, end);
+	}
+
+	if (!length(lines))
+		return { next: position };
+	let last_content = -1;
+	for (let index = 0; index < length(lines); index++)
+		if (length(lines[index]))
+			last_content = index;
+	if (last_content < 0)
+		return { next: position };
+	let canonical = '';
+	if (style == '|') {
+		for (let index = 0; index <= last_content; index++) {
+			if (index > 0)
+				canonical += '\n';
+			canonical += lines[index];
+		}
+	}
+	else {
+		let previous = -1;
+		for (let index = 0; index <= last_content; index++) {
+			if (!length(lines[index]))
+				continue;
+			if (previous < 0)
+				for (let count = 0; count < index; count++)
+					canonical += '\n';
+			else {
+				let blanks = index - previous - 1;
+				let breaks = blanks > 0 ?
+					blanks + (more_indented[previous] || more_indented[index] ? 1 : 0) :
+					(more_indented[previous] || more_indented[index] ? 1 : 0);
+				if (!breaks)
+					canonical += ' ';
+				else
+					for (let count = 0; count < breaks; count++)
+						canonical += '\n';
+			}
+			canonical += lines[index];
+			previous = index;
+		}
+	}
+	let raw_canonical = canonical;
+	while (length(raw_canonical) && substr(raw_canonical, -1) == '\n')
+		raw_canonical = substr(raw_canonical, 0, length(raw_canonical) - 1);
+	if (chomping != '-')
+		canonical += '\n';
+	if (chomping == '+')
+		for (let count = last_content + 1; count < length(lines); count++)
+			canonical += '\n';
+	let raw_spelling = substr(input, content_start, raw_end - content_start);
+	if (!catalog_add(catalog, 'secret', raw_spelling) ||
+	    !credential_add(catalog, raw_canonical) ||
+	    !credential_add(catalog, canonical))
+		return { next: position };
+	return { next: position };
 };
 
 function assigned_values(catalog, input) {
@@ -312,6 +496,14 @@ function assigned_values(catalog, input) {
 						cursor++;
 					break;
 				}
+		}
+		if (secret && cursor < length(input) &&
+		    (substr(input, cursor, 1) == '|' || substr(input, cursor, 1) == '>')) {
+			let block = yaml_block_secret(catalog, input, found, cursor);
+			if (block != null) {
+				offset = max(block.next, found + 1);
+				continue;
+			}
 		}
 		let quote = cursor < length(input) &&
 			(substr(input, cursor, 1) == '"' || substr(input, cursor, 1) == "'") ?
@@ -514,6 +706,31 @@ function json_subscription_values(catalog, input) {
 	}
 };
 
+function bracketed_ipv6_values(catalog, input) {
+	let offset = 0, tokens = 0;
+	while (offset < length(input) && !catalog.failed_closed) {
+		let relative = index(substr(input, offset), '[');
+		if (relative < 0)
+			return;
+		let start = offset + relative + 1;
+		let closing = index(substr(input, start), ']');
+		if (closing < 0)
+			return;
+		if (++tokens > MAX_DISCOVERY_TOKENS) {
+			fail_closed(catalog);
+			return;
+		}
+		let address = substr(input, start, closing);
+		if (length(address) > MAX_TOKEN_LENGTH) {
+			fail_closed(catalog);
+			return;
+		}
+		if (ipv6_address(address))
+			catalog_add(catalog, 'ips', address);
+		offset = start + closing + 1;
+	}
+};
+
 function discover_tokens(catalog, input, sensitive) {
 	let normalized = replace(input, /[[:space:]\[\](),;'"<>]/g, ' ');
 	let words = split(normalized, ' '), suffixes = [];
@@ -564,6 +781,7 @@ function discover_text(catalog, input, sensitive_urls) {
 		scheme_secret_values(catalog, input, scheme);
 	cookie_values(catalog, input);
 	json_subscription_values(catalog, input);
+	bracketed_ipv6_values(catalog, input);
 	if (catalog.failed_closed)
 		return false;
 	return discover_tokens(catalog, input, sensitive_urls);
@@ -641,7 +859,10 @@ function discover(seed_values) {
 };
 
 function replacement_work() {
-	return { patterns: 0, matches: 0, variant_bytes: 0, failed: false };
+	return {
+		patterns: 0, matches: 0, variant_bytes: 0,
+		mixed_percent_steps: 0, failed: false
+	};
 };
 
 function replace_all(input, wanted, replacement, work) {
@@ -708,6 +929,63 @@ function variant_add(variants, value, work) {
 	return true;
 };
 
+function mixed_percent_length(input, offset, value, work) {
+	let cursor = offset, encoded = false;
+	for (let index = 0; index < length(value); index++) {
+		if (++work.mixed_percent_steps > MAX_MIXED_PERCENT_STEPS) {
+			work.failed = true;
+			return 0;
+		}
+		if (cursor >= length(input))
+			return 0;
+		if (substr(input, cursor, 1) == substr(value, index, 1)) {
+			cursor++;
+			continue;
+		}
+		if (substr(input, cursor, 1) != '%' || cursor + 2 >= length(input) ||
+		    !match(substr(input, cursor + 1, 2), /^[0-9A-Fa-f]{2}$/) ||
+		    int(substr(input, cursor + 1, 2), 16) != ord(value, index))
+			return 0;
+		cursor += 3;
+		encoded = true;
+	}
+	return encoded ? cursor - offset : 0;
+};
+
+function replace_mixed_percent(input, values, replacement, work) {
+	for (let value in values) {
+		if (++work.patterns > MAX_REPLACEMENT_PATTERNS) {
+			work.failed = true;
+			return null;
+		}
+		let output = '', offset = 0;
+		while (offset < length(input)) {
+			if (++work.mixed_percent_steps > MAX_MIXED_PERCENT_STEPS) {
+				work.failed = true;
+				return null;
+			}
+			let span = mixed_percent_length(input, offset, value, work);
+			if (work.failed)
+				return null;
+			if (span > 0) {
+				if (++work.matches > MAX_REPLACEMENT_MATCHES) {
+					work.failed = true;
+					return null;
+				}
+				output += replacement;
+				offset += span;
+			}
+			else output += substr(input, offset++, 1);
+			if (length(output) > MAX_TEXT_INPUT) {
+				work.failed = true;
+				return null;
+			}
+		}
+		input = output;
+	}
+	return input;
+};
+
 function replace_variants(input, values, labels, kind, replacement, work) {
 	for (let value in values) {
 		let output = replacement == null ? label(labels, kind, value) : replacement;
@@ -756,6 +1034,18 @@ function replace_urls(input, values, sensitive_urls, labels, mode, work) {
 	return input;
 };
 
+function replace_ips(input, values, labels, mode, work) {
+	for (let value in values)
+		if (index(value, ':') >= 0 && index(value, '/') < 0) {
+			input = replace_all(input, '[' + value + ']',
+				mode == 'silent' ? label(labels, 'IP', value) : MASK, work);
+			if (input == null)
+				return null;
+		}
+	return replace_variants(input, values, labels, 'IP',
+		mode == 'silent' ? null : MASK, work);
+};
+
 function transform_text(mode, catalog, labels, path, value, shared_work) {
 	if (type(value) != 'string' || mode == 'full') return value;
 	if (catalog.failed_closed || length(value) > MAX_TEXT_INPUT) {
@@ -778,20 +1068,25 @@ function transform_text(mode, catalog, labels, path, value, shared_work) {
 		fail_closed(catalog);
 		return MASK;
 	}
+	value = replace_mixed_percent(value, catalog.secrets, MASK, work);
+	if (value == null) {
+		fail_closed(catalog);
+		return MASK;
+	}
 	value = replace_variants(value, catalog.secrets, labels, 'REDACTED', MASK, work);
 	if (value == null) {
 		fail_closed(catalog);
 		return MASK;
 	}
 	if (mode == 'lite') {
-		value = replace_variants(value, catalog.ips, labels, 'IP', MASK, work);
+		value = replace_ips(value, catalog.ips, labels, mode, work);
 		if (value != null)
 			value = replace_variants(value, catalog.devices, labels, 'DEVICE', MASK, work);
 		if (value != null)
 			value = replace_variants(value, catalog.ids, labels, 'ID', MASK, work);
 	}
 	else {
-		value = replace_variants(value, catalog.ips, labels, 'IP', null, work);
+		value = replace_ips(value, catalog.ips, labels, mode, work);
 		if (value != null)
 			value = replace_variants(value, catalog.hosts, labels, 'HOST', null, work);
 		if (value != null)
@@ -814,7 +1109,7 @@ function lite_system_interface(path, key, value) {
 	if (canonical_url(value) != null ||
 	    match(value, /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/) ||
 	    match(value, /^[0-9]{1,3}(\.[0-9]{1,3}){3}(\/[0-9]{1,2})?$/) ||
-	    match(value, /^[0-9A-Fa-f:]+(:[0-9A-Fa-f:]+)+(\/[0-9]{1,3})?$/) ||
+	    ipv6_address(value) ||
 	    match(value, /^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$/))
 		return false;
 	let parent = length(path) ? redact.normalized_key(path[-1]) : '';

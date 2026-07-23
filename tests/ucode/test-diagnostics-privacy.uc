@@ -407,3 +407,116 @@ assert_equal(port_profile.value([], { endpoint: 'provider.example:443' }).endpoi
 	'[HOST-1]:443');
 assert_equal(privacy.create('lite', []).text([], 'provider.example:443'),
 	'provider.example:443', 'lite retains provider domain and port');
+
+// Pre-seeded secrets may later appear with any mixture of raw and percent-
+// encoded bytes, not just the fixed fully encoded spellings.
+let preseed_mixed_secret = 'preseed-secret-Alpha92';
+let preseed_mixed_spelling = 'pre%73eed-secret-%41lpha92';
+for (let mode in [ 'silent', 'lite' ]) {
+	let profile = privacy.create(mode, [ { token: preseed_mixed_secret } ]);
+	let output = profile.text([], 'observed=' + preseed_mixed_spelling);
+	assert_absent(output, [ preseed_mixed_secret, preseed_mixed_spelling ],
+		mode + ' pre-seeded mixed-percent secret');
+	assert_equal(output, 'observed=[REDACTED]',
+		mode + ' replaces pre-seeded mixed-percent secret');
+}
+
+// YAML literal and folded block scalars under secret keys are one credential.
+// Discovery must mask the indented source and retain the de-indented/folded
+// canonical value for later occurrences in the same report.
+for (let mode in [ 'silent', 'lite' ]) {
+	let literal_profile = privacy.create(mode, []);
+	let literal_output = literal_profile.text([], 'api_key: |\n' +
+		'  literal-block-secret-42x\n  literal-tail-42x\nstatus: ready');
+	assert_absent(literal_output,
+		[ 'literal-block-secret-42x', 'literal-tail-42x' ],
+		mode + ' YAML literal secret block');
+	assert_absent(literal_profile.text([], 'retry="literal-block-secret-42x\n' +
+		'literal-tail-42x"'),
+		[ 'literal-block-secret-42x', 'literal-tail-42x' ],
+		mode + ' YAML literal canonical secret');
+
+	let folded_profile = privacy.create(mode, []);
+	let folded_output = folded_profile.text([], 'password: >\n' +
+		'  folded-block-secret-53y\n  folded-tail-53y\nstatus: ready');
+	assert_absent(folded_output,
+		[ 'folded-block-secret-53y', 'folded-tail-53y' ],
+		mode + ' YAML folded secret block');
+	assert_equal(folded_profile.text([], 'retry=folded-block-secret-53y folded-tail-53y'),
+		'retry=[REDACTED]', mode + ' YAML folded canonical secret');
+
+	let indented_profile = privacy.create(mode, []);
+	let indented_output = indented_profile.text([], 'password: >\n' +
+		'  alpha-secret-64z\n    beta-secret-64z\n  gamma-secret-64z');
+	assert_absent(indented_output,
+		[ 'alpha-secret-64z', 'beta-secret-64z', 'gamma-secret-64z' ],
+		mode + ' YAML folded more-indented secret block');
+	assert_equal(indented_profile.text([], 'observed=alpha-secret-64z\n' +
+		'  beta-secret-64z\ngamma-secret-64z\n'), 'observed=[REDACTED]',
+		mode + ' YAML folded more-indented canonical secret');
+
+	let blank_profile = privacy.create(mode, []);
+	let blank_output = blank_profile.text([], 'password: >\n' +
+		'  blank-alpha-secret-75a\n\n  blank-beta-secret-75a\nstatus: ready');
+	assert_absent(blank_output,
+		[ 'blank-alpha-secret-75a', 'blank-beta-secret-75a' ],
+		mode + ' YAML folded blank-line secret block');
+	assert_equal(blank_profile.text([], 'observed=blank-alpha-secret-75a\n' +
+		'blank-beta-secret-75a\n'), 'observed=[REDACTED]',
+		mode + ' YAML folded blank-line canonical secret');
+
+	let combined_profile = privacy.create(mode, []);
+	let combined_output = combined_profile.text([], 'password: >\n' +
+		'  combined-alpha-secret-86b\n    combined-beta-secret-86b\n\n' +
+		'  combined-gamma-secret-86b\nstatus: ready');
+	assert_absent(combined_output,
+		[ 'combined-alpha-secret-86b', 'combined-beta-secret-86b',
+			'combined-gamma-secret-86b' ],
+		mode + ' YAML folded more-indented blank-line secret block');
+	assert_equal(combined_profile.text([], 'observed=combined-alpha-secret-86b\n' +
+		'  combined-beta-secret-86b\n\ncombined-gamma-secret-86b\n'),
+		'observed=[REDACTED]',
+		mode + ' YAML folded more-indented blank-line canonical secret');
+}
+
+// Credential aliases compose their bounded codecs: percent encoding may wrap
+// either Base64 alphabet, and the decoded raw credential remains report-wide.
+let percent_base64_secret = 'percent-base64-secret-64q';
+let percent_base64_alias = percent_encoded(independent_base64(percent_base64_secret));
+let percent_base64url_secret = 'percent-base64url-secret-???';
+let percent_base64url_alias =
+	percent_encoded(independent_base64url(percent_base64url_secret));
+for (let mode in [ 'silent', 'lite' ])
+	for (let probe in [
+		[ percent_base64_alias, percent_base64_secret, 'Base64' ],
+		[ percent_base64url_alias, percent_base64url_secret, 'Base64URL' ]
+	]) {
+		let profile = privacy.create(mode, []);
+		assert_absent(profile.text([], 'token: ' + probe[0]), [ probe[0], probe[1] ],
+			mode + ' percent-encoded ' + probe[2] + ' credential');
+		assert_equal(profile.text([], 'observed=' + probe[1]), 'observed=[REDACTED]',
+			mode + ' catalogs raw ' + probe[2] + ' credential');
+	}
+
+// Brackets are IPv6 transport syntax, not an extra pair to retain around a
+// privacy label. The port remains useful evidence; Lite still masks every IP.
+let bracketed_ipv6 = '2001:db8::77';
+let bracketed_silent_raw = privacy.create('silent', []).text([], bracketed_ipv6);
+assert_equal(bracketed_silent_raw, '[IP-1]',
+	'silent redacts raw compressed IPv6, got ' + bracketed_silent_raw);
+let bracketed_silent_bare =
+	privacy.create('silent', []).text([], '[' + bracketed_ipv6 + ']');
+assert_equal(bracketed_silent_bare, '[IP-1]',
+	'silent redacts bracketed IPv6, got ' + bracketed_silent_bare);
+assert_equal(privacy.create('silent', []).text([], '[' + bracketed_ipv6 + ']:8443'),
+	'[IP-1]:8443', 'silent redacts bracketed IPv6 and retains port');
+assert_equal(privacy.create('lite', []).text([], '[' + bracketed_ipv6 + ']'),
+	'[REDACTED]',
+	'lite masks bracketed IPv6');
+assert_equal(privacy.create('lite', []).text([], '[' + bracketed_ipv6 + ']:8443'),
+	'[REDACTED]:8443', 'lite masks bracketed IPv6 and retains port');
+let embedded_ipv6 = '::ffff:192.0.2.128';
+assert_equal(privacy.create('silent', []).text([], '[' + embedded_ipv6 + ']:443'),
+	'[IP-1]:443', 'silent redacts bracketed IPv4-embedded IPv6');
+assert_equal(privacy.create('lite', []).text([], '[' + embedded_ipv6 + ']:443'),
+	'[REDACTED]:443', 'lite masks bracketed IPv4-embedded IPv6');
