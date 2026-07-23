@@ -66,7 +66,7 @@ const FIELDS = {
 		syslog_enabled: 'bool',
 		syslog_events: 'notification_events',
 		luci_enabled: 'bool',
-		luci_events: 'notification_events',
+		luci_events: 'luci_notification_events',
 		telegram_enabled: 'bool',
 		telegram_events: 'notification_events'
 	},
@@ -121,8 +121,8 @@ function defaults() {
 			syslog_events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 				'direct_fallback', 'memory_action', 'memory_outcome',
 				'subscription_outcome', 'update_outcome', 'internet_restored' ],
-			luci_enabled: false,
-			luci_events: [],
+			luci_enabled: true,
+			luci_events: [ 'miclash_event' ],
 			telegram_enabled: false,
 			telegram_events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 				'direct_fallback', 'memory_outcome', 'subscription_outcome',
@@ -279,6 +279,11 @@ function normalize(kind, value, fallback, strict) {
 		return unique_enum_list(value, [ 'guard_outage', 'failure', 'recovery',
 			'fail_closed', 'direct_fallback', 'memory_action', 'memory_outcome',
 			'subscription_outcome', 'update_outcome', 'internet_restored' ], strict);
+	if (kind == 'luci_notification_events')
+		return unique_enum_list(value, [ 'miclash_event', 'guard_outage', 'failure',
+			'recovery', 'fail_closed', 'direct_fallback', 'memory_action',
+			'memory_outcome', 'subscription_outcome', 'update_outcome',
+			'internet_restored' ], strict);
 	if (kind == 'schema_version') {
 		let normalized = positive_integer(value, null, 1);
 		if (normalized != 1)
@@ -299,7 +304,8 @@ function encoded(kind, value) {
 		return sprintf('%d', value);
 	if (substr(kind, 0, 7) == 'memory_')
 		return sprintf('%d', value);
-	if (kind == 'notification_channels' || kind == 'notification_events')
+	if (kind == 'notification_channels' || kind == 'notification_events' ||
+	    kind == 'luci_notification_events')
 		return join(',', value);
 	return value;
 };

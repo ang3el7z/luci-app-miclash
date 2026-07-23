@@ -2427,3 +2427,5 @@ msgstr "Запуск удаления MiClash не подтверждён."
 
 msgid "MiClash removal started."
 msgstr "Удаление MiClash запущено."
+msgid "MiClash events"
+msgstr "События MiClash"

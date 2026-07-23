@@ -997,8 +997,8 @@ let bounded = make_runtime(50000);
 let bounded_center = notify.create(bounded.runtime, settings({
 	dedupe_window_ms: 60000,
 	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
-	luci: { enabled: false, channel: 'miclash.notification', minimum_severity: 'debug',
-		types: [], components: [] }
+	luci: { enabled: true, channel: 'miclash.notification', minimum_severity: 'debug',
+		types: [ 'update_outcome' ], components: [] }
 }));
 for (let i = 0; i < 201; i++)
 	assert_equal(bounded_center.emit(make_event({
@@ -1049,6 +1049,58 @@ assert_equal(wrong_generation.generation, first_batch.generation);
 assert_equal(wrong_generation.cursor, 203);
 assert_throws(() => bounded_center.list({ generation: first_batch.generation,
 	cursor: 201, limit: 201 }), 'INVALID_ARGUMENT');
+
+// The polled history is the LuCI channel: disabled or unselected events advance
+// the cursor without being replayed later.
+let luci_filtered_env = make_runtime(60000);
+let luci_filtered = notify.create(luci_filtered_env.runtime, settings({
+	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+	luci: { enabled: true, channel: 'miclash.notification', minimum_severity: 'info',
+		types: [ 'recovery' ], components: [] }
+}));
+let luci_cursor = luci_filtered.list({ generation: null, cursor: 0, limit: 10 });
+assert_equal(luci_filtered.emit(make_event({
+	type: 'update_outcome', severity: 'notice', component: 'updates',
+	title: 'Update complete', message: 'Update completed',
+	dedupe_key: 'updates/outcome/filtered', occurred_at: 60000,
+	context: { operation_id: 'filtered' }
+})), true);
+let rejected_luci = luci_filtered.list({ generation: luci_cursor.generation,
+	cursor: luci_cursor.cursor, limit: 10 });
+assert_equal(length(rejected_luci.events), 0);
+assert_equal(rejected_luci.cursor, 1);
+assert_equal(rejected_luci.has_more, false);
+luci_filtered.configure(luci_filtered.prepare(settings({
+	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+	luci: { enabled: true, channel: 'miclash.notification', minimum_severity: 'info',
+		types: [ 'update_outcome' ], components: [] }
+})));
+assert_equal(luci_filtered.emit(make_event({
+	type: 'update_outcome', severity: 'notice', component: 'updates',
+	title: 'Update complete', message: 'Update completed',
+	dedupe_key: 'updates/outcome/visible', occurred_at: 60001,
+	context: { operation_id: 'visible' }
+})), true);
+let accepted_luci = luci_filtered.list({ generation: luci_cursor.generation,
+	cursor: rejected_luci.cursor, limit: 10 });
+assert_equal(length(accepted_luci.events), 1);
+assert_equal(accepted_luci.events[0].event.dedupe_key, 'updates/outcome/visible');
+assert_equal(accepted_luci.cursor, 2);
+luci_filtered.configure(luci_filtered.prepare(settings({
+	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+	luci: { enabled: true, channel: 'miclash.notification', minimum_severity: 'info',
+		types: [], components: [] }
+})));
+assert_equal(luci_filtered.emit(make_event({
+	type: 'update_outcome', severity: 'notice', component: 'updates',
+	title: 'Update complete', message: 'Update completed',
+	dedupe_key: 'updates/outcome/no-selection', occurred_at: 60002,
+	context: { operation_id: 'no-selection' }
+})), true);
+let empty_luci = luci_filtered.list({ generation: luci_cursor.generation,
+	cursor: accepted_luci.cursor, limit: 10 });
+assert_equal(length(empty_luci.events), 0);
+assert_equal(empty_luci.cursor, 3);
 
 // Reconfiguration is prepared before commit and preserves history, dedupe and
 // optional channel subscriptions on the same notifier instance.

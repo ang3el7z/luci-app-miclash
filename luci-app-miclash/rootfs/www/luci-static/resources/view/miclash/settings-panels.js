@@ -12,6 +12,7 @@ const KNOWN_CHANNELS = [ 'luci', 'syslog', 'telegram' ];
 const KNOWN_EVENTS = [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
 	'direct_fallback', 'memory_action', 'memory_outcome', 'subscription_outcome',
 	'update_outcome', 'internet_restored' ];
+const LUCI_ONLY_EVENTS = [ 'miclash_event' ];
 const MEMORY_FIELDS = {
 	sample_interval_ms: [ 10000, 3600000, 60000 ], sustained_samples: [ 2, 60, 5 ],
 	warmup_ms: [ 60000, 86400000, 900000 ], baseline_samples: [ 3, 60, 6 ],
@@ -31,6 +32,7 @@ const MEMORY_LABELS = {
 	failure_cooldown_ms: () => _('Failure cooldown (ms)'), normal_rearm_ms: () => _('Normal rearm delay (ms)')
 };
 const EVENT_LABELS = {
+	miclash_event: () => _('MiClash events'),
 	guard_outage: () => _('Guard outage'), failure: () => _('Component failure'), recovery: () => _('Recovery'),
 	fail_closed: () => _('Fail-closed protection'), direct_fallback: () => _('Direct fallback'),
 	memory_action: () => _('Memory action'), memory_outcome: () => _('Memory outcome'),
@@ -113,7 +115,11 @@ function create(options) {
 	function publishNotificationSettings() {
 		if (typeof options.onNotificationSettings !== 'function') return;
 		const desired = state.desired?.notifications || {};
-		options.onNotificationSettings({ auto_hide: desired.auto_hide !== false });
+		options.onNotificationSettings({
+			auto_hide: desired.auto_hide !== false,
+			luci_enabled: desired.luci_enabled === true,
+			luci_events: Array.isArray(desired.luci_events) ? desired.luci_events.slice() : []
+		});
 	}
 	function clearTimer() { if (timer != null) win.clearTimeout(timer); timer = null; }
 	function schedule(delay) {
@@ -233,7 +239,8 @@ function create(options) {
 				(Array.isArray(runtime[name + '_events']) ? runtime[name + '_events'] : []);
 			const enabled = check('sbox-notify-enabled-' + name, _('Enabled'), configured === true,
 				'notification-enabled', name);
-			const events = KNOWN_EVENTS.map((event) => {
+			const channelEvents = name === 'luci' ? [ ...LUCI_ONLY_EVENTS, ...KNOWN_EVENTS ] : KNOWN_EVENTS;
+			const events = channelEvents.map((event) => {
 				const node = check('sbox-notify-' + name + '-' + event, EVENT_LABELS[event](),
 					selected.includes(event), 'notification-event', event);
 				const input = node.querySelector('input');
@@ -326,7 +333,8 @@ function create(options) {
 				'[data-notification-channel="' + channel + '"][data-notification-event]'))
 				.filter((input) => input.checked)
 				.map((input) => input.getAttribute('data-notification-event'))
-				.filter((event) => KNOWN_EVENTS.includes(event));
+				.filter((event) => (channel === 'luci' ?
+					[ ...LUCI_ONLY_EVENTS, ...KNOWN_EVENTS ] : KNOWN_EVENTS).includes(event));
 		}
 		return { memory, telegram, notifications };
 	}
@@ -465,6 +473,7 @@ return baseclass.extend({
 	exactTelegramId,
 	exactTelegramToken,
 	KNOWN_EVENTS,
+	LUCI_ONLY_EVENTS,
 	KNOWN_CHANNELS,
 	MEMORY_FIELDS,
 	MEMORY_LABELS,

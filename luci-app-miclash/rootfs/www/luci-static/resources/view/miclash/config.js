@@ -79,13 +79,12 @@ const notificationOwner = (() => {
 				if (token !== generation) return;
 				const severity = String(event?.severity || 'info');
 				const kind = /^(?:warning|error|critical)$/.test(severity) ? 'error' : 'info';
-				notify(kind, [ event?.title, event?.message ].filter(Boolean).join(': '));
+				notify(kind, [ event?.title, event?.message ].filter(Boolean).join(': '), event?.type);
 			},
 			onError: () => {}
 		});
 		api.notificationSettings().then((settings) => {
-			if (token === generation)
-				appState.notificationAutoHide = settings?.auto_hide !== false;
+			if (token === generation) applyNotificationSettings(settings);
 		}).catch(() => {});
 		poller.start();
 		return poller;
@@ -112,7 +111,7 @@ const managementOwner = (() => {
 					notify('error', error?.message || error);
 				},
 				onNotificationSettings: (settings) => {
-					appState.notificationAutoHide = settings?.auto_hide !== false;
+					applyNotificationSettings(settings);
 				},
 				onProgress: (message, operation) => setOperationStatus('running', message, {
 					detail: operation?.stage || '', context: 'management'
@@ -181,6 +180,7 @@ const appState = {
 	configProfiles: CONFIG_PROFILES.slice(),
 	settings: null,
 	notificationAutoHide: true,
+	notificationSettings: { luci_enabled: false, luci_events: [] },
 	interfaces: [],
 	selectedInterfaces: [],
 	detectedLan: '',
@@ -203,11 +203,27 @@ const appState = {
 	configReady: false
 };
 
-function notify(type, message) {
+function applyNotificationSettings(settings) {
+	const source = settings && typeof settings === 'object' ? settings : {};
+	appState.notificationAutoHide = source.auto_hide !== false;
+	appState.notificationSettings = {
+		luci_enabled: source.luci_enabled === true,
+		luci_events: Array.isArray(source.luci_events) ? source.luci_events.slice() : []
+	};
+}
+
+function isLuciNotificationEnabled(eventType) {
+	const settings = appState.notificationSettings || {};
+	return settings.luci_enabled === true && Array.isArray(settings.luci_events) &&
+		settings.luci_events.includes(String(eventType || 'miclash_event'));
+}
+
+function notify(type, message, eventType) {
 	if (type === 'error' && view_miclash_api.isSessionExpired(message)) {
 		suspendForSessionExpiry();
 		return null;
 	}
+	if (!isLuciNotificationEnabled(eventType || 'miclash_event')) return null;
 	const node = ui.addNotification(null, E('p', String(message || '')), type);
 	// "Auto-hide notifications" defaults to true; the toast disappears after a
 	// short timeout (longer for errors so the user has time to read them).

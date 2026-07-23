@@ -565,7 +565,10 @@ export function create(runtime, settings) {
 		for (let entry in entries) {
 			if (entry.cursor <= input.cursor) continue;
 			if (length(output) >= input.limit) break;
-			push(output, clone(entry)); next_cursor = entry.cursor;
+			next_cursor = entry.cursor;
+			if (configured.luci.enabled && length(configured.luci.types) &&
+			    accepts(configured.luci, entry.event))
+				push(output, clone(entry));
 		}
 		return { generation, cursor: next_cursor, stale: false, events: output,
 			has_more: next_cursor < cursor };

@@ -57,6 +57,10 @@ assert.match(settings, /Automatically close LuCI notifications/,
 	'notification auto-close wording is not user friendly');
 assert.match(settings, /Notification events/,
 	'notification event selection must be named explicitly');
+assert.match(settings, /miclash_event:\s*\(\) => _\('MiClash events'\)/,
+	'direct LuCI notifications must use the single MiClash events category');
+assert.match(settings, /name === 'luci'[^\n]*LUCI_ONLY_EVENTS/,
+	'MiClash events must only be offered by the LuCI channel');
 assert.match(settings, /'data-notification-tab': name/,
 	'notification tab buttons are missing');
 assert.match(settings, /'data-notification-pane': name/,
@@ -142,5 +146,7 @@ assert.equal(module.exactTelegramToken('not-a-token'), false);
 assert.equal(Object.keys(module.MEMORY_FIELDS).length, 14);
 assert.match(notifications, /let generation = ''/,
 	'notification polling must not send a JSON null through the string ubus signature');
+assert.match(config, /function isLuciNotificationEnabled\(eventType\)/,
+	'direct notifications must honor the persisted LuCI event selection');
 
 console.log('MiClash unified settings panels contract passed');

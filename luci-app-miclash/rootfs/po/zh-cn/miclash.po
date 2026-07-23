@@ -2380,3 +2380,5 @@ msgstr "MiClash 移除请求未被接受。"
 
 msgid "MiClash removal started."
 msgstr "MiClash 移除已开始。"
+msgid "MiClash events"
+msgstr "MiClash 事件"

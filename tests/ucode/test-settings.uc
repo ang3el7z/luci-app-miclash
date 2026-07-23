@@ -68,8 +68,8 @@ assert_equal(defaults.updates.auto_major_miclash, true);
 assert_equal(defaults.notifications.auto_hide, true);
 assert_equal(defaults.notifications.syslog_enabled, true);
 assert_json_equal(defaults.notifications.syslog_events, ALL_EVENTS);
-assert_equal(defaults.notifications.luci_enabled, false);
-assert_json_equal(defaults.notifications.luci_events, []);
+assert_equal(defaults.notifications.luci_enabled, true);
+assert_json_equal(defaults.notifications.luci_events, [ 'miclash_event' ]);
 assert_equal(defaults.notifications.telegram_enabled, false);
 assert_json_equal(defaults.notifications.telegram_events,
 	[ 'guard_outage', 'failure', 'recovery', 'fail_closed', 'direct_fallback',
@@ -119,7 +119,7 @@ assert_json_equal(settings.validate_patch({
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
 	notifications: { syslog_enabled: true,
 		syslog_events: [ 'failure', 'internet_restored', 'failure' ],
-		luci_enabled: false, luci_events: [ 'recovery' ],
+		luci_enabled: false, luci_events: [ 'recovery', 'miclash_event' ],
 		telegram_enabled: true, telegram_events: [ 'internet_restored' ] }
 }), {
 	interfaces: { included: [ 'br-lan', 'wlan0' ] },
@@ -128,7 +128,7 @@ assert_json_equal(settings.validate_patch({
 	memory: { sample_interval_ms: 10000, reserve_min_kb: 4096, reserve_max_kb: 8192 },
 	notifications: { syslog_enabled: true,
 		syslog_events: [ 'failure', 'internet_restored' ],
-		luci_enabled: false, luci_events: [ 'recovery' ],
+		luci_enabled: false, luci_events: [ 'recovery', 'miclash_event' ],
 		telegram_enabled: true, telegram_events: [ 'internet_restored' ] }
 });
 let normalized = settings.save(normalized_env.rt, {
@@ -196,6 +196,10 @@ assert_throws(() => settings.save(fake_runtime().rt,
 	{ notifications: { luci_events: [ 'unknown_event' ] } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ notifications: { telegram_events: [ 'unknown_event' ] } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ notifications: { syslog_events: [ 'miclash_event' ] } }), 'INVALID_ARGUMENT');
+assert_throws(() => settings.save(fake_runtime().rt,
+	{ notifications: { telegram_events: [ 'miclash_event' ] } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
 	{ memory: { reserve_min_kb: 131072, reserve_max_kb: 65536 } }), 'INVALID_ARGUMENT');
 assert_throws(() => settings.save(fake_runtime().rt,
