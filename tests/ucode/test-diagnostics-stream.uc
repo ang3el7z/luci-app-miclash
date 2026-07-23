@@ -45,6 +45,20 @@ assert_equal(json(filesystem.readfile(result.path)).logs[2], 'three');
 assert_equal(result.sha256, runtime.digest.sha256_file(result.path));
 assert_equal(result.size, length(filesystem.readfile(result.path)));
 
+let string_path = '/tmp/miclash/streamed-string.json';
+let string_writer = diagnostics_json.create(runtime,
+	filesystem.open(string_path, 'wx', 0o600));
+string_writer.begin_object();
+string_writer.begin_string_field('active_yaml');
+for (let chunk in [ 'secret: "quoted', '\\value"\n', 'mode: rule\n' ])
+	string_writer.string_chunk(chunk);
+string_writer.end_string();
+string_writer.end_object();
+let string_result = string_writer.finish();
+assert_equal(json(filesystem.readfile(string_result.path)).active_yaml,
+	'secret: "quoted\\value"\nmode: rule\n',
+	'large strings can be JSON-escaped and written in bounded source chunks');
+
 // The report writer and store share the existing 16 MiB transfer ceiling.
 let maximum_path = '/tmp/miclash/maximum-stream.json';
 let maximum_writer = diagnostics_json.create(runtime,

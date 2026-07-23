@@ -1,6 +1,7 @@
 import * as errors from 'miclash.errors';
 
 const MAX_JSON_BYTES = 16777216;
+const MAX_STRING_CHUNK = 131072;
 
 function fail() { errors.fail('INTERNAL'); };
 
@@ -64,6 +65,17 @@ export function create(runtime, target) {
 		if (container?.kind != 'array') terminal();
 		separator(container);
 	};
+	function string_chunk(value) {
+		let container = stack[length(stack) - 1];
+		if (container?.kind != 'string' || type(value) != 'string' ||
+		    length(value) > MAX_STRING_CHUNK)
+			terminal();
+		let encoded = sprintf('%J', value);
+		if (type(encoded) != 'string' || length(encoded) < 2 ||
+		    substr(encoded, 0, 1) != '"' || substr(encoded, -1) != '"')
+			terminal();
+		write(substr(encoded, 1, length(encoded) - 2));
+	};
 	function close(kind, token) {
 		let container = pop(stack);
 		if (container?.kind != kind) terminal();
@@ -84,6 +96,11 @@ export function create(runtime, target) {
 		begin_array_field: (name) => {
 			object_member(name); write('['); push(stack, { kind: 'array', count: 0 });
 		},
+		begin_string_field: (name) => {
+			object_member(name); write('"'); push(stack, { kind: 'string', count: 0 });
+		},
+		string_chunk,
+		end_string: () => close('string', '"'),
 		item: (value) => { array_value(); write(sprintf('%J', value)); },
 		end_array: () => close('array', ']'),
 		end_object: () => close('object', '}'),

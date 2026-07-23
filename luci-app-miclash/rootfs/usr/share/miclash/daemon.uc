@@ -1169,7 +1169,7 @@ export function compose(runtime, overrides) {
 			network_components: () => observed_component_status(runtime, native_network,
 				app.overview()?.observed?.service, settings_domain.get()),
 			last_repair,
-			config: () => configuration.read_active('config.yaml'),
+			config: () => configuration.open_active('config.yaml'),
 			process: () => service_adapter.diagnostics('config.yaml'),
 			logs: () => evidence_domain.logs(), evidence: evidence_domain.open_sections,
 			uci: settings_domain.get,

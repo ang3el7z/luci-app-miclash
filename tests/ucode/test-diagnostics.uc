@@ -544,9 +544,38 @@ let async_operations = operations.create(async_runtime);
 let async_logs = [ 'connected hostname=beta-router.local' ];
 for (let index = 0; index < 1200; index++)
 	push(async_logs, sprintf('diagnostic-line-%04d %64s', index, 'x'));
-let async_log_reads = 0, async_logs_complete = false, evidence_events = [];
+let streamed_config = 'secret: ' + secrets.api_key + '\n' +
+	'private-key: ' + config_private_key + '\n' +
+	'uuid: ' + config_uuid + '\nmode: rule\n';
+let async_log_reads = 0, async_logs_complete = false, evidence_events = [],
+	config_opens = 0, config_reads = 0, maximum_config_read = 0;
 let async_sources = {
 	...sources,
+	config: () => ({
+		size: length(streamed_config),
+		sha256: async_runtime.digest.sha256(streamed_config),
+		open: () => {
+			config_opens++;
+			let offset = 0, closed = false;
+			return {
+				read: (amount) => {
+					assert_true(amount <= 4096,
+						'active config reads remain bounded to 4 KiB');
+					maximum_config_read = max(maximum_config_read, amount);
+					config_reads++;
+					let chunk = substr(streamed_config, offset, amount);
+					offset += length(chunk);
+					return chunk;
+				},
+				finish: () => {
+					assert_equal(offset, length(streamed_config));
+					closed = true;
+					return true;
+				},
+				close: () => { closed = true; return true; }
+			};
+		}
+	}),
 	state: () => ({ desired: {
 		primary_hostname: 'alpha-router.local',
 		backup_hostname: 'beta-router.local'
@@ -622,16 +651,38 @@ assert_equal(resumed.finish().size, resumed.size);
 assert_true(index(content, secrets.telegram_token) < 0,
 	'silent asynchronous report must apply the privacy profile');
 let async_payload = json(content);
-for (let name in [ 'metadata', 'system', 'installation', 'network', 'firewall',
-	'providers', 'subscription', 'rpc', 'recovery' ])
-	assert_true(type(async_payload[name]) == 'object',
+for (let name in [ 'metadata', 'system', 'installation', 'state', 'network', 'firewall',
+	'providers', 'subscription', 'updates', 'telegram', 'memory', 'operations',
+	'rpc', 'recovery', 'config' ])
+	assert_true(exists(async_payload, name),
 		'schema v4 requires top-level ' + name);
-assert_equal(async_payload.network.state.desired.primary_hostname, '[HOST-1]');
-assert_equal(async_payload.network.state.desired.backup_hostname, '[HOST-2]');
+assert_equal(type(async_payload.operations), 'array');
+assert_equal(async_payload.metadata.schema.name, 'miclash.diagnostics');
+assert_equal(async_payload.metadata.schema.version, 4);
+assert_equal(async_payload.metadata.schema_version, 4);
+assert_equal(type(async_payload.metadata.started_at), 'int');
+assert_equal(type(async_payload.metadata.completed_at), 'int');
+assert_equal(type(async_payload.metadata.duration_ms), 'int');
+assert_true(async_payload.metadata.duration_ms >= 0);
+assert_equal(async_payload.state.desired.primary_hostname, '[HOST-1]');
+assert_equal(async_payload.state.desired.backup_hostname, '[HOST-2]');
 assert_true(index(async_payload.logs[0], '[HOST-2]') >= 0,
 	'report-local host labels must stay stable across sections');
 assert_equal(length(async_payload.logs), length(async_logs),
 	'stream generation preserves every available relevant log record');
+for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
+	'updates', 'settings', 'telegram', 'config', 'process', 'network_components',
+	'uci', 'operations', 'logs', 'evidence' ]) {
+	assert_true(type(async_payload.collection.sources[name]) == 'object',
+		'collection records source ' + name);
+	assert_equal(type(async_payload.collection.sources[name].duration_ms), 'int',
+		'collection duration is recorded for ' + name);
+}
+assert_true(config_opens >= 2,
+	'privacy modes pre-scan then stream the active config without materializing it');
+assert_true(config_reads >= config_opens && maximum_config_read > 0 &&
+	maximum_config_read <= 4096,
+	'active config is pulled through bounded reader chunks');
 assert_true(length(filter(async_payload.issues,
 	(item) => item.section == 'collection' && item.component == 'logs')) == 0,
 	'collection evidence is captured after a successful live log stream');
@@ -650,11 +701,10 @@ while (full_offset < full_stream.size) {
 }
 full_stream.finish();
 let full_payload = json(full_content);
-assert_equal(full_payload.subscription.active_config,
-	'secret: ' + secrets.api_key + '\n' +
-	'private-key: ' + config_private_key + '\n' +
-	'uuid: ' + config_uuid + '\nmode: rule\n',
+assert_equal(full_payload.config.active_yaml, streamed_config,
 	'Full schema v4 includes the byte-exact active YAML instead of a hash/size summary');
+assert_true(full_payload.subscription.active_config == null,
+	'active YAML has one canonical schema-v4 location');
 let lite_job = async_center.submit_report({
 	mode: 'lite', acknowledge_secrets: false, source: 'luci'
 });

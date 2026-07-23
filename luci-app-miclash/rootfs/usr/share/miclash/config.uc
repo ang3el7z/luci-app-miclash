@@ -116,6 +116,64 @@ export function create(runtime, operations) {
 			errors.fail('NOT_FOUND');
 		return content;
 	};
+	function open_active(profile) {
+		let path = active_path(profile), expected = runtime.fs.lstat(path);
+		if (expected?.type != 'file' || expected.nlink != 1 || expected.size < 0 ||
+		    expected.size > 16777216 || runtime.fs.realpath(path) != path)
+			errors.fail('NOT_FOUND');
+		let expected_hash = runtime.digest.sha256_file(path);
+		if (type(expected_hash) != 'string' ||
+		    !match(expected_hash, /^[0-9a-f]{64}$/))
+			errors.fail('INTERNAL');
+		return {
+			size: expected.size,
+			sha256: expected_hash,
+			open: () => {
+				let current = runtime.fs.lstat(path);
+				if (!same_identity(expected, current) ||
+				    runtime.fs.realpath(path) != path ||
+				    runtime.digest.sha256_file(path) != expected_hash)
+					errors.fail('INTERNAL');
+				let handle = runtime.fs.open(path, 're');
+				if (handle == null || !same_identity(expected, runtime.fs.fstat(handle))) {
+					if (handle != null) try { runtime.fs.close(handle); } catch (error) {}
+					errors.fail('INTERNAL');
+				}
+				let consumed = 0, closed = false;
+				return {
+					read: (amount) => {
+						if (closed || type(amount) != 'int' || amount < 1 || amount > 4096)
+							errors.fail('INVALID_ARGUMENT');
+						let chunk = runtime.fs.read(handle, min(amount, expected.size - consumed));
+						if (type(chunk) != 'string' || consumed + length(chunk) > expected.size ||
+						    (!length(chunk) && consumed < expected.size))
+							errors.fail('INTERNAL');
+						consumed += length(chunk);
+						return chunk;
+					},
+					finish: () => {
+						if (closed || consumed != expected.size)
+							errors.fail('INTERNAL');
+						let opened = runtime.fs.fstat(handle);
+						let close_result = runtime.fs.close(handle);
+						closed = true;
+						let after = runtime.fs.lstat(path);
+						if (close_result !== true || !same_identity(expected, opened) ||
+						    !same_identity(expected, after) ||
+						    runtime.fs.realpath(path) != path ||
+						    runtime.digest.sha256_file(path) != expected_hash)
+							errors.fail('INTERNAL');
+						return true;
+					},
+					close: () => {
+						if (closed) return false;
+						closed = true;
+						return runtime.fs.close(handle) === true;
+					}
+				};
+			}
+		};
+	};
 	function read_active_state(profile) {
 		let path = active_path(profile);
 		let before = runtime.fs.lstat(path);
@@ -271,6 +329,7 @@ export function create(runtime, operations) {
 	let api = {};
 	api.list_profiles = () => [ ...PROFILES ];
 	api.read_active = read_active;
+	api.open_active = open_active;
 	api.validate_in_operation = (ctx, profile, content) => {
 		operation_context(ctx);
 		return with_candidate(ctx, profile, content, () => ({ ok: true }));

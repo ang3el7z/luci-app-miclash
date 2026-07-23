@@ -48,6 +48,19 @@ for (let profile in [ 'config0.yaml', 'config4.yaml', '../config.yaml' ])
 let env = environment();
 assert_equal(join(',', env.cfg.list_profiles()), 'config.yaml,config2.yaml,config3.yaml');
 assert_equal(env.cfg.read_active('config.yaml'), 'original-active\n');
+let reads_before_stream = length(env.fs.calls.readfile);
+let active_stream = env.cfg.open_active('config.yaml');
+assert_equal(active_stream.size, length('original-active\n'));
+assert_equal(active_stream.sha256, env.runtime.digest.sha256_file('/opt/clash/config.yaml'));
+let active_reader = active_stream.open(), streamed_active = '';
+while (length(streamed_active) < active_stream.size)
+	streamed_active += active_reader.read(3);
+assert_equal(active_reader.finish(), true);
+assert_equal(streamed_active, 'original-active\n');
+assert_equal(length(env.fs.calls.readfile), reads_before_stream,
+	'active config streaming never uses readfile');
+assert_true(length(env.fs.calls.read) > 1,
+	'active config streaming uses bounded file reads');
 
 let invalid = env.cfg.validate('config.yaml', fixture('invalid.yaml'), 'luci');
 env.process.replies[validation_key(invalid.id)] = { code: 1 };

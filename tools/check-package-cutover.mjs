@@ -17,6 +17,8 @@ const miclashd = fs.readFileSync(path.join(pkg, 'rootfs/usr/sbin/miclashd'), 'ut
 const daemon = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/daemon.uc'), 'utf8');
 const operations = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/operations.uc'), 'utf8');
 const diagnostics = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/diagnostics.uc'), 'utf8');
+const diagnosticsJson = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/diagnostics-json.uc'), 'utf8');
+const config = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/config.uc'), 'utf8');
 const api = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/api.uc'), 'utf8');
 const nft = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/firewall/nft.uc'), 'utf8');
 const installer = fs.readFileSync(path.join(root, 'install-miclash.sh'), 'utf8');
@@ -99,6 +101,16 @@ requireMatch(daemon,
 	'report downloads must stream directly from the diagnostics file store');
 forbid(daemon, /memory_download|diagnostics_domain\.read_report\(\{\s*id/,
 	'report downloads must not materialize report content in daemon memory');
+requireMatch(daemon, /config:\s*\(\)\s*=>\s*configuration\.open_active\('config\.yaml'\)/,
+	'diagnostics must receive the active config as a verified file stream');
+forbid(daemon, /config:\s*\(\)\s*=>\s*configuration\.read_active\('config\.yaml'\)/,
+	'diagnostics must not read the complete active config into daemon memory');
+requireMatch(config, /api\.open_active\s*=/,
+	'the configuration domain must expose a verified active-file stream');
+requireMatch(diagnosticsJson, /begin_string_field[\s\S]*string_chunk[\s\S]*end_string/,
+	'the JSON writer must stream and escape large string values in bounded chunks');
+forbid(diagnostics, /writer\.field\('(?:config|subscription)'/,
+	'config and subscription must be emitted field-by-field, not allocated as whole objects');
 forbid(diagnostics, /\b(?:create_report|read_report)\s*:/,
 	'diagnostics domain must not expose synchronous full-memory reports');
 requireMatch(api, /const REPORT_MAX = TRANSFER_MAX;/,

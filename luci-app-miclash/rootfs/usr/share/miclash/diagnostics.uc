@@ -1212,15 +1212,32 @@ export function create(dependencies) {
 		try {
 			operation = operation_manager.submit_observation('diagnostics.report', options.source,
 				{ report_id: staged.id, mode: options.mode }, (ctx) => {
-					let sections = {}, settings_source = null, config_source = null,
+					let sections = {}, collection_sources = {}, source_started = {},
+						settings_source = null, config_source = null,
 						updates_source = null, network_components_source = null,
 						state_view = null, health_view = null, operations_view = null,
 						recovery_view = null, evidence_status = [], profile = null,
 						writer = null, log_reader = null, evidence_reader = null,
+						config_reader = null, report_started = runtime.clock.now(),
 						finished = false, published = false;
+					function finish_source(name, value) {
+						let state = value?.state == 'unavailable' || value?.state == 'unknown' ?
+							value.state : 'success';
+						collection_sources[name] = {
+							state,
+							code: state == 'success' ? null : value?.code ?? 'UNAVAILABLE',
+							duration_ms: max(0, runtime.clock.now() -
+								(source_started[name] ?? runtime.clock.now()))
+						};
+					};
 					function source_value(name) {
-						try { return sources[name](); }
-						catch (error) { return { state: 'unknown', code: 'UNAVAILABLE' }; }
+						if (source_started[name] == null)
+							source_started[name] = runtime.clock.now();
+						let value;
+						try { value = sources[name](); }
+						catch (error) { value = { state: 'unknown', code: 'UNAVAILABLE' }; }
+						finish_source(name, value);
+						return value;
 					};
 					function fail(error) {
 						if (finished) return;
@@ -1229,6 +1246,8 @@ export function create(dependencies) {
 							try { log_reader.close(); } catch (close_error) {}
 						if (evidence_reader?.close != null)
 							try { evidence_reader.close(); } catch (close_error) {}
+						if (config_reader?.close != null)
+							try { config_reader.close(); } catch (close_error) {}
 						let failure = error;
 						if (published) {
 							try {
@@ -1292,25 +1311,54 @@ export function create(dependencies) {
 							close: () => { emitted = true; return true; }
 						};
 					};
+					function config_descriptor(value) {
+						if (type(value) == 'object' && type(value.open) == 'function' &&
+						    type(value.size) == 'int' && value.size >= 0 &&
+						    value.size <= REPORT_MAX_INPUT && type(value.sha256) == 'string' &&
+						    match(value.sha256, /^[0-9a-f]{64}$/))
+							return value;
+						if (type(value) != 'string' || length(value) > REPORT_MAX_INPUT)
+							return null;
+						return {
+							size: length(value),
+							sha256: runtime.digest.sha256(value),
+							open: () => {
+								let offset = 0, closed = false;
+								return {
+									read: (amount) => {
+										if (closed || type(amount) != 'int' || amount < 1 ||
+										    amount > 4096)
+											errors.fail('INVALID_ARGUMENT');
+										let chunk = substr(value, offset, amount);
+										offset += length(chunk);
+										return chunk;
+									},
+									finish: () => {
+										if (closed || offset != length(value))
+											errors.fail('INTERNAL');
+										closed = true;
+										return true;
+									},
+									close: () => { closed = true; return true; }
+								};
+							}
+						};
+					};
 					function initialize_writer() {
 						settings_source = source_value('settings');
-						config_source = source_value('config');
-						profile = privacy.create(options.mode, [ settings_source, config_source ]);
-						let now = runtime.clock.now();
+						config_source = config_descriptor(source_value('config'));
+						profile = privacy.create(options.mode, [ settings_source ]);
 						writer = diagnostics_json.create(runtime, staged.output);
 						writer.begin_object();
 						writer.field('schema_version', 4);
-						writer.field('metadata', {
-							generated_at: now,
-							privacy: profile.metadata()
-						});
 					};
 					function collect_system() {
+						let memory_source = source_value('memory');
 						writer.field('system', profile.value([ 'system' ], {
 							versions: source_value('versions'),
-							architecture: source_value('architecture'),
-							memory: source_value('memory')
+							architecture: source_value('architecture')
 						}));
+						writer.field('memory', profile.value([ 'memory' ], memory_source));
 					};
 					function collect_installation() {
 						updates_source = source_value('updates');
@@ -1318,44 +1366,171 @@ export function create(dependencies) {
 							REPORT_SECTION_LIMITS.process);
 						sections.process = bounded.metadata;
 						writer.field('installation', profile.value([ 'installation' ], {
-							updates: updates_source,
 							process: bounded.value
 						}));
+						writer.field('updates', profile.value([ 'updates' ], updates_source));
 					};
-					function collect_subscription() {
-						let config_summary = summarize_config(config_source, runtime);
-						sections.config = {
-							truncated: false,
-							summarized: options.mode != 'full',
-							original_bytes: type(config_source) == 'string' ?
-								length(config_source) : serialized_size(config_source),
-							included_bytes: serialized_size(config_summary)
+					function walk_private_config(descriptor, output, next) {
+						config_reader = descriptor.open();
+						if (type(config_reader?.read) != 'function' ||
+						    type(config_reader?.finish) != 'function')
+							errors.fail('INVALID_RESPONSE');
+						let consumed = 0, buffered = '', line = 0, overflow = false;
+						function emit(value, redacted) {
+							if (output)
+								writer.string_chunk(redacted ? redact.MASK :
+									profile.value([ 'config', 'active_yaml', line ], value));
+							else
+								profile.value([ 'config', 'active_yaml', line ], value);
+							line++;
 						};
+						function accept(chunk, terminal) {
+							let offset = 0;
+							while (offset < length(chunk)) {
+								let relative = index(substr(chunk, offset), '\n');
+								let end = relative < 0 ? length(chunk) : offset + relative + 1;
+								let piece = substr(chunk, offset, end - offset);
+								offset = end;
+								if (overflow) {
+									if (relative >= 0) {
+										if (output) writer.string_chunk('\n');
+										overflow = false;
+										line++;
+									}
+									continue;
+								}
+								buffered += piece;
+								if (relative >= 0) {
+									emit(buffered, false);
+									buffered = '';
+								}
+								else if (length(buffered) > 126976) {
+									if (!output) profile.value(
+										[ 'config', 'active_yaml', line ], buffered);
+									else writer.string_chunk(redact.MASK);
+									buffered = '';
+									overflow = true;
+								}
+							}
+							if (terminal) {
+								if (overflow) {
+									line++;
+									overflow = false;
+								}
+								else if (length(buffered)) {
+									emit(buffered, false);
+									buffered = '';
+								}
+							}
+						};
+						function pull() {
+							if (consumed >= descriptor.size) {
+								accept('', true);
+								if (config_reader.finish() !== true)
+									errors.fail('INTERNAL');
+								config_reader = null;
+								next();
+								return;
+							}
+							let chunk = config_reader.read(min(4096, descriptor.size - consumed));
+							if (type(chunk) != 'string' || !length(chunk) ||
+							    consumed + length(chunk) > descriptor.size)
+								errors.fail('INVALID_RESPONSE');
+							consumed += length(chunk);
+							accept(chunk, false);
+							schedule(pull);
+						};
+						pull();
+					};
+					function write_full_config(descriptor, next) {
+						config_reader = descriptor.open();
+						if (type(config_reader?.read) != 'function' ||
+						    type(config_reader?.finish) != 'function')
+							errors.fail('INVALID_RESPONSE');
+						let consumed = 0;
+						function pull() {
+							if (consumed >= descriptor.size) {
+								if (config_reader.finish() !== true)
+									errors.fail('INTERNAL');
+								config_reader = null;
+								next();
+								return;
+							}
+							let chunk = config_reader.read(min(4096, descriptor.size - consumed));
+							if (type(chunk) != 'string' || !length(chunk) ||
+							    consumed + length(chunk) > descriptor.size)
+								errors.fail('INVALID_RESPONSE');
+							consumed += length(chunk);
+							writer.string_chunk(chunk);
+							schedule(pull);
+						};
+						pull();
+					};
+					function collect_configuration(next) {
 						let bounded = bound_section('uci', source_value('uci'),
 							REPORT_SECTION_LIMITS.uci);
 						sections.uci = bounded.metadata;
-						writer.field('subscription', profile.value([ 'subscription' ], {
-							status: public_status(settings_source).subscription,
-							settings: settings_source,
-							active_config: config_source,
-							uci: bounded.value
+						writer.begin_object_field('config');
+						writer.field('active', profile.value([ 'config', 'active' ],
+							config_source == null ? {
+							state: 'unavailable', code: 'UNAVAILABLE'
+						} : {
+							state: config_source.size ? 'present' : 'empty',
+							bytes: config_source.size,
+							sha256: config_source.sha256
 						}));
+						writer.field('settings',
+							profile.value([ 'config', 'settings' ], settings_source));
+						writer.field('uci', profile.value([ 'config', 'uci' ], bounded.value));
+						if (config_source == null) {
+							writer.field('active_yaml', null);
+							writer.end_object();
+							sections.config = {
+								truncated: false, summarized: false,
+								original_bytes: 0, included_bytes: 0
+							};
+							finish_source('config', { state: 'unavailable', code: 'UNAVAILABLE' });
+							next();
+							return;
+						}
+						writer.begin_string_field('active_yaml');
+						function complete_config() {
+							writer.end_string();
+							writer.end_object();
+							sections.config = {
+								truncated: false,
+								summarized: false,
+								original_bytes: config_source.size,
+								included_bytes: config_source.size
+							};
+							finish_source('config', { state: 'success' });
+							writer.begin_object_field('subscription');
+							writer.field('status', profile.value([ 'subscription', 'status' ],
+								public_status(settings_source).subscription));
+							writer.end_object();
+							next();
+						};
+						if (options.mode == 'full') {
+							write_full_config(config_source, complete_config);
+							return;
+						}
+						walk_private_config(config_source, false, () =>
+							walk_private_config(config_source, true, complete_config));
 					};
 					function collect_network() {
 						let state_source = source_value('state');
 						let health_source = source_value('health');
 						network_components_source = source_value('network_components');
-						let view = profile.value([ 'network' ], {
-							state: {
-								desired: state_source?.desired ?? {},
-								observed: state_source?.observed ?? {}
-							},
+						state_view = profile.value([ 'state' ], {
+							desired: state_source?.desired ?? {},
+							observed: state_source?.observed ?? {}
+						});
+						health_view = profile.value([ 'network', 'health' ], health_source);
+						writer.field('state', state_view);
+						writer.field('network', profile.value([ 'network' ], {
 							health: health_source,
 							components: network_components_source
-						});
-						state_view = view.state;
-						health_view = view.health;
-						writer.field('network', view);
+						}));
 					};
 					function collect_firewall() {
 						writer.field('firewall', profile.value([ 'firewall' ], {
@@ -1377,11 +1552,15 @@ export function create(dependencies) {
 						let bounded = bound_section('operations', source_value('operations'),
 							REPORT_SECTION_LIMITS.operations);
 						sections.operations = bounded.metadata;
-						operations_view = profile.value([ 'rpc', 'operations' ], bounded.value);
-						writer.field('rpc', profile.value([ 'rpc' ], {
-							telegram: source_value('telegram'),
-							operations: bounded.value
-						}));
+						operations_view = profile.value([ 'operations' ], bounded.value);
+						writer.field('telegram',
+							profile.value([ 'telegram' ], source_value('telegram')));
+						writer.field('operations', operations_view);
+						writer.field('rpc', {
+							state: 'present',
+							operations_available: true,
+							telegram_available: true
+						});
 					};
 					function collect_recovery() {
 						recovery_view = profile.value([ 'recovery' ], {
@@ -1390,6 +1569,17 @@ export function create(dependencies) {
 						writer.field('recovery', recovery_view);
 					};
 					function finalize_report() {
+						let completed_at = runtime.clock.now();
+						writer.field('metadata', {
+							schema: { name: 'miclash.diagnostics', version: 4 },
+							schema_version: 4,
+							mode: options.mode,
+							generated_at: report_started,
+							started_at: report_started,
+							completed_at,
+							duration_ms: max(0, completed_at - report_started),
+							privacy: profile.metadata()
+						});
 						writer.field('issues', report_issues({
 							health: health_view,
 							state: state_view,
@@ -1398,6 +1588,7 @@ export function create(dependencies) {
 							evidence: evidence_status
 						}));
 						writer.field('collection', {
+							sources: collection_sources,
 							sections,
 							evidence: evidence_status
 						});
@@ -1443,6 +1634,7 @@ export function create(dependencies) {
 							}
 							if (batch.done) {
 								evidence_reader = null;
+								finish_source('evidence', { state: 'success' });
 								writer.end_array();
 								finalize_report();
 								return;
@@ -1467,6 +1659,7 @@ export function create(dependencies) {
 							}
 							if (batch.done) {
 								log_reader = null;
+								finish_source('logs', { state: 'success' });
 								collect_evidence(bytes);
 								return;
 							}
@@ -1480,7 +1673,9 @@ export function create(dependencies) {
 						schedule(() => stage('system', 15, collect_system,
 							() => {
 								collect_installation();
-								schedule(() => stage('configuration', 30, collect_subscription,
+								schedule(() => {
+									ctx.stage('configuration', 30, '');
+									collect_configuration(
 									() => stage('network', 45, collect_network,
 										() => {
 											collect_firewall();
@@ -1493,7 +1688,8 @@ export function create(dependencies) {
 															collect_logs();
 														});
 													})));
-										})));
+										}));
+								});
 							}));
 						return false;
 					}
