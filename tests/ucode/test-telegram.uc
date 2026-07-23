@@ -129,7 +129,14 @@ function environment(changes) {
 		list: () => clone(submitted),
 		subscribe: (callback) => {
 			push(operation_subscribers, callback);
-			return () => { operation_subscribers = []; return true; };
+			let active = true;
+			return () => {
+				if (!active) return false;
+				active = false;
+				let offset = index(operation_subscribers, callback);
+				if (offset >= 0) splice(operation_subscribers, offset, 1);
+				return true;
+			};
 		}
 	};
 	function record_call(method, args) {
@@ -523,15 +530,77 @@ assert_equal(document_failure_controller.status().panel_screen, 'diagnostics');
 assert_equal(request_method(document_failure.requests[length(document_failure.requests) - 1]),
 	'sendMessage');
 
-// Restart recovery marks an in-flight observation interrupted. Telegram reports
-// the failure without attempting to open or upload a half-generated file.
+// Restart recovery marks an in-flight observation interrupted. A recreated
+// controller recovers the durable Telegram destination without receiving the
+// old controller's live event, reports failure, and never opens a partial file.
 let interrupted_report = environment();
 let interrupted_controller = telegram.create(interrupted_report.app);
+assert_equal(interrupted_controller.start(), true);
 assert_equal(interrupted_controller.handle_update(update(709, '/diagnostics')), true);
-interrupted_report.emit_report('interrupted', 'interrupted', 30, { code: 'INTERRUPTED' });
+assert_equal(interrupted_controller.stop(), true);
+let interrupted_index = length(interrupted_report.submitted) - 1;
+interrupted_report.submitted[interrupted_index] = {
+	...interrupted_report.submitted[interrupted_index],
+	state: 'interrupted', stage: 'interrupted', progress: 30,
+	error: { code: 'INTERRUPTED', message: 'INTERRUPTED' }
+};
+let interrupted_requests = length(interrupted_report.requests);
+let recovered_controller = telegram.create(interrupted_report.app);
+assert_equal(recovered_controller.start(), true);
+assert_equal(recovered_controller.poll_once(), true);
 assert_equal(interrupted_report.report_opens(), 0);
+assert_true(length(interrupted_report.requests) > interrupted_requests);
 assert_equal(request_method(interrupted_report.requests[
 	length(interrupted_report.requests) - 1]), 'sendMessage');
+
+// A recovered interrupted receipt stays durable when Telegram accepts neither
+// the restored panel nor the explicit result notice, then retries successfully.
+let interrupted_delivery_options = {};
+let interrupted_delivery = environment(interrupted_delivery_options);
+let interrupted_delivery_controller = telegram.create(interrupted_delivery.app);
+assert_equal(interrupted_delivery_controller.start(), true);
+assert_equal(interrupted_delivery_controller.handle_update(update(713, '/diagnostics')), true);
+assert_equal(interrupted_delivery_controller.stop(), true);
+let interrupted_delivery_index = length(interrupted_delivery.submitted) - 1;
+interrupted_delivery.submitted[interrupted_delivery_index] = {
+	...interrupted_delivery.submitted[interrupted_delivery_index],
+	state: 'interrupted', stage: 'interrupted', progress: 30,
+	error: { code: 'INTERRUPTED', message: 'INTERRUPTED' }
+};
+let interrupted_delivery_recovered = telegram.create(interrupted_delivery.app);
+assert_equal(interrupted_delivery_recovered.start(), true);
+interrupted_delivery_options.send_failure = true;
+assert_equal(interrupted_delivery_recovered.poll_once(), true);
+assert_equal(interrupted_delivery_recovered.status().pending_deliveries, 1,
+	'recovered diagnostic receipt was lost when Telegram rejected its failure UX');
+interrupted_delivery_options.send_failure = false;
+interrupted_delivery.clock.advance(15000);
+assert_equal(interrupted_delivery_recovered.poll_once(), true);
+assert_equal(interrupted_delivery_recovered.status().pending_deliveries, 0);
+
+// Recovery uses the same complete administrator authorization set as the live
+// command path, not only the primary configured ID.
+let secondary_restart = environment({ settings: {
+	telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42, 84' },
+	core: { subscription_url: 'https://example.test/current', proxy_mode: 'tproxy' }
+} });
+let secondary_restart_controller = telegram.create(secondary_restart.app);
+assert_equal(secondary_restart_controller.start(), true);
+assert_equal(secondary_restart_controller.handle_update(update(714, '/diagnostics', 84)), true);
+assert_equal(secondary_restart_controller.stop(), true);
+let secondary_restart_index = length(secondary_restart.submitted) - 1;
+secondary_restart.submitted[secondary_restart_index] = {
+	...secondary_restart.submitted[secondary_restart_index],
+	state: 'interrupted', stage: 'interrupted', progress: 30,
+	error: { code: 'INTERRUPTED', message: 'INTERRUPTED' }
+};
+let secondary_restart_recovered = telegram.create(secondary_restart.app);
+assert_equal(secondary_restart_recovered.start(), true);
+assert_equal(secondary_restart_recovered.poll_once(), true);
+assert_equal(secondary_restart_recovered.status().pending_deliveries, 0,
+	'recovered diagnostic receipt excluded an authorized secondary administrator');
+assert_match(secondary_restart.requests[length(secondary_restart.requests) - 1].body,
+	/(^|&)chat_id=84(&|$)/);
 
 // If Telegram becomes unavailable before generation completes, no upload is
 // attempted; the report remains in the TTL-managed store.
@@ -684,6 +753,58 @@ assert_equal(active_timers(lifecycle.clock), 0);
 assert_equal(lifecycle_controller.stop(), true);
 assert_equal(lifecycle_controller.stop(), false);
 assert_equal(lifecycle_controller.status().running, false);
+
+let dormant_lifecycle = environment();
+let dormant_controller = telegram.create(dormant_lifecycle.app);
+assert_equal(length(dormant_lifecycle.operation_subscribers), 2);
+assert_equal(dormant_controller.stop(), false);
+assert_equal(length(dormant_lifecycle.operation_subscribers), 0,
+	'stop left Telegram operation subscriptions on a controller that was not running');
+
+// A live 429 retry remains the sole owner of document delivery. The durable
+// receipt must not race poll_once and then let the timer upload a duplicate.
+let diagnostic_retry_race = environment({ document_replies: [
+	{ status: 429, headers: { 'retry-after': '7' },
+		body: '{"ok":false,"parameters":{"retry_after":7}}' },
+	{ status: 200, headers: {}, body: '{"ok":true,"result":{"message_id":52}}' }
+] });
+let diagnostic_retry_race_controller = telegram.create(diagnostic_retry_race.app);
+assert_equal(diagnostic_retry_race_controller.start(), true);
+assert_equal(diagnostic_retry_race_controller.handle_update(update(712, '/diagnostics')), true);
+diagnostic_retry_race.emit_report('success', 'complete', 100);
+assert_equal(diagnostic_retry_race.report_opens(), 1);
+assert_equal(diagnostic_retry_race_controller.poll_once(), true);
+assert_equal(diagnostic_retry_race.report_opens(), 1,
+	'durable outbox raced the live diagnostic retry');
+diagnostic_retry_race.clock.advance(7000);
+assert_equal(diagnostic_retry_race.report_opens(), 2);
+assert_equal(diagnostic_retry_race.report_finishes(), 1);
+assert_equal(diagnostic_retry_race_controller.status().pending_deliveries, 0);
+
+// Stop detaches the diagnostic listener and cancels/releases a pending document
+// retry. Restarting the same controller re-arms one listener without replaying it.
+let diagnostic_stop = environment({ document_replies: [ {
+	status: 429, headers: { 'retry-after': '7' },
+	body: '{"ok":false,"parameters":{"retry_after":7}}'
+} ] });
+let diagnostic_stop_controller = telegram.create(diagnostic_stop.app);
+assert_equal(diagnostic_stop_controller.start(), true);
+assert_equal(diagnostic_stop_controller.handle_update(update(711, '/diagnostics')), true);
+diagnostic_stop.emit_report('success', 'complete', 100);
+assert_equal(diagnostic_stop.report_opens(), 1);
+assert_equal(diagnostic_stop.report_closes(), 1);
+assert_equal(active_timers(diagnostic_stop.clock), 1);
+assert_equal(length(diagnostic_stop.operation_subscribers), 2);
+assert_equal(diagnostic_stop_controller.status().pending_deliveries, 1);
+assert_equal(diagnostic_stop_controller.stop(), true);
+assert_equal(active_timers(diagnostic_stop.clock), 0);
+assert_equal(length(diagnostic_stop.operation_subscribers), 0);
+assert_equal(diagnostic_stop_controller.status().pending_deliveries, 0,
+	'stop retained a canceled diagnostic retry as a pending delivery job');
+diagnostic_stop.clock.advance(7000);
+assert_equal(diagnostic_stop.report_opens(), 1);
+assert_equal(diagnostic_stop_controller.start(), true);
+assert_equal(length(diagnostic_stop.operation_subscribers), 2);
 
 // Poll dispatch uses its validated settings snapshot; no handler-level reread can fail.
 let snapshot = environment({ poll_replies: [ {

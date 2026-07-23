@@ -464,21 +464,28 @@ export function create(app) {
 			{ chat_id: entry.chat_id, message_id: entry.message_id };
 	};
 
-	function forget_diagnostic(entry) {
+	function forget_diagnostic(entry, retire_receipt) {
 		if (entry.retry_timer?.cancel != null)
 			try { entry.retry_timer.cancel(); } catch (error) {}
 		entry.retry_timer = null;
 		delete diagnostic_jobs[entry.operation_id];
+		if (retire_receipt === true)
+			try { outbox.remove('operation.' + entry.operation_id); } catch (error) {}
 	};
 
 	function restore_diagnostics(entry, settings, success) {
-		try { show_panel('diagnostics', settings, diagnostic_identity(entry)); }
+		let panel_delivered = false, notice_delivered = false;
+		try {
+			panel_delivered = show_panel('diagnostics', settings,
+				diagnostic_identity(entry)) === true;
+		}
 		catch (error) {}
 		try {
-			transport.send(settings, entry.chat_id,
-				diagnostic_notice(entry.locale, success), null);
+			notice_delivered = transport.send(settings, entry.chat_id,
+				diagnostic_notice(entry.locale, success), null) != null;
 		}
 		catch (error) { log_failure('diagnostic result delivery failed'); }
+		return panel_delivered || notice_delivered;
 	};
 
 	function edit_diagnostic_stage(entry, record, settings) {
@@ -501,7 +508,7 @@ export function create(app) {
 		let settings = configuration(app);
 		if (!settings.available || !settings.enabled || !settings.configured ||
 		    !authorized(settings, entry.chat_id)) {
-			forget_diagnostic(entry);
+			forget_diagnostic(entry, true);
 			return false;
 		}
 		entry.attempts++;
@@ -513,7 +520,7 @@ export function create(app) {
 			if (result?.limited === true) {
 				if (entry.attempts >= MAX_DOCUMENT_ATTEMPTS) {
 					restore_diagnostics(entry, settings, false);
-					forget_diagnostic(entry);
+					forget_diagnostic(entry, true);
 					return false;
 				}
 				edit_diagnostic_stage(entry, {
@@ -526,13 +533,13 @@ export function create(app) {
 				return false;
 			}
 			restore_diagnostics(entry, settings, true);
-			forget_diagnostic(entry);
+			forget_diagnostic(entry, true);
 			return true;
 		}
 		catch (error) {
 			log_failure('diagnostic document delivery failed');
 			restore_diagnostics(entry, settings, false);
-			forget_diagnostic(entry);
+			forget_diagnostic(entry, true);
 			return false;
 		}
 	};
@@ -546,7 +553,7 @@ export function create(app) {
 		if (record.state == 'failure' || record.state == 'interrupted') {
 			if (settings.available && settings.enabled && settings.configured)
 				restore_diagnostics(entry, settings, false);
-			forget_diagnostic(entry);
+			forget_diagnostic(entry, true);
 			return false;
 		}
 		if (settings.available && settings.enabled && settings.configured)
@@ -580,10 +587,22 @@ export function create(app) {
 			chat_id: destination.chat_id, message_id: panel?.message_id ?? null,
 			locale: destination.locale, attempts: 0, retry_timer: null
 		};
-		diagnostic_jobs[entry.operation_id] = entry;
 		let record = app.operations.get(entry.operation_id);
-		if (record != null)
-			diagnostic_event(record);
+		if (record == null) {
+			try { show_panel('diagnostics', settings, panel); } catch (error) {}
+			errors.fail('INVALID_RESPONSE');
+		}
+		try {
+			operation_bridge.track({ ...record, report_id: entry.report_id }, {
+				chat_id: entry.chat_id, message_id: entry.message_id, locale: entry.locale
+			});
+		}
+		catch (error) {
+			try { show_panel('diagnostics', settings, panel); } catch (panel_error) {}
+			errors.fail(errors.normalize(error).code);
+		}
+		diagnostic_jobs[entry.operation_id] = entry;
+		diagnostic_event(record);
 		return true;
 	};
 
@@ -598,11 +617,14 @@ export function create(app) {
 		return true;
 	};
 
-	function receipt_payload(record) {
-		return {
+	function receipt_payload(record, previous) {
+		let value = {
 			kind: record.kind, stage: record.stage, progress: record.progress,
 			error: record.error?.code ?? null
 		};
+		if (record.kind == 'diagnostics.report')
+			value.report_id = record.report_id ?? previous?.report_id ?? null;
+		return value;
 	};
 
 	function return_screen(kind) {
@@ -639,7 +661,28 @@ export function create(app) {
 	function deliver_receipt(entry, saved_panel) {
 		let settings = configuration(app);
 		if (!settings.available || !settings.enabled || !settings.configured ||
-		    settings.user_id != entry.chat_id) return false;
+		    !authorized(settings, entry.chat_id)) return false;
+		if (entry.kind == 'diagnostics.report') {
+			// The live job owns its exact retry deadline and descriptor lifecycle.
+			// The durable receipt is only the failover owner after recreation.
+			if (diagnostic_jobs[entry.operation_id] != null) return false;
+			if (entry.state == 'success' && type(entry.payload?.report_id) == 'string') {
+				try {
+					let file = app.diagnostics_open_report(entry.payload.report_id);
+					let result = transport.send_document(settings, entry.chat_id, file,
+						'miclash-diagnostic-lite-' + app.runtime.clock.now() + '.json',
+						telegram_i18n.text(entry.locale, 'diagnostics'));
+					if (result?.limited === true) return false;
+					restore_diagnostics(entry, settings, true);
+					return { delivered: true };
+				}
+				catch (error) { log_failure('recovered diagnostic document delivery failed'); }
+			}
+			if (entry.state != 'failure' && entry.state != 'interrupted' &&
+			    entry.state != 'success') return false;
+			return restore_diagnostics(entry, settings, false) ?
+				{ delivered: true } : false;
+		}
 		if (entry.audience == 'automatic') {
 			let text = event_text(entry.payload);
 			if (type(entry.payload?.count) == 'int' && entry.payload.count > 1)
@@ -679,13 +722,48 @@ export function create(app) {
 			message_id: result.message_id, generation: session.generation } };
 	};
 
+	function subscribe_diagnostics() {
+		if (diagnostics_unsubscribe != null) return false;
+		diagnostics_unsubscribe = app.operations.subscribe((record) => {
+			try { diagnostic_event(record); } catch (error) {}
+		});
+		if (type(diagnostics_unsubscribe) != 'function') {
+			diagnostics_unsubscribe = null;
+			invalid();
+		}
+		return true;
+	};
+	function suspend_diagnostics() {
+		if (diagnostics_unsubscribe != null) {
+			try { diagnostics_unsubscribe(); } catch (error) {}
+			diagnostics_unsubscribe = null;
+		}
+		for (let operation_id in keys(diagnostic_jobs)) {
+			let entry = diagnostic_jobs[operation_id];
+			// A scheduled document retry already owns a terminal operation. Stop
+			// cancels that delivery job completely; its released report remains
+			// available only until the report store's normal TTL cleanup.
+			forget_diagnostic(entry, entry.retry_timer != null);
+		}
+		return true;
+	};
+	function resume_delivery() {
+		if (operation_bridge == null)
+			operation_bridge = telegram_operations.create(app, outbox, receipt_payload);
+		subscribe_diagnostics();
+		try { operation_bridge.recover(); } catch (error) {}
+		return true;
+	};
+	function suspend_delivery() {
+		suspend_diagnostics();
+		if (operation_bridge != null) {
+			try { operation_bridge.close(); } catch (error) {}
+			operation_bridge = null;
+		}
+		return true;
+	};
 	outbox = telegram_outbox.create(app.runtime, deliver_receipt);
-	operation_bridge = telegram_operations.create(app, outbox, receipt_payload);
-	diagnostics_unsubscribe = app.operations.subscribe((record) => {
-		try { diagnostic_event(record); } catch (error) {}
-	});
-	if (type(diagnostics_unsubscribe) != 'function') invalid();
-	try { operation_bridge.recover(); } catch (error) {}
+	resume_delivery();
 
 	function rate_allowed(now) {
 		let retained = [];
@@ -1066,6 +1144,7 @@ export function create(app) {
 			state.last_error = null;
 			state.retry_after_ms = 0;
 			state.failures = 0;
+			suspend_delivery();
 			return false;
 		}
 		state.last_poll_at = app.runtime.clock.now();
@@ -1143,17 +1222,18 @@ export function create(app) {
 		let settings = configuration(app);
 		if (state.running || !settings.available || !settings.enabled || !settings.configured)
 			return false;
+		resume_delivery();
 		state.running = true;
 		return true;
 	};
 	controller.stop = () => {
-		if (!state.running)
-			return false;
+		let was_running = state.running;
 		state.running = false;
 		if (timer?.cancel != null)
 			timer.cancel();
 		timer = null;
-		return true;
+		suspend_delivery();
+		return was_running;
 	};
 	controller.test = () => send_message('MiClash Telegram test');
 	controller.send_event = (event) => {

@@ -35,8 +35,8 @@ export function create(app, outbox, render) {
 	let closed = false;
 	function active() { if (closed) errors.fail('INTERRUPTED'); };
 	function receipt_id(operation_id) { return 'operation.' + operation_id; };
-	function payload(record) {
-		let value = render(clone(record));
+	function payload(record, previous) {
+		let value = render(clone(record), clone(previous));
 		if (type(value) != 'object' || type(value) == 'array') invalid();
 		return value;
 	};
@@ -57,7 +57,10 @@ export function create(app, outbox, render) {
 		if (entry == null) return false;
 		let state = record.state;
 		if (state == 'success' && !verified(record)) state = 'verifying';
-		outbox.update(entry.id, { state, payload: payload({ ...record, state }) });
+		outbox.update(entry.id, {
+			state,
+			payload: payload({ ...record, state }, entry.payload)
+		});
 		return true;
 	};
 	let unsubscribe = app.operations.subscribe((record) => {
@@ -73,7 +76,8 @@ export function create(app, outbox, render) {
 				id: receipt_id(record.id), audience: 'user', kind: record.kind,
 				locale: destination.locale, chat_id: destination.chat_id,
 				message_id: destination.message_id, operation_id: record.id,
-				state: record.state, created_at: app.runtime.clock.now(), payload: payload(record)
+				state: record.state, created_at: app.runtime.clock.now(),
+				payload: payload(record, null)
 			});
 		},
 		operation_event: (record) => { active(); return update_record(record); },

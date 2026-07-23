@@ -69,6 +69,9 @@ assert_equal(resumed.outbox.update('user-2', {
 }), true);
 assert_equal(resumed.outbox.pending()[0].state, 'running');
 assert_equal(resumed.outbox.pending()[0].payload.progress, 50);
+assert_equal(resumed.outbox.remove('user-2'), true);
+assert_equal(length(resumed.outbox.pending()), 0);
+assert_equal(resumed.outbox.remove('user-2'), false);
 
 let panel = environment({ results: [ {
 	delivered: true, panel: { chat_id: '42', message_id: 99, generation: 3 }

@@ -185,6 +185,18 @@ export function create(runtime, deliver) {
 			if (!found) errors.fail('NOT_FOUND');
 			return commit(candidate);
 		},
+		remove: (id) => {
+			active();
+			if (type(id) != 'string' ||
+			    !match(id, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/)) invalid();
+			let candidate = clone(state);
+			for (let index = 0; index < length(candidate.entries); index++)
+				if (candidate.entries[index].id == id) {
+					splice(candidate.entries, index, 1);
+					return commit(candidate);
+				}
+			return false;
+		},
 		attempt: () => {
 			active();
 			let index = -1, now = runtime.clock.now();

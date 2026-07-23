@@ -33,9 +33,10 @@ function environment() {
 		boot_id: () => boot_id,
 		daemon_ready: () => daemon_ready
 	};
-	let bridge = bridge_module.create(app, outbox, (record) => ({
+	let bridge = bridge_module.create(app, outbox, (record, previous) => ({
 		kind: record.kind, stage: record.stage, progress: record.progress,
-		error: record.error?.code ?? null
+		error: record.error?.code ?? null,
+		report_id: record.report_id ?? previous?.report_id ?? null
 	}));
 	return {
 		app, outbox, entries, records, bridge,
@@ -82,6 +83,15 @@ failed.publish({ ...failed_record, state: 'failure', stage: 'install', progress:
 	error: { code: 'HEALTH_FAILED', message: 'HEALTH_FAILED' } });
 assert_equal(failed.entries[0].state, 'failure');
 assert_equal(failed.entries[0].payload.error, 'HEALTH_FAILED');
+
+let diagnostic = environment(), diagnostic_record = operation('queued', 'diagnostics.report');
+diagnostic.bridge.track({ ...diagnostic_record, report_id: 'rpt_0123456789abcdef0123456789abcdef' },
+	{ chat_id: '42', message_id: 13, locale: 'en' });
+diagnostic.publish({ ...diagnostic_record, state: 'interrupted', stage: 'interrupted',
+	progress: 30, error: { code: 'INTERRUPTED', message: 'INTERRUPTED' } });
+assert_equal(diagnostic.entries[0].payload.report_id,
+	'rpt_0123456789abcdef0123456789abcdef',
+	'operation updates discarded durable diagnostic delivery identity');
 
 let reboot = environment();
 let receipt_id = reboot.bridge.prepare_reboot({
