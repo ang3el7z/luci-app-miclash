@@ -125,6 +125,34 @@ for (let mode in [ 'silent', 'lite' ]) {
 	}
 }
 
+// Percent encoding may cover any arbitrary mixture of otherwise safe and unsafe URL bytes.
+let mixed_percent_urls = [
+	'htt%70s%3A%2F%2Frunt%69me.example.invalid%2Fpath%3Ftoken%3Druntime-token',
+	'h%74tps://runtime.example.invalid/path%3Ftoken=runtime-token'
+];
+for (let mode in [ 'silent', 'lite' ])
+	for (let probe in mixed_percent_urls) {
+		let output = privacy.create(mode, []).text([], 'subscription=' + probe);
+		assert_absent(output, [ probe, runtime_host, 'runtime-token' ],
+			mode + ' mixed percent subscription URL');
+		assert_true(index(output, mode == 'silent' ? '[URL-1]' : '[REDACTED]') >= 0,
+			mode + ' replaces mixed percent subscription URL');
+	}
+for (let mode in [ 'silent', 'lite' ]) {
+	let probe = mixed_percent_urls[0];
+	let output = privacy.create(mode, []).text([], 'subscription="' + probe + '"');
+	assert_absent(output, [ probe, runtime_host, 'runtime-token' ],
+		mode + ' quoted mixed percent subscription URL');
+}
+let oversized_percent_url = 'htt%70s%3A%2F%2Fruntime.example.invalid/';
+for (let index = 0; index < 4096; index++) oversized_percent_url += 'a';
+oversized_percent_url += '%3Ftoken%3Druntime-token';
+for (let mode in [ 'silent', 'lite' ]) {
+	let output = privacy.create(mode, []).text([], 'subscription=' + oversized_percent_url);
+	assert_absent(output, [ oversized_percent_url, runtime_host, 'runtime-token' ],
+		mode + ' oversized percent subscription URL');
+}
+
 // Typed labels are shared by object and text transforms within one report.
 let typed_source = { hostname: runtime_host, mac: runtime_mac,
 	device_name: runtime_device, uuid: runtime_uuid };
@@ -137,3 +165,27 @@ assert_equal(typed_object.uuid, '[ID-1]');
 let typed_text = typed_privacy.text([], runtime_host + ' ' + runtime_mac + ' device=' +
 	runtime_device + ' uuid=' + runtime_uuid);
 assert_match(typed_text, /\[HOST-1\].*\[DEVICE-1\].*\[DEVICE-2\].*\[ID-1\]/);
+
+// Text markers use the same typed label as structured values, including local hostnames.
+let local_hostname = 'router-main';
+let hostname_privacy = privacy.create('silent', []);
+assert_equal(hostname_privacy.value([], { hostname: local_hostname }).hostname, '[HOST-1]');
+assert_equal(hostname_privacy.text([], 'hostname=' + local_hostname), 'hostname=[HOST-1]');
+
+// Plain and subscription-scoped structured IDs remain identifying data.
+let structured_ids = { id: 'plain-42', subscription_id: 'subscription-73' };
+let silent_ids = privacy.create('silent', []).value([], structured_ids);
+assert_equal(silent_ids.id, '[ID-1]');
+assert_equal(silent_ids.subscription_id, '[ID-2]');
+let lite_ids = privacy.create('lite', []).value([], structured_ids);
+assert_equal(lite_ids.id, '[REDACTED]');
+assert_equal(lite_ids.subscription_id, '[REDACTED]');
+
+// Lite keeps kernel interface names only in route/network device contexts.
+let lite_devices = privacy.create('lite', []).value([], {
+	routing: { routes: [ { device: 'eth0' } ] },
+	network: { device: 'br-lan', clients: [ { device: 'phone0' } ] }
+});
+assert_equal(lite_devices.routing.routes[0].device, 'eth0');
+assert_equal(lite_devices.network.device, 'br-lan');
+assert_equal(lite_devices.network.clients[0].device, '[REDACTED]');

@@ -1,6 +1,8 @@
 import * as redact from 'miclash.redact';
 
 const MASK = '[REDACTED]';
+const MAX_PERCENT_TOKEN_LENGTH = 4096;
+const MAX_MARKER_SUFFIXES = 16;
 
 function enum_mode(mode) {
 	if (mode != 'silent' && mode != 'lite' && mode != 'full')
@@ -21,9 +23,11 @@ function add(values, value) {
 };
 
 function trim_token(value) {
-	while (length(value) && match(substr(value, 0, 1), /^[\[\](),;:'"<>]$/))
+	while (length(value) && (substr(value, 0, 1) == '"' || substr(value, 0, 1) == "'" ||
+	       match(substr(value, 0, 1), /^[\[\](),;:<>]$/)))
 		value = substr(value, 1);
-	while (length(value) && match(substr(value, -1), /^[\[\](),;:'"<>.!?]$/))
+	while (length(value) && (substr(value, -1) == '"' || substr(value, -1) == "'" ||
+	       match(substr(value, -1), /^[\[\](),;:<>.!?]$/)))
 		value = substr(value, 0, length(value) - 1);
 	return value;
 };
@@ -32,7 +36,7 @@ function typed_kind(key) {
 	let normalized = redact.normalized_key(key);
 	if (match(normalized, /(^|_)(hostname|host_name)($|_)/)) return 'hosts';
 	if (match(normalized, /(^|_)(device|ssid|mac)($|_)/)) return 'devices';
-	if (match(normalized, /(^|_)(uuid|user_id|chat_id|telegram_id)($|_)/)) return 'ids';
+	if (match(normalized, /(^|_)(id|uuid|user_id|chat_id|telegram_id)($|_)/)) return 'ids';
 	return null;
 };
 
@@ -69,6 +73,8 @@ function catalog_add(catalog, kind, value) {
 };
 
 function percent_decoded(input) {
+	if (length(input) > MAX_PERCENT_TOKEN_LENGTH)
+		return input;
 	let output = '';
 	for (let offset = 0; offset < length(input); offset++) {
 		if (substr(input, offset, 1) == '%' && offset + 2 < length(input) &&
@@ -116,8 +122,10 @@ function marker_values(catalog, input, marker, kind) {
 function discover_text(catalog, input) {
 	for (let name in [ 'token', 'secret', 'password', 'cookie', 'authorization', 'bearer' ])
 		marker_values(catalog, input, name, 'secret');
-	for (let name in [ 'device', 'device_name', 'ssid', 'hostname' ])
+	for (let name in [ 'device', 'device_name', 'ssid' ])
 		marker_values(catalog, input, name, 'devices');
+	for (let name in [ 'hostname', 'host_name' ])
+		marker_values(catalog, input, name, 'hosts');
 	for (let name in [ 'uuid', 'id', 'user_id', 'chat_id' ])
 		marker_values(catalog, input, name, 'ids');
 	for (let word in split(replace(input, /[[:space:]]/g, ' '), ' '))
@@ -230,9 +238,34 @@ function replace_urls(input, values, labels, mode) {
 	return input;
 };
 
+function replace_percent_urls(input, labels, mode) {
+	let words = split(replace(input, /[[:space:]]/g, ' '), ' ');
+	for (let word in words) {
+		word = trim_token(word);
+		let candidate = word, suffixes = 0;
+		while (length(candidate) && suffixes++ < MAX_MARKER_SUFFIXES) {
+			candidate = trim_token(candidate);
+			let oversized = length(candidate) > MAX_PERCENT_TOKEN_LENGTH;
+			let bounded = oversized ? substr(candidate, 0, MAX_PERCENT_TOKEN_LENGTH) : candidate;
+			let decoded = percent_decoded(bounded);
+			if (decoded != bounded && match(decoded, /^https?:\/\/[^[:space:]]+$/) &&
+			    (mode == 'silent' || oversized || subscription_url(decoded))) {
+				input = replace_all(input, candidate,
+					mode == 'silent' ? label(labels, 'URL', decoded) : MASK);
+				break;
+			}
+			let separator = index(candidate, '=');
+			if (separator < 0) break;
+			candidate = substr(candidate, separator + 1);
+		}
+	}
+	return input;
+};
+
 function transform_text(mode, catalog, labels, value) {
 	if (type(value) != 'string' || mode == 'full') return value;
 	discover_text(catalog, value);
+	value = replace_percent_urls(value, labels, mode);
 	value = replace_urls(value, catalog.urls, labels, mode);
 	value = replace_variants(value, catalog.secrets, labels, 'REDACTED', MASK);
 	if (mode == 'lite') {
@@ -244,6 +277,16 @@ function transform_text(mode, catalog, labels, value) {
 	value = replace_variants(value, catalog.hosts, labels, 'HOST');
 	value = replace_variants(value, catalog.devices, labels, 'DEVICE');
 	return replace_variants(value, catalog.ids, labels, 'ID');
+};
+
+function lite_system_interface(path, key, value) {
+	if (redact.normalized_key(key) != 'device' || type(value) != 'string' ||
+	    length(value) < 1 || length(value) > 15 ||
+	    !match(value, /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/))
+		return false;
+	let parent = length(path) ? redact.normalized_key(path[-1]) : '';
+	return parent == 'route' || parent == 'routes' || parent == 'routing' ||
+		parent == 'network' || parent == 'networks';
 };
 
 function transform(mode, catalog, labels, path, value) {
@@ -259,7 +302,11 @@ function transform(mode, catalog, labels, path, value) {
 			let key_path = [ ...path, key ];
 			let typed = typed_kind(key);
 			if (typed != null) {
-				if (mode == 'silent' && type(item) == 'string') {
+				if (mode == 'lite' && typed == 'devices' &&
+				    lite_system_interface(path, key, item)) {
+					output[key] = item;
+				}
+				else if (mode == 'silent' && type(item) == 'string') {
 					let kind = typed == 'hosts' ? 'HOST' : typed == 'devices' ? 'DEVICE' : 'ID';
 					output[key] = label(labels, kind, item);
 				}
