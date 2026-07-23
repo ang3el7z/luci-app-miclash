@@ -55,8 +55,32 @@ assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 
 let store = diagnostics.create_store({ ...runtime,
 	storage: { free_blocks: () => 1024 } });
+
+// A stage is owned as soon as mkdir succeeds, including before report.json
+// exists. Chmod/open failures must remove that exact empty stage.
+for (let failure in [ 'chmod', 'open' ]) {
+	let begin_fs = fakes.fs({});
+	for (let directory in [ '/tmp', '/tmp/miclash' ]) begin_fs.mkdir(directory);
+	begin_fs.chmod('/tmp/miclash', 0o700);
+	let begin_runtime = { fs: begin_fs, clock: fakes.clock(1), random: fakes.entropy(),
+		digest: fakes.digest(begin_fs), paths: { tmp: '/tmp/miclash' } };
+	let begin_store = diagnostics.create_store({ ...begin_runtime,
+		storage: { free_blocks: () => 1024 } });
+	if (failure == 'chmod') begin_fs.fail_on = 'chmod';
+	else begin_fs.fail_open_once_matching = 'report.json';
+	assert_throws(() => begin_store.begin({ mode: 'lite', required_bytes: 4096 }), 'INTERNAL');
+	begin_fs.fail_on = null;
+	assert_equal(length(begin_fs.lsdir('/tmp/miclash/diagnostics')), 0,
+		failure + ' failure removes its empty stream stage');
+	diagnostics.create_store({ ...begin_runtime, storage: { free_blocks: () => 1024 } });
+	assert_equal(length(begin_fs.lsdir('/tmp/miclash/diagnostics')), 0,
+		failure + ' failure remains restart recoverable');
+}
+
 let report = store.begin({ mode: 'lite', required_bytes: 4096 });
 assert_true(match(report.id, /^rpt_[0-9a-f]{32}$/));
+assert_true(match(report.path, /\/\.stream-stage-[0-9a-f]{32}$/),
+	'stream stages use a namespace distinct from legacy staging');
 assert_equal(report.mode, 'lite');
 assert_equal(report.downloaded, false);
 let output = diagnostics_json.create(runtime, report.handle);
@@ -290,6 +314,28 @@ assert_equal(length(filesystem.calls.close), closes_before_read_failure + 1,
 assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 	'terminal reader failure discards the report');
 
+// Every integrity failure consumes the published capability, including checks
+// that fail before a reader descriptor can be opened.
+let mutated_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
+let mutated_writer = diagnostics_json.create(runtime, mutated_stage.handle);
+mutated_writer.begin_object(); mutated_writer.field('safe', true); mutated_writer.end_object();
+let mutated_report = store.finish(mutated_stage.id, mutated_writer.finish());
+filesystem.writefile(mutated_report.path, '{"evil":true}');
+assert_throws(() => store.open_report(mutated_report.id), 'INTERNAL');
+assert_equal(filesystem.lstat(mutated_report.path), null,
+	'pre-open mutation discards the published report');
+assert_throws(() => store.open_report(mutated_report.id), 'NOT_FOUND');
+
+let substituted_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
+let substituted_writer = diagnostics_json.create(runtime, substituted_stage.handle);
+substituted_writer.begin_object(); substituted_writer.end_object();
+let substituted_report = store.finish(substituted_stage.id, substituted_writer.finish());
+filesystem.bump_inode(substituted_report.path);
+assert_throws(() => store.open_report(substituted_report.id), 'INTERNAL');
+assert_true(filesystem.lstat(substituted_report.path) != null,
+	'pre-open cleanup never deletes a substituted regular-file target');
+assert_throws(() => store.open_report(substituted_report.id), 'NOT_FOUND');
+
 // Stream and legacy stores share names but never recover or delete each other's reports.
 let coexist_fs = fakes.fs({});
 for (let directory in [ '/tmp', '/tmp/miclash' ]) coexist_fs.mkdir(directory);
@@ -317,3 +363,89 @@ assert_true(coexist_fs.lstat(legacy_path) == null,
 	'legacy initialization recovers its own report');
 assert_true(coexist_fs.lstat(coexist_report.path) != null,
 	'legacy initialization preserves stream reports');
+
+// Interrupted legacy and stream stages have durable, unambiguous ownership.
+let ownership_fs = fakes.fs({});
+for (let directory in [ '/tmp', '/tmp/miclash' ]) ownership_fs.mkdir(directory);
+ownership_fs.chmod('/tmp/miclash', 0o700);
+let ownership_runtime = { fs: ownership_fs, clock: fakes.clock(1), random: fakes.entropy(),
+	digest: fakes.digest(ownership_fs), paths: { tmp: '/tmp/miclash' } };
+let ownership_root = '/tmp/miclash/diagnostics';
+ownership_fs.mkdir(ownership_root); ownership_fs.chmod(ownership_root, 0o700);
+let legacy_stage = ownership_root + '/.stage-11111111111111111111111111111111';
+ownership_fs.mkdir(legacy_stage); ownership_fs.chmod(legacy_stage, 0o700);
+let legacy_partial = ownership_fs.open(legacy_stage + '/report.json', 'wx', 0o600);
+ownership_fs.write(legacy_partial, '{}'); ownership_fs.close(legacy_partial);
+diagnostics.create_store({ ...ownership_runtime, storage: { free_blocks: () => 1024 } });
+assert_true(ownership_fs.lstat(legacy_stage) != null,
+	'stream-first recovery preserves a legacy partial report.json stage');
+diagnostics.create({ runtime: ownership_runtime, sources: minimal_sources() });
+assert_equal(ownership_fs.lstat(legacy_stage), null,
+	'legacy recovery removes its partial report.json stage');
+
+let stream_stage = ownership_root + '/.stream-stage-22222222222222222222222222222222';
+ownership_fs.mkdir(stream_stage);
+diagnostics.create({ runtime: ownership_runtime, sources: minimal_sources() });
+assert_true(ownership_fs.lstat(stream_stage) != null,
+	'legacy-first recovery preserves an empty stream stage');
+diagnostics.create_store({ ...ownership_runtime, storage: { free_blocks: () => 1024 } });
+assert_equal(ownership_fs.lstat(stream_stage), null,
+	'stream recovery removes its owned empty stage');
+
+// Versions before the stream namespace split published one-file reports under
+// report-<token>. Either initializer must safely retire that obsolete shape.
+for (let initializer in [ 'legacy', 'stream' ]) {
+	let token = initializer == 'legacy' ?
+		'33333333333333333333333333333333' : '44444444444444444444444444444444';
+	let old_stream = ownership_root + '/report-' + token;
+	ownership_fs.mkdir(old_stream); ownership_fs.chmod(old_stream, 0o700);
+	let old_leaf = ownership_fs.open(old_stream + '/report.json', 'wx', 0o600);
+	ownership_fs.write(old_leaf, '{}'); ownership_fs.close(old_leaf);
+	if (initializer == 'legacy')
+		diagnostics.create({ runtime: ownership_runtime, sources: minimal_sources() });
+	else
+		diagnostics.create_store({ ...ownership_runtime, storage: { free_blocks: () => 1024 } });
+	assert_equal(ownership_fs.lstat(old_stream), null,
+		initializer + ' initialization retires old one-file stream reports');
+}
+
+// Reverse initialization order with complete reports: legacy initializes
+// first, then stream recovery removes only its own completed restart debris.
+let reverse_stream = ownership_root + '/stream-report-55555555555555555555555555555555';
+ownership_fs.mkdir(reverse_stream); ownership_fs.chmod(reverse_stream, 0o700);
+let reverse_stream_leaf = ownership_fs.open(reverse_stream + '/report.json', 'wx', 0o600);
+ownership_fs.write(reverse_stream_leaf, '{}'); ownership_fs.close(reverse_stream_leaf);
+diagnostics.create({ runtime: ownership_runtime, sources: minimal_sources() });
+assert_true(ownership_fs.lstat(reverse_stream) != null,
+	'legacy-first initialization preserves a complete stream report');
+let reverse_legacy = ownership_root + '/report-66666666666666666666666666666666';
+ownership_fs.mkdir(reverse_legacy); ownership_fs.chmod(reverse_legacy, 0o700);
+for (let leaf in [ 'report.json', 'report.txt' ]) {
+	let reverse_legacy_leaf = ownership_fs.open(reverse_legacy + '/' + leaf, 'wx', 0o600);
+	ownership_fs.write(reverse_legacy_leaf, '{}'); ownership_fs.close(reverse_legacy_leaf);
+}
+diagnostics.create_store({ ...ownership_runtime, storage: { free_blocks: () => 1024 } });
+assert_equal(ownership_fs.lstat(reverse_stream), null,
+	'stream recovery removes its own complete restart debris');
+assert_true(ownership_fs.lstat(reverse_legacy) != null,
+	'stream initialization preserves a complete legacy report');
+
+// Simulate a process stop immediately after mkdir, before begin() can enter its
+// guarded chmod/open block. A fresh initializer must recover the empty stage.
+let crash_fs = fakes.fs({});
+for (let directory in [ '/tmp', '/tmp/miclash' ]) crash_fs.mkdir(directory);
+crash_fs.chmod('/tmp/miclash', 0o700);
+let crash_runtime = { fs: crash_fs, clock: fakes.clock(1), random: fakes.entropy(),
+	digest: fakes.digest(crash_fs), paths: { tmp: '/tmp/miclash' } };
+let crash_store = diagnostics.create_store({ ...crash_runtime,
+	storage: { free_blocks: () => 1024 } });
+crash_fs.on_mkdir = (path) => {
+	if (match(path, /\/\.stream-stage-/)) die('INTERNAL');
+};
+assert_throws(() => crash_store.begin({ mode: 'lite', required_bytes: 4096 }), 'INTERNAL');
+crash_fs.on_mkdir = null;
+assert_equal(length(crash_fs.lsdir('/tmp/miclash/diagnostics')), 1,
+	'process-stop injection leaves the empty stage for restart recovery');
+diagnostics.create_store({ ...crash_runtime, storage: { free_blocks: () => 1024 } });
+assert_equal(length(crash_fs.lsdir('/tmp/miclash/diagnostics')), 0,
+	'restart removes the injected empty stream stage');
