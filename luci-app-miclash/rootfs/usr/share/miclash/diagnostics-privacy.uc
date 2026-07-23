@@ -8,6 +8,9 @@ const MAX_CATALOG_VALUES = 128;
 const MAX_CATALOG_BYTES = 32768;
 const MAX_VALUE_DEPTH = 16;
 const MAX_VALUE_NODES = 4096;
+const MAX_PATH_DEPTH = 64;
+const MAX_PATH_NODES = 64;
+const MAX_PATH_BYTES = 32768;
 const MAX_REPLACEMENT_PATTERNS = 1024;
 const MAX_REPLACEMENT_MATCHES = 4096;
 const MAX_VARIANT_BYTES = 262144;
@@ -62,6 +65,29 @@ function typed_kind(key) {
 	if (match(normalized, /(^|_)(device|ssid|mac)($|_)/)) return 'devices';
 	if (match(normalized, /(^|_)(id|uuid|user_id|chat_id|telegram_id)($|_)/)) return 'ids';
 	return null;
+};
+
+function valid_path(path) {
+	if (type(path) != 'array' || length(path) > MAX_PATH_DEPTH)
+		return false;
+	let nodes = 0, bytes = 0;
+	for (let segment in path) {
+		if (++nodes > MAX_PATH_NODES)
+			return false;
+		let kind = type(segment);
+		if (kind == 'string') {
+			if (length(segment) > MAX_TOKEN_LENGTH)
+				return false;
+			bytes += length(segment);
+		}
+		else if (kind == 'int' && segment >= 0)
+			bytes += 8;
+		else
+			return false;
+		if (bytes > MAX_PATH_BYTES)
+			return false;
+	}
+	return true;
 };
 
 function subscription_context(path) {
@@ -143,33 +169,20 @@ function classify_token(catalog, token, spelling, sensitive) {
 		catalog_add(catalog, 'ids', token);
 		return true;
 	}
+	else if (match(token,
+	         /^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}:[0-9]{1,5}$/)) {
+		let separator = index(token, ':');
+		let port = int(substr(token, separator + 1));
+		if (port > 65535)
+			return false;
+		catalog_add(catalog, 'hosts', substr(token, 0, separator));
+		return true;
+	}
 	else if (match(token, /^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$/)) {
 		catalog_add(catalog, 'hosts', token);
 		return true;
 	}
 	return false;
-};
-
-function marker_values(catalog, input, marker, kind) {
-	let offset = 0, lowered = lc(input), wanted = lc(marker) + '=';
-	while (offset < length(input)) {
-		let relative = index(substr(lowered, offset), wanted);
-		if (relative < 0) return;
-		let start = offset + relative + length(wanted), end = length(input);
-		for (let cursor = start; cursor < length(input); cursor++) {
-			if (!match(substr(input, cursor, 1), /^[[:space:]]$/)) continue;
-			let next = cursor + 1;
-			while (next < length(input) && match(substr(input, next, 1), /^[[:space:]]$/)) next++;
-			let equals = index(substr(input, next), '=');
-			let space = index(substr(input, next), ' ');
-			if (equals >= 0 && (space < 0 || equals < space)) {
-				end = cursor;
-				break;
-			}
-		}
-		catalog_add(catalog, kind, substr(input, start, end - start));
-		offset = max(end + 1, start);
-	}
 };
 
 function base64_decoded(input) {
@@ -196,14 +209,15 @@ function canonical_url(value) {
 	if (type(value) != 'string')
 		return null;
 	let spelling = trim_token(value);
-	if (match(spelling, /^https?:\/\/[^[:space:]]+$/))
-		return spelling;
 	let decoded = percent_decoded(spelling);
 	if (decoded != null && match(decoded, /^https?:\/\/[^[:space:]]+$/))
 		return decoded;
 	let decoded64 = base64_decoded(spelling);
-	return decoded64 != null && match(decoded64, /^https?:\/\/[^[:space:]]+$/) ?
-		decoded64 : null;
+	if (decoded64 == null)
+		return null;
+	let canonical64 = percent_decoded(decoded64);
+	return canonical64 != null && match(canonical64, /^https?:\/\/[^[:space:]]+$/) ?
+		canonical64 : null;
 };
 
 function credential_query_url(value) {
@@ -253,32 +267,41 @@ function credential_add(catalog, input) {
 	return true;
 };
 
-function marker_boundary(input, offset) {
-	return offset <= 0 || !match(substr(input, offset - 1, 1), /^[A-Za-z0-9_-]$/);
+function marker_key_character(character) {
+	return match(character, /^[A-Za-z0-9_.-]$/);
 };
 
-function marked_secret_values(catalog, input, marker) {
-	let lowered = lc(input), offset = 0;
+function assigned_values(catalog, input) {
+	let offset = 0;
 	while (offset < length(input) && !catalog.failed_closed) {
-		let relative = index(substr(lowered, offset), marker);
-		if (relative < 0)
-			return;
-		let found = offset + relative, cursor = found + length(marker);
-		if (!marker_boundary(input, found)) {
-			offset = cursor;
+		while (offset < length(input) &&
+		       !marker_key_character(substr(input, offset, 1)))
+			offset++;
+		let found = offset;
+		while (offset < length(input) &&
+		       marker_key_character(substr(input, offset, 1)))
+			offset++;
+		if (offset <= found)
 			continue;
-		}
-		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+		let key = substr(input, found, offset - found), cursor = offset;
+		while (cursor < length(input) &&
+		       match(substr(input, cursor, 1), /^[ \t]$/))
 			cursor++;
 		if (cursor >= length(input) ||
 		    (substr(input, cursor, 1) != ':' && substr(input, cursor, 1) != '=')) {
-			offset = found + length(marker);
+			offset = max(cursor, found + 1);
+			continue;
+		}
+		let secret = redact.secret_name(key), typed = typed_kind(key);
+		if (!secret && typed == null) {
+			offset = cursor + 1;
 			continue;
 		}
 		cursor++;
-		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+		while (cursor < length(input) &&
+		       match(substr(input, cursor, 1), /^[ \t]$/))
 			cursor++;
-		if (marker == 'authorization') {
+		if (secret) {
 			let tail = lc(substr(input, cursor));
 			for (let scheme in [ 'bearer', 'basic' ])
 				if (substr(tail, 0, length(scheme)) == scheme &&
@@ -294,17 +317,54 @@ function marked_secret_values(catalog, input, marker) {
 			(substr(input, cursor, 1) == '"' || substr(input, cursor, 1) == "'") ?
 			substr(input, cursor++, 1) : null;
 		let end = cursor;
-		while (end < length(input)) {
-			let character = substr(input, end, 1);
-			if ((quote != null && character == quote) ||
-			    (quote == null && match(character, /^[[:space:],;'"<>&#]$/)))
-				break;
-			end++;
+		if (quote != null) {
+			while (end < length(input) && substr(input, end, 1) != quote)
+				end++;
 		}
-		if (end > cursor)
-			credential_add(catalog, substr(input, cursor, end - cursor));
-		offset = max(end + 1, found + length(marker));
+		else if (secret) {
+			while (end < length(input) &&
+			       !match(substr(input, end, 1), /^[[:space:],;'"<>&#]$/))
+				end++;
+		}
+		else {
+			while (end < length(input) && substr(input, end, 1) != '\n' &&
+			       substr(input, end, 1) != '\r') {
+				if (match(substr(input, end, 1), /^[ \t]$/)) {
+					let next = end + 1;
+					while (next < length(input) &&
+					       match(substr(input, next, 1), /^[ \t]$/))
+						next++;
+					let key_end = next;
+					while (key_end < length(input) &&
+					       marker_key_character(substr(input, key_end, 1)))
+						key_end++;
+					let delimiter = key_end;
+					while (delimiter < length(input) &&
+					       match(substr(input, delimiter, 1), /^[ \t]$/))
+						delimiter++;
+					if (key_end > next && delimiter < length(input) &&
+					    (substr(input, delimiter, 1) == ':' ||
+					     substr(input, delimiter, 1) == '=')) {
+						end = max(cursor, end);
+						break;
+					}
+				}
+				end++;
+			}
+		}
+		let discovered = trim(substr(input, cursor, end - cursor));
+		if (length(discovered)) {
+			if (secret)
+				credential_add(catalog, discovered);
+			else
+				catalog_add(catalog, typed, discovered);
+		}
+		offset = max(end + 1, found + 1);
 	}
+};
+
+function marker_boundary(input, offset) {
+	return offset <= 0 || !match(substr(input, offset - 1, 1), /^[A-Za-z0-9_-]$/);
 };
 
 function marked_url_values(catalog, input, marker) {
@@ -454,7 +514,7 @@ function json_subscription_values(catalog, input) {
 	}
 };
 
-function discover_tokens(catalog, input) {
+function discover_tokens(catalog, input, sensitive) {
 	let normalized = replace(input, /[[:space:]\[\](),;'"<>]/g, ' ');
 	let words = split(normalized, ' '), suffixes = [];
 	for (let word in words) {
@@ -474,19 +534,19 @@ function discover_tokens(catalog, input) {
 				continue;
 			if (length(word) > MAX_TOKEN_LENGTH)
 				return fail_closed(catalog);
-			classify_token(catalog, word, word);
+			classify_token(catalog, word, word, sensitive);
 			if (catalog.failed_closed)
 				return false;
 			let decoded = percent_decoded(word);
 			if (decoded == null)
 				return fail_closed(catalog);
 			if (decoded != word)
-				classify_token(catalog, decoded, word);
+				classify_token(catalog, decoded, word, sensitive);
 			if (catalog.failed_closed)
 				return false;
 			let decoded64 = base64_decoded(word);
 			if (decoded64 != null)
-				classify_token(catalog, decoded64, word);
+				classify_token(catalog, decoded64, word, sensitive);
 			if (catalog.failed_closed)
 				return false;
 		}
@@ -494,32 +554,19 @@ function discover_tokens(catalog, input) {
 	return true;
 };
 
-function discover_text(catalog, input) {
+function discover_text(catalog, input, sensitive_urls) {
 	if (type(input) != 'string' || length(input) > MAX_TEXT_INPUT)
 		return fail_closed(catalog);
+	assigned_values(catalog, input);
 	for (let name in [ 'subscription', 'subscriptions', 'subscription_url' ])
 		marked_url_values(catalog, input, name);
-	for (let name in [
-		'token', 'access_token', 'refresh_token', 'secret', 'password', 'passwd',
-		'credential', 'authorization', 'api_key', 'api-key', 'private_key',
-		'private-key', 'access_key', 'access-key', 'client_secret', 'client-secret'
-	])
-		marked_secret_values(catalog, input, name);
 	for (let scheme in [ 'bearer', 'basic' ])
 		scheme_secret_values(catalog, input, scheme);
 	cookie_values(catalog, input);
 	json_subscription_values(catalog, input);
 	if (catalog.failed_closed)
 		return false;
-	for (let name in [ 'device', 'device_name', 'ssid' ])
-		marker_values(catalog, input, name, 'devices');
-	for (let name in [ 'hostname', 'host_name' ])
-		marker_values(catalog, input, name, 'hosts');
-	for (let name in [ 'uuid', 'id', 'user_id', 'chat_id' ])
-		marker_values(catalog, input, name, 'ids');
-	if (catalog.failed_closed)
-		return false;
-	return discover_tokens(catalog, input);
+	return discover_tokens(catalog, input, sensitive_urls);
 };
 
 function discover_into(catalog, seed_values, base_path) {
@@ -575,7 +622,7 @@ function discover_into(catalog, seed_values, base_path) {
 					subscription_context(item.path) || sensitive_url(url));
 			else if (typed != null) catalog_add(catalog, typed, item.value);
 			else if (classified(item.key, item.value)) catalog_add(catalog, 'secret', item.value);
-			discover_text(catalog, item.value);
+			discover_text(catalog, item.value, subscription_context(item.path));
 		}
 	}
 	for (let name in [ 'secrets', 'urls', 'ips', 'hosts', 'devices', 'ids' ])
@@ -709,13 +756,13 @@ function replace_urls(input, values, sensitive_urls, labels, mode, work) {
 	return input;
 };
 
-function transform_text(mode, catalog, labels, value, shared_work) {
+function transform_text(mode, catalog, labels, path, value, shared_work) {
 	if (type(value) != 'string' || mode == 'full') return value;
 	if (catalog.failed_closed || length(value) > MAX_TEXT_INPUT) {
 		fail_closed(catalog);
 		return MASK;
 	}
-	if (!discover_text(catalog, value))
+	if (!discover_text(catalog, value, subscription_context(path)))
 		return MASK;
 	for (let name in [ 'secrets', 'urls' ])
 		sort(catalog[name], (left, right) => length(right) - length(left));
@@ -829,7 +876,7 @@ function transform(mode, catalog, labels, path, value, work) {
 				return MASK;
 		}
 	}
-	return transform_text(mode, catalog, labels, value, work);
+	return transform_text(mode, catalog, labels, path, value, work);
 };
 
 export function create(mode, seed_values) {
@@ -839,13 +886,25 @@ export function create(mode, seed_values) {
 		value: (path, value) => {
 			if (mode == 'full')
 				return value;
+			if (!valid_path(path)) {
+				fail_closed(catalog);
+				return MASK;
+			}
 			if (catalog.failed_closed || !discover_into(catalog, value, path))
 				return MASK;
 			let work = replacement_work();
 			let output = transform(mode, catalog, labels, path, value, work);
 			return catalog.failed_closed || work.failed ? MASK : output;
 		},
-		text: (path, value) => transform_text(mode, catalog, labels, value),
+		text: (path, value) => {
+			if (mode == 'full')
+				return value;
+			if (!valid_path(path)) {
+				fail_closed(catalog);
+				return MASK;
+			}
+			return transform_text(mode, catalog, labels, path, value);
+		},
 		metadata: () => ({ mode, contains_secrets: mode == 'full', sharing_safe: mode != 'full' })
 	};
 };

@@ -331,3 +331,79 @@ assert_equal(silent_url_fields.url, '[URL-1]');
 assert_equal(silent_url_fields.password, '[URL-1]');
 assert_equal(silent_url_profile.text([], 'observed=' + equivalent_url),
 	'observed=[URL-1]');
+
+// The text API receives the same report path as the structured API. Opaque
+// subscription URLs are unsafe because of that path even when the spelling has
+// no credential hint.
+for (let spelling in [ opaque_subscription_url, opaque_percent_url,
+	opaque_base64_url, opaque_base64url_url ])
+	assert_equal(privacy.create('lite', []).text([ 'subscriptions', 0, 'url' ],
+		spelling), '[REDACTED]', 'lite text masks path-scoped subscription URL');
+
+// URL identity is based on the decoded canonical URL. Partial percent encoding
+// must neither create a second Silent label nor evade structured Lite query
+// credential classification.
+let raw_api_url =
+	'https://status.provider.example/health?api_key=query-canonical-secret';
+let partial_api_url =
+	'https://status.provider.example/health?api%5Fkey=query-canonical-secret';
+let canonical_profile = privacy.create('silent', []);
+let canonical_fields = canonical_profile.value([], {
+	raw: raw_api_url,
+	partial: partial_api_url
+});
+assert_equal(canonical_fields.raw, '[URL-1]');
+assert_equal(canonical_fields.partial, '[URL-1]');
+assert_equal(canonical_profile.text([], 'retry=' + partial_api_url), 'retry=[URL-1]');
+assert_equal(privacy.create('lite', []).value([], {
+	url: partial_api_url
+}).url, '[REDACTED]', 'lite masks partially encoded structured API key URL');
+
+// Runtime YAML/log fields use the shared secret-name classifier, including
+// camelCase names. Device-name fields are identifying in both sharing-safe
+// modes and accept ':' as well as '=' assignments.
+let marker_probes = [
+	[ 'apiSecret: camel-api-secret-31a', 'camel-api-secret-31a' ],
+	[ 'authorizationHeader: Bearer camel-auth-secret-42b', 'camel-auth-secret-42b' ],
+	[ 'sessionId: camel-session-secret-53c', 'camel-session-secret-53c' ],
+	[ 'xAPIKey: camel-key-secret-64d', 'camel-key-secret-64d' ],
+	[ 'deviceName: Personal Handset 75e\nstatus: online', 'Personal Handset 75e' ],
+	[ 'clientDeviceName=Kitchen Tablet 86f\nstatus=online', 'Kitchen Tablet 86f' ]
+];
+for (let mode in [ 'silent', 'lite' ])
+	for (let probe in marker_probes)
+		assert_absent(privacy.create(mode, []).text([], probe[0]), [ probe[1] ],
+			mode + ' runtime camel/YAML marker');
+
+// Caller-controlled paths are part of the untrusted redaction boundary. They
+// are validated before discovery or context scanning and fail closed on depth,
+// node-count, or aggregate-byte exhaustion.
+let oversized_path = [];
+for (let index = 0; index < 5000; index++)
+	push(oversized_path, 'segment-' + index);
+let oversized_path_segment = '';
+for (let index = 0; index < 5000; index++)
+	oversized_path_segment += 'x';
+let aggregate_path = [], aggregate_segment = '';
+for (let index = 0; index < 4000; index++)
+	aggregate_segment += 'y';
+for (let index = 0; index < 9; index++)
+	push(aggregate_path, aggregate_segment);
+for (let mode in [ 'silent', 'lite' ]) {
+	assert_equal(privacy.create(mode, []).value(oversized_path, status_url),
+		'[REDACTED]', mode + ' rejects 5000-segment caller path');
+	assert_equal(privacy.create(mode, []).text([ oversized_path_segment ], status_url),
+		'[REDACTED]', mode + ' rejects oversized caller path bytes');
+	assert_equal(privacy.create(mode, []).text(aggregate_path, status_url),
+		'[REDACTED]', mode + ' rejects aggregate caller path bytes');
+}
+
+// A domain followed by a TCP/UDP port remains one host identity in Silent.
+// Only the host is anonymized so the diagnostic port evidence stays useful.
+let port_profile = privacy.create('silent', []);
+assert_equal(port_profile.text([], 'provider.example:443 -> provider.example:8443'),
+	'[HOST-1]:443 -> [HOST-1]:8443');
+assert_equal(port_profile.value([], { endpoint: 'provider.example:443' }).endpoint,
+	'[HOST-1]:443');
+assert_equal(privacy.create('lite', []).text([], 'provider.example:443'),
+	'provider.example:443', 'lite retains provider domain and port');
