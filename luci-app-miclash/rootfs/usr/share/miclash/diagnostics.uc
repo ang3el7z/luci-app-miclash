@@ -6,7 +6,7 @@ import * as redact from 'miclash.redact';
 
 const ROOT = '/tmp/miclash/diagnostics';
 const TTL = 900000;
-const MAX_REPORT = 786432;
+const MAX_REPORT = 16777216;
 const RETENTION = 5;
 const MAX_ROOT_ENTRIES = 32;
 const MAX_DEPTH = 16;
@@ -17,7 +17,7 @@ const MAX_RAW_SECRETS = 64;
 const MAX_SECRET_VARIANTS = 256;
 const REPORT_MAX_DEPTH = 16;
 const REPORT_MAX_NODES = 8192;
-const REPORT_MAX_INPUT = 786432;
+const REPORT_MAX_INPUT = 16777216;
 const REPORT_SECTION_LIMITS = {
 	process: 32768,
 	uci: 32768,
@@ -844,11 +844,13 @@ function validate_stream_json(runtime, directory, path, expected_size, expected_
 // reports while newer callers use this one-file, capability-scoped store.
 export function create_store(runtime) {
 	if (type(runtime?.fs) != 'object' || type(runtime?.clock?.now) != 'function' ||
+		type(runtime?.clock?.set_timeout) != 'function' ||
 		type(runtime?.random?.hex) != 'function' || type(runtime?.digest?.sha256) != 'function' ||
 		type(runtime?.digest?.sha256_file) != 'function' ||
 		runtime?.paths?.tmp != '/tmp/miclash') invalid();
 	ensure_directory(runtime, runtime.paths.tmp);
 	let root = ensure_directory(runtime, ROOT), reports = {}, pending = {};
+	let expiry_timer = null, expiry_due = null;
 	recover_stream_store(runtime, root);
 	function discard(report) {
 		delete reports[report?.id];
@@ -856,16 +858,17 @@ export function create_store(runtime) {
 			remove_stream_directory(runtime, root, report.directory.path, report.directory.identity,
 				report.identity);
 	};
-	function expire() {
-		let now = runtime.clock.now();
-		for (let id, report in reports)
-			if (report.expires_at <= now) discard(report);
-	};
 	function cleanup_pending(id, stage, final_path) {
-		let directory_identity = pending[id]?.directory?.identity;
-		let file_identity = pending[id]?.identity;
+		let owned = pending[id];
+		let directory_identity = owned?.directory?.identity;
+		let file_identity = owned?.identity;
 		delete pending[id];
 		let failure = null;
+		if (owned?.handle != null) {
+			try { runtime.fs.close(owned.handle); }
+			catch (error) { failure = 'INTERNAL'; }
+			owned.handle = null;
+		}
 		try {
 			if (runtime.fs.lstat(stage) != null)
 				remove_stream_stage(runtime, root, stage, directory_identity, file_identity);
@@ -877,6 +880,54 @@ export function create_store(runtime) {
 		}
 		catch (error) { failure = 'INTERNAL'; }
 		if (failure != null) errors.fail(failure);
+	};
+	function cancel_timer(timer) {
+		if (timer?.cancel == null) return;
+		try { timer.cancel(); } catch (error) {}
+	};
+	function cancel_expiry() {
+		let timer = expiry_timer;
+		expiry_timer = null;
+		expiry_due = null;
+		cancel_timer(timer);
+	};
+	function expire() {
+		let now = runtime.clock.now();
+		for (let id, report in [ ...values(reports) ])
+			if (report.expires_at <= now)
+				try { discard(report); } catch (error) {}
+		for (let id, report in [ ...values(pending) ])
+			if (report.expires_at <= now)
+				try { cleanup_pending(report.id, report.stage, report.final_path); }
+				catch (error) {}
+	};
+	function schedule_expiry() {
+		let earliest = null;
+		for (let report in [ ...values(reports), ...values(pending) ])
+			if (earliest == null || report.expires_at < earliest)
+				earliest = report.expires_at;
+		if (earliest == null) return cancel_expiry();
+		if (expiry_timer != null && expiry_due == earliest) return;
+		let previous = expiry_timer, timer = null, activated = false, fired = false;
+		try {
+			timer = runtime.clock.set_timeout(max(0, earliest - runtime.clock.now()), () => {
+				if (!activated) { fired = true; return; }
+				if (expiry_timer !== timer) return;
+				expiry_timer = null;
+				expiry_due = null;
+				expire();
+				try { schedule_expiry(); } catch (error) {}
+			});
+		}
+		catch (error) { errors.fail('INTERNAL'); }
+		if (timer == null || type(timer.cancel) != 'function' || fired) {
+			cancel_timer(timer);
+			errors.fail('INTERNAL');
+		}
+		expiry_timer = timer;
+		expiry_due = earliest;
+		activated = true;
+		cancel_timer(previous);
 	};
 	return {
 		begin: (options) => {
@@ -913,16 +964,19 @@ export function create_store(runtime) {
 					if (handle == null) errors.fail('INTERNAL');
 					opened = safe_file(runtime, file_path, null);
 					let created_at = runtime.clock.now(), expires_at = created_at + TTL;
-					let pending_report = { mode: options.mode, created_at, expires_at,
+					let pending_report = { id, mode: options.mode, created_at, expires_at,
+						stage, final_path: ROOT + '/stream-report-' + token,
 						directory, identity: opened, handle };
 					pending[id] = pending_report;
 					let output = { resource: handle, path: file_path, abort: () => {
 						if (pending[id] === pending_report) {
 							try { runtime.fs.close(handle); } catch (close_error) {}
 							cleanup_pending(id, stage, ROOT + '/stream-report-' + token);
+							schedule_expiry();
 						}
 					} };
 					pending_report.output = output;
+					schedule_expiry();
 					return { id, mode: options.mode, path: stage, size: 0, sha256: null,
 						created_at, expires_at,
 						downloaded: false, handle, output, directory, identity: opened };
@@ -968,6 +1022,7 @@ export function create_store(runtime) {
 				pending_report.output.abort = () => {};
 				delete pending[id];
 				reports[id] = report;
+				schedule_expiry();
 				return { id: report.id, mode: report.mode, path: report.path, size: report.size,
 					sha256: report.sha256, created_at: report.created_at, expires_at: report.expires_at,
 					downloaded: report.downloaded };
@@ -975,6 +1030,7 @@ export function create_store(runtime) {
 			catch (error) {
 				let code = errors.normalize(error).code;
 				cleanup_pending(id, stage, final_path);
+				schedule_expiry();
 				errors.fail(code);
 			}
 		},
@@ -984,6 +1040,7 @@ export function create_store(runtime) {
 			let report = reports[id];
 			if (report == null) return false;
 			discard(report);
+			schedule_expiry();
 			return true;
 		},
 		open_report: (id) => {
@@ -1055,6 +1112,7 @@ export function create_store(runtime) {
 					}
 					catch (error) { reader_terminal('INTERNAL'); }
 					discard(report);
+					schedule_expiry();
 					return true;
 				},
 				release: () => {
@@ -1154,10 +1212,12 @@ export function create(dependencies) {
 		try {
 			operation = operation_manager.submit_observation('diagnostics.report', options.source,
 				{ report_id: staged.id, mode: options.mode }, (ctx) => {
-					let summary_source = {}, summary_view = {}, sections = {},
-						config_source = null, config_view = null, uci_view = null,
-						operations_view = null, evidence_view = [], profile = null,
-						writer = null, log_reader = null, finished = false, published = false;
+					let sections = {}, settings_source = null, config_source = null,
+						updates_source = null, network_components_source = null,
+						state_view = null, health_view = null, operations_view = null,
+						recovery_view = null, evidence_status = [], profile = null,
+						writer = null, log_reader = null, evidence_reader = null,
+						finished = false, published = false;
 					function source_value(name) {
 						try { return sources[name](); }
 						catch (error) { return { state: 'unknown', code: 'UNAVAILABLE' }; }
@@ -1167,6 +1227,8 @@ export function create(dependencies) {
 						finished = true;
 						if (log_reader?.close != null)
 							try { log_reader.close(); } catch (close_error) {}
+						if (evidence_reader?.close != null)
+							try { evidence_reader.close(); } catch (close_error) {}
 						let failure = error;
 						if (published) {
 							try {
@@ -1231,83 +1293,113 @@ export function create(dependencies) {
 						};
 					};
 					function initialize_writer() {
-						summary_source.public_status = public_status(summary_source.settings);
-						profile = privacy.create(options.mode, [ summary_source, config_source ]);
-						for (let name, value in summary_source)
-							summary_view[name] = profile.value([ name ], value);
-						config_view = profile.value([ 'config' ],
-							summarize_config(config_source, runtime));
-						uci_view = profile.value([ 'uci' ], uci_view);
+						settings_source = source_value('settings');
+						config_source = source_value('config');
+						profile = privacy.create(options.mode, [ settings_source, config_source ]);
 						let now = runtime.clock.now();
 						writer = diagnostics_json.create(runtime, staged.output);
 						writer.begin_object();
 						writer.field('schema_version', 4);
-						writer.field('generated_at', now);
-						writer.field('privacy', profile.metadata());
-						writer.field('summary', make_summary(summary_view, now));
-						writer.begin_object_field('details');
-						writer.field('config', config_view);
-						writer.field('uci', uci_view);
+						writer.field('metadata', {
+							generated_at: now,
+							privacy: profile.metadata()
+						});
 					};
 					function collect_system() {
-						for (let name in [ 'versions', 'architecture', 'state', 'health', 'memory',
-							'updates', 'settings', 'telegram', 'last_repair' ])
-							summary_source[name] = source_value(name);
+						writer.field('system', profile.value([ 'system' ], {
+							versions: source_value('versions'),
+							architecture: source_value('architecture'),
+							memory: source_value('memory')
+						}));
 					};
-					function collect_configuration() {
-						config_source = source_value('config');
+					function collect_installation() {
+						updates_source = source_value('updates');
+						let bounded = bound_section('process', source_value('process'),
+							REPORT_SECTION_LIMITS.process);
+						sections.process = bounded.metadata;
+						writer.field('installation', profile.value([ 'installation' ], {
+							updates: updates_source,
+							process: bounded.value
+						}));
+					};
+					function collect_subscription() {
 						let config_summary = summarize_config(config_source, runtime);
 						sections.config = {
 							truncated: false,
-							summarized: true,
+							summarized: options.mode != 'full',
 							original_bytes: type(config_source) == 'string' ?
 								length(config_source) : serialized_size(config_source),
 							included_bytes: serialized_size(config_summary)
 						};
 						let bounded = bound_section('uci', source_value('uci'),
 							REPORT_SECTION_LIMITS.uci);
-						uci_view = bounded.value;
 						sections.uci = bounded.metadata;
+						writer.field('subscription', profile.value([ 'subscription' ], {
+							status: public_status(settings_source).subscription,
+							settings: settings_source,
+							active_config: config_source,
+							uci: bounded.value
+						}));
 					};
 					function collect_network() {
-						summary_source.network_components = source_value('network_components');
-						initialize_writer();
+						let state_source = source_value('state');
+						let health_source = source_value('health');
+						network_components_source = source_value('network_components');
+						let view = profile.value([ 'network' ], {
+							state: {
+								desired: state_source?.desired ?? {},
+								observed: state_source?.observed ?? {}
+							},
+							health: health_source,
+							components: network_components_source
+						});
+						state_view = view.state;
+						health_view = view.health;
+						writer.field('network', view);
+					};
+					function collect_firewall() {
+						writer.field('firewall', profile.value([ 'firewall' ], {
+							status: network_components_source?.firewall ?? {
+								state: 'unavailable',
+								code: 'COLLECTION_UNAVAILABLE'
+							}
+						}));
 					};
 					function collect_providers() {
-						let bounded = bound_section('process', source_value('process'),
-							REPORT_SECTION_LIMITS.process);
-						sections.process = bounded.metadata;
-						writer.field('process', profile.value([ 'process' ], bounded.value));
+						writer.field('providers', profile.value([ 'providers' ], {
+							status: updates_source?.providers ?? {
+								state: 'unavailable',
+								code: 'COLLECTION_UNAVAILABLE'
+							}
+						}));
 					};
-					function collect_operations() {
+					function collect_rpc() {
 						let bounded = bound_section('operations', source_value('operations'),
 							REPORT_SECTION_LIMITS.operations);
 						sections.operations = bounded.metadata;
-						operations_view = profile.value([ 'operations' ], bounded.value);
-						writer.field('operations', operations_view);
+						operations_view = profile.value([ 'rpc', 'operations' ], bounded.value);
+						writer.field('rpc', profile.value([ 'rpc' ], {
+							telegram: source_value('telegram'),
+							operations: bounded.value
+						}));
 					};
-					function finalize_report(log_bytes) {
-						writer.end_array();
-						sections.logs = {
-							truncated: false,
-							original_bytes: log_bytes,
-							included_bytes: log_bytes
-						};
-						let evidence_source = type(sources.evidence) == 'function' ?
-							source_value('evidence') : [];
-						evidence_view = profile.value([ 'evidence' ], evidence_source);
-						writer.field('evidence', evidence_view);
-						writer.end_object();
+					function collect_recovery() {
+						recovery_view = profile.value([ 'recovery' ], {
+							last_repair: source_value('last_repair')
+						});
+						writer.field('recovery', recovery_view);
+					};
+					function finalize_report() {
 						writer.field('issues', report_issues({
-							health: summary_view.health,
-							state: summary_view.state,
-							operations: operations_view,
-							last_repair: summary_view.last_repair,
-							evidence: evidence_view
+							health: health_view,
+							state: state_view,
+							operations: operations_view?.records ?? operations_view,
+							last_repair: recovery_view?.last_repair,
+							evidence: evidence_status
 						}));
 						writer.field('collection', {
 							sections,
-							evidence: evidence_view
+							evidence: evidence_status
 						});
 						writer.end_object();
 						stream_store.finish(staged.id, writer.finish());
@@ -1318,6 +1410,46 @@ export function create(dependencies) {
 							ctx.complete();
 							finished = true;
 						});
+					};
+					function collect_evidence(log_bytes) {
+						writer.end_array();
+						sections.logs = {
+							truncated: false,
+							original_bytes: log_bytes,
+							included_bytes: log_bytes
+						};
+						let evidence_source = type(sources.evidence) == 'function' ?
+							source_value('evidence') : [];
+						evidence_reader = create_log_reader(evidence_source);
+						writer.begin_array_field('evidence');
+						let count = 0;
+						function pull() {
+							let batch = evidence_reader.read(1);
+							if (type(batch) != 'object' || type(batch.records) != 'array' ||
+							    type(batch.done) != 'bool' || length(batch.records) > 1)
+								errors.fail('INVALID_RESPONSE');
+							for (let item in batch.records) {
+								let transformed = profile.value([ 'evidence', count++ ], item);
+								writer.item(transformed);
+								if (type(transformed) == 'object')
+									push(evidence_status, {
+										name: transformed.name,
+										value: {
+											state: transformed.value?.state,
+											code: transformed.value?.code,
+											message: transformed.value?.message
+										}
+									});
+							}
+							if (batch.done) {
+								evidence_reader = null;
+								writer.end_array();
+								finalize_report();
+								return;
+							}
+							schedule(pull);
+						};
+						pull();
 					};
 					function collect_logs() {
 						log_reader = create_log_reader(source_value('logs'));
@@ -1335,7 +1467,7 @@ export function create(dependencies) {
 							}
 							if (batch.done) {
 								log_reader = null;
-								finalize_report(bytes);
+								collect_evidence(bytes);
 								return;
 							}
 							schedule(pull);
@@ -1344,15 +1476,25 @@ export function create(dependencies) {
 					};
 					try {
 						ctx.stage('preflight', 5, '');
+						initialize_writer();
 						schedule(() => stage('system', 15, collect_system,
-							() => stage('configuration', 30, collect_configuration,
-								() => stage('network', 45, collect_network,
-									() => stage('providers', 60, collect_providers,
-										() => stage('operations', 70, collect_operations,
-											() => {
-												ctx.stage('logs', 80, '');
-												collect_logs();
-											}))))));
+							() => {
+								collect_installation();
+								schedule(() => stage('configuration', 30, collect_subscription,
+									() => stage('network', 45, collect_network,
+										() => {
+											collect_firewall();
+											schedule(() => stage('providers', 60, collect_providers,
+												() => stage('operations', 70, collect_rpc,
+													() => {
+														collect_recovery();
+														schedule(() => {
+															ctx.stage('logs', 80, '');
+															collect_logs();
+														});
+													})));
+										})));
+							}));
 						return false;
 					}
 					catch (error) {

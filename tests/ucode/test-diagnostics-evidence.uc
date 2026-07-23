@@ -46,6 +46,24 @@ let evidence = evidence_module.create(runtime, {
 	interfaces: () => null
 });
 
+let section_evidence = evidence_module.create({ fs: { popen: () => ({
+	read: () => '', close: () => 1
+}) } }, {
+	procd: () => ({ state: 'ready' }),
+	interfaces: () => null
+});
+let section_reader = section_evidence.open_sections();
+let pulled_sections = [];
+while (true) {
+	let batch = section_reader.read(1);
+	assert_true(length(batch.records) <= 1,
+		'evidence sections expose one bounded scheduled work unit');
+	for (let section in batch.records) push(pulled_sections, section);
+	if (batch.done) break;
+}
+assert_equal(length(pulled_sections), 13,
+	'the pull reader preserves every schema-v4 evidence section');
+
 let logs = [], log_reader = evidence.logs(), log_batches = 0;
 assert_equal(type(log_reader.read), 'function',
 	'log collection exposes a bounded pull reader instead of a complete record array');

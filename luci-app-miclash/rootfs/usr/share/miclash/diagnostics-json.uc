@@ -1,6 +1,6 @@
 import * as errors from 'miclash.errors';
 
-const MAX_JSON_BYTES = 786432;
+const MAX_JSON_BYTES = 16777216;
 
 function fail() { errors.fail('INTERNAL'); };
 

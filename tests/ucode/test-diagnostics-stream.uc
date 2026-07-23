@@ -45,6 +45,17 @@ assert_equal(json(filesystem.readfile(result.path)).logs[2], 'three');
 assert_equal(result.sha256, runtime.digest.sha256_file(result.path));
 assert_equal(result.size, length(filesystem.readfile(result.path)));
 
+// The report writer and store share the existing 16 MiB transfer ceiling.
+let maximum_path = '/tmp/miclash/maximum-stream.json';
+let maximum_writer = diagnostics_json.create(runtime,
+	filesystem.open(maximum_path, 'wx', 0o600));
+maximum_writer.begin_object();
+maximum_writer.field('payload', sprintf('%16777202s', 'x'));
+maximum_writer.end_object();
+let maximum_result = maximum_writer.finish();
+assert_equal(maximum_result.size, 16777216,
+	'the exact 16 MiB report ceiling remains writable');
+
 let no_space = diagnostics.create_store({ ...runtime,
 	storage: { free_blocks: () => 0 }
 });
@@ -157,6 +168,51 @@ assert_throws(() => restarted.open_report(expiring_report.id), 'NOT_FOUND');
 assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 	'expired report is removed');
 
+// Pending and published reports expire at exactly 15 minutes without requiring
+// a later begin/open call to opportunistically prune them.
+let automatic_fs = fakes.fs({});
+for (let directory in [ '/tmp', '/tmp/miclash' ]) automatic_fs.mkdir(directory);
+automatic_fs.chmod('/tmp/miclash', 0o700);
+let automatic_clock = fakes.clock(2000);
+let automatic_runtime = { fs: automatic_fs, clock: automatic_clock,
+	random: fakes.entropy(), digest: fakes.digest(automatic_fs),
+	paths: { tmp: '/tmp/miclash' }, storage: { free_blocks: () => 65536 } };
+let automatic_store = diagnostics.create_store(automatic_runtime);
+let automatic_pending = automatic_store.begin({
+	mode: 'lite', required_bytes: 16777216
+});
+let automatic_published_stage = automatic_store.begin({
+	mode: 'lite', required_bytes: 4096
+});
+let automatic_published_writer = diagnostics_json.create(automatic_runtime,
+	automatic_published_stage.output);
+automatic_published_writer.begin_object();
+automatic_published_writer.end_object();
+let automatic_published = automatic_store.finish(automatic_published_stage.id,
+	automatic_published_writer.finish());
+assert_equal(automatic_clock.timers[0].due, 902000,
+	'report cleanup is armed for exactly 15 minutes after creation');
+automatic_clock.advance(899999);
+assert_true(automatic_fs.lstat(automatic_pending.path) != null);
+assert_true(automatic_fs.lstat(automatic_published.path) != null);
+automatic_clock.advance(1);
+assert_equal(automatic_fs.lstat(automatic_pending.path), null,
+	'pending stage expires without a later store access');
+assert_equal(automatic_fs.lstat(automatic_published.path), null,
+	'published report expires without a later store access');
+assert_equal(automatic_pending.handle.closed, true,
+	'pending-stage expiry closes the native writer handle');
+
+let substituted_expiry = automatic_store.begin({
+	mode: 'lite', required_bytes: 4096
+});
+automatic_fs.bump_inode(substituted_expiry.handle.path);
+automatic_clock.advance(900000);
+assert_true(automatic_fs.lstat(substituted_expiry.handle.path) != null,
+	'expiry never removes a file substituted after stage admission');
+assert_equal(substituted_expiry.handle.closed, true,
+	'substituted pending-stage expiry still closes the owned native handle');
+
 // Production df uses POSIX pclose() semantics: 0 is success.
 let df_filesystem = fakes.fs({});
 for (let directory in [ '/tmp', '/tmp/miclash' ]) df_filesystem.mkdir(directory);
@@ -255,9 +311,11 @@ for (let failure in [ 'write', 'close' ]) {
 let overflow_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
 let overflow_writer = diagnostics_json.create(runtime, overflow_stage.output);
 overflow_writer.begin_object();
-assert_throws(() => overflow_writer.field('oversized', repeated('x', 786432)), 'INTERNAL');
+assert_throws(() => overflow_writer.field('oversized', sprintf('%16777216s', 'x')), 'INTERNAL');
 assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 	'overflow removes staging immediately');
+assert_throws(() => store.begin({ mode: 'lite', required_bytes: 16777217 }),
+	'INVALID_ARGUMENT', 'preflight rejects only requirements above the 16 MiB policy');
 
 // Validation binds the opened descriptor, not only the pathname.
 let descriptor_stage = store.begin({ mode: 'lite', required_bytes: 4096 });

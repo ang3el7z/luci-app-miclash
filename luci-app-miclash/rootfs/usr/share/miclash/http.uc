@@ -4,7 +4,7 @@ import * as schema from 'miclash.schema';
 const HTTP_PARENT = '/tmp/miclash';
 const HTTP_ROOT = '/tmp/miclash/http';
 const HEADER_LIMIT = 65536;
-const BODY_FILE_LIMIT = 1048576;
+const BODY_FILE_LIMIT = 16777216;
 const OPTION_FIELDS = {
 	url: true, headers: true, connect_timeout_ms: true, timeout_ms: true,
 	max_redirects: true, max_bytes: true, managed: true, allow_insecure_http: true,

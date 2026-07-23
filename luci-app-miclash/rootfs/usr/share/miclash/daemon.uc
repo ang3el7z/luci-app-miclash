@@ -1171,7 +1171,7 @@ export function compose(runtime, overrides) {
 			last_repair,
 			config: () => configuration.read_active('config.yaml'),
 			process: () => service_adapter.diagnostics('config.yaml'),
-			logs: () => evidence_domain.logs(), evidence: evidence_domain.sections,
+			logs: () => evidence_domain.logs(), evidence: evidence_domain.open_sections,
 			uci: settings_domain.get,
 				operations: () => operation_manager.list()
 			}

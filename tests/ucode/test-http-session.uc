@@ -145,6 +145,39 @@ assert_equal(length(multipart.filesystem.lsdir('/tmp/miclash/http')), 0);
 assert_equal(body_file.finish(), true);
 assert_equal(document_finished, 1);
 
+// Diagnostic multipart uploads use the same 16 MiB file ceiling as report
+// generation and the transfer API, rather than the legacy 1 MiB HTTP cap.
+let large_multipart = environment(), large_document = sprintf('%1048577s', 'x'),
+	large_offset = 0;
+let large_body_file = {
+	identity: {},
+	size: length(large_document),
+	sha256: large_multipart.runtime.digest.sha256(large_document),
+	read: (amount) => {
+		let chunk = substr(large_document, large_offset, amount);
+		large_offset += length(chunk);
+		return chunk;
+	},
+	finish: () => true,
+	close: () => true,
+	field: 'document',
+	filename: 'miclash-diagnostic-lite.json',
+	content_type: 'application/json',
+	fields: { chat_id: '42' }
+};
+let large_session = http.begin(large_multipart.runtime, {
+	url: 'https://api.telegram.org/bot123456:telegram-secret/sendDocument',
+	max_redirects: 0,
+	max_bytes: 65536,
+	managed: true,
+	method: 'POST',
+	body_file: large_body_file
+});
+let large_paths = output_paths(large_multipart.filesystem, large_session);
+assert_equal(large_multipart.filesystem.lstat(large_paths.upload_path).size, 1048577,
+	'multipart staging accepts diagnostic files above the obsolete 1 MiB cap');
+assert_equal(large_session.abort(), true);
+
 let path_descriptor = environment();
 assert_throws(() => http.begin(path_descriptor.runtime, {
 	url: 'https://api.telegram.org/bot123456:telegram-secret/sendDocument',

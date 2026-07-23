@@ -673,14 +673,42 @@ export function create(runtime, collectors) {
 		code: 'COLLECTION_UNAVAILABLE',
 		message: 'logread has not been collected'
 	});
+	function open_sections() {
+		let offset = 0, closed = false;
+		return {
+			read: (amount) => {
+				if (closed || type(amount) != 'int' || amount < 1 || amount > 16)
+					errors.fail('INVALID_ARGUMENT');
+				let records = [];
+				for (let count = 0; count < amount && offset <= length(SECTION_NAMES);
+					count++, offset++) {
+					if (offset < length(SECTION_NAMES)) {
+						let name = SECTION_NAMES[offset];
+						push(records, { name, value: section_value(runtime, name, collectors[name]) });
+					}
+					else
+						push(records, { name: 'logs', value: clone(log_status) });
+				}
+				return { records, done: offset > length(SECTION_NAMES) };
+			},
+			close: () => {
+				if (closed) return false;
+				closed = true;
+				return true;
+			}
+		};
+	};
 	return {
-		sections: () => [
-			...map(SECTION_NAMES, (name) => ({
-				name,
-				value: section_value(runtime, name, collectors[name])
-			})),
-			{ name: 'logs', value: clone(log_status) }
-		],
+		open_sections,
+		sections: () => {
+			let reader = open_sections(), sections = [];
+			while (true) {
+				let batch = reader.read(16);
+				for (let section in batch.records) push(sections, section);
+				if (batch.done) break;
+			}
+			return sections;
+		},
 		logs: () => open_logs(runtime, (status) => log_status = status),
 		logs_status: () => clone(log_status)
 	};

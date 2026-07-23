@@ -12,6 +12,18 @@ function repeated(value, count) {
 	for (let index = 0; index < count; index++) output += value;
 	return output;
 };
+
+function report_shape(value) {
+	if (type(value) == 'array')
+		return map(value, (item) => report_shape(item));
+	if (type(value) == 'object') {
+		let shape = {};
+		for (let name in sort(keys(value)))
+			shape[name] = report_shape(value[name]);
+		return shape;
+	}
+	return type(value);
+};
 function percent_encoded(value) {
 	let output = '';
 	for (let offset = 0; offset < length(value); offset++) {
@@ -525,21 +537,23 @@ let async_runtime = {
 	clock: fakes.clock(1900000000000),
 	random: fakes.entropy(),
 	digest: fakes.digest(async_fs),
-	storage: { free_blocks: () => 2048 },
+	storage: { free_blocks: () => 65536 },
 	paths: { tmp: '/tmp/miclash' }
 };
 let async_operations = operations.create(async_runtime);
 let async_logs = [ 'connected hostname=beta-router.local' ];
 for (let index = 0; index < 1200; index++)
 	push(async_logs, sprintf('diagnostic-line-%04d %64s', index, 'x'));
-let async_log_offset = 0, async_log_reads = 0, async_logs_complete = false;
+let async_log_reads = 0, async_logs_complete = false, evidence_events = [];
 let async_sources = {
 	...sources,
 	state: () => ({ desired: {
 		primary_hostname: 'alpha-router.local',
 		backup_hostname: 'beta-router.local'
 	}, observed: {} }),
-	logs: () => ({
+	logs: () => {
+		let async_log_offset = 0;
+		return {
 		read: (amount) => {
 			async_log_reads++;
 			let records = [];
@@ -549,14 +563,28 @@ let async_sources = {
 			if (done) async_logs_complete = true;
 			return { records, done };
 		}
-	}),
-	evidence: () => [ {
-		name: 'logs',
-		value: async_logs_complete ?
-			{ state: 'present', source: 'test-log-stream', records: length(async_logs) } :
-			{ state: 'unavailable', code: 'COLLECTION_UNAVAILABLE',
-				message: 'logs have not finished' }
-	} ]
+		};
+	},
+	evidence: () => {
+		let index = 0;
+		return {
+			read: (amount) => {
+				push(evidence_events, 'section-' + index);
+				if (!index)
+					async_runtime.clock.set_timeout(0, () => push(evidence_events, 'timer'));
+				let records = index++ ? [ {
+					name: 'logs',
+					value: async_logs_complete ?
+						{ state: 'present', source: 'test-log-stream',
+							records: length(async_logs) } :
+						{ state: 'unavailable', code: 'COLLECTION_UNAVAILABLE',
+							message: 'logs have not finished' }
+				} ] : [ { name: 'procd', value: { state: 'present', source: 'test' } } ];
+				return { records, done: index >= 2 };
+			},
+			close: () => true
+		};
+	}
 };
 let async_center = diagnostics.create({
 	runtime: async_runtime, sources: async_sources, operations: async_operations
@@ -573,6 +601,8 @@ let asynchronous_record = async_operations.get(asynchronous.operation.id);
 assert_equal(asynchronous_record.state, 'success');
 assert_true(async_log_reads > 1,
 	'large log sources are consumed through multiple event-loop chunks');
+assert_equal(join(',', evidence_events), 'section-0,timer,section-1',
+	'evidence collection yields to an event-loop timer between sections');
 assert_equal(join(',', map(asynchronous_record.timeline, (item) => item.stage)),
 	'queued,preflight,system,configuration,network,providers,operations,logs,validation,complete');
 let streamed = async_center.open_report(asynchronous.report_id);
@@ -592,15 +622,58 @@ assert_equal(resumed.finish().size, resumed.size);
 assert_true(index(content, secrets.telegram_token) < 0,
 	'silent asynchronous report must apply the privacy profile');
 let async_payload = json(content);
-assert_equal(async_payload.summary.state.desired.primary_hostname, '[HOST-1]');
-assert_equal(async_payload.summary.state.desired.backup_hostname, '[HOST-2]');
-assert_true(index(async_payload.details.logs[0], '[HOST-2]') >= 0,
+for (let name in [ 'metadata', 'system', 'installation', 'network', 'firewall',
+	'providers', 'subscription', 'rpc', 'recovery' ])
+	assert_true(type(async_payload[name]) == 'object',
+		'schema v4 requires top-level ' + name);
+assert_equal(async_payload.network.state.desired.primary_hostname, '[HOST-1]');
+assert_equal(async_payload.network.state.desired.backup_hostname, '[HOST-2]');
+assert_true(index(async_payload.logs[0], '[HOST-2]') >= 0,
 	'report-local host labels must stay stable across sections');
-assert_equal(length(async_payload.details.logs), length(async_logs),
+assert_equal(length(async_payload.logs), length(async_logs),
 	'stream generation preserves every available relevant log record');
 assert_true(length(filter(async_payload.issues,
 	(item) => item.section == 'collection' && item.component == 'logs')) == 0,
 	'collection evidence is captured after a successful live log stream');
+
+let full_job = async_center.submit_report({
+	mode: 'full', acknowledge_secrets: true, source: 'luci'
+});
+async_runtime.clock.advance(0);
+assert_equal(async_operations.get(full_job.operation.id).state, 'success');
+let full_stream = async_center.open_report(full_job.report_id);
+let full_content = '', full_offset = 0;
+while (full_offset < full_stream.size) {
+	let chunk = full_stream.read(full_offset, min(49152, full_stream.size - full_offset));
+	full_content += chunk;
+	full_offset += length(chunk);
+}
+full_stream.finish();
+let full_payload = json(full_content);
+assert_equal(full_payload.subscription.active_config,
+	'secret: ' + secrets.api_key + '\n' +
+	'private-key: ' + config_private_key + '\n' +
+	'uuid: ' + config_uuid + '\nmode: rule\n',
+	'Full schema v4 includes the byte-exact active YAML instead of a hash/size summary');
+let lite_job = async_center.submit_report({
+	mode: 'lite', acknowledge_secrets: false, source: 'luci'
+});
+async_runtime.clock.advance(0);
+assert_equal(async_operations.get(lite_job.operation.id).state, 'success');
+let lite_stream = async_center.open_report(lite_job.report_id);
+let lite_content = '', lite_offset = 0;
+while (lite_offset < lite_stream.size) {
+	let chunk = lite_stream.read(lite_offset, min(49152, lite_stream.size - lite_offset));
+	lite_content += chunk;
+	lite_offset += length(chunk);
+}
+lite_stream.finish();
+assert_equal(sprintf('%J', report_shape(json(lite_content))),
+	sprintf('%J', report_shape(async_payload)),
+	'Silent and Lite retain identical recursive schema depth');
+assert_equal(sprintf('%J', report_shape(full_payload)),
+	sprintf('%J', report_shape(async_payload)),
+	'Silent and Full retain identical recursive schema depth');
 assert_throws(() => async_center.open_report(asynchronous.report_id), 'NOT_FOUND');
 assert_throws(() => async_center.submit_report({
 	mode: 'full', acknowledge_secrets: false, source: 'luci'
@@ -622,7 +695,7 @@ function terminal_publication_failure(boundary) {
 		clock: fakes.clock(1950000000000),
 		random: fakes.entropy(),
 		digest: fakes.digest(failure_fs),
-		storage: { free_blocks: () => 2048 },
+		storage: { free_blocks: () => 65536 },
 		paths: { tmp: '/tmp/miclash' }
 	};
 	let failure_operations = operations.create(failure_runtime);
