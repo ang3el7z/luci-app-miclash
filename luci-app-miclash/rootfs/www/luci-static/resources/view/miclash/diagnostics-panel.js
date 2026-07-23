@@ -520,9 +520,10 @@ function create(options) {
 		confirm.addEventListener('click', () => generateReport('full', true, confirm).catch(showError));
 		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-modal-responsive sbox-report-confirmation' }, [
 			E('p', {}, _('Full reports may include secrets such as subscription credentials and private configuration.')),
-			E('p', { 'class': 'sbox-muted' }, _('Store this report safely and share it only with trusted support.'))
+			E('p', { 'class': 'sbox-muted' }, _('Store this report safely and share it only with trusted support.')),
+			E('div', { 'class': 'sbox-actions' }, [ closeButton(), confirm ])
 		]);
-		ui.showModal(_('Confirm Full diagnostic report'), body, [ closeButton(), confirm ]);
+		ui.showModal(_('Confirm Full diagnostic report'), body);
 		return body;
 	}
 
@@ -547,9 +548,10 @@ function create(options) {
 		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-modal-responsive sbox-report-modal' }, [
 			E('p', {}, _('Choose how much information to include in the diagnostic report.')),
 			E('p', { 'class': 'sbox-muted' }, _('Lite is recommended for most support requests.')),
-			E('div', { 'class': 'sbox-diagnostic-mode-grid' }, cards)
+			E('div', { 'class': 'sbox-diagnostic-mode-grid' }, cards),
+			E('div', { 'class': 'sbox-actions' }, [ closeButton() ])
 		]);
-		ui.showModal(_('Diagnostics'), body, [ closeButton() ]);
+		ui.showModal(_('Diagnostics'), body);
 		return body;
 	}
 
