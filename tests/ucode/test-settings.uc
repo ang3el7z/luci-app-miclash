@@ -73,7 +73,8 @@ assert_json_equal(defaults.notifications.luci_events, [ 'miclash_event' ]);
 assert_equal(defaults.notifications.telegram_enabled, false);
 assert_json_equal(defaults.notifications.telegram_events,
 	[ 'guard_outage', 'failure', 'recovery', 'fail_closed', 'direct_fallback',
-		'memory_outcome', 'subscription_outcome', 'update_outcome', 'internet_restored' ]);
+		'memory_action', 'memory_outcome', 'subscription_outcome', 'update_outcome',
+		'internet_restored' ]);
 assert_equal(defaults.telegram.enabled, false);
 assert_equal(defaults.telegram.poll_timeout_seconds, 25);
 assert_equal(defaults.meta.schema_version, 1);

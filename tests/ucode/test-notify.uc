@@ -1052,6 +1052,22 @@ assert_throws(() => bounded_center.list({ generation: first_batch.generation,
 
 // The polled history is the LuCI channel: disabled or unselected events advance
 // the cursor without being replayed later.
+let luci_test_env = make_runtime(59000);
+luci_test_env.runtime.ubus.connect = () => ({});
+let luci_test_center = notify.create(luci_test_env.runtime, settings({
+	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },
+	luci: { enabled: true, channel: 'miclash.notification', minimum_severity: 'debug',
+		types: [], components: [] }
+}));
+let luci_test_cursor = luci_test_center.list({ generation: null, cursor: 0, limit: 10 });
+assert_equal(luci_test_center.test('luci'), true);
+let luci_test_result = luci_test_center.list({
+	generation: luci_test_cursor.generation, cursor: luci_test_cursor.cursor, limit: 10
+});
+assert_equal(length(luci_test_result.events), 1);
+assert_equal(luci_test_result.events[0].event.type, 'test');
+assert_equal(length(luci_test_env.published), 0);
+
 let luci_filtered_env = make_runtime(60000);
 let luci_filtered = notify.create(luci_filtered_env.runtime, settings({
 	syslog: { enabled: false, minimum_severity: 'debug', types: [], components: [] },

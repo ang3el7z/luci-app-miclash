@@ -125,7 +125,7 @@ function defaults() {
 			luci_events: [ 'miclash_event' ],
 			telegram_enabled: false,
 			telegram_events: [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
-				'direct_fallback', 'memory_outcome', 'subscription_outcome',
+				'direct_fallback', 'memory_action', 'memory_outcome', 'subscription_outcome',
 				'update_outcome', 'internet_restored' ]
 		},
 		meta: { schema_version: 1 }

@@ -542,6 +542,15 @@ export function create(runtime, settings) {
 			recovery_of: null, context: {}
 		};
 	};
+	function remember_luci_test(event) {
+		let stored = clone(event);
+		push(history, stored);
+		push(entries, { cursor: ++cursor, event: clone(stored) });
+		if (length(history) > HISTORY_LIMIT) {
+			shift(history); shift(entries);
+		}
+		return true;
+	};
 
 	let notifier = {};
 	notifier.history = () => clone(history);
@@ -566,8 +575,8 @@ export function create(runtime, settings) {
 			if (entry.cursor <= input.cursor) continue;
 			if (length(output) >= input.limit) break;
 			next_cursor = entry.cursor;
-			if (configured.luci.enabled && length(configured.luci.types) &&
-			    accepts(configured.luci, entry.event))
+			if (configured.luci.enabled && (entry.event.type == 'test' ||
+			    (length(configured.luci.types) && accepts(configured.luci, entry.event))))
 				push(output, clone(entry));
 		}
 		return { generation, cursor: next_cursor, stale: false, events: output,
@@ -675,7 +684,7 @@ export function create(runtime, settings) {
 		if (name == 'syslog')
 			return safe_send(send_syslog, event);
 		if (name == 'luci')
-			return safe_send(send_luci, event);
+			return configured.luci.enabled && remember_luci_test(event);
 		let channel = channels[name];
 		if (channel == null)
 			invalid();
