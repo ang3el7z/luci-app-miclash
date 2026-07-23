@@ -73,7 +73,8 @@ function environment(changes) {
 		telegram: { enabled: true, token: '123456:telegram-secret', user_id: '42' },
 		core: { subscription_url: 'https://example.test/current', proxy_mode: 'tproxy' }
 	};
-	let requests = [], poll_replies = options.poll_replies ?? [];
+	let requests = [], poll_replies = options.poll_replies ?? [],
+		document_replies = options.document_replies ?? [];
 	let http = {
 		request: (rt, request) => {
 			push(requests, clone(request));
@@ -87,14 +88,30 @@ function environment(changes) {
 			if (options.send_failure)
 				die('DOWNLOAD_FAILED');
 			let method = request_method(request);
+			if (method == 'sendDocument') {
+				if (options.document_failure)
+					die('DOWNLOAD_FAILED');
+				let file = request.body_file, received = '';
+				while (length(received) < file.size) {
+					let chunk = file.read(min(49152, file.size - length(received)));
+					if (type(chunk) != 'string' || !length(chunk)) die('INTERNAL');
+					received += chunk;
+				}
+				if (file.read(1) != '') die('INTERNAL');
+				if (rt.digest.sha256(received) != file.sha256) die('INTERNAL');
+				let reply = length(document_replies) ? shift(document_replies) : null;
+				if (reply != null) return clone(reply);
+			}
 			return { status: 200, headers: {}, body: sprintf('%J', {
 				ok: true,
 				result: method == 'sendMessage' ? { message_id: 50 } :
-					(method == 'editMessageText' ? { message_id: 50 } : true)
+					(method == 'editMessageText' ? { message_id: 50 } :
+						(method == 'sendDocument' ? { message_id: 51 } : true))
 			}) };
 		}
 	};
-	let submitted = [], domain_calls = [], audit = [], logs = [], operation_subscribers = [];
+	let submitted = [], domain_calls = [], audit = [], logs = [], operation_subscribers = [],
+		report_requests = [], report_opens = 0, report_finishes = 0, report_closes = 0;
 	let operations = {
 		submit: (kind, source, context, worker) => {
 			let record = {
@@ -143,6 +160,48 @@ function environment(changes) {
 			record_call('diagnostics_summary', []);
 			return { state: 'ok', url: 'https://example.test/?token=diag-secret' };
 		},
+		diagnostics_create_report: (arguments) => {
+			let request = clone(arguments);
+			push(report_requests, request);
+			let number = length(report_requests);
+			let record = {
+				id: sprintf('0000000002000-%08d-0123456789abcdef', number),
+				kind: 'diagnostics.report', source: request.source,
+				state: 'queued', stage: 'queued', progress: 0, error: null,
+				created_at: clock.now(), report_id: sprintf('rpt_%032x', number)
+			};
+			push(submitted, record);
+			return { operation_id: record.id, report_id: record.report_id };
+		},
+		diagnostics_open_report: (id) => {
+			report_opens++;
+			let content = options.report_content ??
+				'{"schema_version":4,"privacy":{"mode":"lite"},"token":"[REDACTED]"}';
+			let offset = 0, closed = false, identity = {};
+			return {
+				identity,
+				size: length(content),
+				sha256: runtime.digest.sha256(content),
+				read: (amount) => {
+					if (closed) die('NOT_FOUND');
+					let chunk = substr(content, offset, amount);
+					offset += length(chunk);
+					return chunk;
+				},
+				finish: () => {
+					if (closed || offset != length(content)) die('VALIDATION_FAILED');
+					closed = true;
+					report_finishes++;
+					return true;
+				},
+				close: () => {
+					if (closed) die('NOT_FOUND');
+					closed = true;
+					report_closes++;
+					return true;
+				}
+			};
+		},
 		logs_read: () => {
 			record_call('logs_read', []);
 			return 'ready\nAuthorization: Bearer log-secret\n' + sprintf('%05000d', 0);
@@ -173,8 +232,19 @@ function environment(changes) {
 			error: (message) => push(logs, message)
 		}
 	};
+	function emit_report(state, stage, progress, error) {
+		let index = length(submitted) - 1;
+		let record = { ...submitted[index], state, stage, progress,
+			error: error ?? null };
+		submitted[index] = record;
+		for (let subscriber in [ ...operation_subscribers ])
+			subscriber(clone(record));
+		return record;
+	};
 	return { app, runtime, filesystem, clock, settings, requests, poll_replies,
-		submitted, domain_calls, audit, logs, operation_subscribers };
+		submitted, domain_calls, audit, logs, operation_subscribers, report_requests,
+		report_opens: () => report_opens, report_finishes: () => report_finishes,
+		report_closes: () => report_closes, emit_report };
 };
 
 assert_equal(type(telegram.create), 'function');
@@ -330,12 +400,13 @@ for (let command in commands) {
 		assert_equal(env.submitted[0].kind, command.kind, command.text);
 		assert_equal(env.submitted[0].source, 'telegram', command.text);
 	}
-	else
+	else if (command.text != '/diagnostics')
 		assert_equal(length(env.submitted), 0, command.text);
 	if (command.text == '/reboot_router')
 		env.submitted[0].worker({ stage: () => null });
-	let expected_calls = command.call == null ? [] : [ command.call ];
-	if (command.text != '/start' && command.text != '/menu')
+	let expected_calls = command.call == null || command.text == '/diagnostics' ?
+		[] : [ command.call ];
+	if (command.text != '/start' && command.text != '/menu' && command.text != '/diagnostics')
 		assert_equal(sprintf('%J', env.domain_calls), sprintf('%J', expected_calls), command.text);
 	let output = sprintf('%J', env.requests);
 	for (let secret in [ 'status-secret', 'memory-secret', 'diag-secret',
@@ -377,21 +448,99 @@ let recreated_controller = telegram.create(recreated.app);
 assert_equal(recreated_controller.poll_once(), true);
 assert_match(recreated.requests[0].url, /\/getUpdates\?offset=703&timeout=25/);
 
-// Diagnostics and logs are rendered as readable code blocks for Telegram.
+// Diagnostics always submits a Lite report, edits stage progress in the working
+// menu, uploads the document, restores Diagnostics, and sends a separate result.
 let formatted_env = environment();
-formatted_env.app.diagnostics_summary = () => ({ state: 'ok', nested: { value: 1 } });
 formatted_env.app.logs_read = () => 'line one\nline two';
 let formatted_controller = telegram.create(formatted_env.app);
 assert_equal(formatted_controller.handle_update(update(705, '/diagnostics')), true);
-let diagnostics_request = formatted_env.requests[length(formatted_env.requests) - 1];
-assert_equal(request_method(diagnostics_request), 'sendMessage');
-assert_match(diagnostics_request.body, /parse_mode=MarkdownV2/);
-assert_match(diagnostics_request.body, /text=%60%60%60json/);
-assert_match(diagnostics_request.body, /%0A%20%20%22nested%22%3A%20%7B/);
+assert_equal(formatted_env.report_requests[0].mode, 'lite');
+assert_equal(formatted_env.report_requests[0].source, 'telegram');
+assert_equal(formatted_env.report_requests[0].acknowledge_secrets, false);
+assert_true(index(sprintf('%J', formatted_env.report_requests), 'full') < 0);
+assert_equal(request_method(formatted_env.requests[0]), 'sendMessage');
+formatted_env.emit_report('running', 'configuration', 30);
+assert_equal(request_method(formatted_env.requests[length(formatted_env.requests) - 1]),
+	'editMessageText');
+assert_match(formatted_env.requests[length(formatted_env.requests) - 1].body, /30%25/);
+formatted_env.emit_report('success', 'complete', 100);
+let diagnostics_request = null, diagnostics_method_order = [];
+for (let request in formatted_env.requests) {
+	push(diagnostics_method_order, request_method(request));
+	if (request_method(request) == 'sendDocument') diagnostics_request = request;
+}
+assert_true(diagnostics_request != null, 'completed Lite report was not uploaded');
+assert_equal(diagnostics_request.method, 'POST');
+assert_equal(diagnostics_request.body, null);
+assert_match(diagnostics_request.body_file.filename, /^miclash-diagnostic-lite-[0-9]+\.json$/);
+assert_equal(diagnostics_request.body_file.field, 'document');
+assert_equal(diagnostics_request.body_file.content_type, 'application/json');
+assert_equal(diagnostics_request.body_file.fields.chat_id, '42');
+assert_true(!exists(diagnostics_request.body_file, 'path'),
+	'Telegram request exposed an arbitrary report pathname');
+assert_equal(formatted_env.report_opens(), 1);
+assert_equal(formatted_env.report_finishes(), 1);
+assert_equal(formatted_env.report_closes(), 0);
+assert_match(join(',', diagnostics_method_order),
+	/sendMessage,(editMessageText,)+sendDocument,editMessageText,sendMessage/);
+assert_equal(formatted_controller.status().panel_screen, 'diagnostics');
+
 assert_equal(formatted_controller.handle_update(update(706, '/logs')), true);
 let logs_request = formatted_env.requests[length(formatted_env.requests) - 1];
 assert_match(logs_request.body, /parse_mode=MarkdownV2/);
 assert_match(logs_request.body, /text=%60%60%60%0Aline%20one%0Aline%20two%0A%60%60%60/);
+
+// Telegram 429 releases the one-shot descriptor, honors retry_after, and opens
+// a fresh daemon capability for the successful retry.
+let document_retry = environment({ document_replies: [
+	{ status: 429, headers: { 'retry-after': '7' },
+		body: '{"ok":false,"parameters":{"retry_after":7}}' },
+	{ status: 200, headers: {}, body: '{"ok":true,"result":{"message_id":52}}' }
+] });
+let document_retry_controller = telegram.create(document_retry.app);
+assert_equal(document_retry_controller.handle_update(update(707, '/diagnostics')), true);
+document_retry.emit_report('success', 'complete', 100);
+assert_equal(document_retry.report_opens(), 1);
+assert_equal(document_retry.report_closes(), 1);
+assert_equal(document_retry.report_finishes(), 0);
+document_retry.clock.advance(6999);
+assert_equal(document_retry.report_opens(), 1);
+document_retry.clock.advance(1);
+assert_equal(document_retry.report_opens(), 2);
+assert_equal(document_retry.report_closes(), 1);
+assert_equal(document_retry.report_finishes(), 1);
+
+// An upload failure releases rather than consumes the report, restores the
+// Diagnostics menu, and emits a separate localized failure message.
+let document_failure = environment({ document_failure: true });
+let document_failure_controller = telegram.create(document_failure.app);
+assert_equal(document_failure_controller.handle_update(update(708, '/diagnostics')), true);
+document_failure.emit_report('success', 'complete', 100);
+assert_equal(document_failure.report_opens(), 1);
+assert_equal(document_failure.report_finishes(), 0);
+assert_equal(document_failure.report_closes(), 1);
+assert_equal(document_failure_controller.status().panel_screen, 'diagnostics');
+assert_equal(request_method(document_failure.requests[length(document_failure.requests) - 1]),
+	'sendMessage');
+
+// Restart recovery marks an in-flight observation interrupted. Telegram reports
+// the failure without attempting to open or upload a half-generated file.
+let interrupted_report = environment();
+let interrupted_controller = telegram.create(interrupted_report.app);
+assert_equal(interrupted_controller.handle_update(update(709, '/diagnostics')), true);
+interrupted_report.emit_report('interrupted', 'interrupted', 30, { code: 'INTERRUPTED' });
+assert_equal(interrupted_report.report_opens(), 0);
+assert_equal(request_method(interrupted_report.requests[
+	length(interrupted_report.requests) - 1]), 'sendMessage');
+
+// If Telegram becomes unavailable before generation completes, no upload is
+// attempted; the report remains in the TTL-managed store.
+let unavailable_report = environment();
+let unavailable_controller = telegram.create(unavailable_report.app);
+assert_equal(unavailable_controller.handle_update(update(710, '/diagnostics')), true);
+unavailable_report.settings.telegram.enabled = false;
+unavailable_report.emit_report('success', 'complete', 100);
+assert_equal(unavailable_report.report_opens(), 0);
 
 // OpenWrt overlayfs may report the private directory and a regular file inside it
 // on different st_dev values. The fixed path and file identity remain authoritative.

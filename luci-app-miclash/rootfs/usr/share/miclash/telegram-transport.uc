@@ -88,6 +88,33 @@ function message_id(value) {
 	return value;
 };
 
+function document_file(value) {
+	if (type(value) != 'object' || type(value) == 'array' ||
+	    length(keys(value)) != 6 ||
+	    type(value.identity) != 'object' || type(value.identity) == 'array' ||
+	    type(value.size) != 'int' || value.size < 1 || value.size > 1048576 ||
+	    type(value.sha256) != 'string' || !match(value.sha256, /^[0-9a-f]{64}$/) ||
+	    type(value.read) != 'function' || type(value.finish) != 'function' ||
+	    type(value.close) != 'function')
+		invalid();
+	return value;
+};
+
+function document_filename(value) {
+	if (type(value) != 'string' ||
+	    !match(value, /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/))
+		invalid();
+	return value;
+};
+
+function document_caption(value) {
+	if (value == null) return null;
+	if (type(value) != 'string' || !length(value) || length(value) > 1024 ||
+	    has_forbidden_control(value, true))
+		invalid();
+	return value;
+};
+
 function markup(value) {
 	if (value == null) return null;
 	if (type(value) != 'object' || type(value) == 'array') invalid();
@@ -132,6 +159,46 @@ export function create(app) {
 		try { response = app.http.request(app.runtime, plan.request); }
 		catch (error) { errors.fail('DOWNLOAD_FAILED'); }
 		return plan.complete(response);
+	};
+
+	function document_plan(settings, chat, file, filename, caption) {
+		let safe = configuration(settings), descriptor = document_file(file);
+		let fields = { chat_id: normalized_id(chat) };
+		let safe_caption = document_caption(caption);
+		if (safe_caption != null) fields.caption = safe_caption;
+		let request = {
+			url: 'https://api.telegram.org/bot' + safe.token + '/sendDocument',
+			connect_timeout_ms: CONNECT_TIMEOUT_MS, timeout_ms: 30000,
+			max_redirects: 0, max_bytes: RESPONSE_LIMIT, managed: true,
+			accept_statuses: [ 429 ], method: 'POST',
+			body_file: {
+				identity: descriptor.identity,
+				size: descriptor.size,
+				sha256: descriptor.sha256,
+				read: descriptor.read,
+				finish: descriptor.finish,
+				close: descriptor.close,
+				field: 'document',
+				filename: document_filename(filename),
+				content_type: 'application/json',
+				fields
+			}
+		};
+		return {
+			request,
+			complete: (response) => {
+				let parsed = document(response);
+				if (response.status == 429)
+					return { limited: true, retry_after_ms: retry_after(response, parsed) };
+				if (response.status < 200 || response.status >= 300 || parsed.ok !== true)
+					errors.fail('INVALID_RESPONSE');
+				let result = parsed.result;
+				if (type(result) != 'object' || type(result.message_id) != 'int' ||
+				    result.message_id < 1)
+					errors.fail('INVALID_RESPONSE');
+				return { limited: false, result };
+			}
+		};
 	};
 
 	function poll_plan(settings, offset, poll_timeout_seconds) {
@@ -202,6 +269,29 @@ export function create(app) {
 			if (type(result) != 'object' || type(result.message_id) != 'int' || result.message_id < 1)
 				errors.fail('INVALID_RESPONSE');
 			return result;
+		},
+		send_document: (settings, chat, file, filename, caption) => {
+			let plan = null, settled = false, response, reply;
+			try {
+				plan = document_plan(settings, chat, file, filename, caption);
+				response = app.http.request(app.runtime, plan.request);
+				reply = plan.complete(response);
+				if (reply.limited) {
+					if (file.close() !== true) errors.fail('INTERNAL');
+					settled = true;
+					return reply;
+				}
+				if (file.finish() !== true) errors.fail('INTERNAL');
+				settled = true;
+				return reply.result;
+			}
+			catch (error) {
+				if (!settled)
+					try { file.close(); } catch (close_error) {}
+				let code = errors.normalize(error).code;
+				errors.fail(code == 'INVALID_ARGUMENT' || code == 'INVALID_RESPONSE' ||
+					code == 'INTERNAL' ? code : 'DOWNLOAD_FAILED');
+			}
 		},
 		answer: (settings, callback_id, text) => {
 			if (type(callback_id) != 'string' || !length(callback_id) ||

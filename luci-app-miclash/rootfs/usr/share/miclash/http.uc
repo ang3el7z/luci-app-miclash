@@ -4,10 +4,11 @@ import * as schema from 'miclash.schema';
 const HTTP_PARENT = '/tmp/miclash';
 const HTTP_ROOT = '/tmp/miclash/http';
 const HEADER_LIMIT = 65536;
+const BODY_FILE_LIMIT = 1048576;
 const OPTION_FIELDS = {
 	url: true, headers: true, connect_timeout_ms: true, timeout_ms: true,
 	max_redirects: true, max_bytes: true, managed: true, allow_insecure_http: true,
-	accept_statuses: true, method: true, body: true
+	accept_statuses: true, method: true, body: true, body_file: true
 };
 const GITHUB_PROXY = 'https://gh-proxy.com/';
 const RETRYABLE_CURL_CODES = { '5': true, '6': true, '7': true, '28': true,
@@ -85,6 +86,38 @@ function verify_candidate(runtime, owned) {
 		errors.fail('INTERNAL');
 };
 
+function write_all(runtime, handle, content) {
+	let offset = 0;
+	while (offset < length(content)) {
+		let amount = runtime.fs.write(handle, substr(content, offset));
+		if (type(amount) != 'int' || amount < 1)
+			errors.fail('INTERNAL');
+		offset += amount;
+	}
+};
+
+function write_owned(runtime, owned, writer) {
+	verify_candidate(runtime, owned);
+	let handle = runtime.fs.open(owned.path, 'r+');
+	if (handle == null)
+		errors.fail('INTERNAL');
+	let opened = runtime.fs.fstat(handle), failure = null;
+	try {
+		if (!same_node(owned.identity, opened))
+			errors.fail('INTERNAL');
+		writer(handle);
+		if (runtime.fs.flush(handle) !== true)
+			errors.fail('INTERNAL');
+	}
+	catch (error) { failure = errors.normalize(error).code; }
+	if (runtime.fs.close(handle) !== true)
+		failure = 'INTERNAL';
+	try { verify_candidate(runtime, owned); }
+	catch (error) { failure = 'INTERNAL'; }
+	if (failure != null)
+		errors.fail(failure);
+};
+
 function candidate(runtime, suffix, content) {
 	for (let attempt = 0; attempt < 16; attempt++) {
 		let entropy = runtime.random.hex(8);
@@ -130,7 +163,7 @@ function curl_quote(value) {
 	return '"' + replace(replace(value, /\\/g, '\\\\'), /"/g, '\\"') + '"';
 };
 
-function curl_config(clean, header_path, output_path) {
+function curl_config(clean, header_path, output_path, multipart) {
 	let lines = [
 		'silent', 'show-error', 'location', 'proto = "=http,https"',
 		'proto-redir = ' + curl_quote(clean.insecure ? '=http,https' : '=https'),
@@ -145,10 +178,126 @@ function curl_config(clean, header_path, output_path) {
 		push(lines, 'header = ' + curl_quote(name + ': ' + value));
 	if (clean.method == 'POST') {
 		push(lines, 'request = "POST"');
-		push(lines, 'data = ' + curl_quote(clean.body));
+		if (multipart != null) {
+			push(lines, 'header = ' +
+				curl_quote('Content-Type: multipart/form-data; boundary=' + multipart.boundary));
+			push(lines, 'data-binary = ' + curl_quote('@' + multipart.path));
+		}
+		else
+			push(lines, 'data = ' + curl_quote(clean.body));
 	}
 	push(lines, 'url = ' + curl_quote(clean.url));
 	return join('\n', lines) + '\n';
+};
+
+function descriptor_snapshot(file) {
+	return {
+		identity: file.identity, size: file.size, sha256: file.sha256,
+		read: file.read, finish: file.finish, close: file.close
+	};
+};
+
+function verify_descriptor(file, snapshot) {
+	if (file.identity !== snapshot.identity || file.size != snapshot.size ||
+	    file.sha256 != snapshot.sha256 || file.read !== snapshot.read ||
+	    file.finish !== snapshot.finish || file.close !== snapshot.close)
+		errors.fail('INTERNAL');
+};
+
+function release_descriptor(file) {
+	try { return file.close() === true; }
+	catch (error) { return false; }
+};
+
+function discard_candidate(runtime, owned) {
+	try {
+		verify_candidate(runtime, owned);
+		return runtime.fs.unlink(owned.path) === true;
+	}
+	catch (error) { return false; }
+};
+
+function stage_upload(runtime, file, snapshot) {
+	let upload = candidate(runtime, 'upload');
+	try {
+		write_owned(runtime, upload, (handle) => {
+			let consumed = 0;
+			while (consumed < snapshot.size) {
+				let amount = min(49152, snapshot.size - consumed);
+				let chunk = file.read(amount);
+				if (type(chunk) != 'string' || !length(chunk) ||
+				    length(chunk) > amount || consumed + length(chunk) > snapshot.size)
+					errors.fail('INTERNAL');
+				write_all(runtime, handle, chunk);
+				consumed += length(chunk);
+			}
+			if (file.read(1) != '')
+				errors.fail('INTERNAL');
+		});
+		verify_descriptor(file, snapshot);
+		let current = runtime.fs.lstat(upload.path);
+		if (!same_node(upload.identity, current) || current?.size != snapshot.size ||
+		    runtime.fs.realpath(upload.path) != upload.path ||
+		    runtime.digest.sha256_file(upload.path) != snapshot.sha256)
+			errors.fail('INTERNAL');
+		return upload;
+	}
+	catch (error) {
+		let code = errors.normalize(error).code;
+		if (!discard_candidate(runtime, upload))
+			code = 'INTERNAL';
+		errors.fail(code);
+	}
+};
+
+function stage_multipart(runtime, clean, upload, boundary) {
+	let multipart = candidate(runtime, 'multipart');
+	try { write_owned(runtime, multipart, (handle) => {
+		for (let name, value in clean.body_file.fields) {
+			write_all(runtime, handle, '--' + boundary + '\r\n');
+			write_all(runtime, handle,
+				'Content-Disposition: form-data; name="' + name + '"\r\n\r\n');
+			write_all(runtime, handle, sprintf('%s', value) + '\r\n');
+		}
+		write_all(runtime, handle, '--' + boundary + '\r\n');
+		write_all(runtime, handle, 'Content-Disposition: form-data; name="' +
+			clean.body_file.field + '"; filename="' + clean.body_file.filename + '"\r\n');
+		write_all(runtime, handle, 'Content-Type: ' + clean.body_file.content_type +
+			'\r\n\r\n');
+		let source = runtime.fs.open(upload.path, 'r');
+		if (source == null)
+			errors.fail('INTERNAL');
+		let opened = runtime.fs.fstat(source), failure = null;
+		try {
+			if (!same_node(upload.identity, opened))
+				errors.fail('INTERNAL');
+			while (true) {
+				let chunk = runtime.fs.read(source, 49152);
+				if (type(chunk) != 'string')
+					errors.fail('INTERNAL');
+				if (!length(chunk))
+					break;
+				write_all(runtime, handle, chunk);
+			}
+		}
+		catch (error) { failure = errors.normalize(error).code; }
+		if (runtime.fs.close(source) !== true)
+			failure = 'INTERNAL';
+		if (failure != null)
+			errors.fail(failure);
+		write_all(runtime, handle, '\r\n--' + boundary + '--\r\n');
+		});
+		verify_candidate(runtime, upload);
+		if (runtime.digest.sha256_file(upload.path) != clean.body_file.sha256)
+			errors.fail('INTERNAL');
+		return { ...multipart, boundary };
+	}
+	catch (error) {
+		let code = errors.normalize(error).code;
+		if (!discard_candidate(runtime, multipart))
+			code = 'INTERNAL';
+		errors.fail(code);
+	}
 };
 
 function read_bounded(runtime, owned, maximum) {
@@ -251,6 +400,35 @@ function parse_headers(input, original_url, maximum_redirects, accepted_statuses
 	return final;
 };
 
+function clean_body_file(value) {
+	if (type(value) != 'object' || type(value) == 'array' ||
+	    length(keys(value)) != 10 ||
+	    type(value.identity) != 'object' || type(value.identity) == 'array' ||
+	    type(value.size) != 'int' || value.size < 1 || value.size > BODY_FILE_LIMIT ||
+	    type(value.sha256) != 'string' || !match(value.sha256, /^[0-9a-f]{64}$/) ||
+	    type(value.read) != 'function' || type(value.finish) != 'function' ||
+	    type(value.close) != 'function' ||
+	    type(value.field) != 'string' || !match(value.field, /^[a-z][a-z0-9_]{0,31}$/) ||
+	    type(value.filename) != 'string' ||
+	    !match(value.filename, /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/) ||
+	    type(value.content_type) != 'string' ||
+	    !match(value.content_type, /^[a-z0-9][a-z0-9.+-]{0,63}\/[a-z0-9][a-z0-9.+-]{0,63}$/) ||
+	    type(value.fields) != 'object' || type(value.fields) == 'array' ||
+	    !length(keys(value.fields)) || length(keys(value.fields)) > 16)
+		invalid();
+	let fields = {};
+	for (let name, field in value.fields) {
+		if (!match(name, /^[a-z][a-z0-9_]{0,31}$/) || name == value.field ||
+		    (type(field) != 'string' && type(field) != 'int' && type(field) != 'bool'))
+			invalid();
+		let text = sprintf('%s', field);
+		if (!length(text) || length(text) > 4096 || match(text, /[[:cntrl:]]/))
+			invalid();
+		fields[name] = text;
+	}
+	return { ...value, fields };
+};
+
 function clean_options(runtime, options) {
 	if (type(runtime?.fs) != 'object' || type(runtime?.fs?.fstat) != 'function' ||
 	    type(runtime?.process?.run) != 'function' ||
@@ -288,12 +466,21 @@ function clean_options(runtime, options) {
 			invalid();
 		seen_headers[normalized] = true;
 	}
-	let method = options.method ?? 'GET', body = options.body ?? null;
-	if ((method != 'GET' && method != 'POST') ||
-	    (method == 'GET' && body != null) ||
-	    (method == 'POST' && (type(body) != 'string' || length(body) > 65536 ||
-	     match(body, /[[:cntrl:]]/))))
+	let method = options.method ?? 'GET', body = options.body ?? null,
+		body_file = options.body_file == null ? null : clean_body_file(options.body_file);
+	if (body_file != null && type(runtime?.digest?.sha256_file) != 'function')
 		invalid();
+	if ((method != 'GET' && method != 'POST') ||
+	    (method == 'GET' && (body != null || body_file != null)) ||
+	    (method == 'POST' && ((body == null) == (body_file == null))) ||
+	    (body != null && (type(body) != 'string' || length(body) > 65536 ||
+	     match(body, /[[:cntrl:]]/))) ||
+	    (body_file != null && options.managed !== true))
+		invalid();
+	if (body_file != null)
+		for (let name in seen_headers)
+			if (name == 'content-type')
+				invalid();
 	let accepted_statuses = options.accept_statuses ?? [];
 	if (type(accepted_statuses) != 'array' || length(accepted_statuses) > 1 ||
 	    length(accepted_statuses) && options.managed !== true)
@@ -306,7 +493,7 @@ function clean_options(runtime, options) {
 		seen_statuses[status] = true;
 	}
 	return { url, connect, total, redirects, maximum, headers, insecure, method, body,
-		accepted_statuses };
+		body_file, accepted_statuses };
 };
 
 function github_proxy_url(url) {
@@ -318,14 +505,16 @@ function github_proxy_url(url) {
 
 function request_session(runtime, clean, logical_url) {
 	let authority = ensure_root(runtime);
-	let output = null, header = null, config = null, closed = false;
+	let output = null, header = null, config = null, upload = null, multipart = null,
+		file_snapshot = clean.body_file == null ? null : descriptor_snapshot(clean.body_file),
+		file_handed_off = false, file_released = false, closed = false;
 
 	function cleanup() {
 		if (closed)
 			return true;
 		closed = true;
 		let valid = true;
-		for (let owned in [ config, header, output ]) {
+		for (let owned in [ config, header, output, multipart, upload ]) {
 			if (owned == null)
 				continue;
 			try {
@@ -338,21 +527,44 @@ function request_session(runtime, clean, logical_url) {
 			}
 			catch (error) { valid = false; }
 		}
+		if (clean.body_file != null && !file_handed_off && !file_released) {
+			file_released = true;
+			if (!release_descriptor(clean.body_file))
+				valid = false;
+		}
 		return valid;
 	};
 
 	try {
+		if (clean.body_file != null) {
+			verify_descriptor(clean.body_file, file_snapshot);
+			verify_authority(runtime, authority);
+			upload = stage_upload(runtime, clean.body_file, file_snapshot);
+			let entropy = runtime.random.hex(16);
+			if (type(entropy) != 'string' || !match(entropy, /^[0-9a-f]{32}$/))
+				errors.fail('INTERNAL');
+			let boundary = '----------------miclash-' + entropy;
+			verify_authority(runtime, authority);
+			multipart = stage_multipart(runtime, clean, upload, boundary);
+			verify_descriptor(clean.body_file, file_snapshot);
+		}
 		verify_authority(runtime, authority);
 		output = candidate(runtime, 'body');
 		verify_authority(runtime, authority);
 		header = candidate(runtime, 'headers');
 		verify_authority(runtime, authority);
 		config = candidate(runtime, 'curl-config',
-			curl_config(clean, header.path, output.path));
+			curl_config(clean, header.path, output.path, multipart));
 		verify_authority(runtime, authority);
 		verify_candidate(runtime, output);
 		verify_candidate(runtime, header);
 		verify_candidate(runtime, config);
+		if (upload != null) {
+			verify_candidate(runtime, upload);
+			verify_candidate(runtime, multipart);
+			if (runtime.digest.sha256_file(upload.path) != file_snapshot.sha256)
+				errors.fail('INTERNAL');
+		}
 	}
 	catch (error) {
 		let failure = errors.normalize(error).code;
@@ -361,15 +573,29 @@ function request_session(runtime, clean, logical_url) {
 		errors.fail(failure);
 	}
 
+	function verify_ready() {
+		verify_authority(runtime, authority);
+		verify_candidate(runtime, output);
+		verify_candidate(runtime, header);
+		verify_candidate(runtime, config);
+		if (upload != null) {
+			verify_descriptor(clean.body_file, file_snapshot);
+			verify_candidate(runtime, upload);
+			verify_candidate(runtime, multipart);
+			let current = runtime.fs.lstat(upload.path);
+			if (current?.size != file_snapshot.size ||
+			    runtime.digest.sha256_file(upload.path) != file_snapshot.sha256)
+				errors.fail('INTERNAL');
+		}
+		return true;
+	};
+
 	function finish(code) {
 		let result = null, failure = null, curl_code = null;
 		try {
 			if (closed || type(code) != 'int')
 				errors.fail('INTERNAL');
-			verify_authority(runtime, authority);
-			verify_candidate(runtime, output);
-			verify_candidate(runtime, header);
-			verify_candidate(runtime, config);
+			verify_ready();
 			if (code != 0) {
 				failure = 'DOWNLOAD_FAILED';
 				curl_code = code;
@@ -380,6 +606,10 @@ function request_session(runtime, clean, logical_url) {
 				let body = read_bounded(runtime, output, clean.maximum);
 				result = { status: parsed.status, headers: parsed.headers, body,
 					url: logical_url, insecure: clean.insecure };
+			}
+			if (failure == null && clean.body_file != null) {
+				verify_ready();
+				file_handed_off = true;
 			}
 		}
 		catch (error) {
@@ -397,6 +627,7 @@ function request_session(runtime, clean, logical_url) {
 		command: '/usr/bin/curl',
 		args: [ '--config', config.path ],
 		timeout_ms: clean.total,
+		verify: verify_ready,
 		finish,
 		abort: cleanup
 	};
@@ -409,6 +640,7 @@ function request_attempt(runtime, clean, logical_url) {
 		// curl only accepts output pathnames. Root-owned 0700 parent/root
 		// authorities prevent unprivileged replacement in the remaining open
 		// window; exact identities are checked on both sides of process.run().
+		session.verify();
 		let reply = runtime.process.run({
 			command: session.command, args: session.args, timeout_ms: session.timeout_ms
 		});

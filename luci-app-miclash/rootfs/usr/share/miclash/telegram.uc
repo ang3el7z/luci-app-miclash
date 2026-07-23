@@ -19,6 +19,7 @@ const MAX_COMMANDS = 5;
 const RATE_WINDOW_MS = 60000;
 const MAX_BACKOFF_MS = 60000;
 const SUCCESS_DELAY_MS = 3000;
+const MAX_DOCUMENT_ATTEMPTS = 3;
 const HELP = '/start /menu /status /health /memory /diagnostics /logs /help ' +
 	'/start_service /stop_service /restart_service /reload_service /reboot_router ' +
 	'/subscription URL /update_subscription ' +
@@ -342,6 +343,7 @@ export function create(app) {
 	    type(app.operations?.submit) != 'function')
 		invalid();
 	for (let method in [ 'status', 'health', 'memory_status', 'diagnostics_summary',
+		'diagnostics_create_report', 'diagnostics_open_report',
 		'logs_read', 'service_start', 'service_stop', 'service_restart', 'service_reload',
 		'reboot', 'subscription_update', 'update_miclash', 'update_mihomo',
 		'settings_set', 'guard_transition' ])
@@ -361,6 +363,7 @@ export function create(app) {
 	let command_times = [];
 	let transport = telegram_transport.create(app);
 	let outbox = null, operation_bridge = null;
+	let diagnostic_jobs = {}, diagnostics_unsubscribe = null;
 	let session = {
 		generation: 0, screen: 'main', awaiting: null,
 		command_locale: null, command_sync_error: null, command_sync_next_at: 0,
@@ -445,6 +448,142 @@ export function create(app) {
 		outbox.panel({ chat_id: destination, message_id: result.message_id,
 			generation: session.generation });
 		session.screen = screen;
+		return true;
+	};
+
+	function diagnostic_notice(locale, success) {
+		return telegram_i18n.text(locale, 'operation_result', {
+			operation: telegram_i18n.text(locale, 'diagnostics'),
+			state: telegram_i18n.text(locale,
+				success ? 'operation_success' : 'operation_failure')
+		});
+	};
+
+	function diagnostic_identity(entry) {
+		return entry.message_id == null ? null :
+			{ chat_id: entry.chat_id, message_id: entry.message_id };
+	};
+
+	function forget_diagnostic(entry) {
+		if (entry.retry_timer?.cancel != null)
+			try { entry.retry_timer.cancel(); } catch (error) {}
+		entry.retry_timer = null;
+		delete diagnostic_jobs[entry.operation_id];
+	};
+
+	function restore_diagnostics(entry, settings, success) {
+		try { show_panel('diagnostics', settings, diagnostic_identity(entry)); }
+		catch (error) {}
+		try {
+			transport.send(settings, entry.chat_id,
+				diagnostic_notice(entry.locale, success), null);
+		}
+		catch (error) { log_failure('diagnostic result delivery failed'); }
+	};
+
+	function edit_diagnostic_stage(entry, record, settings) {
+		if (entry.message_id == null) return false;
+		let rendered = telegram_menu.render('operation_loading', {}, entry.locale,
+			session.generation);
+		let text = rendered.text + '\n\n' + record.stage + ': ' + record.progress + '%';
+		try {
+			return transport.edit(settings, entry.chat_id, entry.message_id,
+				text, rendered.reply_markup) != null;
+		}
+		catch (error) {
+			log_failure('diagnostic stage delivery failed');
+			return false;
+		}
+	};
+
+	function attempt_diagnostic_document(entry) {
+		if (diagnostic_jobs[entry.operation_id] !== entry) return false;
+		let settings = configuration(app);
+		if (!settings.available || !settings.enabled || !settings.configured ||
+		    !authorized(settings, entry.chat_id)) {
+			forget_diagnostic(entry);
+			return false;
+		}
+		entry.attempts++;
+		try {
+			let file = app.diagnostics_open_report(entry.report_id);
+			let result = transport.send_document(settings, entry.chat_id, file,
+				'miclash-diagnostic-lite-' + app.runtime.clock.now() + '.json',
+				telegram_i18n.text(entry.locale, 'diagnostics'));
+			if (result?.limited === true) {
+				if (entry.attempts >= MAX_DOCUMENT_ATTEMPTS) {
+					restore_diagnostics(entry, settings, false);
+					forget_diagnostic(entry);
+					return false;
+				}
+				edit_diagnostic_stage(entry, {
+					stage: 'retry', progress: 100
+				}, settings);
+				entry.retry_timer = app.runtime.clock.set_timeout(result.retry_after_ms, () => {
+					entry.retry_timer = null;
+					attempt_diagnostic_document(entry);
+				});
+				return false;
+			}
+			restore_diagnostics(entry, settings, true);
+			forget_diagnostic(entry);
+			return true;
+		}
+		catch (error) {
+			log_failure('diagnostic document delivery failed');
+			restore_diagnostics(entry, settings, false);
+			forget_diagnostic(entry);
+			return false;
+		}
+	};
+
+	function diagnostic_event(record) {
+		let entry = diagnostic_jobs[record?.id];
+		if (entry == null) return false;
+		let settings = configuration(app);
+		if (record.state == 'success')
+			return attempt_diagnostic_document(entry);
+		if (record.state == 'failure' || record.state == 'interrupted') {
+			if (settings.available && settings.enabled && settings.configured)
+				restore_diagnostics(entry, settings, false);
+			forget_diagnostic(entry);
+			return false;
+		}
+		if (settings.available && settings.enabled && settings.configured)
+			edit_diagnostic_stage(entry, record, settings);
+		return true;
+	};
+
+	function start_diagnostics(settings, destination) {
+		if (!show_panel('operation_loading', settings, {
+			chat_id: destination.chat_id, message_id: null
+		}))
+			errors.fail('UNAVAILABLE');
+		let panel = outbox.panel();
+		let job;
+		try {
+			job = app.diagnostics_create_report({
+				mode: 'lite', acknowledge_secrets: false, source: 'telegram'
+			});
+		}
+		catch (error) {
+			try { show_panel('diagnostics', settings, panel); } catch (panel_error) {}
+			errors.fail(errors.normalize(error).code);
+		}
+		if (type(job) != 'object' || type(job.operation_id) != 'string' ||
+		    type(job.report_id) != 'string') {
+			try { show_panel('diagnostics', settings, panel); } catch (error) {}
+			errors.fail('INVALID_RESPONSE');
+		}
+		let entry = {
+			operation_id: job.operation_id, report_id: job.report_id,
+			chat_id: destination.chat_id, message_id: panel?.message_id ?? null,
+			locale: destination.locale, attempts: 0, retry_timer: null
+		};
+		diagnostic_jobs[entry.operation_id] = entry;
+		let record = app.operations.get(entry.operation_id);
+		if (record != null)
+			diagnostic_event(record);
 		return true;
 	};
 
@@ -542,6 +681,10 @@ export function create(app) {
 
 	outbox = telegram_outbox.create(app.runtime, deliver_receipt);
 	operation_bridge = telegram_operations.create(app, outbox, receipt_payload);
+	diagnostics_unsubscribe = app.operations.subscribe((record) => {
+		try { diagnostic_event(record); } catch (error) {}
+	});
+	if (type(diagnostics_unsubscribe) != 'function') invalid();
 	try { operation_bridge.recover(); } catch (error) {}
 
 	function rate_allowed(now) {
@@ -578,9 +721,6 @@ export function create(app) {
 			return response(app.health());
 		if (command.name == 'memory')
 			return response(app.memory_status());
-		if (command.name == 'diagnostics')
-			return response(telegram_format.fenced_code(telegram_format.pretty_json(
-				app.diagnostics_summary()), 'json'), 'MarkdownV2');
 		if (command.name == 'logs')
 			return response(telegram_format.fenced_code(app.logs_read(), ''), 'MarkdownV2');
 		if (command.name == 'help')
@@ -837,6 +977,22 @@ export function create(app) {
 		if (command.name == 'menu') {
 			audit(command.name, 'accepted', update.update_id);
 			show_panel('main', settings, { chat_id: chat, message_id: null });
+			return { handled: true, retryable: false };
+		}
+		if (command.name == 'diagnostics') {
+			try {
+				start_diagnostics(settings, {
+					chat_id: chat, message_id: message.message_id,
+					locale: telegram_i18n.locale(app.runtime)
+				});
+			}
+			catch (error) {
+				audit(command.name, 'failed', update.update_id);
+				send_message(diagnostic_notice(telegram_i18n.locale(app.runtime), false),
+					settings, chat);
+				return { handled: false, retryable: false };
+			}
+			audit(command.name, 'accepted', update.update_id);
 			return { handled: true, retryable: false };
 		}
 		let outcome;

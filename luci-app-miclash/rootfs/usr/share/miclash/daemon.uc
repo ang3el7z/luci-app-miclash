@@ -1181,6 +1181,38 @@ export function compose(runtime, overrides) {
 			let job = diagnostics_domain.submit_report(arguments);
 			return { operation_id: job.operation.id, report_id: job.report_id };
 		};
+		app.diagnostics_open_report = (id) => {
+			let reader = diagnostics_domain.open_report(id), offset = 0, closed = false;
+			// This opaque object is the in-process capability identity. Callers
+			// receive verified metadata and sequential callbacks, never a path.
+			let identity = { report_id: id, size: reader.size, sha256: reader.sha256 };
+			return {
+				identity,
+				size: reader.size,
+				sha256: reader.sha256,
+				read: (amount) => {
+					if (closed || type(amount) != 'int' || amount < 1 || amount > 49152)
+						errors.fail('INVALID_ARGUMENT');
+					let chunk = reader.read(offset, amount);
+					offset += length(chunk);
+					return chunk;
+				},
+				finish: () => {
+					if (closed || offset != reader.size)
+						errors.fail('VALIDATION_FAILED');
+					let result = reader.finish();
+					closed = true;
+					return result.size == reader.size && result.sha256 == reader.sha256;
+				},
+				close: () => {
+					if (closed)
+						errors.fail('NOT_FOUND');
+					reader.close();
+					closed = true;
+					return true;
+				}
+			};
+		};
 		app.diagnostics_route_test = (arguments) => {
 			let persisted = settings_domain.get(), snapshot = modules.interface_scope.detect(runtime, persisted),
 				projection = modules.interface_scope.resolve(persisted, snapshot),
@@ -1312,6 +1344,8 @@ export function compose(runtime, overrides) {
 				memory_status: app.memory_status,
 				diagnostics_summary: () => ({ status: app.status(), health: app.health(),
 					memory: app.memory_status() }),
+				diagnostics_create_report: app.diagnostics_create_report,
+				diagnostics_open_report: app.diagnostics_open_report,
 				logs_read: () => bounded_logs(runtime),
 				diagnostics_route_test: app.diagnostics_route_test,
 				service_start: app.service_start, service_stop: app.service_stop,
