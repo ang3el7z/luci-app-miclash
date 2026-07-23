@@ -509,4 +509,8 @@ export function secret_name(input) {
 	return secret_key(input);
 };
 
+export function normalized_key(input) {
+	return type(input) == 'string' ? normalized_name(input) : '';
+};
+
 export { MASK };
