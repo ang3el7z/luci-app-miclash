@@ -604,7 +604,8 @@ function storage_free_blocks(runtime) {
 		}
 	}
 	catch (error) { failure = 'INTERNAL'; }
-	if (handle.close() !== true) failure = 'INTERNAL';
+	let close_status = handle.close();
+	if (close_status !== true && close_status !== 0) failure = 'INTERNAL';
 	if (failure != null || length(output) > 8192) errors.fail('INTERNAL');
 	let lines = split(output, '\n');
 	if (length(lines) < 2) errors.fail('INTERNAL');
@@ -612,23 +613,36 @@ function storage_free_blocks(runtime) {
 	if (length(fields) < 4 || !match(fields[3], /^[0-9]+$/)) errors.fail('INTERNAL');
 	return int(fields[3]);
 };
-function validate_stream_json(runtime, directory, path, expected_size) {
+function validate_stream_json(runtime, directory, path, expected_size, expected_identity) {
 	verify_directory(runtime, directory.path, directory.identity);
-	let identity = safe_file(runtime, path, null);
+	let identity = safe_file(runtime, path, expected_identity);
 	if (identity.size != expected_size || expected_size > REPORT_MAX_INPUT)
 		errors.fail('RESPONSE_TOO_LARGE');
 	let handle = runtime.fs.open(path, 're');
 	if (handle == null) errors.fail('INTERNAL');
-	let content = '', failure = null;
+	let consumed = 0, depth = 0, quoted = false, escaped = false, failure = null;
 	try {
-		while (length(content) <= REPORT_MAX_INPUT) {
+		while (consumed <= REPORT_MAX_INPUT) {
 			let chunk = runtime.fs.read(handle, 4096);
 			if (type(chunk) != 'string') errors.fail('INTERNAL');
 			if (!length(chunk)) break;
-			content += chunk;
+			consumed += length(chunk);
+			for (let offset = 0; offset < length(chunk); offset++) {
+				let character = substr(chunk, offset, 1);
+				if (quoted) {
+					if (escaped) escaped = false;
+					else if (character == '\\') escaped = true;
+					else if (character == '"') quoted = false;
+				}
+				else if (character == '"') quoted = true;
+				else if (character == '{' || character == '[') depth++;
+				else if (character == '}' || character == ']') {
+					if (--depth < 0) errors.fail('INVALID_RESPONSE');
+				}
+			}
 		}
-		if (length(content) != expected_size) errors.fail('INTERNAL');
-		json(content);
+		if (consumed != expected_size || quoted || escaped || depth != 0)
+			errors.fail('INVALID_RESPONSE');
 	}
 	catch (error) { failure = 'INVALID_RESPONSE'; }
 	if (runtime.fs.close(handle) !== true) failure = 'INTERNAL';
@@ -645,7 +659,8 @@ function validate_stream_json(runtime, directory, path, expected_size) {
 // reports while newer callers use this one-file, capability-scoped store.
 export function create_store(runtime) {
 	if (type(runtime?.fs) != 'object' || type(runtime?.clock?.now) != 'function' ||
-		type(runtime?.random?.hex) != 'function' || type(runtime?.digest?.sha256_file) != 'function' ||
+		type(runtime?.random?.hex) != 'function' || type(runtime?.digest?.sha256) != 'function' ||
+		type(runtime?.digest?.sha256_file) != 'function' ||
 		runtime?.paths?.tmp != '/tmp/miclash') invalid();
 	ensure_directory(runtime, runtime.paths.tmp);
 	let root = ensure_directory(runtime, ROOT), reports = {}, pending = {};
@@ -702,7 +717,9 @@ export function create_store(runtime) {
 					handle.path = stage + '/report.json';
 					let opened = safe_file(runtime, handle.path, null);
 					let created_at = runtime.clock.now(), expires_at = created_at + TTL;
-					pending[id] = { mode: options.mode, created_at, expires_at };
+					pending[id] = { mode: options.mode, created_at, expires_at,
+						directory, identity: opened };
+					handle.abort = () => cleanup_pending(id, stage, ROOT + '/report-' + token);
 					return { id, mode: options.mode, path: stage, size: 0, sha256: null,
 						created_at, expires_at,
 						downloaded: false, handle, directory, identity: opened };
@@ -721,11 +738,13 @@ export function create_store(runtime) {
 			if (pending_report == null) errors.fail('NOT_FOUND');
 			let stage = ROOT + '/.stage-' + substr(id, 4), final_path = ROOT + '/report-' + substr(id, 4);
 			try {
-				let directory = { path: stage, identity: verify_directory(runtime, stage, null) };
+				let directory = { path: stage,
+					identity: verify_directory(runtime, stage, pending_report.directory.identity) };
 				let expected = stage + '/report.json';
 				if (result.path != expected || type(result.size) != 'int' || result.size < 1 ||
 					type(result.sha256) != 'string' || !match(result.sha256, /^[0-9a-f]{64}$/)) invalid();
-				let file = validate_stream_json(runtime, directory, expected, result.size);
+				let file = validate_stream_json(runtime, directory, expected, result.size,
+					pending_report.identity);
 				if (runtime.digest.sha256_file(expected) != result.sha256) errors.fail('INTERNAL');
 				verify_directory(runtime, ROOT, root);
 				if (runtime.fs.lstat(final_path) != null || runtime.fs.rename(stage, final_path) !== true)
@@ -758,17 +777,30 @@ export function create_store(runtime) {
 			let file = safe_file(runtime, report.path, report.identity);
 			if (file.size != report.size || runtime.digest.sha256_file(report.path) != report.sha256)
 				errors.fail('INTERNAL');
+			report.downloaded = true;
 			let handle = runtime.fs.open(report.path, 're');
-			if (handle == null) errors.fail('INTERNAL');
+			if (handle == null) { discard(report); errors.fail('INTERNAL'); }
+			let opened = runtime.fs.fstat(handle);
+			if (!same_node(file, opened)) { runtime.fs.close(handle); discard(report); errors.fail('INTERNAL'); }
+			let content = '', reader_failure = null;
 			return {
-				read: (amount) => runtime.fs.read(handle, amount),
+				read: (amount) => {
+					let chunk = runtime.fs.read(handle, amount);
+					if (type(chunk) != 'string' || length(content) + length(chunk) > report.size) {
+						reader_failure = 'INTERNAL'; discard(report); errors.fail('INTERNAL');
+					}
+					content += chunk;
+					return chunk;
+				},
 				close: () => {
 					let closed = runtime.fs.close(handle);
-					if (closed !== true) errors.fail('INTERNAL');
+					if (closed !== true) { discard(report); errors.fail('INTERNAL'); }
+					let after = runtime.fs.fstat(handle);
 					let current = safe_file(runtime, report.path, report.identity);
-					if (!same_node(file, current) || runtime.digest.sha256_file(report.path) != report.sha256)
-						errors.fail('INTERNAL');
-					report.downloaded = true;
+					if (reader_failure != null || !same_node(opened, after) || !same_node(file, current) ||
+						length(content) != report.size || runtime.digest.sha256(content) != report.sha256) {
+						discard(report); errors.fail('INTERNAL');
+					}
 					discard(report);
 					return true;
 				}

@@ -23,6 +23,9 @@ export function create(runtime, handle) {
 		errors.fail('INVALID_ARGUMENT');
 
 	let path = handle.path, stack = [], closed = false, bytes = 0;
+	function abort() {
+		try { if (type(handle.abort) == 'function') handle.abort(); } catch (error) {}
+	};
 	function write(value) {
 		if (closed || type(value) != 'string' || bytes + length(value) > MAX_JSON_BYTES) fail();
 		write_all(runtime, handle, value);
@@ -73,9 +76,9 @@ export function create(runtime, handle) {
 			let after = runtime.fs.lstat(path);
 			if (failure != null || before?.type != 'file' || after?.type != 'file' ||
 				before.inode != after.inode || after.size != bytes || runtime.fs.realpath(path) != path)
-				fail();
+				{ abort(); fail(); }
 			let sha256 = runtime.digest.sha256_file(path);
-			if (type(sha256) != 'string' || !match(sha256, /^[0-9a-f]{64}$/)) fail();
+			if (type(sha256) != 'string' || !match(sha256, /^[0-9a-f]{64}$/)) { abort(); fail(); }
 			return { path, size: bytes, sha256 };
 		}
 	};

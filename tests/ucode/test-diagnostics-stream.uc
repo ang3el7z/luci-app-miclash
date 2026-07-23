@@ -85,3 +85,53 @@ runtime.clock.advance(900000);
 assert_throws(() => restarted.open_report(expiring_report.id), 'NOT_FOUND');
 assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 	'expired report is removed');
+
+// Production df uses POSIX pclose() semantics: 0 is success.
+let df_filesystem = fakes.fs({});
+for (let directory in [ '/tmp', '/tmp/miclash' ]) df_filesystem.mkdir(directory);
+df_filesystem.chmod('/tmp/miclash', 0o700);
+let df_calls = [];
+df_filesystem.popen = (command, mode) => {
+	push(df_calls, { command, mode });
+	let offset = 0, content = 'Filesystem 1024-blocks Used Available Capacity Mounted on\n' +
+		'tmpfs 65536 1 65535 1% /tmp\n';
+	return { read: (amount) => {
+		let chunk = substr(content, offset, amount); offset += length(chunk); return chunk;
+	}, close: () => 0 };
+};
+let df_runtime = { fs: df_filesystem, clock: fakes.clock(1), random: fakes.entropy(),
+	digest: fakes.digest(df_filesystem), paths: { tmp: '/tmp/miclash' } };
+let df_store = diagnostics.create_store(df_runtime);
+let df_report = df_store.begin({ mode: 'lite', required_bytes: 4096 });
+assert_equal(df_calls[0].command, '/bin/df -Pk /tmp');
+assert_equal(df_calls[0].mode, 'r');
+assert_true(match(df_report.id, /^rpt_[0-9a-f]{32}$/));
+
+// Single-use capability is consumed before a second reader can be issued.
+let concurrent_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
+let concurrent_output = diagnostics_json.create(runtime, concurrent_stage.handle);
+concurrent_output.begin_object(); concurrent_output.field('reader', true); concurrent_output.end_object();
+let concurrent = store.finish(concurrent_stage.id, concurrent_output.finish());
+let first_reader = store.open_report(concurrent.id);
+assert_throws(() => store.open_report(concurrent.id), 'NOT_FOUND');
+assert_equal(first_reader.read(64), '{"reader":true}');
+assert_equal(first_reader.close(), true);
+
+let failing_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
+filesystem.fail_on = 'flush';
+let failing_output = diagnostics_json.create(runtime, failing_stage.handle);
+failing_output.begin_object(); failing_output.end_object();
+assert_throws(() => failing_output.finish(), 'INTERNAL');
+filesystem.fail_on = null;
+assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
+	'writer finalization failure removes its staging directory');
+
+let invalid_stage = store.begin({ mode: 'lite', required_bytes: 4096 });
+filesystem.write(invalid_stage.handle, '{');
+filesystem.close(invalid_stage.handle);
+assert_throws(() => store.finish(invalid_stage.id, {
+	path: invalid_stage.handle.path, size: 1,
+	sha256: runtime.digest.sha256_file(invalid_stage.handle.path)
+}), 'INVALID_RESPONSE');
+assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
+	'invalid JSON removes staging');
