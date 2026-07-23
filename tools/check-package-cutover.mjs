@@ -28,6 +28,14 @@ const clashGuardGate = clash.indexOf('/etc/init.d/miclash-guard start');
 const clashProcdOpen = clash.indexOf('procd_open_instance');
 if (clashGuardGate < 0 || clashProcdOpen < 0 || clashGuardGate > clashProcdOpen)
 	throw new Error('Mihomo startup must synchronously verify the early Guard owner first');
+const startService = clash.slice(clash.indexOf('start_service()'));
+const packageMarkerGate = startService.indexOf('consume_package_install_marker');
+const missingKernelGate = startService.indexOf('reason=missing-kernel');
+if (packageMarkerGate < 0 || missingKernelGate < 0 || packageMarkerGate > missingKernelGate)
+	throw new Error('package-install autostart marker must be consumed before Mihomo prerequisites are checked');
+requireMatch(clash,
+	/stat -c '%u:%a:%h'[\s\S]*0:600:1[\s\S]*rm -f "\$NO_AUTOSTART_MARKER"/,
+	'package-install autostart marker must be authenticated and consumed atomically');
 requireMatch(makefile, /LUCI_DEPENDS:=[\s\S]*\+ip-full/,
 	'full iproute2 is required for owned route proto and rule protocol syntax');
 requireMatch(makefile, /LUCI_DEPENDS:=[^\n]*\+kmod-nft-tproxy/,
