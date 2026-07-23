@@ -942,9 +942,13 @@ export function create_store(runtime) {
 					handle.path = stage + '/report.json';
 					opened = safe_file(runtime, handle.path, null);
 					let created_at = runtime.clock.now(), expires_at = created_at + TTL;
-					pending[id] = { mode: options.mode, created_at, expires_at,
-						directory, identity: opened };
-					handle.abort = () => cleanup_pending(id, stage, ROOT + '/stream-report-' + token);
+					let pending_report = { mode: options.mode, created_at, expires_at,
+						directory, identity: opened, handle };
+					pending[id] = pending_report;
+					handle.abort = () => {
+						if (pending[id] === pending_report)
+							cleanup_pending(id, stage, ROOT + '/stream-report-' + token);
+					};
 					return { id, mode: options.mode, path: stage, size: 0, sha256: null,
 						created_at, expires_at,
 						downloaded: false, handle, directory, identity: opened };
@@ -987,6 +991,7 @@ export function create_store(runtime) {
 					sha256: result.sha256, created_at: pending_report.created_at,
 					expires_at: pending_report.expires_at, downloaded: false,
 					directory: final_directory, identity: final_file };
+				pending_report.handle.abort = () => {};
 				delete pending[id];
 				reports[id] = report;
 				return { id: report.id, mode: report.mode, path: report.path, size: report.size,

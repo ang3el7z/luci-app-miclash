@@ -87,9 +87,12 @@ let output = diagnostics_json.create(runtime, report.handle);
 output.begin_object(); output.field('ok', true); output.end_object();
 let completed = store.finish(report.id, output.finish());
 assert_equal(completed.sha256, runtime.digest.sha256_file(completed.path));
-let reader = store.open_report(completed.id);
-assert_equal(reader.read(64), '{"ok":true}');
-assert_equal(reader.close(), true);
+report.handle.abort();
+assert_throws(() => output.field('after_publication', true), 'INTERNAL');
+let retained_abort_reader = store.open_report(completed.id);
+assert_equal(retained_abort_reader.read(64), '{"ok":true}',
+	'post-publication writer misuse cannot remove the published report');
+assert_equal(retained_abort_reader.close(), true);
 assert_throws(() => store.open_report(completed.id), 'NOT_FOUND');
 assert_equal(length(filesystem.lsdir('/tmp/miclash/diagnostics')), 0,
 	'a downloaded report is removed');
