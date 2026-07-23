@@ -184,15 +184,23 @@ Bot 仅使用出站 HTTPS long polling，只接受已授权的 private chat，�
 
 ## 诊断
 
+常规排查请打开 **MiClash → 设置 → 组件 → 诊断**：
+
+- **Silent** 仅包含最少的系统健康信息，适合公开问题报告。
+- **Lite** 包含已脱敏的诊断、配置摘要和近期事件，推荐用于大多数支持请求。
+- **Full** 可能包含私有配置和密钥，仅可交给可信支持人员。
+
+如果 LuCI 无法使用，请通过 SSH 执行：
+
 ```sh
 /etc/init.d/miclashd status
 /etc/init.d/clash status
 ubus call miclash status '{}'
 ubus call miclash health '{}'
-logread -e miclashd
+logread | grep -E '(miclash|mihomo|clash)'
 ```
 
-请求支持时请下载诊断报告，并使用 route test 检查所选路径。Guard 启用时不要手动删除其 nftables/routing rules 或 latch。
+使用“路由检查”卡片中的**路由测试**检查所选路径。Guard 启用时不要手动删除其 nftables/routing 规则或安全锁。
 
 ## 删除（removal）
 

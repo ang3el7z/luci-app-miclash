@@ -184,15 +184,23 @@ The bot uses outbound HTTPS long polling only, accepts authorized private chats,
 
 ## Diagnostics
 
+For normal troubleshooting, open **MiClash → Settings → Components → Diagnostics**:
+
+- **Silent** contains only minimal system health information and is suitable for public issue reports.
+- **Lite** contains redacted diagnostics, a configuration summary, and recent events. Use it for most support requests.
+- **Full** may contain private configuration and secrets. Share it only with trusted support.
+
+If LuCI is unavailable, use these commands over SSH:
+
 ```sh
 /etc/init.d/miclashd status
 /etc/init.d/clash status
 ubus call miclash status '{}'
 ubus call miclash health '{}'
-logread -e miclashd
+logread | grep -E '(miclash|mihomo|clash)'
 ```
 
-Download the diagnostic report when requesting support, and use route test to inspect the selected path. When Guard is enabled, do not manually delete its nftables/routing rules or latch.
+Use **Route test** in the Routing card to inspect the selected path. When Guard is enabled, do not manually delete its nftables/routing rules or safety latch.
 
 ## Removal
 
