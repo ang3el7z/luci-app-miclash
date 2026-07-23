@@ -189,3 +189,73 @@ let lite_devices = privacy.create('lite', []).value([], {
 assert_equal(lite_devices.routing.routes[0].device, 'eth0');
 assert_equal(lite_devices.network.device, 'br-lan');
 assert_equal(lite_devices.network.clients[0].device, '[REDACTED]');
+
+// Runtime credentials are discovered from their text grammar, not from seeds.
+// Each spelling uses an unrelated value so one successful discovery cannot
+// accidentally hide a failure in another form.
+let runtime_credentials = [
+	[ 'token: colon-secret-91x', [ 'colon-secret-91x' ] ],
+	[ '  api_key:\t yaml-key-82y', [ 'yaml-key-82y' ] ],
+	[ 'Authorization: Bearer bearer-secret-73z', [ 'bearer-secret-73z' ] ],
+	[ 'Authorization:\tBearer   spaced-bearer-64q', [ 'spaced-bearer-64q' ] ],
+	[ 'Authorization: Basic ' + independent_base64('basic-user:basic-pass-55r'),
+		[ independent_base64('basic-user:basic-pass-55r'), 'basic-user:basic-pass-55r',
+			'basic-pass-55r' ] ],
+	[ 'https://runtime-auth.invalid/check?access_token=query-secret-46s&safe=ok',
+		[ 'query-secret-46s', percent_encoded('query-secret-46s'),
+			independent_base64('query-secret-46s') ] ],
+	[ 'Cookie: sid=cookie-secret-37t; csrf=csrf-secret-28u',
+		[ 'cookie-secret-37t', 'csrf-secret-28u' ] ],
+	[ 'token: ' + percent_encoded('percent-secret-19v'),
+		[ percent_encoded('percent-secret-19v'), 'percent-secret-19v' ] ],
+	[ 'token: ' + independent_base64('base64-secret-10w'),
+		[ independent_base64('base64-secret-10w'), 'base64-secret-10w' ] ]
+];
+for (let mode in [ 'silent', 'lite' ])
+	for (let probe in runtime_credentials) {
+		let output = privacy.create(mode, []).text([], probe[0]);
+		assert_absent(output, probe[1], mode + ' runtime credential');
+	}
+
+// Quoted JSON fields must expose their complete value to URL detection even
+// when the URL has no raw '=' separator and uses arbitrary percent mixing.
+let json_subscription =
+	'htt%70s%3A%2F%2Fquoted-json.invalid%2Fsub%3Fcredential%3Djson-only-83k';
+for (let mode in [ 'silent', 'lite' ]) {
+	let output = privacy.create(mode, []).text([],
+		'{"subscription":"' + json_subscription + '","status":"pending"}');
+	assert_absent(output, [ json_subscription, 'quoted-json.invalid', 'json-only-83k' ],
+		mode + ' quoted JSON subscription');
+	assert_true(index(output, mode == 'silent' ? '[URL-1]' : '[REDACTED]') >= 0,
+		mode + ' masks quoted JSON subscription');
+}
+
+// Work bounds fail closed. Oversized tokens and aggregate text are replaced as
+// a unit before percent/Base64 expansion, and a long-lived profile cannot grow
+// an unbounded runtime catalog across calls.
+let oversized_credential = '';
+for (let index = 0; index < 5000; index++) oversized_credential += 'A';
+oversized_credential += '-oversized-secret-74m';
+for (let mode in [ 'silent', 'lite' ])
+	assert_equal(privacy.create(mode, []).text([], 'token: ' + oversized_credential),
+		'[REDACTED]', mode + ' oversized credential fails closed');
+
+let oversized_text = '';
+for (let index = 0; index < 132000; index++) oversized_text += 'x';
+oversized_text += ' token: aggregate-secret-65n';
+for (let mode in [ 'silent', 'lite' ])
+	assert_equal(privacy.create(mode, []).text([], oversized_text), '[REDACTED]',
+		mode + ' oversized text fails closed');
+
+for (let mode in [ 'silent', 'lite' ]) {
+	let bounded_profile = privacy.create(mode, []);
+	let output;
+	for (let index = 0; index < 300; index++) {
+		let runtime_secret = 'catalog-secret-' + index + '-56p';
+		output = bounded_profile.text([], 'token: ' + runtime_secret);
+		assert_absent(output, [ runtime_secret ], mode + ' bounded runtime catalog');
+	}
+	assert_equal(output, '[REDACTED]', mode + ' saturated runtime catalog fails closed');
+	assert_equal(bounded_profile.text([], 'https://status.provider.example/health'),
+		'[REDACTED]', mode + ' saturated profile remains fail closed');
+}

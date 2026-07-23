@@ -1,8 +1,16 @@
 import * as redact from 'miclash.redact';
 
 const MASK = '[REDACTED]';
-const MAX_PERCENT_TOKEN_LENGTH = 4096;
-const MAX_MARKER_SUFFIXES = 16;
+const MAX_TEXT_INPUT = 131072;
+const MAX_TOKEN_LENGTH = 4096;
+const MAX_DISCOVERY_TOKENS = 2048;
+const MAX_CATALOG_VALUES = 128;
+const MAX_CATALOG_BYTES = 32768;
+const MAX_VALUE_DEPTH = 16;
+const MAX_VALUE_NODES = 4096;
+const MAX_REPLACEMENT_PATTERNS = 1024;
+const MAX_REPLACEMENT_MATCHES = 4096;
+const MAX_VARIANT_BYTES = 262144;
 
 function enum_mode(mode) {
 	if (mode != 'silent' && mode != 'lite' && mode != 'full')
@@ -17,9 +25,25 @@ function contains(values, value) {
 	return false;
 };
 
-function add(values, value) {
-	if (type(value) == 'string' && length(value) && !contains(values, value))
-		push(values, value);
+function fail_closed(catalog) {
+	catalog.failed_closed = true;
+	return false;
+};
+
+function catalog_store(catalog, values, value) {
+	if (type(value) != 'string' || !length(value))
+		return true;
+	if (length(value) > MAX_TOKEN_LENGTH)
+		return fail_closed(catalog);
+	if (contains(values, value))
+		return true;
+	if (catalog.count >= MAX_CATALOG_VALUES ||
+	    catalog.bytes + length(value) > MAX_CATALOG_BYTES)
+		return fail_closed(catalog);
+	push(values, value);
+	catalog.count++;
+	catalog.bytes += length(value);
+	return true;
 };
 
 function trim_token(value) {
@@ -45,36 +69,36 @@ function classified(key, value) {
 		(redact.secret_name(key) || match(value, /^[0-9]{5,}:[^[:space:]]+$/));
 };
 
-function add_variant(values, value) {
-	add(values, value);
-	let percent = '';
-	for (let offset = 0; offset < length(value); offset++)
-		percent += sprintf('%%%02X', ord(value, offset));
-	add(values, percent);
-	try {
-		let base64 = b64enc(value);
-		add(values, base64);
-		let urlsafe = replace(replace(base64, /\+/g, '-'), /\//g, '_');
-		add(values, urlsafe);
-		add(values, replace(base64, /=+$/, ''));
-		add(values, replace(urlsafe, /=+$/, ''));
-	}
-	catch (error) {}
-};
-
 function catalog_add(catalog, kind, value) {
 	value = trim_token(value);
 	if (!length(value))
-		return;
-	if (kind == 'secret')
-		add_variant(catalog.secrets, value);
-	else
-		add(catalog[kind], value);
+		return true;
+	return catalog_store(catalog, kind == 'secret' ? catalog.secrets : catalog[kind], value);
+};
+
+function catalog_url(catalog, spelling, canonical, sensitive) {
+	spelling = trim_token(spelling);
+	canonical = trim_token(canonical);
+	if (!catalog_add(catalog, 'urls', canonical) ||
+	    (sensitive && !catalog_store(catalog, catalog.sensitive_urls, canonical)) ||
+	    spelling == canonical)
+		return !catalog.failed_closed;
+	for (let alias in catalog.url_aliases)
+		if (alias.spelling == spelling && alias.canonical == canonical)
+			return true;
+	if (length(spelling) > MAX_TOKEN_LENGTH ||
+	    catalog.count >= MAX_CATALOG_VALUES ||
+	    catalog.bytes + length(spelling) > MAX_CATALOG_BYTES)
+		return fail_closed(catalog);
+	push(catalog.url_aliases, { spelling, canonical });
+	catalog.count++;
+	catalog.bytes += length(spelling);
+	return true;
 };
 
 function percent_decoded(input) {
-	if (length(input) > MAX_PERCENT_TOKEN_LENGTH)
-		return input;
+	if (length(input) > MAX_TOKEN_LENGTH)
+		return null;
 	let output = '';
 	for (let offset = 0; offset < length(input); offset++) {
 		if (substr(input, offset, 1) == '%' && offset + 2 < length(input) &&
@@ -87,14 +111,32 @@ function percent_decoded(input) {
 	return output;
 };
 
-function classify_token(catalog, token) {
+function classify_token(catalog, token, spelling, sensitive) {
 	token = trim_token(token);
-	if (match(token, /^https?:\/\/[^[:space:]]+$/)) catalog_add(catalog, 'urls', token);
-	else if (match(token, /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/)) catalog_add(catalog, 'devices', token);
+	if (!length(token))
+		return false;
+	if (match(token, /^https?:\/\/[^[:space:]]+$/)) {
+		catalog_url(catalog, spelling ?? token, token, sensitive);
+		return true;
+	}
+	else if (match(token, /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/)) {
+		catalog_add(catalog, 'devices', token);
+		return true;
+	}
 	else if (match(token, /^[0-9]{1,3}(\.[0-9]{1,3}){3}(\/[0-9]{1,2})?$/) ||
-	         match(token, /^[0-9A-Fa-f:]+(:[0-9A-Fa-f:]+)+(\/[0-9]{1,3})?$/)) catalog_add(catalog, 'ips', token);
-	else if (match(token, /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/)) catalog_add(catalog, 'ids', token);
-	else if (match(token, /^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$/)) catalog_add(catalog, 'hosts', token);
+	         match(token, /^[0-9A-Fa-f:]+(:[0-9A-Fa-f:]+)+(\/[0-9]{1,3})?$/)) {
+		catalog_add(catalog, 'ips', token);
+		return true;
+	}
+	else if (match(token, /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/)) {
+		catalog_add(catalog, 'ids', token);
+		return true;
+	}
+	else if (match(token, /^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$/)) {
+		catalog_add(catalog, 'hosts', token);
+		return true;
+	}
+	return false;
 };
 
 function marker_values(catalog, input, marker, kind) {
@@ -119,43 +161,303 @@ function marker_values(catalog, input, marker, kind) {
 	}
 };
 
+function base64_decoded(input) {
+	if (length(input) < 4 || length(input) > MAX_TOKEN_LENGTH ||
+	    !match(input, /^[A-Za-z0-9+\/_-]+={0,2}$/))
+		return null;
+	let base64 = replace(replace(input, /-/g, '+'), /_/g, '/');
+	let remainder = length(base64) % 4;
+	if (remainder == 1)
+		return null;
+	if (remainder == 2) base64 += '==';
+	else if (remainder == 3) base64 += '=';
+	try {
+		let decoded = b64dec(base64);
+		return type(decoded) == 'string' && length(decoded) <= MAX_TOKEN_LENGTH ?
+			decoded : null;
+	}
+	catch (error) {
+		return null;
+	}
+};
+
+function credential_add(catalog, input) {
+	input = trim_token(input);
+	if (!length(input))
+		return true;
+	if (length(input) > MAX_TOKEN_LENGTH)
+		return fail_closed(catalog);
+	if (!catalog_add(catalog, 'secret', input))
+		return false;
+	let decoded = percent_decoded(input);
+	if (decoded == null)
+		return fail_closed(catalog);
+	if (decoded != input && !catalog_add(catalog, 'secret', decoded))
+		return false;
+	let decoded64 = base64_decoded(input);
+	if (decoded64 != null && match(decoded64, /^[[:print:]\t]+$/) &&
+	    !catalog_add(catalog, 'secret', decoded64))
+		return false;
+	return true;
+};
+
+function marker_boundary(input, offset) {
+	return offset <= 0 || !match(substr(input, offset - 1, 1), /^[A-Za-z0-9_-]$/);
+};
+
+function marked_secret_values(catalog, input, marker) {
+	let lowered = lc(input), offset = 0;
+	while (offset < length(input) && !catalog.failed_closed) {
+		let relative = index(substr(lowered, offset), marker);
+		if (relative < 0)
+			return;
+		let found = offset + relative, cursor = found + length(marker);
+		if (!marker_boundary(input, found)) {
+			offset = cursor;
+			continue;
+		}
+		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+			cursor++;
+		if (cursor >= length(input) ||
+		    (substr(input, cursor, 1) != ':' && substr(input, cursor, 1) != '=')) {
+			offset = found + length(marker);
+			continue;
+		}
+		cursor++;
+		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+			cursor++;
+		if (marker == 'authorization') {
+			let tail = lc(substr(input, cursor));
+			for (let scheme in [ 'bearer', 'basic' ])
+				if (substr(tail, 0, length(scheme)) == scheme &&
+				    match(substr(tail, length(scheme), 1), /^[ \t]$/)) {
+					cursor += length(scheme);
+					while (cursor < length(input) &&
+					       match(substr(input, cursor, 1), /^[ \t]$/))
+						cursor++;
+					break;
+				}
+		}
+		let quote = cursor < length(input) &&
+			(substr(input, cursor, 1) == '"' || substr(input, cursor, 1) == "'") ?
+			substr(input, cursor++, 1) : null;
+		let end = cursor;
+		while (end < length(input)) {
+			let character = substr(input, end, 1);
+			if ((quote != null && character == quote) ||
+			    (quote == null && match(character, /^[[:space:],;'"<>&#]$/)))
+				break;
+			end++;
+		}
+		if (end > cursor)
+			credential_add(catalog, substr(input, cursor, end - cursor));
+		offset = max(end + 1, found + length(marker));
+	}
+};
+
+function scheme_secret_values(catalog, input, scheme) {
+	let lowered = lc(input), offset = 0;
+	while (offset < length(input) && !catalog.failed_closed) {
+		let relative = index(substr(lowered, offset), scheme);
+		if (relative < 0)
+			return;
+		let found = offset + relative, cursor = found + length(scheme);
+		if (!marker_boundary(input, found) || cursor >= length(input) ||
+		    !match(substr(input, cursor, 1), /^[ \t]$/)) {
+			offset = cursor;
+			continue;
+		}
+		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+			cursor++;
+		let end = cursor;
+		while (end < length(input) &&
+		       !match(substr(input, end, 1), /^[[:space:],;'"<>&#]$/))
+			end++;
+		if (end > cursor)
+			credential_add(catalog, substr(input, cursor, end - cursor));
+		offset = max(end + 1, cursor);
+	}
+};
+
+function cookie_values(catalog, input) {
+	let lowered = lc(input), offset = 0;
+	while (offset < length(input) && !catalog.failed_closed) {
+		let relative = index(substr(lowered, offset), 'cookie');
+		if (relative < 0)
+			return;
+		let found = offset + relative, cursor = found + 6;
+		if (!marker_boundary(input, found)) {
+			offset = cursor;
+			continue;
+		}
+		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+			cursor++;
+		if (cursor >= length(input) ||
+		    (substr(input, cursor, 1) != ':' && substr(input, cursor, 1) != '=')) {
+			offset = found + 6;
+			continue;
+		}
+		cursor++;
+		let end = cursor;
+		while (end < length(input) && substr(input, end, 1) != '\n' &&
+		       substr(input, end, 1) != '\r')
+			end++;
+		for (let pair in split(substr(input, cursor, end - cursor), ';')) {
+			let separator = index(pair, '=');
+			credential_add(catalog, trim(separator < 0 ? pair :
+				substr(pair, separator + 1)));
+			if (catalog.failed_closed)
+				return;
+		}
+		offset = max(end + 1, cursor);
+	}
+};
+
+function json_subscription_values(catalog, input) {
+	let lowered = lc(input), marker = '"subscription"', offset = 0;
+	while (offset < length(input) && !catalog.failed_closed) {
+		let relative = index(substr(lowered, offset), marker);
+		if (relative < 0)
+			return;
+		let found = offset + relative, cursor = found + length(marker);
+		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+			cursor++;
+		if (cursor >= length(input) || substr(input, cursor, 1) != ':') {
+			offset = found + length(marker);
+			continue;
+		}
+		cursor++;
+		while (cursor < length(input) && match(substr(input, cursor, 1), /^[ \t]$/))
+			cursor++;
+		if (cursor >= length(input) ||
+		    (substr(input, cursor, 1) != '"' && substr(input, cursor, 1) != "'")) {
+			offset = cursor;
+			continue;
+		}
+		let quote = substr(input, cursor++, 1), end = cursor;
+		while (end < length(input) && substr(input, end, 1) != quote)
+			end++;
+		let spelling = substr(input, cursor, end - cursor);
+		if (length(spelling) > MAX_TOKEN_LENGTH) {
+			fail_closed(catalog);
+			return;
+		}
+		let decoded = percent_decoded(spelling);
+		if (decoded == null) {
+			fail_closed(catalog);
+			return;
+		}
+		if (!classify_token(catalog, decoded, spelling, true)) {
+			let decoded64 = base64_decoded(spelling);
+			if (decoded64 != null)
+				classify_token(catalog, decoded64, spelling, true);
+		}
+		offset = max(end + 1, cursor);
+	}
+};
+
+function discover_tokens(catalog, input) {
+	let normalized = replace(input, /[[:space:]\[\](),;'"<>]/g, ' ');
+	let words = split(normalized, ' '), suffixes = [];
+	for (let word in words) {
+		let separator = index(word, '=');
+		if (separator >= 0 && separator + 1 < length(word))
+			push(suffixes, substr(word, separator + 1));
+	}
+	let groups = [ words, suffixes ];
+	let tokens = 0;
+	for (let words in groups) {
+		for (let word in words)
+			if (length(word) && ++tokens > MAX_DISCOVERY_TOKENS)
+				return fail_closed(catalog);
+		for (let word in words) {
+			word = trim_token(word);
+			if (!length(word))
+				continue;
+			if (length(word) > MAX_TOKEN_LENGTH)
+				return fail_closed(catalog);
+			classify_token(catalog, word, word);
+			if (catalog.failed_closed)
+				return false;
+			let decoded = percent_decoded(word);
+			if (decoded == null)
+				return fail_closed(catalog);
+			if (decoded != word)
+				classify_token(catalog, decoded, word);
+			if (catalog.failed_closed)
+				return false;
+			let decoded64 = base64_decoded(word);
+			if (decoded64 != null)
+				classify_token(catalog, decoded64, word);
+			if (catalog.failed_closed)
+				return false;
+		}
+	}
+	return true;
+};
+
 function discover_text(catalog, input) {
-	for (let name in [ 'token', 'secret', 'password', 'cookie', 'authorization', 'bearer' ])
-		marker_values(catalog, input, name, 'secret');
+	if (type(input) != 'string' || length(input) > MAX_TEXT_INPUT)
+		return fail_closed(catalog);
+	for (let name in [
+		'token', 'access_token', 'refresh_token', 'secret', 'password', 'passwd',
+		'credential', 'authorization', 'api_key', 'api-key', 'private_key',
+		'private-key', 'access_key', 'access-key', 'client_secret', 'client-secret'
+	])
+		marked_secret_values(catalog, input, name);
+	for (let scheme in [ 'bearer', 'basic' ])
+		scheme_secret_values(catalog, input, scheme);
+	cookie_values(catalog, input);
+	json_subscription_values(catalog, input);
+	if (catalog.failed_closed)
+		return false;
 	for (let name in [ 'device', 'device_name', 'ssid' ])
 		marker_values(catalog, input, name, 'devices');
 	for (let name in [ 'hostname', 'host_name' ])
 		marker_values(catalog, input, name, 'hosts');
 	for (let name in [ 'uuid', 'id', 'user_id', 'chat_id' ])
 		marker_values(catalog, input, name, 'ids');
-	for (let word in split(replace(input, /[[:space:]]/g, ' '), ' '))
-		classify_token(catalog, word);
-	let words = split(replace(input, /[[:space:],;=]/g, ' '), ' ');
-	for (let word in words) {
-		classify_token(catalog, word);
-		let decoded = percent_decoded(word);
-		if (decoded != word) classify_token(catalog, decoded);
-		try {
-			let base64 = replace(replace(word, /-/g, '+'), /_/g, '/');
-			let padding = length(base64) % 4;
-			if (padding) base64 += padding == 2 ? '==' : '=';
-			let decoded64 = b64dec(base64);
-			if (decoded64 != null) classify_token(catalog, decoded64);
-		}
-		catch (error) {}
-	}
+	if (catalog.failed_closed)
+		return false;
+	return discover_tokens(catalog, input);
 };
 
-function discover(seed_values) {
-	let catalog = { secrets: [], urls: [], ips: [], hosts: [], devices: [], ids: [] };
-	let stack = [ { value: seed_values, key: '' } ];
-	while (length(stack)) {
+function discover_into(catalog, seed_values) {
+	let stack = [ { value: seed_values, key: '', depth: 0 } ];
+	let nodes = 0, aggregate = 0;
+	while (length(stack) && !catalog.failed_closed) {
 		let item = pop(stack), kind = type(item.value);
+		if (item.depth > MAX_VALUE_DEPTH || ++nodes > MAX_VALUE_NODES) {
+			fail_closed(catalog);
+			break;
+		}
 		if (kind == 'array')
-			for (let value in item.value) push(stack, { value, key: item.key });
+			for (let value in item.value) {
+				if (length(stack) >= MAX_VALUE_NODES) {
+					fail_closed(catalog);
+					break;
+				}
+				push(stack, { value, key: item.key, depth: item.depth + 1 });
+			}
 		else if (kind == 'object')
-			for (let key, value in item.value) push(stack, { value, key });
+			for (let key, value in item.value) {
+				if (length(stack) >= MAX_VALUE_NODES) {
+					fail_closed(catalog);
+					break;
+				}
+				aggregate += length(key);
+				if (aggregate > MAX_TEXT_INPUT || length(key) > MAX_TOKEN_LENGTH) {
+					fail_closed(catalog);
+					break;
+				}
+				push(stack, { value, key, depth: item.depth + 1 });
+			}
 		else if (kind == 'string') {
+			aggregate += length(item.value);
+			if (aggregate > MAX_TEXT_INPUT || length(item.value) > MAX_TEXT_INPUT) {
+				fail_closed(catalog);
+				break;
+			}
 			let typed = typed_kind(item.key);
 			if (typed != null) catalog_add(catalog, typed, item.value);
 			else if (classified(item.key, item.value)) catalog_add(catalog, 'secret', item.value);
@@ -164,18 +466,52 @@ function discover(seed_values) {
 	}
 	for (let name in [ 'secrets', 'urls', 'ips', 'hosts', 'devices', 'ids' ])
 		sort(catalog[name], (left, right) => length(right) - length(left));
+	return !catalog.failed_closed;
+};
+
+function discover(seed_values) {
+	let catalog = {
+		secrets: [], urls: [], sensitive_urls: [], url_aliases: [],
+		ips: [], hosts: [], devices: [], ids: [],
+		count: 0, bytes: 0, failed_closed: false
+	};
+	discover_into(catalog, seed_values);
 	return catalog;
 };
 
-function replace_all(input, wanted, replacement) {
+function replacement_work() {
+	return { patterns: 0, matches: 0, variant_bytes: 0, failed: false };
+};
+
+function replace_all(input, wanted, replacement, work) {
+	if (!length(wanted))
+		return input;
+	if (++work.patterns > MAX_REPLACEMENT_PATTERNS) {
+		work.failed = true;
+		return null;
+	}
 	let output = '', rest = input;
-	while (length(wanted)) {
+	while (true) {
 		let position = index(rest, wanted);
-		if (position < 0) return output + rest;
+		if (position < 0) {
+			output += rest;
+			if (length(output) > MAX_TEXT_INPUT) {
+				work.failed = true;
+				return null;
+			}
+			return output;
+		}
+		if (++work.matches > MAX_REPLACEMENT_MATCHES) {
+			work.failed = true;
+			return null;
+		}
 		output += substr(rest, 0, position) + replacement;
+		if (length(output) > MAX_TEXT_INPUT) {
+			work.failed = true;
+			return null;
+		}
 		rest = substr(rest, position + length(wanted));
 	}
-	return input;
 };
 
 function label(labels, kind, value) {
@@ -189,12 +525,6 @@ function label(labels, kind, value) {
 	return labels[key];
 };
 
-function replace_catalog(input, values, labels, kind, replacement) {
-	for (let value in values)
-		input = replace_all(input, value, replacement == null ? label(labels, kind, value) : replacement);
-	return input;
-};
-
 function encoded(value, all) {
 	let output = '';
 	for (let offset = 0; offset < length(value); offset++) {
@@ -205,22 +535,38 @@ function encoded(value, all) {
 	return output;
 };
 
-function replace_variants(input, values, labels, kind, replacement) {
+function variant_add(variants, value, work) {
+	if (type(value) != 'string' || !length(value) || contains(variants, value))
+		return true;
+	work.variant_bytes += length(value);
+	if (work.variant_bytes > MAX_VARIANT_BYTES) {
+		work.failed = true;
+		return false;
+	}
+	push(variants, value);
+	return true;
+};
+
+function replace_variants(input, values, labels, kind, replacement, work) {
 	for (let value in values) {
 		let output = replacement == null ? label(labels, kind, value) : replacement;
-		input = replace_all(input, value, output);
-		input = replace_all(input, encoded(value, false), output);
-		input = replace_all(input, lc(encoded(value, false)), output);
-		input = replace_all(input, encoded(value, true), output);
-		input = replace_all(input, lc(encoded(value, true)), output);
+		let variants = [], partial = encoded(value, false), complete = encoded(value, true);
+		for (let variant in [ value, partial, lc(partial), complete, lc(complete) ])
+			if (!variant_add(variants, variant, work))
+				return null;
 		try {
 			let base64 = b64enc(value), urlsafe = replace(replace(base64, /\+/g, '-'), /\//g, '_');
-			input = replace_all(input, base64, output);
-			input = replace_all(input, urlsafe, output);
-			input = replace_all(input, replace(base64, /=+$/, ''), output);
-			input = replace_all(input, replace(urlsafe, /=+$/, ''), output);
+			for (let variant in [ base64, urlsafe, replace(base64, /=+$/, ''),
+				replace(urlsafe, /=+$/, '') ])
+				if (!variant_add(variants, variant, work))
+					return null;
 		}
 		catch (error) {}
+		for (let variant in variants) {
+			input = replace_all(input, variant, output, work);
+			if (input == null)
+				return null;
+		}
 	}
 	return input;
 };
@@ -230,53 +576,78 @@ function subscription_url(value) {
 		index(lc(value), 'subscription') >= 0 || match(value, /^https?:\/\/[^\/@]+:[^\/@]+@/);
 };
 
-function replace_urls(input, values, labels, mode) {
-	for (let value in values)
-		if (mode == 'silent' || subscription_url(value))
-			input = replace_variants(input, [ value ], labels, 'URL',
-				mode == 'silent' ? null : MASK);
-	return input;
-};
-
-function replace_percent_urls(input, labels, mode) {
-	let words = split(replace(input, /[[:space:]]/g, ' '), ' ');
-	for (let word in words) {
-		word = trim_token(word);
-		let candidate = word, suffixes = 0;
-		while (length(candidate) && suffixes++ < MAX_MARKER_SUFFIXES) {
-			candidate = trim_token(candidate);
-			let oversized = length(candidate) > MAX_PERCENT_TOKEN_LENGTH;
-			let bounded = oversized ? substr(candidate, 0, MAX_PERCENT_TOKEN_LENGTH) : candidate;
-			let decoded = percent_decoded(bounded);
-			if (decoded != bounded && match(decoded, /^https?:\/\/[^[:space:]]+$/) &&
-			    (mode == 'silent' || oversized || subscription_url(decoded))) {
-				input = replace_all(input, candidate,
-					mode == 'silent' ? label(labels, 'URL', decoded) : MASK);
-				break;
-			}
-			let separator = index(candidate, '=');
-			if (separator < 0) break;
-			candidate = substr(candidate, separator + 1);
+function replace_url_aliases(input, aliases, sensitive_urls, labels, mode, work) {
+	for (let alias in aliases)
+		if (mode == 'silent' || subscription_url(alias.canonical) ||
+		    contains(sensitive_urls, alias.canonical)) {
+			input = replace_all(input, alias.spelling,
+				mode == 'silent' ? label(labels, 'URL', alias.canonical) : MASK, work);
+			if (input == null)
+				return null;
 		}
-	}
 	return input;
 };
 
-function transform_text(mode, catalog, labels, value) {
+function replace_urls(input, values, sensitive_urls, labels, mode, work) {
+	for (let value in values)
+		if (mode == 'silent' || subscription_url(value) ||
+		    contains(sensitive_urls, value)) {
+			input = replace_variants(input, [ value ], labels, 'URL',
+				mode == 'silent' ? null : MASK, work);
+			if (input == null)
+				return null;
+		}
+	return input;
+};
+
+function transform_text(mode, catalog, labels, value, shared_work) {
 	if (type(value) != 'string' || mode == 'full') return value;
-	discover_text(catalog, value);
-	value = replace_percent_urls(value, labels, mode);
-	value = replace_urls(value, catalog.urls, labels, mode);
-	value = replace_variants(value, catalog.secrets, labels, 'REDACTED', MASK);
-	if (mode == 'lite') {
-		value = replace_variants(value, catalog.ips, labels, 'IP', MASK);
-		value = replace_variants(value, catalog.devices, labels, 'DEVICE', MASK);
-		return replace_variants(value, catalog.ids, labels, 'ID', MASK);
+	if (catalog.failed_closed || length(value) > MAX_TEXT_INPUT) {
+		fail_closed(catalog);
+		return MASK;
 	}
-	value = replace_variants(value, catalog.ips, labels, 'IP');
-	value = replace_variants(value, catalog.hosts, labels, 'HOST');
-	value = replace_variants(value, catalog.devices, labels, 'DEVICE');
-	return replace_variants(value, catalog.ids, labels, 'ID');
+	if (!discover_text(catalog, value))
+		return MASK;
+	for (let name in [ 'secrets', 'urls' ])
+		sort(catalog[name], (left, right) => length(right) - length(left));
+	let work = shared_work ?? replacement_work();
+	value = replace_url_aliases(value, catalog.url_aliases, catalog.sensitive_urls,
+		labels, mode, work);
+	if (value == null) {
+		fail_closed(catalog);
+		return MASK;
+	}
+	value = replace_urls(value, catalog.urls, catalog.sensitive_urls, labels, mode, work);
+	if (value == null) {
+		fail_closed(catalog);
+		return MASK;
+	}
+	value = replace_variants(value, catalog.secrets, labels, 'REDACTED', MASK, work);
+	if (value == null) {
+		fail_closed(catalog);
+		return MASK;
+	}
+	if (mode == 'lite') {
+		value = replace_variants(value, catalog.ips, labels, 'IP', MASK, work);
+		if (value != null)
+			value = replace_variants(value, catalog.devices, labels, 'DEVICE', MASK, work);
+		if (value != null)
+			value = replace_variants(value, catalog.ids, labels, 'ID', MASK, work);
+	}
+	else {
+		value = replace_variants(value, catalog.ips, labels, 'IP', null, work);
+		if (value != null)
+			value = replace_variants(value, catalog.hosts, labels, 'HOST', null, work);
+		if (value != null)
+			value = replace_variants(value, catalog.devices, labels, 'DEVICE', null, work);
+		if (value != null)
+			value = replace_variants(value, catalog.ids, labels, 'ID', null, work);
+	}
+	if (value == null || work.failed || length(value) > MAX_TEXT_INPUT) {
+		fail_closed(catalog);
+		return MASK;
+	}
+	return value;
 };
 
 function lite_system_interface(path, key, value) {
@@ -289,11 +660,12 @@ function lite_system_interface(path, key, value) {
 		parent == 'network' || parent == 'networks';
 };
 
-function transform(mode, catalog, labels, path, value) {
+function transform(mode, catalog, labels, path, value, work) {
 	if (mode == 'full') return value;
 	if (type(value) == 'array') {
 		let output = [];
-		for (let item in value) push(output, transform(mode, catalog, labels, path, item));
+		for (let item in value)
+			push(output, transform(mode, catalog, labels, path, item, work));
 		return output;
 	}
 	if (type(value) == 'object') {
@@ -318,18 +690,26 @@ function transform(mode, catalog, labels, path, value) {
 				}
 				else output[key] = MASK;
 			}
-			else output[key] = transform(mode, catalog, labels, key_path, item);
+			else output[key] = transform(mode, catalog, labels, key_path, item, work);
 		}
 		return output;
 	}
-	return transform_text(mode, catalog, labels, value);
+	return transform_text(mode, catalog, labels, value, work);
 };
 
 export function create(mode, seed_values) {
 	mode = enum_mode(mode);
-	let catalog = discover(seed_values), labels = {};
+	let catalog = discover(mode == 'full' ? [] : seed_values), labels = {};
 	return {
-		value: (path, value) => transform(mode, catalog, labels, path, value),
+		value: (path, value) => {
+			if (mode == 'full')
+				return value;
+			if (catalog.failed_closed || !discover_into(catalog, value))
+				return MASK;
+			let work = replacement_work();
+			let output = transform(mode, catalog, labels, path, value, work);
+			return catalog.failed_closed || work.failed ? MASK : output;
+		},
 		text: (path, value) => transform_text(mode, catalog, labels, value),
 		metadata: () => ({ mode, contains_secrets: mode == 'full', sharing_safe: mode != 'full' })
 	};
