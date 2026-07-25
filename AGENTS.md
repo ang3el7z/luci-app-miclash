@@ -39,5 +39,3 @@ Use the lowest-cost reliable setting. Default to Terra Medium for implementation
 ## Git, PR, and Security
 
 Use Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`, and `ci:`. Never put agent or AI-tool names (`codex`, `chatgpt`, `ai`) in branches, commits, or PR titles; use the task name. Keep commits scoped. Ignored `docs/` may contain local plans and specifications, but never force-add or commit it. Never commit tokens, subscription URLs, router credentials, generated reports, or live UCI state. PRs should state impact, safety, verification, and include LuCI screenshots.
-
-@RTK.md
