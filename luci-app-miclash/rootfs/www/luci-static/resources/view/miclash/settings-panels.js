@@ -4,8 +4,6 @@
 'require view.miclash.background-refresh';
 'require view.miclash.ui-shell';
 
-const MASK = '[REDACTED]';
-const DISPLAY_MASK = '********';
 const SOURCE = 'luci';
 const POLL_MS = 30000;
 const MAX_POLL_MS = 300000;
@@ -54,6 +52,10 @@ function normalizeTelegramIds(value) {
 	return Array.from(seen).join(', ');
 }
 function exactTelegramToken(value) { return /^(?:[1-9][0-9]{0,19}:[A-Za-z0-9_-]{8,128})$/.test(String(value || '').trim()); }
+function telegramTokenMask(length) {
+	const count = Number(length);
+	return Number.isSafeInteger(count) && count > 0 && count <= 149 ? '*'.repeat(count) : '';
+}
 function integer(value, bounds, name) {
 	const text = String(value == null ? '' : value).trim();
 	if (!/^[0-9]+$/.test(text)) throw new Error(_('%s must be an integer.').format(name));
@@ -91,8 +93,7 @@ function create(options) {
 	const api = options.api, doc = options.document || document, win = options.window || window;
 	if (!api || typeof api.memoryStatus !== 'function' || typeof api.memorySettings !== 'function' ||
 		typeof api.memoryResetBaseline !== 'function' || typeof api.telegram_status !== 'function' ||
-		typeof api.telegram_settings !== 'function' || typeof api.telegram_token_reveal !== 'function' ||
-		typeof api.telegram_test !== 'function' ||
+		typeof api.telegram_settings !== 'function' || typeof api.telegram_test !== 'function' ||
 		typeof api.notificationSettings !== 'function' || typeof api.testNotification !== 'function' ||
 		typeof api.settings_get !== 'function' ||
 		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
@@ -100,6 +101,7 @@ function create(options) {
 		dirty = false, retryMs = POLL_MS;
 	let active = false;
 	let hydrated = false;
+	let settingsReady = false, memoryReady = false, telegramReady = false;
 	let notificationTab = 'luci';
 	let state = { desired: {}, memory: {}, memorySettings: {}, telegram: {}, telegramSettings: {}, notifications: {} };
 	const cancels = new Set();
@@ -150,6 +152,7 @@ function create(options) {
 	}
 
 	function memorySection() {
+		if (!settingsReady || !memoryReady) return loadingPane(_('Memory monitoring'));
 		const desired = state.desired.memory || {}, current = state.memory || {};
 		const settings = Object.assign({}, Object.fromEntries(Object.entries(MEMORY_FIELDS).map(([ name, bound ]) => [ name, bound[2] ])),
 			state.memorySettings || {}, desired || {});
@@ -175,20 +178,30 @@ function create(options) {
 	}
 
 	function telegramSection() {
+		if (!settingsReady || !telegramReady) return loadingPane(_('Telegram'));
 		const desired = state.desired.telegram || {}, settings = state.telegramSettings || {}, status = state.telegram || {};
 		const userId = settings.user_id ? normalizeTelegramIds(settings.user_id) : '';
-		// telegram_settings always redacts the token field, including an empty one;
-		// only the dedicated status flag can tell whether a secret is configured.
-		const configured = status.configured === true || settings.token === MASK ||
-			desired.token === MASK;
+		const tokenMask = status.bot_configured === true ? telegramTokenMask(status.bot_length) : '';
+		const configured = tokenMask.length > 0;
 		const tokenInput = E('input', { 'id': 'sbox-telegram-token', 'type': 'password', 'class': 'cbi-input-text',
-			'value': configured ? DISPLAY_MASK : '', 'autocomplete': 'new-password',
-			'data-token-configured': configured ? 'true' : 'false' });
+			'value': tokenMask, 'autocomplete': 'new-password',
+			'data-token-mask': tokenMask });
 		const reveal = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral sbox-secret-reveal',
-			'data-action': 'telegram-token-reveal', 'aria-label': _('Show token'), 'aria-pressed': 'false' },
-			[ E('svg', { 'aria-hidden': 'true', 'viewBox': '0 0 24 24', 'focusable': 'false' }, [
-				E('path', { 'd': 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12zm10 3.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z' })
-			]) ]);
+			'data-action': 'telegram-token-visibility', 'aria-label': _('Show token'), 'aria-pressed': 'false',
+			'hidden': configured ? null : 'hidden' });
+		const reveal_icon = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		reveal_icon.setAttribute('aria-hidden', 'true');
+		reveal_icon.setAttribute('viewBox', '0 0 24 24');
+		reveal_icon.setAttribute('focusable', 'false');
+		reveal_icon.setAttribute('style', 'fill: none; stroke: currentColor; stroke-width: 2;');
+		const reveal_path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+		reveal_path.setAttribute('d', 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z');
+		const reveal_pupil = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
+		reveal_pupil.setAttribute('cx', '12');
+		reveal_pupil.setAttribute('cy', '12');
+		reveal_pupil.setAttribute('r', '3.5');
+		reveal_icon.append(reveal_path, reveal_pupil);
+		reveal.append(reveal_icon);
 		const tokenField = E('div', { 'class': 'sbox-management-field' }, [
 			E('label', { 'for': 'sbox-telegram-token' }, _('BotFather token')),
 			E('div', { 'class': 'sbox-secret-input' }, [ tokenInput, reveal ])
@@ -314,18 +327,19 @@ function create(options) {
 			memory.warmup_ms < memory.sample_interval_ms)
 			throw new Error(_('Memory expert settings are internally inconsistent.'));
 		const enabled = !!host.querySelector('#sbox-telegram-enabled')?.checked;
-		const token = String(host.querySelector('#sbox-telegram-token')?.value || '').trim();
+		const tokenInput = host.querySelector('#sbox-telegram-token');
+		const token = String(tokenInput?.value || '').trim();
+		const tokenMask = String(tokenInput?.dataset.tokenMask || '');
 		const userId = normalizeTelegramIds(host.querySelector('#sbox-telegram-user-id')?.value || '');
-		if (token !== DISPLAY_MASK && token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
+		if (token !== tokenMask && token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
 		const normalizedUserIds = userId ? normalizeTelegramIds(userId) : '';
-		const configured = state.telegram?.configured === true;
-		const hasToken = token === DISPLAY_MASK ? configured : exactTelegramToken(token);
+		const hasToken = token === tokenMask ? tokenMask.length > 0 : exactTelegramToken(token);
 		if (enabled && !(hasToken && normalizedUserIds))
 			throw new Error(_('Enabling Telegram requires a BotFather token and exact user IDs.'));
 		const telegram = { enabled, user_id: normalizedUserIds };
 		telegram.poll_timeout_seconds = integer(host.querySelector('#sbox-telegram-poll-timeout')?.value,
 			[ 5, 50 ], _('Telegram polling timeout'));
-		if (token !== DISPLAY_MASK) telegram.token = token;
+		if (token !== tokenMask) telegram.token = token;
 		const notifications = {
 			auto_hide: !!host.querySelector('#sbox-notification-auto-hide')?.checked
 		};
@@ -344,6 +358,7 @@ function create(options) {
 	function collectPatch() {
 		if (!host || destroyed) throw new Error(_('Settings panel is not available.'));
 		if (!hydrated) throw new Error(_('Settings panel is still loading.'));
+		if (!memoryReady || !telegramReady) throw new Error(_('Settings panel is still loading.'));
 		return formPatch();
 	}
 	async function markSaved() {
@@ -364,10 +379,20 @@ function create(options) {
 	}
 	function bind() {
 		const markDirty = () => { dirty = true; };
+		function updateTelegramTokenReveal() {
+			const input = host.querySelector('#sbox-telegram-token');
+			const reveal = host.querySelector('[data-action="telegram-token-visibility"]');
+			if (!input || !reveal) return;
+			const length = String(input.value || '').length;
+			reveal.hidden = !length;
+		}
 		for (const input of [ ...host.querySelectorAll('input'), ...host.querySelectorAll('select') ]) {
 			input.addEventListener('input', markDirty);
 			input.addEventListener('change', markDirty);
 		}
+		const telegramToken = host.querySelector('#sbox-telegram-token');
+		if (telegramToken) telegramToken.addEventListener('input', updateTelegramTokenReveal);
+		updateTelegramTokenReveal();
 		for (const tab of host.querySelectorAll('[data-notification-tab]'))
 			tab.addEventListener('click', () => {
 				const selected = tab.getAttribute('data-notification-tab');
@@ -386,26 +411,13 @@ function create(options) {
 			const actionName = button.getAttribute('data-action');
 			const testAction = [ 'telegram-test', 'notification-test' ].includes(actionName);
 			const run = () => withBusy(testAction ? null : button, async () => {
-				if (actionName === 'telegram-token-reveal') {
+				if (actionName === 'telegram-token-visibility') {
 					const input = host.querySelector('#sbox-telegram-token');
-					if (!input) return;
-					if (input.type === 'text') {
-						input.type = 'password';
-						input.value = input.dataset.tokenConfigured === 'true' ? DISPLAY_MASK : '';
-						delete input.dataset.originalTelegramToken;
-						button.setAttribute('aria-label', _('Show token'));
-						button.setAttribute('aria-pressed', 'false');
-						return;
-					}
-					if (input.dataset.tokenConfigured === 'true') {
-						const reply = await api.telegram_token_reveal();
-						if (!exactTelegramToken(reply?.token)) throw new Error(_('Telegram token is not configured.'));
-						input.value = reply.token;
-						input.dataset.originalTelegramToken = reply.token;
-					}
-					input.type = 'text';
-					button.setAttribute('aria-label', _('Hide token'));
-					button.setAttribute('aria-pressed', 'true');
+					if (!input || !input.value) return;
+					const visible = input.type !== 'text';
+					input.type = visible ? 'text' : 'password';
+					button.setAttribute('aria-label', visible ? _('Hide token') : _('Show token'));
+					button.setAttribute('aria-pressed', visible ? 'true' : 'false');
 				}
 				else if (actionName === 'memory-reset') {
 					await awaitOperation(await api.memoryResetBaseline(SOURCE), _('Resetting memory baseline…'));
@@ -432,14 +444,29 @@ function create(options) {
 		if (destroyed || !active && !force || doc.hidden && !force) return;
 		const token = ++generation;
 		try {
-			const replies = await Promise.all([ api.settings_get(), api.memoryStatus(), api.telegram_status() ]);
-			if (destroyed || token !== generation) return;
-			const desired = replies[0] || {};
-			state = { desired, memory: replies[1] || {}, memorySettings: desired.memory || {},
-				telegram: replies[2] || {}, telegramSettings: desired.telegram || {},
-				notifications: desired.notifications || {} };
-			hydrated = true;
-			publishNotificationSettings();
+			const repaint = () => {
+				if (destroyed || token !== generation || (dirty || busy) && !replaceForm) return;
+				paint();
+			};
+			const replies = await Promise.allSettled([
+				Promise.resolve().then(() => api.settings_get()).then((reply) => {
+					if (destroyed || token !== generation) return;
+					const desired = reply || {};
+					state = { ...state, desired, memorySettings: desired.memory || {},
+						telegramSettings: desired.telegram || {}, notifications: desired.notifications || {} };
+					settingsReady = true; hydrated = true; publishNotificationSettings(); repaint();
+				}),
+				Promise.resolve().then(() => api.memoryStatus()).then((reply) => {
+					if (destroyed || token !== generation) return;
+					state = { ...state, memory: reply || {} }; memoryReady = true; repaint();
+				}),
+				Promise.resolve().then(() => api.telegram_status()).then((reply) => {
+					if (destroyed || token !== generation) return;
+					state = { ...state, telegram: reply || {} }; telegramReady = true; repaint();
+				})
+			]);
+			const failed = replies.find((reply) => reply.status === 'rejected');
+			if (failed) throw failed.reason;
 			retryMs = POLL_MS;
 			if (replaceForm || (!dirty && !busy)) paint();
 		}
@@ -470,13 +497,12 @@ function create(options) {
 	}
 	doc.addEventListener('visibilitychange', visibilitychange);
 	return { mount, refresh, setActive, destroy, collectPatch, markSaved, ready: () => hydrated,
-		exactTelegramId, exactTelegramToken };
+		exactTelegramId, exactTelegramToken, telegramTokenMask };
 }
 
 return baseclass.extend({
 	create,
-	exactTelegramId,
-	exactTelegramToken,
+	exactTelegramId, exactTelegramToken, telegramTokenMask,
 	KNOWN_EVENTS,
 	LUCI_ONLY_EVENTS,
 	KNOWN_CHANNELS,

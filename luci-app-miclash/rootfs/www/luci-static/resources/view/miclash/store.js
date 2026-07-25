@@ -5,7 +5,7 @@ const CONFIG_PATH = '/opt/clash/config.yaml';
 const CONFIG_DIR = '/opt/clash';
 const MAIN_CONFIG_NAME = 'config.yaml';
 const CONFIG_PROFILES = [
-	{ name: 'config.yaml', label: 'Main Config #1' },
+	{ name: 'config.yaml', label: 'Config #1' },
 	{ name: 'config2.yaml', label: 'Config #2' },
 	{ name: 'config3.yaml', label: 'Config #3' }
 ];
@@ -152,7 +152,16 @@ async function ensureConfigProfilesReady(seedMainContent) {
 	return withApi(async (api) => {
 		const listed = await api.config_list();
 		const names = new Set((listed?.profiles || []).map((item) => typeof item === 'string' ? item : item?.profile));
-		for (const profile of CONFIG_PROFILES) if (!names.has(profile.name)) {
+		for (const profile of CONFIG_PROFILES) {
+			let exists = names.has(profile.name);
+			if (exists) {
+				try { await api.config_read(profile.name); }
+				catch (error) {
+					if (error?.code !== 'NOT_FOUND') throw error;
+					exists = false;
+				}
+			}
+			if (exists) continue;
 			const seed = String(seedMainContent || '').trimEnd() + '\n';
 			await waitOperation(api, await api.config_apply(profile.name, seed, 'luci'));
 		}

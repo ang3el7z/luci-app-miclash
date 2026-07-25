@@ -9,11 +9,11 @@
 	--sbox-muted: var(--text-color-medium, var(--text-color-low, GrayText));
 	--sbox-panel-soft: var(--background-color-low, var(--sbox-panel));
 	--sbox-border: var(--border-color-medium, var(--border-color-low, var(--sbox-muted)));
-	--sbox-accent: var(--primary-color, var(--link-color, #0969da));
-	--sbox-success: var(--success-color, var(--positive-color, #00ac59));
-	--sbox-danger: var(--error-color, #d15653);
-	--sbox-warn: var(--warning-color, #d6aa46);
-	--sbox-info: var(--info-color, #4fb5d8);
+	--sbox-accent: var(--primary-color-high);
+	--sbox-success: var(--success-color-high);
+	--sbox-danger: var(--error-color-high);
+	--sbox-warn: var(--warn-color-high);
+	--sbox-info: var(--primary-color-high);
 	--sbox-log-info: var(--sbox-info);
 	--sbox-code-key: var(--sbox-danger);
 	--sbox-code-string: var(--sbox-success);
@@ -91,7 +91,7 @@
 	content: '';
 	position: absolute;
 	inset: 0;
-	background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .18) 50%, transparent 80%);
+	background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--sbox-text) 18%, transparent) 50%, transparent 80%);
 	animation: sbox-shimmer 1.35s ease-in-out infinite;
 }
 .sbox-version-action-button {
@@ -296,13 +296,11 @@
 }
 .sbox-status-on::before {
 	animation: sbox-status-pulse 2.4s ease-in-out infinite;
-	box-shadow: 0 0 0 0 rgba(0, 172, 89, 0.28);
 	box-shadow: 0 0 0 0 color-mix(in srgb, var(--sbox-success) 32%, transparent);
 }
 @keyframes sbox-status-pulse {
 	0%, 100% {
 		opacity: 0.82;
-		box-shadow: 0 0 0 0 rgba(0, 172, 89, 0.24);
 		box-shadow: 0 0 0 0 color-mix(in srgb, var(--sbox-success) 28%, transparent);
 	}
 	50% {
@@ -368,11 +366,11 @@
 	border-color: color-mix(in srgb, var(--sbox-danger) 38%, transparent);
 }
 .sbox-guard-unknown {
-	color: var(--sbox-warning);
+	color: var(--sbox-warn);
 	background: var(--sbox-panel-soft);
-	border-color: var(--sbox-warning);
-	background: color-mix(in srgb, var(--sbox-warning) 10%, transparent);
-	border-color: color-mix(in srgb, var(--sbox-warning) 38%, transparent);
+	border-color: var(--sbox-warn);
+	background: color-mix(in srgb, var(--sbox-warn) 10%, transparent);
+	border-color: color-mix(in srgb, var(--sbox-warn) 38%, transparent);
 }
 .sbox-guard-loading {
 	color: var(--sbox-muted);
@@ -393,7 +391,7 @@
 	content: '';
 	position: absolute;
 	inset: 0;
-	background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .18) 50%, transparent 80%);
+	background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--sbox-text) 18%, transparent) 50%, transparent 80%);
 	animation: sbox-shimmer 1.35s ease-in-out infinite;
 }
 .sbox-guard-state {
@@ -650,11 +648,11 @@
 }
 .sbox-overview-card {
 	grid-column: span 4;
-	background: var(--sbox-panel);
+	background: var(--sbox-panel-soft);
 }
 @supports (background: color-mix(in srgb, CanvasText 10%, transparent)) {
 	.sbox-overview-card {
-		background: color-mix(in srgb, var(--sbox-panel) 92%, var(--sbox-text) 8%);
+		background: color-mix(in srgb, var(--sbox-panel-soft) 94%, var(--sbox-text) 6%);
 	}
 }
 .sbox-settings-summary-current {
@@ -926,7 +924,9 @@
 	display: block;
 	width: 18px;
 	height: 18px;
-	fill: currentColor;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2;
 }
 .sbox-telegram-fields {
 	display: grid;
@@ -1119,16 +1119,16 @@
 }
 .sbox-device-identity-warning {
 	padding: 8px 10px;
-	color: var(--sbox-warning);
-	background: color-mix(in srgb, var(--sbox-warning) 8%, transparent);
-	border: 1px solid color-mix(in srgb, var(--sbox-warning) 34%, var(--sbox-border));
+	color: var(--sbox-warn);
+	background: color-mix(in srgb, var(--sbox-warn) 8%, transparent);
+	border: 1px solid color-mix(in srgb, var(--sbox-warn) 34%, var(--sbox-border));
 	border-radius: 7px;
 }
 
 .sbox-management-warning {
-	border-left: .25rem solid #d97706;
+	border-left: .25rem solid var(--sbox-warn);
 	padding: .55rem .75rem;
-	background: rgba(217, 119, 6, .08);
+	background: color-mix(in srgb, var(--sbox-warn) 8%, transparent);
 }
 
 .sbox-settings-page button:focus-visible,
@@ -1420,7 +1420,7 @@
 	background: var(--sbox-panel);
 	border: 1px solid var(--sbox-border);
 	border-radius: 8px;
-	box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+	box-shadow: 0 8px 24px color-mix(in srgb, var(--sbox-text) 16%, transparent);
 }
 .sbox-settings-save-btn {
 	width: 100%;
@@ -1500,7 +1500,7 @@
 	content: '';
 	position: absolute;
 	inset: 0;
-	background: linear-gradient(100deg, transparent 25%, rgba(255, 255, 255, .11) 48%, transparent 72%);
+	background: linear-gradient(100deg, transparent 25%, color-mix(in srgb, var(--sbox-text) 11%, transparent) 48%, transparent 72%);
 	animation: sbox-shimmer 1.35s ease-in-out infinite;
 	pointer-events: none;
 }

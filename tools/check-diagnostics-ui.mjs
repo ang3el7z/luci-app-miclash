@@ -40,13 +40,13 @@ assert.doesNotMatch(configSource, /sbox-diagnostics-dashboard-card/,
 	'diagnostics must not become a standalone dashboard card');
 assert.match(css, /\.sbox-settings-summary-grid[\s\S]*grid-template-columns:\s*repeat\(2/);
 assert.match(css, /@media[^}]*max-width:[^}]*[\s\S]*\.sbox-settings-summary-grid[\s\S]*grid-template-columns:\s*1fr/);
-assert.match(css, /\.sbox-overview-card\s*\{[^}]*background:\s*var\(--sbox-panel\)/s,
-	'overview cards must be brighter than ordinary settings surfaces');
+assert.match(css, /\.sbox-overview-card\s*\{[^}]*background:\s*var\(--sbox-panel-soft\)/s,
+	'overview cards must use the theme-provided elevated surface');
 assert.match(css, /@supports[^}]*color-mix[\s\S]*\.sbox-overview-card[^}]*color-mix/s,
 	'overview brightness should use a supported theme-aware color mix');
 assert.match(css,
-	/color-mix\(in srgb, var\(--sbox-panel\) 92%, var\(--sbox-text\) 8%\)/,
-	'overview cards must remain theme-aware while using the approved brighter surface');
+	/color-mix\(in srgb, var\(--sbox-panel-soft\) 94%, var\(--sbox-text\) 6%\)/,
+	'overview cards must retain a subtle theme-aware distinction from the elevated surface');
 assert.match(css, /\.sbox-diagnostics-state\s*\{[^}]*color:\s*var\(--sbox-text\)/s,
 	'component values must use the same readable value color as adjacent overview cards');
 assert.match(css, /\.sbox-diagnostics-state-ok\s+\.sbox-diagnostics-state-icon\s*\{[^}]*var\(--sbox-success\)/s,

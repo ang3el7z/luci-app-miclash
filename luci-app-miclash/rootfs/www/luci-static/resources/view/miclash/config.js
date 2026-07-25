@@ -169,6 +169,7 @@ view_miclash_utils.bumpRpcTimeout();
 const appState = {
 	versions: { app: 'unknown', clash: 'unknown' },
 	kernelStatus: { installed: false, version: null },
+	serviceStateLoading: true,
 	serviceRunning: false,
 	serviceHealth: 'unknown',
 	serviceState: {},
@@ -755,6 +756,7 @@ function applyServiceState(status) {
 	const operation = getServiceOperationState(state);
 
 	appState.serviceState = state;
+	appState.serviceStateLoading = false;
 	appState.serviceRunning = service === 'running';
 	appState.serviceHealth = health || (appState.serviceRunning ? 'unknown' : 'stopped');
 	appState.serviceJobBusy = operation === 'running';
@@ -2279,7 +2281,7 @@ function buildPageHtml() {
 				'<div id="sbox-pane-control">' +
 					'<div class="sbox-row">' +
 						'<span id="sbox-status" class="sbox-status ' + (appState.serviceRunning ? 'sbox-status-on' : 'sbox-status-off') + '">' +
-							'<span id="sbox-status-label">' + safeText(appState.serviceRunning ? _('Service running') : _('Service stopped')) + '</span>' +
+							'<span id="sbox-status-label">' + safeText(appState.serviceStateLoading ? _('Loading service state…') : (appState.serviceRunning ? _('Service running') : _('Service stopped'))) + '</span>' +
 						'</span>' +
 						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-service-button"' + (appState.serviceRunning ? ' hidden' : '') + '>' + safeText(_('Start')) + '</button>' +
 						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop core')) + '</button>' +
@@ -2367,24 +2369,25 @@ function updateHeaderAndControlDom() {
 	const serviceBusy = !!appState.serviceActionBusy || !!appState.serviceJobBusy || !!appState.updateJobBusy;
 
 	if (status && statusLabel) {
-		status.classList.toggle('sbox-status-on', appState.serviceRunning);
-		status.classList.toggle('sbox-status-off', !appState.serviceRunning);
-		statusLabel.textContent = appState.serviceRunning ? _('Service running') : _('Service stopped');
+		status.classList.toggle('sbox-status-on', !appState.serviceStateLoading && appState.serviceRunning);
+		status.classList.toggle('sbox-status-off', !appState.serviceStateLoading && !appState.serviceRunning);
+		statusLabel.textContent = appState.serviceStateLoading ? _('Loading service state…') :
+			(appState.serviceRunning ? _('Service running') : _('Service stopped'));
 	}
 
 	if (startBtn) {
 		if (!serviceBusy) startBtn.hidden = appState.serviceRunning;
-		startBtn.disabled = serviceBusy || appState.serviceRunning;
+		startBtn.disabled = serviceBusy || appState.serviceStateLoading || appState.serviceRunning;
 	}
 
 	if (stopBtn) {
 		if (!serviceBusy) stopBtn.hidden = !appState.serviceRunning;
-		stopBtn.disabled = serviceBusy || !appState.serviceRunning;
+		stopBtn.disabled = serviceBusy || appState.serviceStateLoading || !appState.serviceRunning;
 	}
 
 	if (restartBtn) {
 		if (!serviceBusy) restartBtn.hidden = !appState.serviceRunning;
-		restartBtn.disabled = serviceBusy || !appState.serviceRunning;
+		restartBtn.disabled = serviceBusy || appState.serviceStateLoading || !appState.serviceRunning;
 	}
 
 	if (operationStatus) {
@@ -3432,6 +3435,7 @@ return view.extend({
 		appState.subscriptionUrl = '';
 		appState.configReady = false;
 		appState.systemMetadataReady = false;
+		appState.serviceStateLoading = true;
 		appState.settings = data[0] || {};
 		const networkSnapshot = data[1] || { interfaces: [], detectedLan: '', detectedWan: '' };
 		appState.interfaces = Array.isArray(networkSnapshot.interfaces) ? networkSnapshot.interfaces : [];
@@ -3458,9 +3462,9 @@ return view.extend({
 
 		pageRoot = E('div', { 'class': 'sbox-page' }, [
 			E('link', {
-				'rel': 'stylesheet',
-				'href': L.resource('view/miclash/style.css') + '?v=' +
-					encodeURIComponent(String(appState.versions?.app || 'unknown')) + '-ui2'
+			'rel': 'stylesheet',
+			'href': L.resource('view/miclash/style.css') + '?v=' +
+				encodeURIComponent(String(appState.versions?.app || 'unknown')) + '-ui3'
 			}),
 			E('div', { 'id': 'sbox-root' })
 		]);
@@ -3510,7 +3514,7 @@ return view.extend({
 				updateHeaderAndControlDom();
 			}
 		});
-		Promise.allSettled([ configHydration, initialHydration ]).then(() => {
+		initialHydration.finally(() => {
 			window.setTimeout(() => {
 				if (generation !== pageGeneration || !pageRoot || document.hidden) return;
 				notificationOwner.replace();

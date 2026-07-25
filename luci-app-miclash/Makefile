@@ -114,6 +114,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/mutation-lock.sh $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-remove $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-release $(1)/usr/share/miclash/
+	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-upgrade-recover $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/developer-remove $(1)/usr/share/miclash/
 	$(INSTALL_DIR) $(1)/usr/libexec/miclash
 	$(INSTALL_BIN) ./rootfs/usr/libexec/miclash/validate-config.uc $(1)/usr/libexec/miclash/
@@ -150,17 +151,45 @@ endef
 define Package/$(PKG_NAME)/preinst
 #!/bin/sh
 ROOT="$${IPKG_INSTROOT:-}"
+MICLASH_UPGRADE_STATE="$$ROOT/etc/miclash/package-upgrade-state"
+write_upgrade_state() {
+	[ -n "$$IPKG_INSTROOT" ] && return 0
+	[ -f /etc/config/miclash ] || return 0
+	guard_enabled=0
+	[ "$$(uci -q get miclash.guard.enabled 2>/dev/null || true)" = 1 ] && guard_enabled=1
+	service_running=0
+	/etc/init.d/clash running >/dev/null 2>&1 && service_running=1
+	( umask 077; printf 'version=1\nguard_enabled=%s\nservice_running=%s\n' "$$guard_enabled" "$$service_running" > "$$MICLASH_UPGRADE_STATE" ) || exit 1
+}
 mkdir -p "$$ROOT/opt/clash" 2>/dev/null || true
 mkdir -p "$$ROOT/etc/miclash" 2>/dev/null || exit 1
 chmod 0700 "$$ROOT/etc/miclash" 2>/dev/null || exit 1
 [ -f "$$ROOT/opt/clash/config.yaml" ] && cp -p "$$ROOT/opt/clash/config.yaml" \
 	"$$ROOT/opt/clash/.config.yaml.upgrade.bak"
+write_upgrade_state
 exit 0
 endef
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
 ROOT="$${IPKG_INSTROOT:-}"
+MICLASH_UPGRADE_STATE="$$ROOT/etc/miclash/package-upgrade-state"
+recover_upgrade_state() {
+	[ -e "$$MICLASH_UPGRADE_STATE" ] || return 0
+	[ -x /usr/share/miclash/package-upgrade-recover ] || return 1
+	/usr/share/miclash/package-upgrade-recover "$$MICLASH_UPGRADE_STATE" || return 1
+	return 0
+}
+restore_service_intent() {
+	[ -e "$$MICLASH_UPGRADE_STATE" ] || return 0
+	service_running="$$(sed -n 's/^service_running=\([01]\)$$/\1/p' "$$MICLASH_UPGRADE_STATE")"
+	case "$$service_running" in
+		0) /etc/init.d/clash stop || return 1 ;;
+		1) ;;
+		*) return 1 ;;
+	esac
+	rm -f "$$MICLASH_UPGRADE_STATE" || return 1
+}
 if [ -f "$$ROOT/opt/clash/.config.yaml.upgrade.bak" ]; then
 	mv "$$ROOT/opt/clash/.config.yaml.upgrade.bak" "$$ROOT/opt/clash/config.yaml"
 	FIRST_INSTALL=0
@@ -176,6 +205,8 @@ rm -rf "$$ROOT/opt/clash/history" "$$ROOT/etc/miclash/backups" || exit 1
 	/etc/init.d/miclash-guard start || exit 1
 	/etc/init.d/miclashd enable || exit 1
 	/etc/init.d/miclashd start || exit 1
+	recover_upgrade_state || exit 1
+	restore_service_intent || exit 1
 	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
 	rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*
 

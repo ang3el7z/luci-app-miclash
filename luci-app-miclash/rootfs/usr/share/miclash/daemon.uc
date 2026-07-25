@@ -675,7 +675,9 @@ export function compose(runtime, overrides) {
 		};
 		let telegram_domain = {
 			status: () => telegram_controller == null ? {
-				running: false, enabled: telegram_settings.enabled, configured: false
+				running: false, enabled: telegram_settings.enabled, configured: false,
+				bot_configured: type(telegram_settings.token) == 'string' && length(telegram_settings.token) > 0,
+				bot_length: type(telegram_settings.token) == 'string' ? length(telegram_settings.token) : 0
 			} : telegram_controller.status(),
 			settings: () => clone(telegram_settings),
 			test: () => telegram_controller != null && telegram_controller.test() === true,

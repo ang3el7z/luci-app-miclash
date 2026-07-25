@@ -1136,6 +1136,8 @@ export function create(app) {
 			running: state.running,
 			enabled: settings.enabled,
 			configured: settings.configured,
+			bot_configured: settings.token != null,
+			bot_length: settings.token != null ? length(settings.token) : 0,
 			last_update_id: state.last_update_id,
 			last_poll_at: state.last_poll_at,
 			last_success_at: state.last_success_at,

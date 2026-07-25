@@ -71,8 +71,6 @@ msgstr "Конфигурация Clash"
 msgid "Your current Clash config. When applied, the changes will be saved and the service will be restarted."
 msgstr "Ваша текущая конфигурация Clash. При применении изменения будут сохранены, а служба перезапущена."
 
-msgid "Save & Apply Configuration"
-msgstr "Сохранить и применить"
 
 msgid "Unable to start and enable service: %s"
 msgstr "Не удалось запустить и включить службу: %s"
@@ -198,8 +196,6 @@ msgstr "ТЕХНИЧЕСКИЙ"
 msgid "IP-CIDR List (fake-ip whitelist mode)"
 msgstr "Список IP-CIDR (режим fake-ip whitelist)"
 
-msgid "This list is used by the firewall (nftables/iptables) to mark traffic to specified IPs and subnets for proxying in fake-ip whitelist mode. Enter one IPv4 address or CIDR per line (e.g. 8.8.8.8 or 1.2.3.0/24). Lines starting with # are treated as comments. Saving applies changes immediately without restarting Mihomo."
-msgstr "Этот список используется файрволом (nftables/iptables) для маркировки трафика к указанным IP и подсетям для проксирования в режиме fake-ip whitelist. Вводите по одному IPv4-адресу или CIDR на строку (например, 8.8.8.8 или 1.2.3.0/24). Строки, начинающиеся с #, считаются комментариями. Сохранение применяет изменения немедленно без перезапуска Mihomo."
 
 msgid "IP-CIDR whitelist saved and firewall rules updated."
 msgstr "Белый список IP-CIDR сохранён, правила файрвола обновлены."
@@ -440,8 +436,6 @@ msgstr "Загрузка ядра mihomo..."
 msgid "Updating mihomo kernel on router..."
 msgstr "Обновление ядра mihomo на роутере..."
 
-msgid "Mihomo kernel downloaded and installed successfully!"
-msgstr "Ядро Mihomo успешно загружено и установлено!"
 
 msgid "Failed to download mihomo kernel: %s"
 msgstr "Не удалось загрузить ядро mihomo: %s"
@@ -461,8 +455,6 @@ msgstr "Последний релиз является предваритель�
 msgid "Download failed"
 msgstr "Загрузка не удалась"
 
-msgid "Extraction failed"
-msgstr "Распаковка не удалась"
 
 msgid "Failed to read /sys/class/net:"
 msgstr "Не удалось прочитать /sys/class/net:"
@@ -547,46 +539,30 @@ msgstr "Автоматически добавляет HWID-заголовки к
 msgid "User-Agent"
 msgstr "User-Agent"
 
-msgid "Application identifier sent in HTTP headers"
-msgstr "Идентификатор приложения в HTTP-заголовках"
 
 msgid "Device OS"
 msgstr "ОС устройства"
 
-msgid "Operating system name sent in headers"
-msgstr "Имя операционной системы в заголовках"
 
-msgid "Auto-generated values:"
-msgstr "Автоматически генерируемые значения:"
 
 msgid "Adding HWID headers to configuration..."
 msgstr "Добавление HWID-заголовков в конфигурацию..."
 
 ### MiClash UI strings ###
 
-msgid "Control Center"
-msgstr "Центр управления"
 
-msgid "Checking service..."
-msgstr "Проверка службы..."
 
 msgid "Configuration applied and service reloaded."
 msgstr "Конфигурация применена, служба перезагружена."
 
-msgid "Configuration saved."
-msgstr "Конфигурация сохранена."
 
 msgid "Download failed: %s"
 msgstr "Ошибка загрузки: %s"
 
-msgid "Download Subscription"
-msgstr "Скачать подписку"
 
 msgid "Downloaded file is empty."
 msgstr "Загруженный файл пуст."
 
-msgid "Editor with safe YAML validation: invalid changes are automatically rolled back."
-msgstr "Редактор с безопасной проверкой YAML: некорректные изменения автоматически откатываются."
 
 msgid "Failed to apply configuration: %s"
 msgstr "Не удалось применить конфигурацию: %s"
@@ -597,47 +573,23 @@ msgstr "Не удалось применить подписку: %s"
 msgid "Failed to initialize editor: %s"
 msgstr "Не удалось инициализировать редактор: %s"
 
-msgid "Failed to save configuration: %s"
-msgstr "Не удалось сохранить конфигурацию: %s"
 
-msgid "Failed to save URL: %s"
-msgstr "Не удалось сохранить URL: %s"
 
 msgid "Invalid subscription URL."
 msgstr "Некорректный URL подписки."
 
-msgid "Loading versions..."
-msgstr "Загрузка версий..."
 
-msgid "MiClash Control Center"
-msgstr "Центр управления MiClash"
 
-msgid "MiClash Log"
-msgstr "Журнал MiClash"
 
-msgid "MiClash: %s  |  Mihomo: %s  |  OpenWrt: %s"
-msgstr "MiClash: %s  |  Mihomo: %s  |  OpenWrt: %s"
 
-msgid "Open the remaining MiClash sections."
-msgstr "Откройте остальные разделы MiClash."
 
-msgid "Quick Navigation"
-msgstr "Быстрая навигация"
 
-msgid "Real-time Clash service logs."
-msgstr "Логи службы Clash в реальном времени."
 
 msgid "Restart"
 msgstr "Перезапустить"
 
-msgid "Save & Apply"
-msgstr "Сохранить и применить"
 
-msgid "Save URL"
-msgstr "Сохранить URL"
 
-msgid "Save your subscription URL and download config directly to /opt/clash/config.yaml with automatic YAML validation."
-msgstr "Сохраните URL подписки и загрузите конфиг напрямую в /opt/clash/config.yaml с автоматической проверкой YAML."
 
 msgid "Service running"
 msgstr "Служба запущена"
@@ -654,8 +606,6 @@ msgstr "Остановить"
 msgid "Stop core"
 msgstr "Остановить"
 
-msgid "Subscription downloaded, validated and applied."
-msgstr "Подписка загружена, проверена и применена."
 
 msgid "Subscription URL"
 msgstr "URL подписки"
@@ -666,14 +616,10 @@ msgstr "URL подписки пуст."
 msgid "Subscription URL saved."
 msgstr "URL подписки сохранен."
 
-msgid "Unable to toggle service: %s"
-msgstr "Не удалось переключить состояние службы: %s"
 
 msgid "Validate YAML"
 msgstr "Проверить YAML"
 
-msgid "YAML Configuration"
-msgstr "YAML-конфигурация"
 
 msgid "YAML validation failed: %s"
 msgstr "Проверка YAML не пройдена: %s"
@@ -710,8 +656,6 @@ msgstr "Конфиг"
 msgid "Logs"
 msgstr "Логи"
 
-msgid "Main Config"
-msgstr "Основной конфиг"
 
 msgid "Traffic Scope"
 msgstr "Область трафика"
@@ -770,8 +714,6 @@ msgstr "Хранить rules/providers в tmpfs"
 msgid "Inject HWID headers into proxy-providers"
 msgstr "Добавлять HWID-заголовки в proxy-providers"
 
-msgid "Clear Interface Selection"
-msgstr "Очистить выбор интерфейсов"
 
 msgid "Mode: Exclude (proxy all except selected interfaces)"
 msgstr "Режим: исключения (проксировать всё, кроме выбранных интерфейсов)"
@@ -785,11 +727,7 @@ msgstr "Режим прокси: %s"
 msgid "Tun stack: %s"
 msgstr "Стек TUN: %s"
 
-msgid "Refresh"
-msgstr "Обновить"
 
-msgid "Kernel"
-msgstr "Ядро"
 
 msgid "Status: %s"
 msgstr "Статус: %s"
@@ -833,16 +771,12 @@ msgstr "Настройки сохранены, но перезапустить �
 msgid "Failed to refresh protection rules."
 msgstr "Не удалось обновить правила защиты."
 
-msgid "Kernel installed and service restarted."
-msgstr "Ядро установлено, служба перезапущена."
 
-msgid "Kernel installed, but failed to restart service: %s"
-msgstr "Ядро установлено, но перезапустить службу не удалось: %s"
 
 ### Multi-config profiles (config.js) ###
 
-msgid "Main Config #1"
-msgstr "Основной конфиг #1"
+msgid "Config #1"
+msgstr "Конфиг #1"
 
 msgid "Config #2"
 msgstr "Конфиг #2"
@@ -918,8 +852,6 @@ msgstr "Не удалось загрузить информацию о ядре:
 msgid "Failed to open rulesets: %s"
 msgstr "Не удалось открыть списки правил: %s"
 
-msgid "Failed to refresh logs: %s"
-msgstr "Не удалось обновить журналы: %s"
 
 msgid "Failed to save IP-CIDR list: %s"
 msgstr "Не удалось сохранить список IP-CIDR: %s"
@@ -957,14 +889,10 @@ msgstr "Интерфейсы вручную: %s"
 msgid "Mihomo kernel downloaded and installed."
 msgstr "Ядро Mihomo загружено и установлено."
 
-msgid "Downloading MiClash package..."
-msgstr "Загрузка пакета MiClash..."
 
 msgid "Updating MiClash package on router..."
 msgstr "Обновление пакета MiClash на роутере..."
 
-msgid "MiClash package downloaded and installed."
-msgstr "Пакет MiClash загружен и установлен."
 
 msgid "MiClash package installed. Reloading interface..."
 msgstr "Пакет MiClash установлен. Перезагрузка интерфейса..."
@@ -984,11 +912,7 @@ msgstr "Не найден поддерживаемый пакетный мене
 msgid "Failed to update package index."
 msgstr "Не удалось обновить индекс пакетов."
 
-msgid "Failed to install MiClash dependencies."
-msgstr "Не удалось установить зависимости MiClash."
 
-msgid "Failed to install MiClash package."
-msgstr "Не удалось установить пакет MiClash."
 
 msgid "Command failed"
 msgstr "Команда завершилась ошибкой"
@@ -1062,8 +986,6 @@ msgstr "Не удалось прочитать загруженный файл"
 msgid "Unavailable"
 msgstr "Недоступно"
 
-msgid "Updated: %s"
-msgstr "Обновлено: %s"
 
 msgid "Virtual"
 msgstr "Виртуальные"
@@ -1077,8 +999,6 @@ msgstr "Проверка YAML завершилась ошибкой."
 msgid "Client devices only through MiClash (beta)"
 msgstr "Устройства только через MiClash (beta)"
 
-msgid "Blocks direct external traffic from clients. If MiClash is stopped or fails, the internet is blocked while local network access remains available."
-msgstr "Блокирует прямой внешний трафик от клиентов. Если MiClash остановлен или упал, интернет блокируется, а доступ к локальной сети остаётся доступным."
 
 msgid "Guard"
 msgstr "Защита"
@@ -1092,8 +1012,6 @@ msgstr "ВЫКЛ"
 msgid "Auto-hide notifications"
 msgstr "Автоматически скрывать уведомления"
 
-msgid "Release channel"
-msgstr "Канал релизов"
 
 msgid "Release channels"
 msgstr "Каналы релизов"
@@ -1104,11 +1022,7 @@ msgstr "Последний"
 msgid "Pre-release"
 msgstr "Предрелиз"
 
-msgid "Release only"
-msgstr "Только релизы"
 
-msgid "Release + pre-release"
-msgstr "Релизы + pre-release"
 
 msgid "Support the author"
 msgstr "Поддержать автора"
@@ -2506,3 +2420,6 @@ msgid "Validating report"
 msgstr "Проверка отчёта"
 msgid "Diagnostics"
 msgstr "Диагностика"
+
+msgid "Loading service state…"
+msgstr "Загрузка состояния службы…"

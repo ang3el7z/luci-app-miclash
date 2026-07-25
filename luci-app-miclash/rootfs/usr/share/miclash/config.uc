@@ -179,6 +179,8 @@ export function create(runtime, operations) {
 		let before = runtime.fs.lstat(path);
 		let content = runtime.fs.readfile(path);
 		let after = runtime.fs.lstat(path);
+		if (before == null || after == null || type(content) != 'string')
+			errors.fail('NOT_FOUND');
 		let hash = type(content) == 'string' ? runtime.digest.sha256(content) : null;
 		if (!same_identity(before, after) || runtime.fs.realpath(path) != path ||
 		    hash == null || runtime.digest.sha256_file(path) != hash)
@@ -285,9 +287,14 @@ export function create(runtime, operations) {
 	};
 	function activation(ctx, profile, content) {
 		return with_candidate(ctx, profile, content, (candidate, candidate_hash) => {
-			let previous = read_active_state(profile);
-			let recover_service = recovery_required(runtime.service, profile);
-			assert_active_state(profile, previous);
+			let previous = null;
+			try { previous = read_active_state(profile); }
+			catch (error) {
+				if (errors.normalize(error).code != 'NOT_FOUND')
+					errors.fail(errors.normalize(error).code);
+			}
+			let recover_service = previous != null && recovery_required(runtime.service, profile);
+			if (previous != null) assert_active_state(profile, previous);
 			storage.atomic_write(runtime, active_path(profile), candidate, 0o600);
 			record_active(profile, candidate_hash, ctx.id);
 			if (recover_service && !healthy(runtime.service, profile, previous.content)) {

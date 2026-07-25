@@ -73,6 +73,21 @@ assert_equal(finish(env, applied).state, 'success');
 assert_equal(env.fs.readfile('/opt/clash/config.yaml'), fixture('valid.yaml'));
 assert_equal(env.cfg.detect_external('config.yaml').changed, false);
 
+// A clean installation may contain only the main profile. Initializing an
+// additional profile must create it after validation without touching Mihomo.
+let missing_profile_recovery_calls = 0;
+let missing_profile = environment({
+	observe: () => ({ state: 'running', running: true }),
+	recover: () => { missing_profile_recovery_calls++; return { ok: true }; },
+	reload: () => true,
+	health: () => true
+}, (fs) => fs.unlink('/opt/clash/config2.yaml'));
+let created_profile = missing_profile.cfg.apply('config2.yaml', fixture('valid.yaml'), 'luci');
+let created_profile_result = finish(missing_profile, created_profile);
+assert_equal(created_profile_result.state, 'success', sprintf('%J', created_profile_result));
+assert_equal(missing_profile.fs.readfile('/opt/clash/config2.yaml'), fixture('valid.yaml'));
+assert_equal(missing_profile_recovery_calls, 0);
+
 // Applying a validated profile while Mihomo is intentionally stopped must
 // commit the file without starting or recovering the service.
 let stopped_recovery_calls = 0;

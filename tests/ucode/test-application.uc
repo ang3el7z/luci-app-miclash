@@ -14,6 +14,7 @@ let operations = {
 };
 let actions = [];
 let readiness_deadlines = [];
+let service_stages = [];
 let service = {
 	start: (profile) => push(actions, 'start:' + profile),
 	stop: (profile) => push(actions, 'stop:' + profile),
@@ -146,11 +147,16 @@ for (let action in [ 'start', 'stop', 'reload', 'restart' ]) {
 	let record = app['service_' + action]('config.yaml', 'luci');
 	assert_equal(length(submitted), before + 1);
 	assert_equal(record.id, submitted[length(submitted) - 1].record.id);
-	submitted[length(submitted) - 1].worker({ stage: () => null });
+	submitted[length(submitted) - 1].worker({ stage: (name) => push(service_stages, name) });
 }
 assert_equal(join(',', actions),
 	'start:config.yaml,stop:config.yaml,reload:config.yaml,restart:config.yaml');
 assert_equal(join(',', readiness_deadlines), '31000,6000,31000,31000');
+assert_equal(join(',', service_stages),
+	'service_start,service_start_dispatched,service_start_readiness,ready,' +
+	'service_stop,service_stop_dispatched,service_stop_readiness,ready,' +
+	'service_reload,service_reload_dispatched,service_reload_readiness,ready,' +
+	'service_restart,service_restart_dispatched,service_restart_readiness,ready');
 let network_recovery = app.network_recover('luci');
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(network_recovery.id, submitted[length(submitted) - 1].record.id);

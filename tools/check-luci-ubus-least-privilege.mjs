@@ -16,7 +16,7 @@ const expectedNames = 'status,overview,health,operation_get,operation_list,' +
 	'subscription_get,subscription_set,subscription_update,update_release,update_miclash,' +
 	'update_mihomo,update_rollback_mihomo,memory_status,memory_reset_baseline,memory_settings,' +
 	'diagnostics_summary,diagnostics_create_report,diagnostics_route_test,' +
-	'telegram_status,telegram_settings,telegram_token_reveal,telegram_test,telegram_ingest,' +
+	'telegram_status,telegram_settings,telegram_test,telegram_ingest,' +
 	'devices_list,devices_timezones,devices_policy_list,devices_policy_set,devices_policy_delete,' +
 	'notifications_settings,notifications_test,notifications_list,logs_read,system_info,' +
 	'network_interfaces,ruleset_list,ruleset_read,ruleset_write,ruleset_delete,' +
@@ -32,7 +32,6 @@ const expectedRead = new Set([
 ]);
 const secretBearing = new Set([
 	'config_read',
-	'telegram_token_reveal',
 	'transfer_begin', 'transfer_write', 'transfer_read', 'transfer_finish', 'transfer_abort'
 ]);
 

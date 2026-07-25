@@ -367,6 +367,15 @@ for (let settings in [
 	assert_equal(index(encoded, 'missing-user-secret'), -1);
 }
 
+// The UI needs to distinguish a saved token from a fully configured bot.
+let token_only = environment({ settings: {
+	telegram: { enabled: true, token: '123456:missing-user-secret', user_id: '' }
+} });
+let token_only_status = telegram.create(token_only.app).status();
+assert_equal(token_only_status.configured, false);
+assert_equal(token_only_status.bot_configured, true);
+assert_equal(token_only_status.bot_length, 26);
+
 // Authorization accepts one normalized ID and private messages only.
 let authorized = environment();
 let authorized_controller = telegram.create(authorized.app);

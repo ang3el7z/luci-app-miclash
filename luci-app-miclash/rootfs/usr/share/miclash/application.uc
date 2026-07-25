@@ -86,6 +86,8 @@ export function create(dependencies) {
 				else
 					dependencies.service.restart_service(profile);
 
+				ctx.stage('service_' + action + '_dispatched', 45, '');
+				ctx.stage('service_' + action + '_readiness', 70, '');
 				let ready = dependencies.service.wait_ready(
 					dependencies.clock.now() + (action == 'stop'
 						? SERVICE_STOP_TIMEOUT_MS : SERVICE_READY_TIMEOUT_MS), profile,
@@ -246,11 +248,6 @@ export function create(dependencies) {
 		notifications_list: (arguments) => dependencies.notifications.list(arguments),
 		telegram_status: () => dependencies.telegram.status(),
 		telegram_settings: () => dependencies.telegram.settings(),
-		telegram_token_reveal: () => {
-			let settings = dependencies.telegram.settings();
-			let token = type(settings?.token) == 'string' ? settings.token : '';
-			return { configured: length(token) > 0, token };
-		},
 		telegram_test: () => dependencies.telegram.test() === true,
 		set_draining: (value) => {
 			if (type(value) != 'bool')

@@ -367,13 +367,14 @@ function create(options) {
 		const diagnosticActions = [ actionButton(_('Diagnostics'), 'download-report') ];
 		const componentRows = COMPONENTS.filter(([ name ]) => name !== 'guard').map(([ name, label ]) => {
 			let componentState = summary.components?.[name]?.state ?? health[name]?.state;
+			const guardEnabled = summary.components?.guard?.state === 'enabled';
 			if (name === 'mihomo' && !componentState && typeof serviceRunning === 'boolean')
 				componentState = serviceRunning ? 'running' : 'stopped';
 			if (name !== 'mihomo' && !componentState && serviceState === 'stopped')
 				componentState = 'inactive';
 			return E('div', { 'class': 'sbox-diagnostics-row' }, [
 				E('span', { 'class': 'sbox-diagnostics-label' }, label()),
-				statusNode(label(), componentState)
+				statusNode(label(), componentState, name === 'firewall' && guardEnabled && componentState === 'ready' ? _('Ready') + '*' : null)
 			]);
 		});
 		for (const [ label, presentation ] of [

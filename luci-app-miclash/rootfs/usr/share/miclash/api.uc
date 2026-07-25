@@ -110,11 +110,13 @@ function telegram_status_value(app) {
 		return status;
 	}
 	let settings = app.settings_get()?.telegram;
+	let token = type(settings?.token) == 'string' ? settings.token : '';
 	return {
 		running: false,
 		enabled: settings?.enabled === true,
-		configured: type(settings?.token) == 'string' && length(settings.token) > 0 &&
-			type(settings?.user_id) == 'string' && length(settings.user_id) > 0
+		configured: length(token) > 0 && type(settings?.user_id) == 'string' && length(settings.user_id) > 0,
+		bot_configured: length(token) > 0,
+		bot_length: length(token)
 	};
 };
 
@@ -750,13 +752,6 @@ export function method_table(app, transfers) {
 		telegram_settings: method(empty, (arguments) => {
 			exact(arguments, {});
 			return telegram_settings_value(app);
-		}),
-		telegram_token_reveal: method(empty, (arguments) => {
-			exact(arguments, {});
-			let revealed = type(app.telegram_token_reveal) == 'function'
-				? app.telegram_token_reveal() : {};
-			let token = type(revealed?.token) == 'string' ? revealed.token : '';
-			return { configured: length(token) > 0, token };
 		}),
 		telegram_test: method(empty, (arguments) => {
 			exact(arguments, {});

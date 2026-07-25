@@ -34,7 +34,7 @@ for (const [name, source] of Object.entries({ settings, devices })) {
 
 for (const token of [
 	'memoryStatus', 'memorySettings', 'memoryResetBaseline', 'telegram_status',
-	'telegram_settings', 'telegram_token_reveal', 'telegram_test', 'notificationSettings', 'testNotification',
+	'telegram_settings', 'telegram_test', 'notificationSettings', 'testNotification',
 	'settings_get', 'collectPatch', 'markSaved', 'Expert settings', 'Reset baseline',
 	'BotFather token', 'Allowed Telegram user ID', 'Send test', 'KNOWN_EVENTS',
 	'MEMORY_LABELS', 'EVENT_LABELS', 'visibilitychange', 'destroy'
@@ -89,8 +89,10 @@ assert.match(settings, /configured === true[\s\S]*action\(_\('Send test'\), 'not
 	'notification test visibility must depend on persisted channel state');
 assert.match(settings, /\[\s*'telegram-test', 'notification-test'\s*\]\.includes\(actionName\)[\s\S]*withButtons\(button, run\)/,
 	'all test actions need button-local busy feedback');
-assert.match(settings, /E\('svg',[\s\S]*viewBox[\s\S]*E\('path'/,
-	'Telegram token reveal must use a centered eye icon');
+assert.match(settings, /doc\.createElementNS\('http:\/\/www\.w3\.org\/2000\/svg', 'svg'\)[\s\S]*createElementNS[\s\S]*'path'[\s\S]*createElementNS[\s\S]*'circle'/,
+	'Telegram token reveal must create real SVG eye geometry');
+assert.match(settings, /setAttribute\('style', 'fill: none; stroke: currentColor; stroke-width: 2;'\)/,
+	'Telegram token reveal must keep its outline when a LuCI theme overrides SVG styles');
 assert.match(settings,
 	/const userField = E\('div',[\s\S]*Allowed Telegram user IDs[\s\S]*data-telegram-id-hint[\s\S]*List IDs separated by commas\./,
 	'Telegram ID guidance must sit directly inside the allowed-user field');
@@ -100,14 +102,20 @@ assert.doesNotMatch(settings, /Save management settings|data-action[^\n]*save/,
 	'management panel still owns a separate save button');
 assert.doesNotMatch(settings, /backup_outcome|Backup result/,
 	'removed Backup notification remains in Settings');
-assert.match(settings, /'value': configured \? DISPLAY_MASK : ''/,
-	'stored Telegram token must render only as a masked sentinel');
-assert.match(settings, /const DISPLAY_MASK = '\*{8}'/,
-	'stored Telegram token must visibly render as eight stars');
+assert.match(settings, /function telegramTokenMask\(length\)/,
+	'Telegram token mask must derive its length from backend metadata');
+assert.match(settings, /status\.bot_configured === true \? telegramTokenMask\(status\.bot_length\) : ''/,
+	'Telegram token display must use the safe token-specific status fields');
+assert.match(settings, /function updateTelegramTokenReveal\(\)/,
+	'Telegram token reveal must track whether the current field is empty');
+assert.match(settings, /reveal\.hidden = !length;/,
+	'Telegram token reveal must disappear when the current field is empty');
+assert.doesNotMatch(settings, /DISPLAY_MASK/,
+	'Telegram token display must not use a fixed-length mask');
 assert.doesNotMatch(settings, /Poller is running|Poller is stopped/,
 	'Telegram poller implementation status must not clutter Settings');
-assert.match(settings, /await api\.telegram_token_reveal\(\)/,
-	'token reveal must use the dedicated authenticated RPC method');
+assert.doesNotMatch(settings, /telegram_token_reveal|telegram-token-reveal/,
+	'Telegram token visibility must never fetch a saved token from the backend');
 assert.doesNotMatch(settings, /Number\([^\n]*user[_-]?id|parseInt\([^\n]*user[_-]?id/i,
 	'Telegram IDs must stay exact decimal strings beyond Number.MAX_SAFE_INTEGER');
 
@@ -147,6 +155,8 @@ assert.equal(module.exactTelegramId('9007199254740993123456789'), true);
 assert.equal(module.exactTelegramId('9e18'), false);
 assert.equal(module.exactTelegramToken('123456:telegram-secret'), true);
 assert.equal(module.exactTelegramToken('not-a-token'), false);
+assert.equal(module.telegramTokenMask(0), '');
+assert.equal(module.telegramTokenMask(22), '**********************');
 assert.equal(Object.keys(module.MEMORY_FIELDS).length, 14);
 assert.match(notifications, /let generation = ''/,
 	'notification polling must not send a JSON null through the string ubus signature');

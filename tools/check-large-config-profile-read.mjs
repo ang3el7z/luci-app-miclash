@@ -33,8 +33,10 @@ check(readConfigBlock.includes('api.config_read(') && !readConfigBlock.includes(
 check(store.includes('async function pathExists(') && store.includes('api.config_list()'),
 	'Store must check profile existence through the typed config inventory.');
 
-check(!ensureProfilesBlock.includes('fs.') && ensureProfilesBlock.includes('api.config_list()'),
-	'ensureConfigProfilesReady must use backend-owned profile inventory and mutations.');
+check(!ensureProfilesBlock.includes('fs.') && ensureProfilesBlock.includes('api.config_list()') &&
+	ensureProfilesBlock.includes('api.config_read(profile.name)') &&
+	ensureProfilesBlock.includes("error?.code !== 'NOT_FOUND'"),
+	'ensureConfigProfilesReady must verify listed profiles exist and seed only missing files.');
 
 check(!acl.includes('"file"') && acl.includes('"config_read"') && acl.includes('"config_apply"'),
 	'ACL must grant typed config methods without filesystem or shell authority.');

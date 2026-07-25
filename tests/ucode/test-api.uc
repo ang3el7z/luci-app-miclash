@@ -40,7 +40,6 @@ let app = {
 	}),
 	diagnostics_route_test: () => ({ decision: 'proxy' }),
 	telegram_status: () => ({ running: true }), telegram_settings: () => ({ token: '123:secret' }),
-	telegram_token_reveal: () => ({ token: '123:secret' }),
 	telegram_test: () => true, devices_list: () => [], devices_timezones: () => [ 'UTC' ],
 	telegram_ingest: () => ({ handled: true, retryable: false, last_update_id: 1 }),
 	devices_policy_list: () => [], devices_policy_set: () => operation('devices.set'),
@@ -79,7 +78,7 @@ let fixture = json(require('fs').readfile('tests/fixtures/api/methods.json'));
 assert_equal(join(',', sort(keys(methods))), join(',', sort(map(fixture.methods, (entry) => entry.name))));
 for (let removed in [ 'config_read_draft', 'config_save_draft', 'history_list',
 	'history_diff', 'history_open_draft', 'history_restore', 'backup_list',
-	'backup_create', 'backup_inspect', 'backup_restore' ])
+	'backup_create', 'backup_inspect', 'backup_restore', 'telegram_token_reveal' ])
 	assert_equal(methods[removed], null);
 
 assert_equal(methods.status.call({ args: {} }).state, 'ready');
@@ -94,7 +93,6 @@ assert_equal(methods.config_apply.call({ args: {
 	profile: '../config.yaml', content: 'mode: rule\n', source: 'luci'
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(methods.telegram_settings.call({ args: {} }).token, '[REDACTED]');
-assert_equal(methods.telegram_token_reveal.call({ args: {} }).token, '123:secret');
 let safe_settings = methods.settings_get.call({ args: {} });
 assert_equal(safe_settings.telegram.token, '[REDACTED]');
 assert_equal(safe_settings.notifications.syslog_events[0], 'guard_outage');

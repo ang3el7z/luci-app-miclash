@@ -157,6 +157,7 @@ function create(options) {
 	let active = false;
 	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, pendingMac = '', retryMs = POLL_MS;
 	let hydrated = false;
+	let devicesReady = false, policiesReady = false, timezonesReady = false;
 	const policyDrafts = createPolicyDrafts();
 	let vendorDatabase = null, vendorLoadState = 'idle';
 	const cancels = new Set();
@@ -413,15 +414,34 @@ function create(options) {
 		if (destroyed || !active && !force || doc.hidden && !force) return;
 		const token = ++generation;
 		try {
-			const replies = await Promise.all([ api.devicesList(), api.devicePolicies(), api.deviceTimezones() ]);
-			if (destroyed || token !== generation) return;
-			const zones = Array.isArray(replies[2]) ? replies[2] : replies[2]?.timezones;
-			if (!Array.isArray(zones) || !zones.length || zones.length > 512 || zones[0] !== 'UTC' ||
-				zones.some((name, index) => typeof name !== 'string' || name.length > 64 || zones.indexOf(name) !== index))
-				throw new Error(_('Invalid timezone response.'));
-			devices = Array.isArray(replies[0]) ? replies[0] : (Array.isArray(replies[0]?.devices) ? replies[0].devices : []);
-			policies = Array.isArray(replies[1]) ? replies[1] : (Array.isArray(replies[1]?.policies) ? replies[1].policies : []);
-			timezones = zones.slice(); hydrated = true; retryMs = POLL_MS; paint(); ensureVendorDatabase();
+			const repaint = () => {
+				if (destroyed || token !== generation) return;
+				hydrated = devicesReady && policiesReady; paint();
+				if (hydrated) ensureVendorDatabase();
+			};
+			const replies = await Promise.allSettled([
+				Promise.resolve().then(() => api.devicesList()).then((reply) => {
+					if (destroyed || token !== generation) return;
+					devices = Array.isArray(reply) ? reply : (Array.isArray(reply?.devices) ? reply.devices : []);
+					devicesReady = true; repaint();
+				}),
+				Promise.resolve().then(() => api.devicePolicies()).then((reply) => {
+					if (destroyed || token !== generation) return;
+					policies = Array.isArray(reply) ? reply : (Array.isArray(reply?.policies) ? reply.policies : []);
+					policiesReady = true; repaint();
+				}),
+				Promise.resolve().then(() => api.deviceTimezones()).then((reply) => {
+					if (destroyed || token !== generation) return;
+					const zones = Array.isArray(reply) ? reply : reply?.timezones;
+					if (!Array.isArray(zones) || !zones.length || zones.length > 512 || zones[0] !== 'UTC' ||
+						zones.some((name, index) => typeof name !== 'string' || name.length > 64 || zones.indexOf(name) !== index))
+						throw new Error(_('Invalid timezone response.'));
+					timezones = zones.slice(); timezonesReady = true; repaint();
+				})
+			]);
+			const failed = replies.find((reply) => reply.status === 'rejected');
+			if (failed) throw failed.reason;
+			retryMs = POLL_MS;
 		}
 		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
 		finally { if (!destroyed && token === generation) schedule(); }

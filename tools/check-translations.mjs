@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const viewDir = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash';
+const storePath = viewDir + '/store.js';
 const locales = [
 	'luci-app-miclash/rootfs/po/ru/miclash.po',
 	'luci-app-miclash/rootfs/po/zh-cn/miclash.po'
@@ -35,6 +36,24 @@ function extractLocalizedStrings(file) {
 			file,
 			line,
 			text: unquoteJs(match[1], match[2])
+		});
+	}
+
+	return strings;
+}
+
+function extractConfigProfileLabels(file) {
+	const source = readFileSync(file, 'utf8');
+	const strings = [];
+	const pattern = /\{\s*name:\s*(['"])(config(?:2|3)?\.yaml)\1,\s*label:\s*(['"])((?:\\.|(?!\3)[\s\S])*?)\3\s*\}/g;
+	let match;
+
+	while ((match = pattern.exec(source))) {
+		const line = source.slice(0, match.index).split(/\r?\n/).length;
+		strings.push({
+			file,
+			line,
+			text: unquoteJs(match[3], match[4])
 		});
 	}
 
@@ -96,7 +115,10 @@ function placeholders(text) {
 	return matches ? matches.join(' ') : '';
 }
 
-const references = walkJs(viewDir).flatMap(extractLocalizedStrings);
+const references = [
+	...walkJs(viewDir).flatMap(extractLocalizedStrings),
+	...extractConfigProfileLabels(storePath)
+];
 const unique = [...new Map(references.map((ref) => [ref.text, ref])).values()]
 	.sort((a, b) => a.text.localeCompare(b.text));
 

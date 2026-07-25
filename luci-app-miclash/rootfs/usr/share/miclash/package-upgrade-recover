@@ -1,0 +1,33 @@
+#!/bin/sh
+
+set -eu
+
+state_file="${1:-/etc/miclash/package-upgrade-state}"
+[ ! -L "$state_file" ] && [ -f "$state_file" ] || exit 1
+[ "$(stat -c '%u:%a:%h' "$state_file" 2>/dev/null)" = '0:600:1' ] || exit 1
+
+guard_enabled="$(sed -n 's/^guard_enabled=\([01]\)$/\1/p' "$state_file")"
+service_running="$(sed -n 's/^service_running=\([01]\)$/\1/p' "$state_file")"
+case "$guard_enabled" in
+	0|1) ;;
+	*) exit 1 ;;
+esac
+case "$service_running" in
+	0|1) ;;
+	*) exit 1 ;;
+esac
+
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+	summary="$(ubus call miclash diagnostics_summary '{}' 2>/dev/null || true)"
+	if [ "$guard_enabled" = 1 ]; then
+		printf '%s\n' "$summary" | grep -Eq '"guard"[[:space:]]*:[[:space:]]*\{[[:space:]]*"state"[[:space:]]*:[[:space:]]*"enabled"' && break
+	else
+		printf '%s\n' "$summary" | grep -Eq '"guard"[[:space:]]*:[[:space:]]*\{[[:space:]]*"state"[[:space:]]*:[[:space:]]*"disabled"' && break
+	fi
+	attempt=$((attempt + 1))
+	sleep 1
+done
+
+[ "$attempt" -lt 30 ] || exit 1
+exit 0
