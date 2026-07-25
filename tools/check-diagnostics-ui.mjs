@@ -647,8 +647,7 @@ assert.equal(createdUrls.length, 1);
 assert.match(clickedDownloads[0].download, /^miclash-diagnostic-lite-\d{8}-\d{6}\.json$/);
 assert.deepEqual(revoked, [createdUrls[0].value], 'object URL must always be revoked');
 
-const confirmFullButton = fullConfirmation.buttons.find((button) =>
-	button.getAttribute('data-action') === 'confirm-full-report');
+const confirmFullButton = fullConfirmation.body.querySelector('[data-action="confirm-full-report"]');
 confirmFullButton.click();
 await new Promise((resolve) => setImmediate(resolve));
 assert.deepEqual(calls.filter((call) => call[0] === 'createDiagnosticReport').at(-1).slice(1),
@@ -676,7 +675,7 @@ const failedReportPanel = moduleApi.create({ api: { ...api,
 	async downloadChunks() { throw new Error('download must not start'); },
 	destroy() {}
 }, document: documentMock, window: windowMock, pollInterval: 30000 });
-await assert.rejects(failedReportPanel.downloadReport(failedReportButton), /report failed/);
+await assert.rejects(failedReportPanel.generateReport('lite', false, failedReportButton), /report failed/);
 assert.equal(failedReportButton.disabled, false, 'failed report must restore the button');
 assert.equal(failedReportButton.getAttribute('aria-busy'), null);
 assert.equal(failedReportButton.textContent, 'Download diagnostic report');
@@ -694,7 +693,8 @@ const destroyedReportPanel = moduleApi.create({ api: { ...api,
 	watchOperation(_operationId, _callback) { return () => { destroyWatchCancelled++; }; },
 	destroy() {}
 }, document: documentMock, window: windowMock, pollInterval: 30000 });
-const pendingDestroyReport = destroyedReportPanel.downloadReport(E('button', {}, 'Download diagnostic report'));
+const pendingDestroyReport = destroyedReportPanel.generateReport('lite', false,
+	E('button', {}, 'Download diagnostic report'));
 await new Promise((resolve) => setImmediate(resolve));
 destroyedReportPanel.destroy();
 await assert.rejects(pendingDestroyReport, /CANCELLED/);
