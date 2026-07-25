@@ -158,6 +158,52 @@ assert.equal(module.exactTelegramToken('not-a-token'), false);
 assert.equal(module.telegramTokenMask(0), '');
 assert.equal(module.telegramTokenMask(22), '**********************');
 assert.equal(Object.keys(module.MEMORY_FIELDS).length, 14);
+
+let releaseRefresh;
+const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+let refreshCalls = 0;
+const refreshApi = {
+	settings_get: () => { refreshCalls++; return refreshGate; },
+	memoryStatus: () => { refreshCalls++; return refreshGate; },
+	memorySettings: async () => ({}),
+	memoryResetBaseline: async () => ({}),
+	telegram_status: () => { refreshCalls++; return refreshGate; },
+	telegram_settings: async () => ({}),
+	telegram_test: async () => ({}),
+	notificationSettings: async () => ({}),
+	testNotification: async () => ({}),
+	watchOperation: () => () => {},
+	destroy: () => {}
+};
+const documentProbe = {
+	hidden: false,
+	addEventListener: () => {},
+	removeEventListener: () => {}
+};
+const windowProbe = {
+	setTimeout: () => 1,
+	clearTimeout: () => {}
+};
+const refreshModule = new Function(
+	'baseclass', 'ui', 'E', '_', 'document', 'window',
+	'view_miclash_background_refresh', 'view_miclash_ui_shell', settings
+)(
+	baseclass, {}, () => ({}), identity, documentProbe, windowProbe,
+	{ create: () => ({ run: (callback) => callback() }) },
+	{ loadingBlock: () => ({}) }
+);
+const refreshPanel = refreshModule.create({
+	api: refreshApi, document: documentProbe, window: windowProbe
+});
+const firstRefresh = refreshPanel.refresh(true);
+await Promise.resolve();
+const secondRefresh = refreshPanel.refresh(true);
+await Promise.resolve();
+assert.equal(refreshCalls, 3, 'overlapping Settings refresh issued duplicate RPCs');
+releaseRefresh({});
+await Promise.all([ firstRefresh, secondRefresh ]);
+refreshPanel.destroy();
+
 assert.match(notifications, /let generation = ''/,
 	'notification polling must not send a JSON null through the string ubus signature');
 assert.match(config, /function isLuciNotificationEnabled\(eventType\)/,

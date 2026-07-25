@@ -41,6 +41,8 @@ function healthy(service, profile, controller_config) {
 };
 
 function recovery_required(service, profile) {
+	if (profile != 'config.yaml')
+		return false;
 	if (type(service?.observe) != 'function')
 		return true;
 	try {

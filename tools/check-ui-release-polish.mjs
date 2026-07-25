@@ -137,6 +137,13 @@ const checks = [
 			config.includes("_('Clear editor content')") &&
 			!config.includes("id=\"sbox-stop\" type=\"button\" class=\"cbi-button cbi-button-negative sbox-service-button\"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop'))") &&
 			!config.includes("id=\"sbox-clear-editor\" type=\"button\" class=\"cbi-button cbi-button-negative\">' + safeText(_('Clear'))")
+	},
+	{
+		name: 'release freshness is cached and concurrent checks are coalesced',
+		pass: config.includes('let releaseRefreshPromise = null') &&
+			config.includes('Date.now() - appState.releaseMeta.checkedAt < UPDATE_CHECK_MS') &&
+			config.includes('if (releaseRefreshPromise) return releaseRefreshPromise') &&
+			config.includes("refreshReleaseMeta({ force: false })")
 	}
 ];
 

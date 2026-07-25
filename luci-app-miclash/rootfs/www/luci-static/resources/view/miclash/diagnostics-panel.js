@@ -306,8 +306,7 @@ function create(options) {
 	let current = { status: {}, health: {}, summary: {} };
 	let pollTimer = null;
 	let eventTimer = null;
-	let refreshing = false;
-	let refreshPending = false;
+	let refreshPromise = null;
 	let destroyed = false;
 	let active = false;
 	let hasGoodSummary = false;
@@ -412,27 +411,28 @@ function create(options) {
 		if (host && !destroyed) host.replaceChildren(renderSummary(current));
 	}
 
-	async function refresh() {
-		if (destroyed || !active || doc.hidden) return;
-		if (refreshing) { refreshPending = true; return; }
-		refreshing = true;
-		try {
-			const summary = await api.diagnosticsSummary();
-			if (!summary || typeof summary !== 'object' || Array.isArray(summary))
-				throw Object.assign(new Error(_('Invalid diagnostics response')), { code: 'INVALID_RESPONSE' });
-			if (!destroyed) {
-				current = { summary: summary || {} };
-				hasGoodSummary = true;
-				paint();
+	function refresh(force) {
+		if (destroyed || !active && !force || doc.hidden && !force) return;
+		if (refreshPromise) return refreshPromise;
+		const running = (async () => {
+			try {
+				const summary = await api.diagnosticsSummary();
+				if (!summary || typeof summary !== 'object' || Array.isArray(summary))
+					throw Object.assign(new Error(_('Invalid diagnostics response')), { code: 'INVALID_RESPONSE' });
+				if (!destroyed) {
+					current = { summary: summary || {} };
+					hasGoodSummary = true;
+					paint();
+				}
+			} finally {
+				schedulePoll();
 			}
-		} finally {
-			refreshing = false;
-			if (!destroyed && refreshPending) {
-				refreshPending = false;
-				return refresh();
-			}
-			schedulePoll();
-		}
+		})();
+		const tracked = running.finally(() => {
+			if (refreshPromise === tracked) refreshPromise = null;
+		});
+		refreshPromise = tracked;
+		return refreshPromise;
 	}
 
 	function showError(error) {
@@ -768,9 +768,9 @@ function createOwner(options) {
 			if (!panel || typeof panel.openRouteTest !== 'function') return null;
 			return panel.openRouteTest();
 		},
-		refresh() {
+		refresh(force) {
 			if (!panel || typeof panel.refresh !== 'function') return null;
-			return panel.refresh();
+			return panel.refresh(force === true);
 		},
 		setActive(value) {
 			if (!panel || typeof panel.setActive !== 'function') return false;

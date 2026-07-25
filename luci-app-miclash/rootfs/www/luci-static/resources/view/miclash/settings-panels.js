@@ -99,6 +99,7 @@ function create(options) {
 		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
 	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
 		dirty = false, retryMs = POLL_MS;
+	let refreshPromise = null;
 	let active = false;
 	let hydrated = false;
 	let settingsReady = false, memoryReady = false, telegramReady = false;
@@ -440,38 +441,46 @@ function create(options) {
 		});
 	}
 
-	async function refresh(force, replaceForm) {
+	function refresh(force, replaceForm) {
 		if (destroyed || !active && !force || doc.hidden && !force) return;
+		if (refreshPromise) return refreshPromise;
 		const token = ++generation;
-		try {
-			const repaint = () => {
-				if (destroyed || token !== generation || (dirty || busy) && !replaceForm) return;
-				paint();
-			};
-			const replies = await Promise.allSettled([
-				Promise.resolve().then(() => api.settings_get()).then((reply) => {
-					if (destroyed || token !== generation) return;
-					const desired = reply || {};
-					state = { ...state, desired, memorySettings: desired.memory || {},
-						telegramSettings: desired.telegram || {}, notifications: desired.notifications || {} };
-					settingsReady = true; hydrated = true; publishNotificationSettings(); repaint();
-				}),
-				Promise.resolve().then(() => api.memoryStatus()).then((reply) => {
-					if (destroyed || token !== generation) return;
-					state = { ...state, memory: reply || {} }; memoryReady = true; repaint();
-				}),
-				Promise.resolve().then(() => api.telegram_status()).then((reply) => {
-					if (destroyed || token !== generation) return;
-					state = { ...state, telegram: reply || {} }; telegramReady = true; repaint();
-				})
-			]);
-			const failed = replies.find((reply) => reply.status === 'rejected');
-			if (failed) throw failed.reason;
-			retryMs = POLL_MS;
-			if (replaceForm || (!dirty && !busy)) paint();
-		}
-		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
-		finally { if (!destroyed && token === generation) schedule(); }
+		const running = (async () => {
+			try {
+				const repaint = () => {
+					if (destroyed || token !== generation || (dirty || busy) && !replaceForm) return;
+					paint();
+				};
+				const replies = await Promise.allSettled([
+					Promise.resolve().then(() => api.settings_get()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						const desired = reply || {};
+						state = { ...state, desired, memorySettings: desired.memory || {},
+							telegramSettings: desired.telegram || {}, notifications: desired.notifications || {} };
+						settingsReady = true; hydrated = true; publishNotificationSettings(); repaint();
+					}),
+					Promise.resolve().then(() => api.memoryStatus()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						state = { ...state, memory: reply || {} }; memoryReady = true; repaint();
+					}),
+					Promise.resolve().then(() => api.telegram_status()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						state = { ...state, telegram: reply || {} }; telegramReady = true; repaint();
+					})
+				]);
+				const failed = replies.find((reply) => reply.status === 'rejected');
+				if (failed) throw failed.reason;
+				retryMs = POLL_MS;
+				if (replaceForm || (!dirty && !busy)) paint();
+			}
+			catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
+			finally { if (!destroyed && token === generation) schedule(); }
+		})();
+		const tracked = running.finally(() => {
+			if (refreshPromise === tracked) refreshPromise = null;
+		});
+		refreshPromise = tracked;
+		return refreshPromise;
 	}
 	function visibilitychange() {
 		if (doc.hidden) clearTimer();

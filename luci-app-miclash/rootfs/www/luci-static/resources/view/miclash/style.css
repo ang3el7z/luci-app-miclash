@@ -621,6 +621,35 @@
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 12px;
 }
+.sbox-performance-heading,
+.sbox-performance-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 9px;
+}
+.sbox-performance-heading {
+	margin: 4px 0 0;
+}
+.sbox-performance-heading h4,
+.sbox-performance-card h4 {
+	margin: 0;
+}
+.sbox-performance-grid {
+	display: grid;
+	gap: 12px;
+}
+.sbox-performance-table-wrap {
+	max-width: 100%;
+	overflow-x: auto;
+}
+.sbox-performance-table {
+	min-width: 42rem;
+}
+.sbox-performance-table td:not(:first-child),
+.sbox-performance-table th:not(:first-child) {
+	text-align: right;
+}
 .sbox-developer-action {
 	justify-content: space-between;
 	gap: 16px;
@@ -630,6 +659,10 @@
 }
 @media (max-width: 900px) {
 	.sbox-developer-actions { grid-template-columns: 1fr; }
+	.sbox-performance-heading {
+		align-items: flex-start;
+		flex-direction: column;
+	}
 }
 .sbox-card-divider {
 	height: 1px;

@@ -153,15 +153,7 @@ async function ensureConfigProfilesReady(seedMainContent) {
 		const listed = await api.config_list();
 		const names = new Set((listed?.profiles || []).map((item) => typeof item === 'string' ? item : item?.profile));
 		for (const profile of CONFIG_PROFILES) {
-			let exists = names.has(profile.name);
-			if (exists) {
-				try { await api.config_read(profile.name); }
-				catch (error) {
-					if (error?.code !== 'NOT_FOUND') throw error;
-					exists = false;
-				}
-			}
-			if (exists) continue;
+			if (names.has(profile.name)) continue;
 			const seed = String(seedMainContent || '').trimEnd() + '\n';
 			await waitOperation(api, await api.config_apply(profile.name, seed, 'luci'));
 		}

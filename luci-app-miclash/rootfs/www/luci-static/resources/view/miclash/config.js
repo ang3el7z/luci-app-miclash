@@ -16,6 +16,8 @@
 'require view.miclash.settings-panels';
 'require view.miclash.devices-panel';
 'require view.miclash.notification-poller';
+'require view.miclash.performance';
+'require view.miclash.performance-panel';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
@@ -56,6 +58,8 @@ let cfgTabSetter = null;
 let developerVisible = false;
 let developerTapTimes = [];
 let developerExpiryTimer = null;
+let releaseRefreshPromise = null;
+const performanceOwner = view_miclash_performance_panel.create();
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
@@ -151,9 +155,11 @@ const managementOwner = (() => {
 			if (typeof panel.markSaved === 'function') await panel.markSaved();
 	}
 	function refresh(force) {
-		if (!panels) return;
-		for (const panel of panels)
-			if (typeof panel.refresh === 'function') panel.refresh(force === true).catch(() => {});
+		if (!panels) return Promise.resolve([]);
+		return Promise.all(panels.map((panel) =>
+			typeof panel.refresh === 'function'
+				? Promise.resolve(panel.refresh(force === true)).catch(() => undefined)
+				: Promise.resolve(undefined)));
 	}
 	function setActive(active) {
 		if (!panels) return false;
@@ -646,28 +652,39 @@ function shouldCheckKernelRelease(force) {
 	return !!force || resolveKernelActionState().kind !== 'update';
 }
 
-async function refreshReleaseMeta(options) {
+function refreshReleaseMeta(options) {
 	const opts = options || {};
 	const force = !!opts.force;
+	if (!force && appState.releaseMeta.checkedAt > 0 &&
+		Date.now() - appState.releaseMeta.checkedAt < UPDATE_CHECK_MS)
+		return Promise.resolve(false);
+	if (releaseRefreshPromise) return releaseRefreshPromise;
 	const checkApp = shouldCheckAppRelease(force);
 	const checkKernel = shouldCheckKernelRelease(force);
 
-	if (!checkApp && !checkKernel) return false;
+	if (!checkApp && !checkKernel) return Promise.resolve(false);
 
-	const [appRelease, kernelRelease] = await Promise.all([
-		checkApp ? getLatestMiClashRelease() : Promise.resolve(null),
-		checkKernel ? getLatestMihomoRelease() : Promise.resolve(null)
-	]);
+	const running = (async () => {
+		const [appRelease, kernelRelease] = await Promise.all([
+			checkApp ? getLatestMiClashRelease() : Promise.resolve(null),
+			checkKernel ? getLatestMihomoRelease() : Promise.resolve(null)
+		]);
 
-	if (checkApp) {
-		appState.releaseMeta.appVersion = appRelease ? normalizeAppVersion(appRelease.version || '') : '';
-	}
-	if (checkKernel) {
-		appState.releaseMeta.kernelVersion = kernelRelease ? normalizeVersion(kernelRelease.version || '') : '';
-	}
-	appState.releaseMeta.checkedAt = Date.now();
-	updateHeaderAndControlDom();
-	return true;
+		if (checkApp) {
+			appState.releaseMeta.appVersion = appRelease ? normalizeAppVersion(appRelease.version || '') : '';
+		}
+		if (checkKernel) {
+			appState.releaseMeta.kernelVersion = kernelRelease ? normalizeVersion(kernelRelease.version || '') : '';
+		}
+		appState.releaseMeta.checkedAt = Date.now();
+		updateHeaderAndControlDom();
+		return true;
+	})();
+	const tracked = running.finally(() => {
+		if (releaseRefreshPromise === tracked) releaseRefreshPromise = null;
+	});
+	releaseRefreshPromise = tracked;
+	return releaseRefreshPromise;
 }
 
 function isRpcReconnectLikeError(error) {
@@ -1030,13 +1047,34 @@ async function openKernelModal() {
 	}
 }
 
+function actionMetricName(btns) {
+	const values = Array.isArray(btns) ? btns : [ btns ];
+	for (const button of values) {
+		if (!button || typeof button !== 'object') continue;
+		const value = button.id || button.getAttribute?.('data-action') ||
+			button.getAttribute?.('data-developer-action');
+		if (value) return String(value);
+	}
+	return 'control';
+}
+
 async function withButtons(btns, fn) {
-	return view_miclash_ui_shell.withButtons(btns, fn, safeText);
+	const metric = view_miclash_performance.begin('action.' + actionMetricName(btns));
+	try {
+		const result = await view_miclash_ui_shell.withButtons(btns, fn, safeText);
+		view_miclash_performance.end(metric, true);
+		return result;
+	} catch (error) {
+		view_miclash_performance.end(metric, false);
+		throw error;
+	}
 }
 
 async function withServiceButtons(activeBtn, inactiveBtn, fn) {
 	const activeHtml = activeBtn ? activeBtn.innerHTML : '';
 	const inactiveDisabled = inactiveBtn ? inactiveBtn.disabled : false;
+	const metric = view_miclash_performance.begin('action.' + actionMetricName(activeBtn));
+	let succeeded = false;
 
 	appState.serviceActionBusy = true;
 
@@ -1048,8 +1086,11 @@ async function withServiceButtons(activeBtn, inactiveBtn, fn) {
 	updateHeaderAndControlDom();
 
 	try {
-		return await fn();
+		const result = await fn();
+		succeeded = true;
+		return result;
 	} finally {
+		view_miclash_performance.end(metric, succeeded);
 		appState.serviceActionBusy = false;
 
 		if (activeBtn && activeBtn.isConnected) {
@@ -1214,14 +1255,9 @@ async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode
 	return view_miclash_subscription.downloadWithProfile(url, profile, deviceHeaders, mode);
 }
 
-async function applySubscriptionOnRouter(url, targetName, settings, appVersion, proxyMode, tunStack) {
+async function applySubscriptionOnRouter(targetName) {
 	return view_miclash_subscription.applySubscriptionOnRouter({
-		url: url,
-		targetName: targetName,
-		settings: settings,
-		appVersion: appVersion,
-		proxyMode: proxyMode,
-		tunStack: tunStack
+		targetName: targetName
 	});
 }
 
@@ -2333,6 +2369,7 @@ function buildPageHtml() {
 					'<h4>' + safeText(_('Developer tools')) + '</h4>' +
 					'<p>' + safeText(_('This hidden session stays open for 10 minutes. These emergency actions can interrupt access to the router.')) + '</p>' +
 				'</div>' +
+				'<div id="sbox-performance-panel"></div>' +
 				'<div class="sbox-developer-actions">' +
 					'<article class="sbox-settings-card sbox-developer-action">' +
 						'<div><h4>' + safeText(_('Restore OpenWrt network')) + '</h4><p>' + safeText(_('Stop Mihomo and remove MiClash DNS, firewall and routing ownership. Remove Guard first if it is enabled.')) + '</p></div>' +
@@ -2496,16 +2533,21 @@ function resolveGuardHeaderState() {
 }
 
 async function refreshHeaderAndControl() {
-	const [serviceState, versions, kernelStatus, proxyMode] = await Promise.all([
+	const [serviceState, system, proxyMode] = await Promise.all([
 		readMiClashServiceState(),
-		getVersions(),
-		getMihomoStatus(),
+		typedCall((api) => api.system_info()),
 		detectCurrentProxyMode()
 	]);
 
 	applyServiceState(serviceState);
-	appState.versions = versions;
-	appState.kernelStatus = kernelStatus;
+	appState.versions = {
+		app: normalizeAppVersion(system?.app_version || 'unknown'),
+		clash: system?.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : 'unknown'
+	};
+	appState.kernelStatus = {
+		installed: system?.mihomo?.installed === true,
+		version: system?.mihomo?.installed ? String(system.mihomo.version || '') : null
+	};
 	appState.proxyMode = proxyMode || 'tproxy';
 
 	updateHeaderAndControlDom();
@@ -2529,6 +2571,30 @@ async function refreshHeaderAndControlSafe() {
 	}
 }
 
+async function warmBackgroundPanels(generation, configHydration) {
+	if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+	const metric = view_miclash_performance.begin('background.warmup');
+	let succeeded = true;
+	try {
+		notificationOwner.replace();
+		await managementOwner.refresh(true);
+		if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+		const results = await Promise.allSettled([
+			Promise.resolve(diagnosticsOwner.refresh(true)),
+			refreshLogs()
+		]);
+		succeeded = results.every((result) => result.status === 'fulfilled');
+		if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+		await configHydration;
+		if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+		await refreshReleaseMeta({ force: false });
+	} catch (error) {
+		succeeded = false;
+	} finally {
+		view_miclash_performance.end(metric, succeeded);
+	}
+}
+
 function renderSettingsPane() {
 	if (!pageRoot) return;
 	const pane = pageRoot.querySelector('#sbox-pane-settings');
@@ -2541,7 +2607,7 @@ function renderSettingsPane() {
 		if (!managementOwner.ready?.()) managementOwner.replace();
 		managementOwner.mount(pane);
 		pane.setAttribute('data-settings-mounted', 'true');
-	} else managementOwner.refresh();
+	}
 }
 
 async function collectSettingsFormState() {
@@ -3103,16 +3169,7 @@ function bindConfigEvents() {
 			await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
 			setOperationStatus('running', _('Downloading subscription...'));
 
-			const currentSettings = appState.settings || await loadOperationalSettings();
-			const versions = await getVersions();
-			const appliedInfo = await applySubscriptionOnRouter(
-				url,
-				selectedConfig,
-				currentSettings,
-				versions.app,
-				normalizeProxyMode(appState.proxyMode || currentSettings.proxyMode || 'tproxy'),
-				currentSettings.tunStack || 'system'
-			);
+			const appliedInfo = await applySubscriptionOnRouter(selectedConfig);
 
 			const freshConfig = await readConfigFileByName(selectedConfig);
 			appState.configContent = String(freshConfig || '');
@@ -3125,12 +3182,8 @@ function bindConfigEvents() {
 			if (selectedConfig === MAIN_CONFIG_NAME) {
 				await applySubscriptionProfileUpdateInterval(appliedInfo.profileUpdateIntervalHours);
 				refreshAutoUpdateIntervalChoices(appliedInfo.profileUpdateIntervalHours);
-				if (await getServiceStatus()) {
-					setOperationStatus('running', _('Reloading Mihomo configuration...'));
-					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
-					serviceReloaded = true;
-				}
 				appState.serviceRunning = await getServiceStatus();
+				serviceReloaded = appState.serviceRunning;
 				updateHeaderAndControlDom();
 			}
 
@@ -3270,8 +3323,11 @@ function setDeveloperVisible(visible, activate) {
 		developerExpiryTimer = window.setTimeout(() => setDeveloperVisible(false, true),
 			DEVELOPER_SESSION_MS);
 		if (activate && typeof cfgTabSetter === 'function') cfgTabSetter('developer');
+		else if (appState.activeCfgTab === 'developer')
+			performanceOwner.mount(pageRoot?.querySelector('#sbox-performance-panel'));
 	} else if (activate && appState.activeCfgTab === 'developer' &&
 		typeof cfgTabSetter === 'function') cfgTabSetter('settings');
+	if (!developerVisible) performanceOwner.destroy();
 }
 
 function registerDeveloperTap() {
@@ -3391,18 +3447,27 @@ function bindTabEvents() {
 		},
 		onChange: (name) => {
 			if (cfgTabsInitialized && appState.activeCfgTab === name) return;
+			const metric = view_miclash_performance.begin('tab.' + name + '.open');
 			cfgTabsInitialized = true;
-			appState.activeCfgTab = name;
-			managementOwner.setActive(name === 'settings');
-			diagnosticsOwner.setActive(name === 'settings');
-			if (name !== 'logs') stopLogPolling();
-			if (name === 'settings') {
-				renderSettingsPane();
-			} else if (name === 'logs') {
-				refreshLogs().catch(() => {});
-				startLogPolling();
-			} else {
-				resizeConfigEditor();
+			try {
+				appState.activeCfgTab = name;
+				managementOwner.setActive(name === 'settings');
+				diagnosticsOwner.setActive(name === 'settings');
+				if (name !== 'logs') stopLogPolling();
+				if (name === 'settings') {
+					renderSettingsPane();
+				} else if (name === 'logs') {
+					refreshLogs().catch(() => {});
+					startLogPolling();
+				} else {
+					resizeConfigEditor();
+				}
+				if (name === 'developer')
+					performanceOwner.mount(pageRoot?.querySelector('#sbox-performance-panel'));
+				else
+					performanceOwner.destroy();
+			} finally {
+				view_miclash_performance.end(metric, true);
 			}
 		}
 	});
@@ -3427,6 +3492,7 @@ return view.extend({
 		if (appState.activeCfgTab === 'developer') appState.activeCfgTab = 'settings';
 		notificationOwner.destroy();
 		managementOwner.destroy();
+		performanceOwner.destroy();
 		releaseConfigRuntime();
 		const generation = ++pageGeneration;
 		appState.configProfiles = CONFIG_PROFILES.slice();
@@ -3464,7 +3530,7 @@ return view.extend({
 			E('link', {
 			'rel': 'stylesheet',
 			'href': L.resource('view/miclash/style.css') + '?v=' +
-				encodeURIComponent(String(appState.versions?.app || 'unknown')) + '-ui3'
+				encodeURIComponent(String(appState.versions?.app || 'unknown')) + '-ui4'
 			}),
 			E('div', { 'id': 'sbox-root' })
 		]);
@@ -3500,10 +3566,17 @@ return view.extend({
 			}
 		};
 		document.addEventListener('visibilitychange', visibilityChangeHandler);
-		const configHydration = beginPageHydration(generation).finally(() => {
-			if (generation === pageGeneration && pageRoot && !document.hidden)
-				refreshReleaseMeta({ force: true }).catch(() => {});
-		});
+		const pageHydrationMetric = view_miclash_performance.begin('page.hydration');
+		const configHydration = beginPageHydration(generation).then(
+			(value) => {
+				view_miclash_performance.end(pageHydrationMetric, true);
+				return value;
+			},
+			(error) => {
+				view_miclash_performance.end(pageHydrationMetric, false);
+				throw error;
+			}
+		);
 		hydrateSystemMetadata(generation).catch((error) => {
 			if (generation === pageGeneration) console.error('[MiClash] Failed to hydrate system metadata:', error);
 		});
@@ -3517,9 +3590,7 @@ return view.extend({
 		initialHydration.finally(() => {
 			window.setTimeout(() => {
 				if (generation !== pageGeneration || !pageRoot || document.hidden) return;
-				notificationOwner.replace();
-				managementOwner.refresh(true);
-				if (!logsLoaded) refreshLogs().catch(() => {});
+				warmBackgroundPanels(generation, configHydration).catch(() => {});
 			}, 0);
 		});
 
@@ -3534,6 +3605,7 @@ return view.extend({
 		diagnosticsOwner.destroy();
 		notificationOwner.destroy();
 		managementOwner.destroy();
+		performanceOwner.destroy();
 		releaseConfigRuntime();
 	}
 });

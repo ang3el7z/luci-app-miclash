@@ -2423,3 +2423,39 @@ msgstr "Диагностика"
 
 msgid "Loading service state…"
 msgstr "Загрузка состояния службы…"
+
+msgid "Performance"
+msgstr "Производительность"
+
+msgid "Local browser measurements only. RPC arguments and payloads are never recorded."
+msgstr "Только локальные измерения браузера. Аргументы и данные RPC никогда не записываются."
+
+msgid "Refresh"
+msgstr "Обновить"
+
+msgid "No measurements yet."
+msgstr "Измерений пока нет."
+
+msgid "Metric"
+msgstr "Метрика"
+
+msgid "Calls"
+msgstr "Вызовы"
+
+msgid "Errors"
+msgstr "Ошибки"
+
+msgid "Average, ms"
+msgstr "Среднее, мс"
+
+msgid "Maximum, ms"
+msgstr "Максимум, мс"
+
+msgid "Total, ms"
+msgstr "Всего, мс"
+
+msgid "RPC methods"
+msgstr "Методы RPC"
+
+msgid "Page and action timings"
+msgstr "Время страниц и действий"

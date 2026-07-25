@@ -88,6 +88,20 @@ assert_equal(created_profile_result.state, 'success', sprintf('%J', created_prof
 assert_equal(missing_profile.fs.readfile('/opt/clash/config2.yaml'), fixture('valid.yaml'));
 assert_equal(missing_profile_recovery_calls, 0);
 
+// Secondary profiles are stored choices, not the runtime-active configuration.
+// Updating one while the main service runs must not reload or health-check it.
+let inactive_runtime_calls = 0;
+let inactive_profile = environment({
+	observe: () => ({ state: 'running', running: true }),
+	reload: () => { inactive_runtime_calls++; return true; },
+	health: () => { inactive_runtime_calls++; return true; }
+});
+let inactive_apply = inactive_profile.cfg.apply('config2.yaml', fixture('valid.yaml'), 'luci');
+assert_equal(finish(inactive_profile, inactive_apply).state, 'success');
+assert_equal(inactive_runtime_calls, 0,
+	'writing config2 must not apply it to the running main service');
+assert_equal(inactive_profile.fs.readfile('/opt/clash/config2.yaml'), fixture('valid.yaml'));
+
 // Applying a validated profile while Mihomo is intentionally stopped must
 // commit the file without starting or recovering the service.
 let stopped_recovery_calls = 0;

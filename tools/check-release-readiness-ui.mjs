@@ -43,7 +43,7 @@ assert.equal((await releaseWith(mihomoApi).getLatestMihomoRelease(false)).versio
 assert.match(configSource,
 	/appState\.releaseMeta\.appVersion = appRelease \? normalizeAppVersion\(appRelease\.version \|\| ''\) : '';/,
 	'partial publication must clear the cached toolbar candidate');
-const refreshStart = configSource.indexOf('async function refreshReleaseMeta(options)');
+const refreshStart = configSource.indexOf('function refreshReleaseMeta(options)');
 const refreshEnd = configSource.indexOf('function isRpcReconnectLikeError', refreshStart);
 assert.ok(refreshStart >= 0 && refreshEnd > refreshStart);
 const refreshSource = configSource.slice(refreshStart, refreshEnd);

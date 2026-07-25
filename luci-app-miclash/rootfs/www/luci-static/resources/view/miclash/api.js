@@ -1,6 +1,7 @@
 'use strict';
 'require baseclass';
 'require rpc';
+'require view.miclash.performance';
 
 const METHOD_SPECS = [
 	{ name: 'status', params: [], operation: false, access: 'read' },
@@ -237,6 +238,7 @@ function createClient(options) {
 		rawCalls[spec.name] = declared;
 		calls[spec.name] = (...args) => {
 			if (destroyed) return Promise.reject(apiError('CANCELLED', 'View destroyed'));
+			const metricStartedAt = view_miclash_performance.now();
 			const invoke = () => {
 				if (destroyed) return Promise.reject(apiError('CANCELLED', 'View destroyed'));
 				return Promise.resolve().then(() => declared(...args))
@@ -254,7 +256,22 @@ function createClient(options) {
 					throw normalized;
 				});
 			};
-			return invoke();
+			return invoke().then(
+				(reply) => {
+					try {
+						view_miclash_performance.recordRpc(
+							spec.name, metricStartedAt, true, view_miclash_performance.now());
+					} catch (error) {}
+					return reply;
+				},
+				(error) => {
+					try {
+						view_miclash_performance.recordRpc(
+							spec.name, metricStartedAt, false, view_miclash_performance.now());
+					} catch (metricError) {}
+					throw error;
+				}
+			);
 		};
 	}
 	function abortTransfer(transferId) {

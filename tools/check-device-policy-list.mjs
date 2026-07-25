@@ -96,6 +96,58 @@ assert.equal((await module.loadVendorDatabase(async () => readFileSync(
 	'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/device-vendors.db', 'utf8'))).snapshot,
 	'2026-07-19');
 
+let releaseDeviceRefresh;
+const deviceRefreshGate = new Promise((resolve) => { releaseDeviceRefresh = resolve; });
+let deviceRefreshCalls = 0;
+const deviceApi = {
+	devicesList: () => {
+		deviceRefreshCalls++;
+		return deviceRefreshGate.then(() => []);
+	},
+	devicePolicies: () => {
+		deviceRefreshCalls++;
+		return deviceRefreshGate.then(() => []);
+	},
+	deviceTimezones: () => {
+		deviceRefreshCalls++;
+		return deviceRefreshGate.then(() => [ 'UTC' ]);
+	},
+	setDevicePolicy: async () => ({}),
+	deleteDevicePolicy: async () => ({}),
+	watchOperation: () => () => {},
+	destroy: () => {}
+};
+const documentProbe = {
+	hidden: false,
+	addEventListener: () => {},
+	removeEventListener: () => {}
+};
+const windowProbe = {
+	setTimeout: () => 1,
+	clearTimeout: () => {}
+};
+const refreshModule = new Function(
+	'baseclass', 'ui', 'E', '_', 'document', 'window',
+	'view_miclash_background_refresh', 'view_miclash_device_vendors',
+	'view_miclash_ui_shell', source
+)(
+	{ extend: (value) => value }, {}, () => ({}), String,
+	documentProbe, windowProbe,
+	{ create: () => ({ run: (callback) => callback() }) },
+	vendorModule, { loadingBlock: () => ({}) }
+);
+const refreshPanel = refreshModule.create({
+	api: deviceApi, document: documentProbe, window: windowProbe
+});
+const firstRefresh = refreshPanel.refresh(true);
+await Promise.resolve();
+const secondRefresh = refreshPanel.refresh(true);
+await Promise.resolve();
+assert.equal(deviceRefreshCalls, 3, 'overlapping Devices refresh issued duplicate RPCs');
+releaseDeviceRefresh();
+await Promise.all([ firstRefresh, secondRefresh ]);
+refreshPanel.destroy();
+
 assert.deepEqual(module.policyPresentation({ action: 'direct' }, {
 	action: 'direct', safety: 'direct_exception'
 }), { configured: 'direct', effective: 'direct', safety: 'direct_exception', overridden: false },
@@ -145,6 +197,10 @@ assert.match(daemonSource, /modules\.devices\.active_device_policies[\s\S]*modul
 	'the native firewall compiler must receive active device policies and provider data with the effective interface scope');
 assert.match(source, /\/cgi-bin\/miclash-device-vendors/,
 	'the panel must load the local offline database without a large RPC response');
+assert.doesNotMatch(source, /cache:\s*'no-store'/,
+	'the large vendor database must use the browser cache');
+assert.match(source, /cache:\s*'default'/,
+	'the vendor database fetch must explicitly allow normal browser caching');
 assert.ok((source.match(/deviceDisplayName\(/g) || []).length >= 3,
 	'table, sorting model, and policy modal must share the resolved label');
 assert.doesNotMatch(source, /_\('Last seen'\)/, 'unified device list must not retain the history column');

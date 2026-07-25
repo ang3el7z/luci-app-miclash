@@ -34,9 +34,9 @@ check(store.includes('async function pathExists(') && store.includes('api.config
 	'Store must check profile existence through the typed config inventory.');
 
 check(!ensureProfilesBlock.includes('fs.') && ensureProfilesBlock.includes('api.config_list()') &&
-	ensureProfilesBlock.includes('api.config_read(profile.name)') &&
-	ensureProfilesBlock.includes("error?.code !== 'NOT_FOUND'"),
-	'ensureConfigProfilesReady must verify listed profiles exist and seed only missing files.');
+	!ensureProfilesBlock.includes('api.config_read(') &&
+	ensureProfilesBlock.includes('names.has(profile.name)'),
+	'ensureConfigProfilesReady must trust typed inventory and seed only missing files without rereading content.');
 
 check(!acl.includes('"file"') && acl.includes('"config_read"') && acl.includes('"config_apply"'),
 	'ACL must grant typed config methods without filesystem or shell authority.');

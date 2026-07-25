@@ -2395,3 +2395,39 @@ msgstr "诊断"
 
 msgid "Loading service state…"
 msgstr "正在加载服务状态…"
+
+msgid "Performance"
+msgstr "性能"
+
+msgid "Local browser measurements only. RPC arguments and payloads are never recorded."
+msgstr "仅记录浏览器本地测量数据，绝不记录 RPC 参数或负载。"
+
+msgid "Refresh"
+msgstr "刷新"
+
+msgid "No measurements yet."
+msgstr "暂无测量数据。"
+
+msgid "Metric"
+msgstr "指标"
+
+msgid "Calls"
+msgstr "调用次数"
+
+msgid "Errors"
+msgstr "错误"
+
+msgid "Average, ms"
+msgstr "平均值，毫秒"
+
+msgid "Maximum, ms"
+msgstr "最大值，毫秒"
+
+msgid "Total, ms"
+msgstr "总计，毫秒"
+
+msgid "RPC methods"
+msgstr "RPC 方法"
+
+msgid "Page and action timings"
+msgstr "页面和操作耗时"

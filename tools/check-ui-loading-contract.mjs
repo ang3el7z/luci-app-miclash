@@ -11,8 +11,10 @@ assert.match(config, /serviceStateLoading\s*=\s*false/,
 	'initial service loading must end after a real service observation');
 assert.match(config, /_\('Loading service state…'\)/,
 	'the control card must communicate an honest loading state');
-assert.match(config, /initialHydration\.finally\([\s\S]*managementOwner\.refresh\(true\)/,
+assert.match(config, /initialHydration\.finally\([\s\S]*warmBackgroundPanels\(generation, configHydration\)/,
 	'Settings panels must start after initial state, without waiting for the editor hydration');
+assert.match(config, /async function warmBackgroundPanels\(generation, configHydration\)[\s\S]*managementOwner\.refresh\(true\)/,
+	'Settings background warm-up must still preload the management panels');
 assert.match(panel, /guardEnabled[\s\S]*_\('Ready'\) \+ '\*'/,
 	'Firewall must distinguish an active Guard without adding a separate component row');
 assert.doesNotMatch(css, /rgba\(255,\s*255,\s*255/,

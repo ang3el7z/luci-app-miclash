@@ -156,6 +156,7 @@ function create(options) {
 	let host = null, destroyed = false, generation = 0, timer = null, modalGeneration = 0;
 	let active = false;
 	let devices = [], policies = [], timezones = [ 'UTC' ], busy = false, pendingMac = '', retryMs = POLL_MS;
+	let refreshPromise = null;
 	let hydrated = false;
 	let devicesReady = false, policiesReady = false, timezonesReady = false;
 	const policyDrafts = createPolicyDrafts();
@@ -166,7 +167,7 @@ function create(options) {
 		: async () => {
 			if (typeof win.fetch !== 'function') throw new Error('fetch unavailable');
 			const response = await win.fetch('/cgi-bin/miclash-device-vendors', {
-				credentials: 'same-origin', cache: 'no-store'
+				credentials: 'same-origin', cache: 'default'
 			});
 			if (!response?.ok) throw new Error('vendor database unavailable');
 			return response.text();
@@ -410,41 +411,49 @@ function create(options) {
 	async function markSaved() {
 		await refresh(true);
 	}
-	async function refresh(force) {
+	function refresh(force) {
 		if (destroyed || !active && !force || doc.hidden && !force) return;
+		if (refreshPromise) return refreshPromise;
 		const token = ++generation;
-		try {
-			const repaint = () => {
-				if (destroyed || token !== generation) return;
-				hydrated = devicesReady && policiesReady; paint();
-				if (hydrated) ensureVendorDatabase();
-			};
-			const replies = await Promise.allSettled([
-				Promise.resolve().then(() => api.devicesList()).then((reply) => {
+		const running = (async () => {
+			try {
+				const repaint = () => {
 					if (destroyed || token !== generation) return;
-					devices = Array.isArray(reply) ? reply : (Array.isArray(reply?.devices) ? reply.devices : []);
-					devicesReady = true; repaint();
-				}),
-				Promise.resolve().then(() => api.devicePolicies()).then((reply) => {
-					if (destroyed || token !== generation) return;
-					policies = Array.isArray(reply) ? reply : (Array.isArray(reply?.policies) ? reply.policies : []);
-					policiesReady = true; repaint();
-				}),
-				Promise.resolve().then(() => api.deviceTimezones()).then((reply) => {
-					if (destroyed || token !== generation) return;
-					const zones = Array.isArray(reply) ? reply : reply?.timezones;
-					if (!Array.isArray(zones) || !zones.length || zones.length > 512 || zones[0] !== 'UTC' ||
-						zones.some((name, index) => typeof name !== 'string' || name.length > 64 || zones.indexOf(name) !== index))
-						throw new Error(_('Invalid timezone response.'));
-					timezones = zones.slice(); timezonesReady = true; repaint();
-				})
-			]);
-			const failed = replies.find((reply) => reply.status === 'rejected');
-			if (failed) throw failed.reason;
-			retryMs = POLL_MS;
-		}
-		catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
-		finally { if (!destroyed && token === generation) schedule(); }
+					hydrated = devicesReady && policiesReady; paint();
+					if (hydrated) ensureVendorDatabase();
+				};
+				const replies = await Promise.allSettled([
+					Promise.resolve().then(() => api.devicesList()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						devices = Array.isArray(reply) ? reply : (Array.isArray(reply?.devices) ? reply.devices : []);
+						devicesReady = true; repaint();
+					}),
+					Promise.resolve().then(() => api.devicePolicies()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						policies = Array.isArray(reply) ? reply : (Array.isArray(reply?.policies) ? reply.policies : []);
+						policiesReady = true; repaint();
+					}),
+					Promise.resolve().then(() => api.deviceTimezones()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						const zones = Array.isArray(reply) ? reply : reply?.timezones;
+						if (!Array.isArray(zones) || !zones.length || zones.length > 512 || zones[0] !== 'UTC' ||
+							zones.some((name, index) => typeof name !== 'string' || name.length > 64 || zones.indexOf(name) !== index))
+							throw new Error(_('Invalid timezone response.'));
+						timezones = zones.slice(); timezonesReady = true; repaint();
+					})
+				]);
+				const failed = replies.find((reply) => reply.status === 'rejected');
+				if (failed) throw failed.reason;
+				retryMs = POLL_MS;
+			}
+			catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
+			finally { if (!destroyed && token === generation) schedule(); }
+		})();
+		const tracked = running.finally(() => {
+			if (refreshPromise === tracked) refreshPromise = null;
+		});
+		refreshPromise = tracked;
+		return refreshPromise;
 	}
 	function visibilitychange() {
 		if (doc.hidden) clearTimer();

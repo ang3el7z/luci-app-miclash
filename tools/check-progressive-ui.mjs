@@ -46,12 +46,14 @@ requirePattern(/function beginPageHydration\(generation\)\s*\{\s*return Promise\
 	'Page hydration must return its readiness promise.');
 const renderBody = source.match(/render:\s*function\(data\)\s*\{([\s\S]*?)\n\t\treturn pageRoot;/)?.[1] || '';
 if (!renderBody) throw new Error('Unable to locate the LuCI render() body.');
-const hydrationStart = renderBody.indexOf('beginPageHydration(generation).finally');
+const hydrationStart = renderBody.indexOf('beginPageHydration(generation).then');
 const forcedReleaseCalls = [ ...renderBody.matchAll(/refreshReleaseMeta\(\{ force: true \}\)/g) ];
-if (forcedReleaseCalls.length !== 1 || forcedReleaseCalls[0].index < hydrationStart)
+if (hydrationStart < 0 || forcedReleaseCalls.length !== 0)
 	throw new Error('Forced release checks must not compete with initial config hydration.');
-if (!/beginPageHydration\(generation\)\.finally\(\(\) => \{[\s\S]*?generation === pageGeneration[\s\S]*?!document\.hidden[\s\S]*?refreshReleaseMeta\(\{ force: true \}\)/.test(renderBody))
-	throw new Error('Forced release checks must start only after config hydration settles.');
+if (!/initialHydration\.finally\([\s\S]*?warmBackgroundPanels\(generation, configHydration\)/.test(renderBody))
+	throw new Error('Background panels must warm after initial state without waiting for the editor.');
+requirePattern(/async function warmBackgroundPanels\(generation, configHydration\)[\s\S]*await configHydration;[\s\S]*refreshReleaseMeta\(\{ force: false \}\)/,
+	'Release freshness must run last through the cached background path.');
 requirePattern(/loadingHtml\(\{\s*kind:\s*'editor'/, 'The config editor must start with a shimmer.');
 requirePattern(/function setConfigWorkspaceReady\(/, 'Missing config-control readiness gate.');
 requirePattern(/configReady:\s*false/, 'The config workspace must be unavailable before hydration succeeds.');

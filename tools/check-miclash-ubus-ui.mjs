@@ -165,10 +165,16 @@ const windowMock = {
 	setTimeout(callback) { const id = nextTimer++; scheduled.set(id, callback); return id; },
 	clearTimeout(id) { cleared.push(id); scheduled.delete(id); }
 };
+const performanceRecorderMock = {
+	now: () => Date.now(),
+	recordRpc: () => {}
+};
 const moduleApi = new Function('baseclass', 'rpc', 'window', 'TextEncoder', 'Uint8Array', 'ArrayBuffer',
-	'btoa', 'atob', ui)({ extend: (value) => value }, rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
+	'btoa', 'atob', 'view_miclash_performance', ui)(
+	{ extend: (value) => value }, rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
 	(value) => Buffer.from(value, 'binary').toString('base64'),
-	(value) => Buffer.from(value, 'base64').toString('binary'));
+	(value) => Buffer.from(value, 'base64').toString('binary'),
+	performanceRecorderMock);
 assert.equal(typeof moduleApi.isSessionExpired, 'function',
 	'api.js must export the LuCI session-expiry classifier');
 assert.equal(moduleApi.isSessionExpired(new Error('Login session is expired at notifySessionExpiry')), true);

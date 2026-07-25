@@ -105,9 +105,6 @@ async function downloadWithProfile(url) {
 async function applySubscriptionOnRouter(options) {
 	const opts = options || {}, profile = profileName(opts.targetName);
 	return withApi(async (api) => {
-		const current = await api.subscription_get(profile);
-		if (!current?.configured) await waitOperation(api,
-			await api.subscription_set(profile, String(opts.url || ''), 'luci'));
 		const record = await waitOperation(api, await api.subscription_update(profile, 'luci'));
 		return { profileUpdateIntervalHours: String(record?.result?.interval_hours || '') };
 	});

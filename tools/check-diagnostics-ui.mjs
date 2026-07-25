@@ -310,6 +310,26 @@ assert.equal(host.querySelectorAll('.sbox-loading-surface').length, 0,
 	'first valid summary must replace both overview shimmers');
 assert.deepEqual(calls.map((call) => call[0]),
 	['diagnosticsSummary'], 'summary refresh must use one cached diagnostics RPC');
+
+let releaseSummaryRefresh;
+const summaryRefreshGate = new Promise((resolve) => { releaseSummaryRefresh = resolve; });
+let overlappingSummaryCalls = 0;
+const initialSummaryReader = api.diagnosticsSummary;
+api.diagnosticsSummary = async () => {
+	overlappingSummaryCalls++;
+	await summaryRefreshGate;
+	return replies.summary;
+};
+const firstSummaryRefresh = panel.refresh();
+await Promise.resolve();
+const secondSummaryRefresh = panel.refresh();
+releaseSummaryRefresh();
+await Promise.all([ firstSummaryRefresh, secondSummaryRefresh ]);
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(overlappingSummaryCalls, 1,
+	'overlapping Diagnostics refresh issued a queued duplicate RPC');
+api.diagnosticsSummary = initialSummaryReader;
+
 const summaryText = host.textContent;
 for (const label of ['Mihomo', 'DNS', 'Firewall', 'Routing', 'Memory monitoring', 'Mihomo memory (RSS)',
 	'Status', 'Baseline', 'Last action', 'Telegram', 'Provider synchronization',
@@ -798,10 +818,16 @@ const rpcMock = { declare(spec) { return async (...args) => {
 	const reply = rpcReplies.get(spec.method);
 	return typeof reply === 'function' ? reply(...args) : (reply || {});
 }; } };
+const performanceRecorderMock = {
+	now: () => Date.now(),
+	recordRpc: () => {}
+};
 const typedApi = new Function('baseclass', 'rpc', 'window', 'TextEncoder', 'Uint8Array', 'ArrayBuffer',
-	'btoa', 'atob', apiSource)(baseclass, rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
+	'btoa', 'atob', 'view_miclash_performance', apiSource)(
+	baseclass, rpcMock, windowMock, TextEncoder, Uint8Array, ArrayBuffer,
 	(value) => Buffer.from(value, 'binary').toString('base64'),
-	(value) => Buffer.from(value, 'base64').toString('binary'));
+	(value) => Buffer.from(value, 'base64').toString('binary'),
+	performanceRecorderMock);
 rpcReplies.set('status', replies.status);
 rpcReplies.set('health', { observed: { service: { running: true }, readiness: { components: [] } }, observed_at: 1710000000000 });
 rpcReplies.set('diagnostics_summary', replies.summary);
