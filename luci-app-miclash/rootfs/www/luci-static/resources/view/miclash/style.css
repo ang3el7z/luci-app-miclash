@@ -76,6 +76,9 @@
 	align-items: center;
 	gap: 6px;
 }
+.sbox-version-inline [data-developer-toggle] {
+	cursor: pointer;
+}
 .sbox-version-loading {
 	position: relative;
 	display: inline-block;

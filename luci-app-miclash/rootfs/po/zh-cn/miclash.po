@@ -2440,3 +2440,6 @@ msgstr "下一个匹配项"
 
 msgid "Previous match"
 msgstr "上一个匹配项"
+
+msgid "Developer mode: %d taps remaining."
+msgstr "开发者模式：还需点击 %d 次。"

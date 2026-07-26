@@ -34,7 +34,8 @@ const SERVICE_JOB_POLL_MS = 1000;
 const SERVICE_JOB_TIMEOUT_MS = 3 * 60 * 1000;
 const OPERATION_TOKEN_STORAGE_PREFIX = 'miclash-operation-token-';
 const AUTO_UPDATE_PRESET_INTERVAL_HOURS = ['2', '4', '12', '24'];
-const DEVELOPER_TAP_COUNT = 10;
+const DEVELOPER_TAP_COUNT = 7;
+const DEVELOPER_TAP_HINT_COUNT = 5;
 const DEVELOPER_TAP_WINDOW_MS = 5000;
 const DEVELOPER_SESSION_MS = 10 * 60 * 1000;
 
@@ -2382,7 +2383,7 @@ function buildPageHtml() {
 	return '' +
 		'<div class="sbox-header">' +
 			'MiClash <span class="sbox-version-inline">' +
-				'<strong id="sbox-app-version"' + versionLoadingClass + versionLoadingState + '>' + versionApp + '</strong>' +
+				'<strong id="sbox-app-version" data-developer-toggle' + versionLoadingClass + versionLoadingState + '>' + versionApp + '</strong>' +
 				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '"' + appTarget + (metadataReady ? '' : ' hidden') + '>' + buildVersionActionIcon(appActionState) + '</button>' +
 			'</span>' +
 			'mihomo <span class="sbox-version-inline">' +
@@ -3447,6 +3448,11 @@ function registerDeveloperTap() {
 	developerTapTimes = developerTapTimes.filter((timestamp) =>
 		now - timestamp <= DEVELOPER_TAP_WINDOW_MS);
 	developerTapTimes.push(now);
+	if (developerTapTimes.length === DEVELOPER_TAP_HINT_COUNT) {
+		notify('info', _('Developer mode: %d taps remaining.')
+			.format(DEVELOPER_TAP_COUNT - DEVELOPER_TAP_HINT_COUNT));
+		return;
+	}
 	if (developerTapTimes.length < DEVELOPER_TAP_COUNT) return;
 	setDeveloperVisible(!developerVisible, true);
 }
@@ -3481,8 +3487,8 @@ async function runDeveloperOperation(reply, progress) {
 }
 
 function bindDeveloperEvents() {
-	const settingsTab = pageRoot?.querySelector('[data-cfg-tab="settings"]');
-	if (settingsTab) settingsTab.addEventListener('click', registerDeveloperTap);
+	const appVersion = pageRoot?.querySelector('#sbox-app-version');
+	if (appVersion) appVersion.addEventListener('click', registerDeveloperTap);
 	const pane = pageRoot?.querySelector('#sbox-pane-developer');
 	if (!pane) return;
 	const restore = pane.querySelector('[data-developer-action="restore-network"]');

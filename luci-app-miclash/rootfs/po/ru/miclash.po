@@ -2468,3 +2468,6 @@ msgstr "Следующее совпадение"
 
 msgid "Previous match"
 msgstr "Предыдущее совпадение"
+
+msgid "Developer mode: %d taps remaining."
+msgstr "Режим разработчика: осталось нажатий — %d."
