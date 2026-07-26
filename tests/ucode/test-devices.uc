@@ -128,6 +128,61 @@ assert_equal(length(devices.discover(boundary_observed)), 0,
 	'discovery accepts observers completed in the next wall-clock second');
 assert_true(boundary_clock_calls >= 2, 'discovery brackets observer collection with clock samples');
 
+// iproute2 6.18 may emit an explicit `router: null` attribute for failed
+// IPv6 neighbour entries. One such harmless optional attribute must not make
+// the entire device list unavailable.
+let iproute_618_neighbors = devices.discover(runtime({ observers: {
+	dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+	neighbors: (family) => ({ observed_at: 1710000000, data: family == 'ipv6' ? enc([
+		{ dst: 'fd3d:e3b1:1940::204', dev: 'br-lan', router: null, state: [ 'FAILED' ] },
+		{ dst: 'fd3d:e3b1:1940::40', dev: 'br-lan',
+			lladdr: 'ac:bb:cc:dd:ee:40', state: [ 'REACHABLE' ] }
+	]) : '[]' })
+} }));
+assert_equal(length(iproute_618_neighbors), 1,
+	'iproute2 router metadata on a failed IPv6 neighbor does not reject the device list');
+assert_equal(iproute_618_neighbors[0].mac, 'ac:bb:cc:dd:ee:40',
+	'a valid LAN neighbor remains visible beside ignored failed metadata');
+
+let official_neighbor_metadata = devices.discover(runtime({ observers: {
+	dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+	neighbors: (family) => ({ observed_at: 1710000000, data: family == 'ipv6' ? enc([
+		{ dst: 'fd3d:e3b1:1940::41', dev: 'br-lan', lladdr: 'ac:bb:cc:dd:ee:41',
+			router: null, proxy: null, managed: null, extern_learn: null,
+			offload: null, extern_valid: null, protocol: 'boot', state: [ 'STALE' ] },
+		{ dst: 'fd3d:e3b1:1940::42', dev: 'br-lan', managed: null }
+	]) : '[]' })
+} }));
+assert_equal(length(official_neighbor_metadata), 1,
+	'official iproute2 metadata does not reject the device list and a missing NUD state is ignored');
+assert_equal(official_neighbor_metadata[0].mac, 'ac:bb:cc:dd:ee:41',
+	'official metadata preserves the validated neighbor identity');
+
+for (let flag in [ 'router', 'proxy', 'managed', 'extern_learn', 'offload', 'extern_valid' ]) {
+	let malformed = { dst: '192.168.1.43', dev: 'br-lan',
+		lladdr: 'ac:bb:cc:dd:ee:43', state: [ 'STALE' ] };
+	malformed[flag] = true;
+	let bad_metadata = runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: (family) => ({ observed_at: 1710000000,
+			data: family == 'ipv4' ? enc([ malformed ]) : '[]' })
+	} });
+	assert_throws(() => devices.discover(bad_metadata), 'INVALID_RESPONSE');
+}
+for (let malformed in [
+	{ dst: '192.168.1.44', dev: 'br-lan', lladdr: 'ac:bb:cc:dd:ee:44',
+		protocol: 99, state: [ 'STALE' ] },
+	{ dst: '192.168.1.45', dev: 'br-lan', lladdr: 'ac:bb:cc:dd:ee:45',
+		unexpected: null, state: [ 'STALE' ] }
+]) {
+	let bad_metadata = runtime({ observers: {
+		dhcp_leases: () => ({ observed_at: 1710000000, data: '' }),
+		neighbors: (family) => ({ observed_at: 1710000000,
+			data: family == 'ipv4' ? enc([ malformed ]) : '[]' })
+	} });
+	assert_throws(() => devices.discover(bad_metadata), 'INVALID_RESPONSE');
+}
+
 let guarded_discovery = devices.discover_effective(runtime({ guard: true, core_available: true,
 	observers: {
 		dhcp_leases: () => fixture('dhcp'),

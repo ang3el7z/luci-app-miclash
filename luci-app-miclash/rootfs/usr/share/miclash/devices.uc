@@ -32,10 +32,10 @@ const HISTORY_SECONDS = 7 * 86400;
 function invalid(code) { fail(code ?? 'INVALID_ARGUMENT'); };
 function clone(value) { return value == null ? value : json(sprintf('%J', value)); };
 function same(left, right) { return sprintf('%J', left) == sprintf('%J', right); };
-function exact(value, allowed, required) {
-	if (type(value) != 'object' || type(value) == 'array') invalid();
-	for (let name in value) if (!exists(allowed, name)) invalid();
-	for (let name in required ?? allowed) if (!exists(value, name)) invalid();
+function exact(value, allowed, required, code) {
+	if (type(value) != 'object' || type(value) == 'array') invalid(code);
+	for (let name in value) if (!exists(allowed, name)) invalid(code);
+	for (let name in required ?? allowed) if (!exists(value, name)) invalid(code);
 };
 function has(values, wanted) { for (let value in values ?? []) if (value == wanted) return true; return false; };
 function same_strings(left, right) {
@@ -324,15 +324,26 @@ function parse_neighbors(cache, observed, family, external) {
 	if (type(values) != 'array') invalid('INVALID_RESPONSE');
 	if (length(values) > MAX_LINES) invalid('RESPONSE_TOO_LARGE');
 	for (let value in values) {
-		exact(value, { dst: true, dev: true, lladdr: true, state: true }, { dst: true, dev: true, state: true });
+		exact(value, {
+			dst: true, dev: true, lladdr: true, state: true,
+			router: true, proxy: true, managed: true, extern_learn: true,
+			offload: true, extern_valid: true, protocol: true
+		}, { dst: true, dev: true }, 'INVALID_RESPONSE');
+		for (let flag in [ 'router', 'proxy', 'managed', 'extern_learn', 'offload', 'extern_valid' ])
+			if (exists(value, flag) && value[flag] != null) invalid('INVALID_RESPONSE');
+		if (exists(value, 'protocol') &&
+		    (type(value.protocol) != 'string' || !length(value.protocol) ||
+		     length(value.protocol) > 64 || !match(value.protocol, /^[A-Za-z0-9_.-]+$/)))
+			invalid('INVALID_RESPONSE');
 		let iface = interface_name(value.dev, 'INVALID_RESPONSE');
 		let parsed = address(value.dst, 'INVALID_RESPONSE', iface);
 		if (parsed.family != family) invalid('INVALID_RESPONSE');
+		let observed_mac_value = observed_mac(value.lladdr);
+		if (!exists(value, 'state')) continue;
 		if (type(value.state) != 'array' || !length(value.state) || length(value.state) > 8)
 			invalid('INVALID_RESPONSE');
 		for (let state in value.state)
 			if (type(state) != 'string' || !match(state, /^[A-Z_]{2,16}$/)) invalid('INVALID_RESPONSE');
-		let observed_mac_value = observed_mac(value.lladdr);
 		if (has(external, iface)) continue;
 		add_observation(cache, observed_mac_value.mac, parsed.address, null, 'neighbor', iface,
 			observed.observed_at, !has(value.state, 'FAILED') && !has(value.state, 'INCOMPLETE'),
