@@ -501,6 +501,42 @@
 	line-height: 1.18;
 	white-space: pre;
 }
+.sbox-log-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 8px;
+}
+.sbox-log-search-input {
+	min-width: 0;
+	flex: 1 1 220px;
+}
+.sbox-log-search-button {
+	min-width: 30px;
+	padding: 0 8px;
+}
+.sbox-log-search-button:disabled {
+	color: var(--sbox-muted);
+	border-color: var(--sbox-border);
+	background: var(--sbox-panel-soft);
+}
+.sbox-log-search-count {
+	min-width: 48px;
+	color: var(--sbox-muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	text-align: center;
+}
+.sbox-log-search-match {
+	padding: 0 1px;
+	border-radius: 2px;
+	background: color-mix(in srgb, var(--sbox-accent) 22%, transparent);
+	color: inherit;
+}
+.sbox-log-search-match-active {
+	background: color-mix(in srgb, var(--sbox-accent) 42%, transparent);
+	outline: 1px solid color-mix(in srgb, var(--sbox-accent) 72%, transparent);
+}
 .sbox-log-muted { color: var(--sbox-muted); }
 .sbox-log-line {
 	display: grid;

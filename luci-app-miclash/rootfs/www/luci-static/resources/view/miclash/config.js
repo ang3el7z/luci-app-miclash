@@ -52,6 +52,7 @@ let visibilityChangeHandler = null;
 let subscriptionUpdateBusy = false;
 let logsLoaded = false;
 let logsRefreshPromise = null;
+let logSearch = createLogSearchState();
 let pageGeneration = 0;
 let sessionExpired = false;
 let cfgTabSetter = null;
@@ -1529,10 +1530,26 @@ async function loadClashLogs() {
 	return view_miclash_logs.readRaw();
 }
 
-function formatLogHtml(raw) {
-	if (!raw) return emptyLogsHtml();
+function createLogSearchState() {
+	return { query: '', activeIndex: -1, matches: [] };
+}
 
-	const rows = String(raw || '').split('\n')
+function matchOffsets(text, query) {
+	const value = String(text || '');
+	const needle = String(query || '').trim().toLocaleLowerCase();
+	if (!needle) return [];
+	const haystack = value.toLocaleLowerCase();
+	const offsets = [];
+	for (let start = haystack.indexOf(needle); start !== -1;
+		start = haystack.indexOf(needle, start + needle.length))
+		offsets.push([ start, start + needle.length ]);
+	return offsets;
+}
+
+function logRows(raw) {
+	if (!raw) return [];
+
+	return String(raw || '').split('\n')
 		.map((line) => view_miclash_logs.formatLine(line))
 		.map((item) => {
 			if (!item || !item.text) return null;
@@ -1552,16 +1569,100 @@ function formatLogHtml(raw) {
 			};
 		})
 		.filter((item) => !!item && !!item.message);
+}
 
-	if (!rows.length) return emptyLogsHtml();
-	return rows.map((item) => {
-		return '<span class="sbox-log-line ' + safeText(item.levelClass || '') + ' ' + safeText(item.daemonClass || '') + '">' +
-			'<span class="sbox-log-time">' + safeText(item.time || '--:--:--') + '</span>' +
-			'<span class="sbox-log-daemon">' + safeText(item.daemon || 'clash') + '</span>' +
-			'<span class="sbox-log-level">' + safeText(item.level || 'MUTED') + '</span>' +
-			'<span class="sbox-log-message">' + safeText(item.message || item.text) + '</span>' +
-		'</span>';
-	}).join('\n');
+function appendLogText(parent, text) {
+	const value = String(text || '');
+	let cursor = 0;
+	for (const [ start, end ] of matchOffsets(value, logSearch.query)) {
+		if (start > cursor) parent.appendChild(document.createTextNode(value.slice(cursor, start)));
+		const match = E('mark', { 'class': 'sbox-log-search-match' }, [ value.slice(start, end) ]);
+		logSearch.matches.push(match);
+		parent.appendChild(match);
+		cursor = end;
+	}
+	if (cursor < value.length || !value.length) parent.appendChild(document.createTextNode(value.slice(cursor)));
+}
+
+function updateLogSearchControls(scrollActive) {
+	const toolbar = pageRoot?.querySelector('#sbox-log-search');
+	if (!toolbar) return;
+	toolbar.hidden = !developerVisible;
+	if (!developerVisible) return;
+
+	const total = logSearch.matches.length;
+	if (logSearch.activeIndex >= total) logSearch.activeIndex = total - 1;
+	if (total === 0) logSearch.activeIndex = -1;
+	for (let i = 0; i < total; i++)
+		logSearch.matches[i].classList.toggle('sbox-log-search-match-active', i === logSearch.activeIndex);
+
+	const count = toolbar.querySelector('#sbox-log-search-count');
+	const next = toolbar.querySelector('#sbox-log-search-next');
+	const previous = toolbar.querySelector('#sbox-log-search-previous');
+	if (count) count.textContent = total ? String(logSearch.activeIndex + 1) + ' / ' + String(total) : '0 / 0';
+	if (next) next.disabled = total === 0;
+	if (previous) previous.disabled = total === 0;
+	if (scrollActive && logSearch.activeIndex >= 0)
+		logSearch.matches[logSearch.activeIndex].scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+function renderLogs(options) {
+	const content = pageRoot?.querySelector('#sbox-log-content');
+	if (!content) return;
+	const opts = options || {};
+	const rows = logRows(appState.logsRaw);
+	logSearch.matches = [];
+	content.replaceChildren();
+	if (!rows.length) {
+		content.appendChild(E('span', { 'class': 'sbox-log-muted' }, [
+			_('No MiClash or Mihomo records match the current log level yet. Current level: %s')
+				.format(configuredLogLevel())
+		]));
+	} else {
+		for (let i = 0; i < rows.length; i++) {
+			const item = rows[i];
+			const row = E('span', { 'class': 'sbox-log-line ' + item.levelClass + ' ' + item.daemonClass });
+			const time = E('span', { 'class': 'sbox-log-time' });
+			const daemon = E('span', { 'class': 'sbox-log-daemon' });
+			const level = E('span', { 'class': 'sbox-log-level' });
+			const message = E('span', { 'class': 'sbox-log-message' });
+			appendLogText(time, item.time || '--:--:--');
+			appendLogText(daemon, item.daemon || 'clash');
+			appendLogText(level, item.level || 'MUTED');
+			appendLogText(message, item.message || item.text);
+			row.append(time, daemon, level, message);
+			if (i > 0) content.appendChild(document.createTextNode('\n'));
+			content.appendChild(row);
+		}
+	}
+	if (logSearch.query.trim() && logSearch.activeIndex < 0 && logSearch.matches.length)
+		logSearch.activeIndex = 0;
+	updateLogSearchControls(opts.scrollActive === true);
+	if (opts.followBottom === true) content.scrollTop = content.scrollHeight;
+}
+
+function setLogSearchQuery(value) {
+	const query = String(value || '');
+	if (logSearch.query === query) return;
+	logSearch.query = query;
+	logSearch.activeIndex = -1;
+	renderLogs({ scrollActive: query.trim().length > 0 });
+}
+
+function moveLogSearchResult(direction) {
+	const total = logSearch.matches.length;
+	if (!total) return;
+	const step = direction < 0 ? -1 : 1;
+	const current = logSearch.activeIndex < 0 ? (step < 0 ? 0 : -1) : logSearch.activeIndex;
+	logSearch.activeIndex = (current + step + total) % total;
+	updateLogSearchControls(true);
+}
+
+function clearLogSearch() {
+	logSearch = createLogSearchState();
+	const input = pageRoot?.querySelector('#sbox-log-search-input');
+	if (input) input.value = '';
+	if (pageRoot?.querySelector('#sbox-log-content')) renderLogs();
 }
 
 function configuredLogLevel() {
@@ -1569,12 +1670,6 @@ function configuredLogLevel() {
 	return match ? String(match[1] || '').trim() : _('unknown');
 }
 
-function emptyLogsHtml() {
-	return '<span class="sbox-log-muted">' + safeText(
-		_('No MiClash or Mihomo records match the current log level yet. Current level: %s')
-			.format(configuredLogLevel())
-	) + '</span>';
-}
 
 async function initializeConfigEditor(content) {
 	const editorHost = (pageRoot && pageRoot.querySelector('#miclash-editor')) || document.getElementById('miclash-editor');
@@ -2359,6 +2454,12 @@ function buildPageHtml() {
 			'<div id="sbox-pane-settings" hidden></div>' +
 
 			'<div id="sbox-pane-logs" hidden>' +
+				'<div id="sbox-log-search" class="sbox-log-search" hidden>' +
+					'<input id="sbox-log-search-input" class="cbi-input-text sbox-input sbox-log-search-input" type="search" placeholder="' + safeText(_('Search logs')) + '" />' +
+					'<button id="sbox-log-search-next" type="button" class="cbi-button cbi-button-neutral sbox-log-search-button" aria-label="' + safeText(_('Next match')) + '">↓</button>' +
+					'<span id="sbox-log-search-count" class="sbox-log-search-count">0 / 0</span>' +
+					'<button id="sbox-log-search-previous" type="button" class="cbi-button cbi-button-neutral sbox-log-search-button" aria-label="' + safeText(_('Previous match')) + '">↑</button>' +
+				'</div>' +
 				'<pre id="sbox-log-content" class="sbox-log-content">' +
 					view_miclash_ui_shell.loadingHtml({ kind: 'editor', lines: 7 }) +
 				'</pre>' +
@@ -2842,8 +2943,7 @@ async function refreshLogs() {
 		const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
 		if (content) {
 			const nearBottom = (content.scrollHeight - content.scrollTop - content.clientHeight) < 48;
-			content.innerHTML = formatLogHtml(raw);
-			if (nearBottom) content.scrollTop = content.scrollHeight;
+			renderLogs({ followBottom: nearBottom && !logSearch.query.trim() });
 		}
 	})().finally(() => { logsRefreshPromise = null; });
 	return logsRefreshPromise;
@@ -2885,6 +2985,12 @@ function startUpdatePolling() {
 }
 
 function bindControlAndHeaderEvents() {
+	const logSearchInput = pageRoot.querySelector('#sbox-log-search-input');
+	const logSearchNext = pageRoot.querySelector('#sbox-log-search-next');
+	const logSearchPrevious = pageRoot.querySelector('#sbox-log-search-previous');
+	if (logSearchInput) logSearchInput.addEventListener('input', () => setLogSearchQuery(logSearchInput.value));
+	if (logSearchNext) logSearchNext.addEventListener('click', () => moveLogSearchResult(1));
+	if (logSearchPrevious) logSearchPrevious.addEventListener('click', () => moveLogSearchResult(-1));
 	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
 	const appAction = pageRoot.querySelector('#sbox-app-action');
 	if (appAction) {
@@ -3317,9 +3423,12 @@ function setDeveloperVisible(visible, activate) {
 	clearDeveloperTimer();
 	const tab = pageRoot?.querySelector('#sbox-developer-tab');
 	const pane = pageRoot?.querySelector('#sbox-pane-developer');
+	const logSearchToolbar = pageRoot?.querySelector('#sbox-log-search');
 	if (tab) tab.hidden = !developerVisible;
+	if (logSearchToolbar) logSearchToolbar.hidden = !developerVisible;
 	if (!developerVisible && pane) pane.hidden = true;
 	if (developerVisible) {
+		if (pageRoot?.querySelector('#sbox-log-content')) renderLogs();
 		developerExpiryTimer = window.setTimeout(() => setDeveloperVisible(false, true),
 			DEVELOPER_SESSION_MS);
 		if (activate && typeof cfgTabSetter === 'function') cfgTabSetter('developer');
@@ -3327,7 +3436,10 @@ function setDeveloperVisible(visible, activate) {
 			performanceOwner.mount(pageRoot?.querySelector('#sbox-performance-panel'));
 	} else if (activate && appState.activeCfgTab === 'developer' &&
 		typeof cfgTabSetter === 'function') cfgTabSetter('settings');
-	if (!developerVisible) performanceOwner.destroy();
+	if (!developerVisible) {
+		clearLogSearch();
+		performanceOwner.destroy();
+	}
 }
 
 function registerDeveloperTap() {

@@ -2459,3 +2459,12 @@ msgstr "Методы RPC"
 
 msgid "Page and action timings"
 msgstr "Время страниц и действий"
+
+msgid "Search logs"
+msgstr "Поиск в логах"
+
+msgid "Next match"
+msgstr "Следующее совпадение"
+
+msgid "Previous match"
+msgstr "Предыдущее совпадение"

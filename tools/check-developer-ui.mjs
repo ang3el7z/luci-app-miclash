@@ -20,6 +20,10 @@ for (const action of [ 'restore-network', 'remove-guard', 'remove-miclash' ])
 		`developer action ${action} is missing`);
 assert.match(config, /setDeveloperVisible\(!developerVisible, true\)/,
 	'ten further Settings taps must toggle the developer tab off');
+assert.match(config, /sbox-log-search[\s\S]*\.hidden\s*=\s*!developerVisible/,
+	'log search toolbar must follow developer session visibility');
+assert.match(config, /if \(!developerVisible\)[\s\S]*?clearLogSearch\(\)/,
+	'disabling developer mode must clear the local log search state');
 assert.doesNotMatch(diagnostics, /data-action[^\n]+recover-network/,
 	'emergency actions must not leak into component diagnostics');
 

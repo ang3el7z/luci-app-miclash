@@ -2431,3 +2431,12 @@ msgstr "RPC 方法"
 
 msgid "Page and action timings"
 msgstr "页面和操作耗时"
+
+msgid "Search logs"
+msgstr "搜索日志"
+
+msgid "Next match"
+msgstr "下一个匹配项"
+
+msgid "Previous match"
+msgstr "上一个匹配项"
