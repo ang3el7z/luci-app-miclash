@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 const MANIFEST_NAME = 'miclash-release-manifest.json';
 const METADATA_NAME = 'release-metadata.json';
 const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*\.(?:ipk|apk)$/;
-const TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$/;
+const TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+(?:(?:[.-][0-9A-Za-z][0-9A-Za-z.-]*)|(?:_rc[0-9]+))?$/;
 const COMMIT_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SDK_PATTERN = /^(?:24\.10|25\.12)\.[0-9]+$/;
 const TARGET_PATTERN = /^[a-z0-9][a-z0-9._+-]*\/[a-z0-9][a-z0-9._+-]*$/;

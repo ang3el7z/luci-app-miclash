@@ -253,7 +253,7 @@ function architecture(runtime) {
 
 function version(value) {
 	if (type(value) != 'string' || !match(value,
-	    /^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$/))
+	    /^v?[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$/))
 		invalid();
 	return substr(value, 0, 1) == 'v' ? value : 'v' + value;
 };

@@ -81,7 +81,8 @@ function packaged_app_version(filesystem) {
 	try { value = trim(filesystem.readfile('/usr/share/miclash/version') ?? ''); }
 	catch (error) { value = ''; }
 	if (type(value) == 'string' && length(value) <= 64 &&
-	    match(value, /^[0-9]+(\.[0-9]+)+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$/))
+	    match(value,
+	      /^[0-9]+(\.[0-9]+)+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$/))
 		return value;
 	return '0.9.3';
 };
@@ -91,11 +92,17 @@ export function create_flush_adapter(filesystem) {
 	if (probe == null)
 		fail('INTERNAL');
 
+	// Clear registry state before probing the active fs ABI. OpenWrt 24's
+	// pinned ucode has an inverted fflush() check: a successful flush returns
+	// null and records the current errno, so post-flush error text is only a
+	// reliable failure signal for the corrected true-success ABI.
+	probe.error();
 	let success_marker = probe.flush();
 	let probe_error = probe.error();
 	let closed = probe.close();
 	if ((success_marker !== true && success_marker != null) ||
-	    probe_error != null || closed !== true)
+	    (success_marker === true && probe_error != null) ||
+	    closed !== true)
 		fail('INTERNAL');
 
 	return (handle) => handle.flush() === success_marker;

@@ -28,7 +28,8 @@ export function verifyReleaseManifest({ manifestPath, assetsDir }) {
 		'transition_installer', 'artifacts' ],
 		'release manifest');
 	assert.equal(manifest.schema_version, 1);
-	assert.match(manifest.tag, /^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$/);
+	assert.match(manifest.tag,
+		/^v[0-9]+\.[0-9]+\.[0-9]+(?:(?:[.-][0-9A-Za-z][0-9A-Za-z.-]*)|(?:_rc[0-9]+))?$/);
 	assert.match(manifest.source_tag_sha, COMMIT_PATTERN);
 	assert.match(manifest.synced_build_sha, COMMIT_PATTERN);
 	for (const [ field, filename ] of [
@@ -110,17 +111,19 @@ function runBuilderContracts() {
 		const first = join(root, 'out-a');
 		const second = join(root, 'out-b');
 		const apk = {
-			filename: 'luci-app-miclash-1.2.3.apk', sdk: { release: '25.12.5', target: 'x86/64' },
+			filename: 'luci-app-miclash-1.2.3_rc1.apk',
+			sdk: { release: '25.12.5', target: 'x86/64' },
 			package_type: 'apk'
 		};
 		const ipk = {
-			filename: 'luci-app-miclash_1.2.3_all.ipk', sdk: { release: '24.10.7', target: 'x86/64' },
+			filename: 'luci-app-miclash_1.2.3_rc1_all.ipk',
+			sdk: { release: '24.10.7', target: 'x86/64' },
 			package_type: 'ipk'
 		};
 		writeBuild(artifacts, 'z-apk', apk, Buffer.from('apk fixture\n'));
 		writeBuild(artifacts, 'a-ipk', ipk, Buffer.from('ipk fixture\n'));
 		const options = {
-			artifactsDir: artifacts, tag: 'v1.2.3', sourceTagSha: 'a'.repeat(40),
+			artifactsDir: artifacts, tag: 'v1.2.3_rc1', sourceTagSha: 'a'.repeat(40),
 			syncedBuildSha: 'b'.repeat(40), installerPath: join(root, 'install-miclash.sh'),
 			transitionInstallerPath: join(root, 'install-miclash-upgrade-0-9-x-to-2.x.x.sh')
 		};
@@ -137,6 +140,7 @@ function runBuilderContracts() {
 			readFileSync(join(second, MANIFEST_NAME), 'utf8'), 'manifest is not reproducible');
 		assert.deepEqual(manifest.artifacts.map((entry) => entry.filename),
 			[ apk.filename, ipk.filename ].sort());
+		assert.equal(manifest.tag, 'v1.2.3_rc1');
 		for (const file of readdirSync(first))
 			assert.equal(readFileSync(join(first, file)).includes('must-never-appear-in-release-output'), false,
 				`${file} leaked an environment secret`);
@@ -154,6 +158,8 @@ function runBuilderContracts() {
 		writeBuild(duplicateRoot, 'two', apk, Buffer.from('two'));
 		expectFailure(() => buildReleaseManifest({ ...options, artifactsDir: duplicateRoot,
 			outputDir: join(root, 'duplicate-out') }), /duplicate/i);
+		expectFailure(() => buildReleaseManifest({ ...options, tag: 'v1.2.3__rc1',
+			outputDir: join(root, 'bad-tag-out') }), /tag/i);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 		delete process.env.GH_TOKEN;
@@ -228,6 +234,10 @@ function runRepositoryContracts() {
 	assert.deepEqual(sdkEntries(checks, 'package-build:'), [
 		'24.10.7:opkg:x86/64', '25.12.5:apk:x86/64', '25.12.5:apk:mediatek/filogic'
 	], 'PR CI must build the exact three-SDK supported matrix');
+	assert.match(checks, /PKG_VERSION:=2\.5\.2_rc1/,
+		'PR CI must compile an apk-compatible release-candidate version');
+	assert.match(checks, /2\.5\.2_rc1-r1/,
+		'PR CI must verify the raw apk release-candidate package name');
 	for (const [ name, workflow ] of [ [ 'release', release ], [ 'checks', checks ] ]) {
 		assert.match(workflow, /# CONFIG_ALL_KMODS is not set/,
 			`${name} workflow must disable the SDK-wide kmod build`);

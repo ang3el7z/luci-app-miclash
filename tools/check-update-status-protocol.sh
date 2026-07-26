@@ -32,9 +32,9 @@ grep -Eq '^updated_at=[0-9]+$' "$status"
 printf '%s\n' stale > "$status"
 chmod 0600 "$status"
 "$installer" status-protocol-test --status-file "$status" --token "$token2" \
-	--target-tag v9.9.10 --service-was-running 0
+	--target-tag v9.9.10_rc1 --service-was-running 0
 grep -Fxq "token=$token2" "$status"
-grep -Fxq 'target_version=v9.9.10' "$status"
+grep -Fxq 'target_version=v9.9.10_rc1' "$status"
 grep -Fxq 'service_was_running=0' "$status"
 ! grep -Fq stale "$status"
 

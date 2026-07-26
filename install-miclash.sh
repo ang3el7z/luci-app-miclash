@@ -108,7 +108,7 @@ validate_status_authority() {
     printf '%s\n' "$operation" | grep -Eq '^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$' || return 1
     printf '%s\n' "$CURRENT_TOKEN" | grep -Eq '^[0-9a-f]{32}$' || return 1
     printf '%s\n' "$STATUS_TARGET_VERSION" |
-        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
     case "$STATUS_SERVICE_WAS_RUNNING" in 0|1) ;; *) return 1 ;; esac
     if [ -e "$STATUS_FILE" ] || [ -L "$STATUS_FILE" ]; then
         [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] || return 1
@@ -225,7 +225,7 @@ installed_miclash_version() {
 version_major() {
     normalized="$(normalize_version "$1")"
     printf '%s\n' "$normalized" |
-        grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+        grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
     printf '%s' "${normalized%%.*}"
 }
 
@@ -558,7 +558,7 @@ validate_miclash_release_file() {
     [ -f "$release_file" ] && [ -s "$release_file" ] || return 1
     case "$requested_manager" in apk|opkg) ;; *) return 1 ;; esac
     printf '%s\n' "$expected_tag" |
-        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
 
     tag_count="$(exact_value_count "$expected_tag" json_string_values "$release_file" tag_name)" || return 1
     [ "$tag_count" = 1 ] || return 1
@@ -661,7 +661,7 @@ stable_catalog_tags_newest_first() {
 select_terminal_release() {
     if [ -n "$MICLASH_TARGET_TAG" ]; then
         printf '%s\n' "$MICLASH_TARGET_TAG" |
-            grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' \
+            grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' \
             || die "Invalid requested MiClash tag"
         fetch_miclash_exact_release "$MICLASH_TARGET_TAG" ||
             die "Requested MiClash release was not found: $MICLASH_TARGET_TAG"
@@ -885,12 +885,6 @@ schedule_backend_reload() {
         # to reach LuCI before replacing the daemon process.
         /bin/busybox sleep 5
         /etc/init.d/miclashd restart
-        if [ -e /etc/miclash/package-upgrade-state ]; then
-            /usr/share/miclash/package-upgrade-recover \
-                /etc/miclash/package-upgrade-state ||
-                logger -t miclash -p daemon.err \
-                    "package upgrade recovery remains pending after backend reload"
-        fi
     ) >/dev/null 2>&1 &
 }
 

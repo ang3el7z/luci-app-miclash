@@ -33,6 +33,11 @@ function curl_request(filesystem, args) {
 	return { output: output?.[1], header: header?.[1], url: url?.[1] };
 };
 
+function assert_intent_unchanged(service_calls, label) {
+	for (let call in service_calls)
+		assert_true(call != 'enabled' && call != 'enable' && call != 'disable', label);
+};
+
 function environment(options) {
 	options ??= {};
 	let old = options.old ?? 'old mihomo binary';
@@ -115,11 +120,14 @@ function environment(options) {
 		'mihomo-linux-arm64-v1.2.3.gz';
 	responses[asset_url] = gzip_body;
 	let service_calls = [], wait_calls = [], curl_urls = [], running = options.running === true,
-		start_count = 0;
+		enabled = options.enabled === true, start_count = 0;
 	let stop_count = 0, stopped_wait_failed = false;
 	let readiness = [ ...(options.readiness ?? []) ], wait_count = 0;
 	let service = {
 		observe: () => ({ state: running ? 'running' : 'stopped', running }),
+		enabled: () => { push(service_calls, 'enabled'); return enabled; },
+		enable: () => { push(service_calls, 'enable'); enabled = true; },
+		disable: () => { push(service_calls, 'disable'); enabled = false; },
 		stop: () => {
 			push(service_calls, 'stop'); running = false; stop_count++;
 			if (options.stop_throw_once && stop_count == 1) die('HEALTH_FAILED');
@@ -234,7 +242,7 @@ function environment(options) {
 		runtime, operations: ops, service,
 		settings: { get: () => ({ updates: {
 			mihomo_release_channel: options.channel ?? 'release',
-			miclash_release_channel: 'release'
+			miclash_release_channel: options.miclash_channel ?? 'release'
 		} }) }
 	};
 	return { filesystem, clock, process, digest, ops, service_calls, wait_calls, curl_urls,
@@ -352,6 +360,8 @@ running.clock.advance(0);
 assert_equal(running.ops.get(running_update.id).state, 'success');
 assert_equal(join(',', running.service_calls), 'stop,start');
 assert_equal(running.filesystem.readfile('/opt/clash/bin/clash'), 'new mihomo binary');
+assert_intent_unchanged(running.service_calls,
+	'Mihomo update must restore runtime without changing durable enable state');
 
 // Failed readiness restores the exact old binary and proves it starts. A
 // failure of that restoration is a distinct INTERNAL terminal state.
@@ -372,7 +382,23 @@ assert_equal(restore_failed.ops.get(restore_failed_update.id).state, 'failure');
 assert_equal(restore_failed.ops.get(restore_failed_update.id).error.code, 'INTERNAL');
 
 // Explicit rollback consumes only the opaque previous id and itself uses the
-// same stopped/running atomic transaction.
+// same stopped/running atomic transaction without touching durable intent.
+let stopped_rollback = environment({ old: 'current binary' });
+stopped_rollback.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
+	'old mihomo binary');
+stopped_rollback.filesystem.chmod('/opt/clash/bin/previous/' + previous_id, 0o700);
+let stopped_rollback_op = stopped_rollback.updater.rollback_mihomo(
+	{ id: previous_id }, 'luci');
+stopped_rollback.clock.advance(0);
+assert_equal(stopped_rollback.ops.get(stopped_rollback_op.id).state, 'success');
+assert_equal(stopped_rollback.filesystem.readfile('/opt/clash/bin/clash'),
+	'old mihomo binary');
+assert_intent_unchanged(stopped_rollback.service_calls,
+	'Mihomo stopped rollback must preserve runtime and durable enable state');
+assert_equal(length(stopped_rollback.service_calls), 0);
+assert_equal(stopped_rollback.updater.status().service_was_running, false);
+assert_equal(stopped_rollback.updater.status().postcheck, 'stopped');
+
 let rollback = environment({ old: 'current binary', running: true });
 rollback.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
 	'old mihomo binary');
@@ -383,6 +409,8 @@ assert_equal(rollback.ops.get(rollback_op.id).state, 'success',
 	sprintf('%J', rollback.ops.get(rollback_op.id)));
 assert_equal(rollback.filesystem.readfile('/opt/clash/bin/clash'), 'old mihomo binary');
 assert_equal(join(',', rollback.service_calls), 'stop,start');
+assert_intent_unchanged(rollback.service_calls,
+	'Mihomo rollback must restore runtime without changing durable enable state');
 
 // Exact architecture suffix selection is closed over known OpenWrt targets;
 // duplicate matching release assets are never resolved by array order.
@@ -481,6 +509,16 @@ assert_equal(app_info.readiness, 'ready');
 let apk_info = environment({ manager: 'apk' }).updater.release_info({ kind: 'miclash' });
 assert_equal(apk_info.ready, true);
 assert_equal(apk_info.readiness, 'ready');
+let apk_rc_release = replace(fixture('miclash-release.json'), /v9\.9\.9/g, 'v2.5.2_rc1');
+apk_rc_release = replace(apk_rc_release, /9\.9\.9/g, '2.5.2_rc1');
+apk_rc_release = replace(apk_rc_release, '"prerelease": false', '"prerelease": true');
+let apk_rc = environment({ manager: 'apk', miclash_channel: 'prerelease', responses: {
+	[MICLASH_RELEASES]: '[' + apk_rc_release + ']'
+} });
+let apk_rc_info = apk_rc.updater.release_info({ kind: 'miclash' });
+assert_equal(apk_rc_info.version, 'v2.5.2_rc1');
+assert_equal(apk_rc_info.ready, true);
+assert_equal(apk_rc_info.readiness, 'ready');
 
 let pending_release = fixture('miclash-release-incomplete.json');
 let pending = environment({ responses: { [MICLASH_LATEST]: pending_release } });
@@ -546,12 +584,16 @@ assert_equal(running_app_update.updater.status().service_was_running, true);
 assert_equal(running_app_update.updater.status().postcheck, 'ready');
 assert_true(length(running_app_update.wait_calls) > 0,
 	'running app update requires a fresh readiness check');
+assert_intent_unchanged(running_app_update.service_calls,
+	'running MiClash update must leave durable intent to package recovery');
 
 let stopped_app_started = environment({ installer_starts_service: true });
 let stopped_app_op = stopped_app_started.updater.update_miclash(
 	{ version: 'v9.9.9' }, 'telegram');
 stopped_app_started.clock.advance(0);
 assert_equal(stopped_app_started.ops.get(stopped_app_op.id).state, 'success');
+assert_intent_unchanged(stopped_app_started.service_calls,
+	'stopped MiClash update must leave durable intent to package recovery');
 assert_equal(stopped_app_started.service_calls[0], 'stop');
 assert_equal(stopped_app_started.updater.status().postcheck, 'stopped');
 

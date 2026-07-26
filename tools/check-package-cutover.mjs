@@ -22,6 +22,7 @@ const config = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/config.u
 const api = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/api.uc'), 'utf8');
 const nft = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/firewall/nft.uc'), 'utf8');
 const installer = fs.readFileSync(path.join(root, 'install-miclash.sh'), 'utf8');
+const miclashdInit = fs.readFileSync(path.join(pkg, 'rootfs/etc/init.d/miclashd'), 'utf8');
 
 function requireMatch(value, expression, message) {
 	if (!expression.test(value)) throw new Error(message);
@@ -29,6 +30,18 @@ function requireMatch(value, expression, message) {
 function forbid(value, expression, message) {
 	if (expression.test(value)) throw new Error(message);
 }
+
+const upgradeRecoverInstance = miclashdInit.match(/procd_open_instance upgrade-recover\n([\s\S]*?)\n\tprocd_close_instance/)?.[1] || '';
+const backendReload = installer.match(/schedule_backend_reload\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+requireMatch(upgradeRecoverInstance,
+	/procd_set_param command \/usr\/share\/miclash\/package-upgrade-recover \/etc\/miclash\/package-upgrade-state/,
+	'miclashd must register the one-shot package recovery worker');
+forbid(upgradeRecoverInstance, /procd_set_param command \/bin\/sh -c/,
+	'package recovery must be directly owned by procd, without a shell wrapper');
+forbid(upgradeRecoverInstance, /procd_set_param respawn/,
+	'package recovery must not respawn after a retained journal failure');
+forbid(backendReload, /package-upgrade-recover/,
+	'the installer reload path must leave recovery ownership to miclashd');
 
 const clashGuardGate = clash.indexOf('/etc/init.d/miclash-guard start');
 const clashProcdOpen = clash.indexOf('procd_open_instance');
@@ -43,8 +56,14 @@ requireMatch(clash,
 	/stat -c '%u:%a:%h'[\s\S]*0:600:1[\s\S]*rm -f "\$NO_AUTOSTART_MARKER"/,
 	'package-install autostart marker must be authenticated and consumed atomically');
 requireMatch(service,
-	/command: '\/etc\/init\.d\/clash'[\s\S]*args: \[ 'start' \]/,
+	/function start_service\(\)[\s\S]*init_action\('start'\)/,
 	'explicit Mihomo start must re-enter rc.common to register a suppressed procd instance');
+requireMatch(service,
+	/function init_action\(action\)[\s\S]*command: '\/etc\/init\.d\/clash'[\s\S]*args: \[ action \]/,
+	'Mihomo init actions must use the fixed init entrypoint with one bounded argument');
+for (const action of [ 'enabled', 'enable', 'disable' ])
+	requireMatch(service, new RegExp(`function ${action}\\(\\)[\\s\\S]*init_action\\('${action}'\\)`),
+		`Mihomo ${action} must use a literal bounded init action, not shell interpolation`);
 forbid(service, /spawn:\s*true/,
 	'Mihomo start must not spawn a procd instance that package installation may have suppressed');
 requireMatch(makefile, /LUCI_DEPENDS:=[\s\S]*\+ip-full/,

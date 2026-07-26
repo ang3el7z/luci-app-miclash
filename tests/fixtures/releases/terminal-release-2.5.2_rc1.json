@@ -1,0 +1,11 @@
+{
+  "tag_name": "v2.5.2_rc1",
+  "draft": false,
+  "prerelease": true,
+  "assets": [
+    { "name": "install-miclash.sh.sha256", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.5.2_rc1/install-miclash.sh.sha256" },
+    { "name": "miclash-release-manifest.json", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.5.2_rc1/miclash-release-manifest.json" },
+    { "name": "luci-app-miclash-2.5.2_rc1.apk", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.5.2_rc1/luci-app-miclash-2.5.2_rc1.apk" },
+    { "name": "luci-app-miclash-2.5.2_rc1.apk.sha256", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.5.2_rc1/luci-app-miclash-2.5.2_rc1.apk.sha256" }
+  ]
+}

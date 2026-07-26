@@ -18,7 +18,8 @@ export function detect_package_manager(runtime) {
 
 export function miclash_assets(manager, version) {
 	if ((manager != 'apk' && manager != 'opkg') || type(version) != 'string' ||
-	    !match(version, /^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$/))
+	    !match(version,
+	      /^[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$/))
 		invalid();
 	let package_name = manager == 'apk'
 		? 'luci-app-miclash-' + version + '.apk'
