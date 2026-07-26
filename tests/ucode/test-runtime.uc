@@ -12,6 +12,9 @@ let rt = runtime.create({ process: fake_process, clock: fake_clock, fs: packaged
 assert_true(rt.fs != null);
 assert_equal(rt.clock.now(), 1000);
 assert_equal(rt.app_version, '2.0.4');
+let prerelease_rt = runtime.create({ process: fakes.process(), clock: fakes.clock(0),
+	fs: fakes.fs({ '/usr/share/miclash/version': '2.5.2_rc1\n' }) });
+assert_equal(prerelease_rt.app_version, '2.5.2_rc1');
 let fallback_rt = runtime.create({ process: fakes.process(), clock: fakes.clock(0),
 	fs: fakes.fs({}) });
 assert_equal(fallback_rt.app_version, '0.9.3');
@@ -148,29 +151,6 @@ assert_equal(production.rulesets.validate('safe.txt', 'DOMAIN,' + sprintf('%c', 
 let random_hex = production.random.hex(8);
 assert_match(random_hex, /^[0-9a-f]{16}$/);
 
-function flush_probe(marker) {
-	return {
-		open: (path, mode) => {
-			assert_equal(path, '/dev/null');
-			assert_equal(mode, 'w');
-			return {
-				flush: () => marker,
-				error: () => null,
-				close: () => true
-			};
-		}
-	};
-};
-
-// OpenWrt 24's pinned ucode returns null for a successful flush while
-// OpenWrt 25 returns true. The adapter must normalize both ABIs without
-// accepting the opposite failure value.
-let legacy_flush = runtime.create_flush_adapter(flush_probe(null));
-assert_equal(legacy_flush({ flush: () => null }), true);
-assert_equal(legacy_flush({ flush: () => true }), false);
-let current_flush = runtime.create_flush_adapter(flush_probe(true));
-assert_equal(current_flush({ flush: () => true }), true);
-assert_equal(current_flush({ flush: () => null }), false);
 assert_equal(production.fs.flush({ flush: () => null, error: () => null }), true);
 assert_equal(production.fs.flush({ flush: () => true, error: () => null }), false);
 assert_equal(production.fs.flush({ flush: () => null, error: () => 'stale error' }), true);

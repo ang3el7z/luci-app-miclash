@@ -336,6 +336,47 @@ let init_failure = env({ process: fakes.process({
 }) });
 assert_throws(() => service.create(init_failure.rt).start('config.yaml'), 'HEALTH_FAILED');
 
+// Boot intent is independent from the transient procd state. The adapter
+// must issue bounded init actions and distinguish disabled from a failure.
+let boot_intent = env({ process: fakes.process({
+	'/etc/init.d/clash:enabled': { code: 0 },
+	'/etc/init.d/clash:enable': { code: 0 },
+	'/etc/init.d/clash:disable': { code: 0 }
+}) });
+let boot_service = service.create(boot_intent.rt);
+assert_true(boot_service.enabled());
+assert_true(boot_service.enable());
+assert_true(boot_service.disable());
+assert_equal(join(',', map(boot_intent.rt.process.calls,
+	(call) => call.command + ':' + join(',', call.args))),
+	'/etc/init.d/clash:enabled,/etc/init.d/clash:enable,/etc/init.d/clash:disable');
+for (let call in boot_intent.rt.process.calls)
+	assert_equal(call.timeout_ms, 15000,
+		'init intent action must have a finite 15-second process deadline');
+
+let boot_disabled = env({ process: fakes.process({
+	'/etc/init.d/clash:enabled': { code: 1 }
+}) });
+assert_equal(service.create(boot_disabled.rt).enabled(), false);
+
+let boot_unknown = env({ process: fakes.process({
+	'/etc/init.d/clash:enabled': { code: 2 }
+}) });
+assert_throws(() => service.create(boot_unknown.rt).enabled(), 'HEALTH_FAILED');
+
+let boot_invalid = env({ process: { run: (request) => ({ code: null }) } });
+assert_throws(() => service.create(boot_invalid.rt).enabled(), 'HEALTH_FAILED');
+
+let enable_failure = env({ process: fakes.process({
+	'/etc/init.d/clash:enable': { code: 1 }
+}) });
+assert_throws(() => service.create(enable_failure.rt).enable(), 'HEALTH_FAILED');
+
+let disable_failure = env({ process: fakes.process({
+	'/etc/init.d/clash:disable': { code: 1 }
+}) });
+assert_throws(() => service.create(disable_failure.rt).disable(), 'HEALTH_FAILED');
+
 stopped.rt.process.on_run = (request) => {
 	if (request.command == '/etc/init.d/clash' && request.args[0] == 'start')
 		stopped.ubus.running = true;

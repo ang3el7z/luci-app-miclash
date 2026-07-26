@@ -141,9 +141,11 @@ jobs:
           sudo tools/check-package-cleanup.sh
           sudo tools/check-package-release.sh
           sudo tools/check-package-removal.sh
+          sudo tools/check-package-upgrade-recovery.sh
           sudo tools/check-hard-reinstall-marker.sh
           sudo tools/check-mutation-lock.sh
           sudo tools/check-ready-release-selection.sh
+          sudo tools/check-terminal-service-restore.sh
           sudo tools/check-update-status-protocol.sh
 
   package-build:
@@ -211,6 +213,10 @@ jobs:
           cd "$SDK_HOME"
           ./scripts/feeds update > /dev/null 2>&1
           ./scripts/feeds install -a > /dev/null 2>&1
+          if [ "${{ matrix.package_manager }}" = apk ] && [ "${{ matrix.arch }}" = x86/64 ]; then
+            sed -i 's/^PKG_VERSION:=.*/PKG_VERSION:=2.5.2_rc1/' \
+              "${{ github.workspace }}/luci-app-miclash/Makefile"
+          fi
           ln -s "${{ github.workspace }}/luci-app-miclash" "package/$PACKAGE_NAME"
           python3 - <<'PY'
           from pathlib import Path
@@ -273,4 +279,10 @@ jobs:
             *) echo "Unsupported package manager: ${{ matrix.package_manager }}" >&2; exit 1 ;;
           esac
           test -n "$package" && test -s "$package"
+          if [ "${{ matrix.package_manager }}" = apk ] && [ "${{ matrix.arch }}" = x86/64 ]; then
+            case "${package##*/}" in
+              "${PACKAGE_NAME}-2.5.2_rc1-r1.apk") ;;
+              *) echo "Unexpected release-candidate apk name: ${package##*/}" >&2; exit 1 ;;
+            esac
+          fi
           ls -lh "$package"

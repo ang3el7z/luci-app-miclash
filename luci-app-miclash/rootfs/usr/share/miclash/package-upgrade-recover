@@ -3,17 +3,95 @@
 set -eu
 
 state_file="${1:-/etc/miclash/package-upgrade-state}"
+
+state_absent() {
+	[ ! -e "$state_file" ] && [ ! -L "$state_file" ]
+}
+
+state_absent && exit 0
+
+runtime_dir=/var/run/miclash
+lock_dir="$runtime_dir/package-upgrade-recover.lock"
+lock_acquired=0
+
+release_lock() {
+	[ "$lock_acquired" -eq 1 ] || return 0
+	rmdir "$lock_dir" 2>/dev/null || true
+}
+
+finish() {
+	status=$?
+	release_lock
+	if [ "$status" -ne 0 ]; then
+		printf '%s\n' 'MiClash package upgrade recovery remains pending' >&2
+	fi
+	exit "$status"
+}
+
+trap finish EXIT
+trap 'exit 1' HUP INT TERM
+
+if [ ! -e "$runtime_dir" ] && [ ! -L "$runtime_dir" ]; then
+	( umask 077; mkdir -p "$runtime_dir" ) 2>/dev/null || exit 1
+	chown 0:0 "$runtime_dir" 2>/dev/null || exit 1
+	chmod 0700 "$runtime_dir" || exit 1
+fi
+[ ! -L "$runtime_dir" ] && [ -d "$runtime_dir" ] || exit 1
+[ "$(stat -c '%u:%a' "$runtime_dir" 2>/dev/null)" = '0:700' ] || exit 1
+
+attempt=0
+waited_for_owner=0
+while [ "$attempt" -lt 30 ]; do
+	if [ "$waited_for_owner" -eq 0 ] && mkdir "$lock_dir" 2>/dev/null; then
+		lock_acquired=1
+		chown 0:0 "$lock_dir" 2>/dev/null || exit 1
+		chmod 0700 "$lock_dir" || exit 1
+		[ "$(stat -c '%u:%a' "$lock_dir" 2>/dev/null)" = '0:700' ] || exit 1
+		break
+	fi
+	state_absent && exit 0
+	waited_for_owner=1
+	attempt=$((attempt + 1))
+	sleep 1
+done
+
+[ "$lock_acquired" -eq 1 ] || exit 1
+state_absent && exit 0
 [ ! -L "$state_file" ] && [ -f "$state_file" ] || exit 1
 [ "$(stat -c '%u:%a:%h' "$state_file" 2>/dev/null)" = '0:600:1' ] || exit 1
+[ "$(wc -c < "$state_file" 2>/dev/null)" -le 512 ] || exit 1
 
-guard_enabled="$(sed -n 's/^guard_enabled=\([01]\)$/\1/p' "$state_file")"
-service_running="$(sed -n 's/^service_running=\([01]\)$/\1/p' "$state_file")"
-case "$guard_enabled" in
-	0|1) ;;
-	*) exit 1 ;;
-esac
-case "$service_running" in
-	0|1) ;;
+version=
+guard_enabled=
+service_running=
+service_enabled=
+while IFS= read -r line || [ -n "$line" ]; do
+	[ "${#line}" -le 64 ] || exit 1
+	case "$line" in
+		version=1|version=2)
+			[ -z "$version" ] || exit 1
+			version="${line#version=}"
+			;;
+		guard_enabled=0|guard_enabled=1)
+			[ -z "$guard_enabled" ] || exit 1
+			guard_enabled="${line#guard_enabled=}"
+			;;
+		service_running=0|service_running=1)
+			[ -z "$service_running" ] || exit 1
+			service_running="${line#service_running=}"
+			;;
+		service_enabled=0|service_enabled=1)
+			[ -z "$service_enabled" ] || exit 1
+			service_enabled="${line#service_enabled=}"
+			;;
+		*) exit 1 ;;
+	esac
+done < "$state_file"
+
+[ -n "$version" ] && [ -n "$guard_enabled" ] && [ -n "$service_running" ] || exit 1
+case "$version" in
+	1) [ -z "$service_enabled" ] || exit 1 ;;
+	2) [ -n "$service_enabled" ] || exit 1 ;;
 	*) exit 1 ;;
 esac
 
@@ -30,8 +108,17 @@ done
 
 [ "$attempt" -lt 30 ] || exit 1
 
-case "$service_running" in
+desired_on="$service_running"
+if [ "$version" = 2 ] && {
+	[ "$service_running" = 1 ] || [ "$service_enabled" = 1 ]
+}; then
+	desired_on=1
+fi
+
+case "$desired_on" in
 	1)
+		/etc/init.d/clash enable >/dev/null 2>&1 || exit 1
+		/etc/init.d/clash enabled >/dev/null 2>&1 || exit 1
 		/etc/init.d/clash running >/dev/null 2>&1 ||
 			/etc/init.d/clash start >/dev/null 2>&1 || exit 1
 		attempt=0
@@ -45,7 +132,10 @@ case "$service_running" in
 	0)
 		/etc/init.d/clash stop >/dev/null 2>&1 || exit 1
 		! /etc/init.d/clash running >/dev/null 2>&1 || exit 1
+		/etc/init.d/clash disable >/dev/null 2>&1 || exit 1
+		! /etc/init.d/clash enabled >/dev/null 2>&1 || exit 1
 		;;
+	*) exit 1 ;;
 esac
 
 rm -f "$state_file" || exit 1
