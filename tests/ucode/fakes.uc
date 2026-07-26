@@ -97,15 +97,18 @@ export function fs(initial) {
 		throw_after_rename_once_matching: null,
 		fail_rmdir_once: false,
 		ignore_chmod: false,
+		on_readfile: null,
 		on_lstat: null,
+		on_link: null,
 		on_mkdir: null,
 		on_rename: null,
+		read_results: [],
 		write_results: [],
 		calls: {
 			open: [], write: [], flush: [], close: [], chmod: [], rename: [], unlink: [],
-			read: [], readfile: [], fstat: [], rmdir: []
+			link: [], read: [], readfile: [], fstat: [], rmdir: []
 		},
-		writefile: (path, data) => files[path] = data,
+		writefile: null,
 		exists: (path) => exists(files, path) || exists(symlinks, path),
 		mkdir: null
 	};
@@ -122,6 +125,8 @@ export function fs(initial) {
 	};
 	fake.readfile = (path) => {
 		push(fake.calls.readfile, path);
+		if (type(fake.on_readfile) == 'function')
+			fake.on_readfile(path);
 		return files[path];
 	};
 	fake.read = (handle, amount) => handle.read(amount);
@@ -160,6 +165,29 @@ export function fs(initial) {
 			if (path == link || substr(path, 0, length(link) + 1) == link + '/')
 				return target + substr(path, length(link));
 		return path;
+	};
+
+	function set_inode_value(values, path, value) {
+		let resolved = resolve(path), inode = inodes[resolved];
+		if (inode == null || !exists(files, resolved)) {
+			values[resolved] = value;
+			return;
+		}
+		for (let peer in files)
+			if (inodes[peer] == inode)
+				values[peer] = value;
+	};
+
+	fake.writefile = (path, data) => {
+		let resolved = resolve(path), inode = inodes[resolved];
+		if (inode == null) {
+			files[resolved] = data;
+			remember_directories(resolved);
+			return;
+		}
+		for (let peer in files)
+			if (inodes[peer] == inode)
+				files[peer] = data;
 	};
 
 	function info(path, follow) {
@@ -206,22 +234,33 @@ export function fs(initial) {
 		    (substr(mode, 0, 1) == 'r' && !fake.exists(path)))
 			return null;
 
+		let actual_path = resolve(path);
 		if (substr(mode, 0, 1) != 'r') {
-			files[path] = '';
-			inodes[path] = next_inode++;
-			modes[path] = perm;
-			remember_directories(path);
-			push(created, path);
+			if (exists(files, actual_path))
+				fake.writefile(actual_path, '');
+			else {
+				files[actual_path] = '';
+				inodes[actual_path] = next_inode++;
+				modes[actual_path] = perm;
+				remember_directories(actual_path);
+				push(created, actual_path);
+			}
 		}
 		push(fake.calls.open, { path, mode, perm });
 		let offset = 0;
 		let fd = next_fd++;
-		let opened_path = resolve(path), opened_inode = info(resolve(path), true)?.inode;
+		let opened_path = actual_path, opened_inode = info(actual_path, true)?.inode;
 		let handle = { path, opened_path, opened_inode, closed: false, last_error: null };
 		handle.fileno = () => fd;
 		handle.read = (amount) => {
-			if (handle.closed)
+			if (handle.closed || fake.fail_on == 'read')
 				return null;
+			if (length(fake.read_results)) {
+				let requested = shift(fake.read_results);
+				if (requested == null)
+					return null;
+				amount = requested;
+			}
 			let data = substr(files[handle.opened_path], offset, amount);
 			offset += length(data);
 			push(fake.calls.read, { path, amount: length(data) });
@@ -234,7 +273,8 @@ export function fs(initial) {
 			if (amount == null)
 				return null;
 			amount = amount > length(data) ? length(data) : amount;
-			files[path] = substr(files[path], 0, offset) + substr(data, 0, amount);
+			fake.writefile(opened_path,
+				substr(files[opened_path], 0, offset) + substr(data, 0, amount));
 			offset += amount;
 			push(fake.calls.write, { path, amount });
 			return amount;
@@ -252,8 +292,8 @@ export function fs(initial) {
 		handle.close = () => {
 			push(fake.calls.close, path);
 			handle.closed = true;
-			if (fake.corrupt_on_close && length(files[path]))
-				files[path] = '!' + substr(files[path], 1);
+			if (fake.corrupt_on_close && length(files[opened_path]))
+				fake.writefile(opened_path, '!' + substr(files[opened_path], 1));
 			return fake.fail_on == 'close' ? null : true;
 		};
 		return handle;
@@ -275,8 +315,49 @@ export function fs(initial) {
 		if (fake.fail_on == 'chmod')
 			return null;
 		if (!fake.ignore_chmod)
-			modes[path] = mode;
+			set_inode_value(modes, path, mode);
 		return true;
+	};
+	fake.link = (from, to) => {
+		push(fake.calls.link, { from, to });
+		let source = resolve(from);
+		let source_info = info(source, true), parent_info = info(parent(to), true);
+		if (!exists(files, source) || fake.exists(to) || fake.fail_on == 'link' ||
+		    source_info?.dev?.major != parent_info?.dev?.major ||
+		    source_info?.dev?.minor != parent_info?.dev?.minor)
+			return null;
+		files[to] = files[source];
+		modes[to] = modes[source];
+		owners[to] = owners[source];
+		groups[to] = groups[source];
+		devices[to] = source_info.dev.minor;
+		inodes[to] = inodes[source];
+		let count = (links[source] ?? 1) + 1;
+		for (let path in files)
+			if (inodes[path] == inodes[source])
+				links[path] = count;
+		remember_directories(to);
+		let generation = next_object_generation++;
+		object_generations[to] = generation;
+		generation_paths[sprintf('%d', generation)] = to;
+		if (type(fake.on_link) == 'function') fake.on_link(from, to);
+		return true;
+	};
+	function drop_file_entry(path) {
+		let inode = inodes[path], count = links[path] ?? 1;
+		if (count > 1)
+			for (let peer in files)
+				if (peer != path && inodes[peer] == inode)
+					links[peer] = count - 1;
+		delete links[path];
+		delete modes[path];
+		delete owners[path];
+		delete groups[path];
+		delete devices[path];
+		delete inodes[path];
+		delete generation_paths[sprintf('%d', object_generations[path])];
+		delete object_generations[path];
+		delete files[path];
 	};
 	fake.unlink = (path) => {
 		push(fake.calls.unlink, path);
@@ -291,12 +372,15 @@ export function fs(initial) {
 		}
 		let actual = exists(symlinks, path) ? path : resolve(path);
 		let present = exists(files, actual) || exists(symlinks, actual);
-		delete modes[path];
-		delete inodes[actual];
-		delete generation_paths[sprintf('%d', object_generations[actual])];
-		delete object_generations[actual];
-		delete files[actual];
-		delete symlinks[actual];
+		if (exists(files, actual))
+			drop_file_entry(actual);
+		else {
+			delete modes[path];
+			delete inodes[actual];
+			delete generation_paths[sprintf('%d', object_generations[actual])];
+			delete object_generations[actual];
+			delete symlinks[actual];
+		}
 		return present;
 	};
 	fake.rmdir = (path) => {
@@ -356,14 +440,41 @@ export function fs(initial) {
 		}
 		let actual_from = resolve(from);
 		let actual_to = resolve(to);
+		if (!exists(files, actual_from))
+			return null;
+		if (exists(files, actual_to) &&
+		    inodes[actual_from] == inodes[actual_to]) {
+			if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
+			if (fake.throw_after_rename_once_matching != null &&
+			    index(to, fake.throw_after_rename_once_matching) >= 0) {
+				fake.throw_after_rename_once_matching = null;
+				die('INTERNAL');
+			}
+			if (fake.throw_after_rename_once_to != null &&
+			    to == fake.throw_after_rename_once_to) {
+				fake.throw_after_rename_once_to = null;
+				die('INTERNAL');
+			}
+			return true;
+		}
+		if (exists(files, actual_to))
+			drop_file_entry(actual_to);
 		files[actual_to] = files[actual_from];
 		modes[actual_to] = modes[actual_from];
+		owners[actual_to] = owners[actual_from];
+		groups[actual_to] = groups[actual_from];
+		devices[actual_to] = devices[actual_from];
 		inodes[actual_to] = inodes[actual_from];
+		links[actual_to] = links[actual_from];
 		object_generations[actual_to] = object_generations[actual_from];
 		generation_paths[sprintf('%d', object_generations[actual_to])] = actual_to;
 		delete files[actual_from];
 		delete modes[actual_from];
+		delete owners[actual_from];
+		delete groups[actual_from];
+		delete devices[actual_from];
 		delete inodes[actual_from];
+		delete links[actual_from];
 		delete object_generations[actual_from];
 		if (type(fake.on_rename) == 'function') fake.on_rename(from, to);
 		if (fake.throw_after_rename_once_matching != null &&
@@ -403,15 +514,21 @@ export function fs(initial) {
 		return names;
 	};
 	fake.mode = (path) => modes[path];
-	fake.set_device = (path, device) => devices[path] = device;
+	fake.set_device = (path, device) => set_inode_value(devices, path, device);
 	fake.set_nlink = (path, count) => links[path] = count;
-	fake.set_uid = (path, uid) => owners[path] = uid;
-	fake.set_gid = (path, gid) => groups[path] = gid;
-	fake.set_mode = (path, mode) => modes[path] = mode;
+	fake.set_uid = (path, uid) => set_inode_value(owners, path, uid);
+	fake.set_gid = (path, gid) => set_inode_value(groups, path, gid);
+	fake.set_mode = (path, mode) => set_inode_value(modes, path, mode);
 	fake.set_mtime = (path, mtime) => mtimes[path] = mtime;
 	fake.bump_inode = (path) => {
 		let resolved = resolve(path);
+		let old_inode = inodes[resolved], count = links[resolved] ?? 1;
+		if (count > 1)
+			for (let peer in files)
+				if (peer != resolved && inodes[peer] == old_inode)
+					links[peer] = count - 1;
 		inodes[resolved] = next_inode++;
+		links[resolved] = 1;
 		if (object_generations[resolved] == null) {
 			let generation = next_object_generation++;
 			object_generations[resolved] = generation;

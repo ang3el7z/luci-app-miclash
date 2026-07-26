@@ -325,6 +325,7 @@ function createClient(options) {
 							// LuCI XHRs. The operation journal survives that replacement.
 						} else {
 							callback(null, error);
+							if (isTransientOperationPollError(error)) return;
 						}
 					}
 				}
