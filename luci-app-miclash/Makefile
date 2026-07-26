@@ -155,18 +155,77 @@ MICLASH_UPGRADE_STATE="$$ROOT/etc/miclash/package-upgrade-state"
 write_upgrade_state() {
 	[ -n "$$IPKG_INSTROOT" ] && return 0
 	[ -f /etc/config/miclash ] || return 0
+	state_dir="$$ROOT/etc/miclash"
+	mkdir -p "$$state_dir" 2>/dev/null || return 1
+	[ ! -L "$$state_dir" ] && [ -d "$$state_dir" ] || return 1
+	[ "$$(stat -c '%u' "$$state_dir" 2>/dev/null)" = 0 ] || return 1
+	chmod 0700 "$$state_dir" 2>/dev/null || return 1
+	[ "$$(stat -c '%u:%a' "$$state_dir" 2>/dev/null)" = '0:700' ] || return 1
+	if [ -e "$$MICLASH_UPGRADE_STATE" ] || [ -L "$$MICLASH_UPGRADE_STATE" ]; then
+		[ ! -L "$$MICLASH_UPGRADE_STATE" ] && [ -f "$$MICLASH_UPGRADE_STATE" ] || return 1
+		[ "$$(stat -c '%u:%a:%h' "$$MICLASH_UPGRADE_STATE" 2>/dev/null)" = '0:600:1' ] || return 1
+		[ "$$(wc -c < "$$MICLASH_UPGRADE_STATE" 2>/dev/null)" -le 512 ] || return 1
+		state_version=
+		state_guard_enabled=
+		state_service_running=
+		state_service_enabled=
+		while IFS= read -r state_line || [ -n "$$state_line" ]; do
+			[ "$${#state_line}" -le 64 ] || return 1
+			case "$$state_line" in
+				version=1|version=2)
+					[ -z "$$state_version" ] || return 1
+					state_version="$${state_line#version=}"
+					;;
+				guard_enabled=0|guard_enabled=1)
+					[ -z "$$state_guard_enabled" ] || return 1
+					state_guard_enabled="$${state_line#guard_enabled=}"
+					;;
+				service_running=0|service_running=1)
+					[ -z "$$state_service_running" ] || return 1
+					state_service_running="$${state_line#service_running=}"
+					;;
+				service_enabled=0|service_enabled=1)
+					[ -z "$$state_service_enabled" ] || return 1
+					state_service_enabled="$${state_line#service_enabled=}"
+					;;
+				*) return 1 ;;
+			esac
+		done < "$$MICLASH_UPGRADE_STATE"
+		[ -n "$$state_version" ] && [ -n "$$state_guard_enabled" ] && \
+			[ -n "$$state_service_running" ] || return 1
+		case "$$state_version" in
+			1) [ -z "$$state_service_enabled" ] || return 1 ;;
+			2) [ -n "$$state_service_enabled" ] || return 1 ;;
+			*) return 1 ;;
+		esac
+		return 0
+	fi
 	guard_enabled=0
 	[ "$$(uci -q get miclash.guard.enabled 2>/dev/null || true)" = 1 ] && guard_enabled=1
 	service_running=0
 	/etc/init.d/clash running >/dev/null 2>&1 && service_running=1
-	( umask 077; printf 'version=1\nguard_enabled=%s\nservice_running=%s\n' "$$guard_enabled" "$$service_running" > "$$MICLASH_UPGRADE_STATE" ) || exit 1
+	service_enabled=0
+	/etc/init.d/clash enabled >/dev/null 2>&1 && service_enabled=1
+	tmp_file="$$state_dir/.package-upgrade-state.$$$$"
+	cleanup_upgrade_state() {
+		rm -f "$$tmp_file"
+	}
+	trap cleanup_upgrade_state 0 HUP INT TERM
+	( umask 077; set -C; : > "$$tmp_file" ) || return 1
+	printf 'version=2\nguard_enabled=%s\nservice_running=%s\nservice_enabled=%s\n' \
+		"$$guard_enabled" "$$service_running" "$$service_enabled" > "$$tmp_file" || return 1
+	[ ! -L "$$tmp_file" ] && [ -f "$$tmp_file" ] || return 1
+	[ "$$(stat -c '%u:%a:%h' "$$tmp_file" 2>/dev/null)" = '0:600:1' ] || return 1
+	/bin/mv -f "$$tmp_file" "$$MICLASH_UPGRADE_STATE" || return 1
+	tmp_file=
+	trap - 0 HUP INT TERM
+	[ ! -L "$$MICLASH_UPGRADE_STATE" ] && [ -f "$$MICLASH_UPGRADE_STATE" ] || return 1
+	[ "$$(stat -c '%u:%a:%h' "$$MICLASH_UPGRADE_STATE" 2>/dev/null)" = '0:600:1' ] || return 1
 }
 mkdir -p "$$ROOT/opt/clash" 2>/dev/null || true
-mkdir -p "$$ROOT/etc/miclash" 2>/dev/null || exit 1
-chmod 0700 "$$ROOT/etc/miclash" 2>/dev/null || exit 1
 [ -f "$$ROOT/opt/clash/config.yaml" ] && cp -p "$$ROOT/opt/clash/config.yaml" \
 	"$$ROOT/opt/clash/.config.yaml.upgrade.bak"
-write_upgrade_state
+write_upgrade_state || exit 1
 exit 0
 endef
 
@@ -175,20 +234,19 @@ define Package/$(PKG_NAME)/postinst
 ROOT="$${IPKG_INSTROOT:-}"
 MICLASH_UPGRADE_STATE="$$ROOT/etc/miclash/package-upgrade-state"
 APP_UPDATE_MARKER="/tmp/miclash-package-no-autostart-autoupdate"
-consume_app_update_marker() {
+app_update_marker_present() {
 	[ ! -L "$$APP_UPDATE_MARKER" ] && [ -f "$$APP_UPDATE_MARKER" ] || return 1
 	[ "$$(stat -c '%u:%a:%h' "$$APP_UPDATE_MARKER" 2>/dev/null)" = "0:600:1" ] || return 1
 	[ "$$(readlink -f "$$APP_UPDATE_MARKER" 2>/dev/null)" = "$$APP_UPDATE_MARKER" ] || return 1
-	rm -f "$$APP_UPDATE_MARKER" || return 1
 }
 recover_upgrade_state() {
-	[ -e "$$MICLASH_UPGRADE_STATE" ] || return 0
+	[ -e "$$MICLASH_UPGRADE_STATE" ] || [ -L "$$MICLASH_UPGRADE_STATE" ] || return 0
 	[ -x /usr/share/miclash/package-upgrade-recover ] || return 1
 	/usr/share/miclash/package-upgrade-recover "$$MICLASH_UPGRADE_STATE" || return 1
 	return 0
 }
 if [ -f "$$ROOT/opt/clash/.config.yaml.upgrade.bak" ]; then
-	mv "$$ROOT/opt/clash/.config.yaml.upgrade.bak" "$$ROOT/opt/clash/config.yaml"
+	/bin/mv "$$ROOT/opt/clash/.config.yaml.upgrade.bak" "$$ROOT/opt/clash/config.yaml"
 	FIRST_INSTALL=0
 else
 	FIRST_INSTALL=1
@@ -201,13 +259,13 @@ rm -rf "$$ROOT/opt/clash/history" "$$ROOT/etc/miclash/backups" || exit 1
 	/etc/init.d/miclash-guard enable 2>/dev/null || true
 	/etc/init.d/miclash-guard start || exit 1
 	/etc/init.d/miclashd enable || exit 1
-	/etc/init.d/miclashd start || exit 1
-	if consume_app_update_marker; then
+	if app_update_marker_present; then
 		# The current miclashd owns this package transaction and cannot answer
-		# a synchronous postinst ubus callback. Its detached reload worker
-		# performs durable recovery after the new backend is running.
+		# a synchronous postinst ubus callback. Keep the marker for the outer
+		# default_postinst start; the owning installer removes it afterwards.
 		:
 	else
+		/etc/init.d/miclashd start || exit 1
 		recover_upgrade_state || exit 1
 	fi
 	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
@@ -228,17 +286,20 @@ endef
 define Package/$(PKG_NAME)/prerm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
-	case "$$1" in
-		upgrade|update) ;;
-		*)
-			BARRIER="/var/run/miclash/package-removal"
-			[ -x /usr/share/miclash/package-remove ] || {
-				echo "MiClash package removal protocol unavailable" >&2
-				exit 1
-			}
-			/usr/share/miclash/package-remove || exit 1
-			;;
-	esac
+	PACKAGE_ACTION="$${2:-$${1:-}}"
+	if [ "$${PKG_UPGRADE:-0}" != 1 ]; then
+		case "$$PACKAGE_ACTION" in
+			upgrade|update) ;;
+			*)
+				BARRIER="/var/run/miclash/package-removal"
+				[ -x /usr/share/miclash/package-remove ] || {
+					echo "MiClash package removal protocol unavailable" >&2
+					exit 1
+				}
+				/usr/share/miclash/package-remove || exit 1
+				;;
+		esac
+	fi
 }
 exit 0
 endef
@@ -246,6 +307,10 @@ endef
 define Package/$(PKG_NAME)/postrm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
+	PACKAGE_UPGRADE=0
+	case "$${PKG_UPGRADE:-0}:$${1:-}" in
+		1:*|*:upgrade|*:update) PACKAGE_UPGRADE=1 ;;
+	esac
 	HARD_REINSTALL=0
 	HARD_REINSTALL_MARKER=/tmp/miclash-hard-reinstall
 	if [ -e "$$HARD_REINSTALL_MARKER" ] || [ -L "$$HARD_REINSTALL_MARKER" ]; then
@@ -282,9 +347,7 @@ define Package/$(PKG_NAME)/postrm
 	rm -f /opt/clash/.config.yaml.upgrade.bak
 	rm -f /etc/init.d/clash
 	rm -f /etc/apk/protected_paths.d/miclash.list
-	case "$$1" in
-		upgrade|update) ;;
-		*)
+	if [ "$$PACKAGE_UPGRADE" != 1 ]; then
 			BARRIER="/var/run/miclash/package-removal"
 			RELEASE_DIR="/var/run/miclash/package-removal-release"
 			RELEASE_CLEANUP="$$RELEASE_DIR.cleanup"
@@ -403,34 +466,25 @@ define Package/$(PKG_NAME)/postrm
 					exit 1
 				fi
 			fi
-			;;
-	esac
+	fi
 
 	# Preserve the manually installed core on ordinary upgrades. An explicit
 	# hard reinstall intentionally starts over without it.
-	case "$$1" in
-		upgrade|update)
-			if [ "$$HARD_REINSTALL" = "1" ]; then
-				rm -f /opt/clash/bin/clash || exit 1
-			fi
-			;;
-		*)
-			if [ "$$HARD_REINSTALL" = "1" ] || ! is_pkg_installed; then
-				rm -f /opt/clash/bin/clash || exit 1
-			fi
-			;;
-	esac
+	if [ "$$PACKAGE_UPGRADE" = 1 ]; then
+		if [ "$$HARD_REINSTALL" = "1" ]; then
+			rm -f /opt/clash/bin/clash || exit 1
+		fi
+	elif [ "$$HARD_REINSTALL" = "1" ] || ! is_pkg_installed; then
+		rm -f /opt/clash/bin/clash || exit 1
+	fi
 
 	# This is the terminal fallible operation for ordinary removal. Every prior
 	# cleanup, including optional core removal, runs while the final proof is
 	# retained. A failed unlink leaves the proof for the next actual postrm.
-	case "$$1" in
-		upgrade|update) ;;
-		*)
-			valid_release_proof "$$RELEASE_DONE" || exit 1
-			rm -f "$$RELEASE_DONE" || exit 1
-			;;
-	esac
+	if [ "$$PACKAGE_UPGRADE" != 1 ]; then
+		valid_release_proof "$$RELEASE_DONE" || exit 1
+		rm -f "$$RELEASE_DONE" || exit 1
+	fi
 }
 endef
 

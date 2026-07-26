@@ -64,5 +64,7 @@ assert.match(reloadSource, /while[^\n]*STATUS_FILE[^\n]*-e/,
 	'backend reload must wait while the authenticated handoff is owned by the update operation');
 assert.match(reloadSource, /MAX_BACKEND_RELOAD_WAIT/,
 	'backend reload wait must remain bounded');
+assert.match(reloadSource, /operation_terminal_for_status "\$STATUS_FILE"/,
+	'backend reload must wait until the self-update operation journal is terminal');
 
 console.log('self-update reconnect contract passed');

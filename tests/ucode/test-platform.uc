@@ -23,9 +23,15 @@ assert_equal(platform.miclash_assets('apk', '2.0.0').package_name,
 	'luci-app-miclash-2.0.0.apk');
 assert_equal(platform.miclash_assets('apk', '2.0.0-rc.1').checksum_name,
 	'luci-app-miclash-2.0.0-rc.1.apk.sha256');
+assert_equal(platform.miclash_assets('apk', '2.5.2_rc1').package_name,
+	'luci-app-miclash-2.5.2_rc1.apk');
+assert_equal(platform.miclash_assets('opkg', '2.5.2_rc1').checksum_name,
+	'luci-app-miclash_2.5.2_rc1_all.ipk.sha256');
 
 for (let invalid in [
 	() => platform.miclash_assets('rpm', '2.0.0'),
 	() => platform.miclash_assets('apk', 'v2.0.0'),
-	() => platform.miclash_assets('apk', '../2.0.0')
+	() => platform.miclash_assets('apk', '../2.0.0'),
+	() => platform.miclash_assets('apk', '2.5.2_rc'),
+	() => platform.miclash_assets('apk', '2.5.2__rc1')
 ]) assert_throws(invalid, 'INVALID_ARGUMENT');
