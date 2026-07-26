@@ -52,6 +52,8 @@ assert.doesNotMatch(refreshSource, /update_miclash\s*\(/,
 const actionStart = configSource.indexOf('function resolveAppActionState()');
 const actionEnd = configSource.indexOf('function resolveKernelActionState()', actionStart);
 const actionSource = configSource.slice(actionStart, actionEnd);
+const kernelActionEnd = configSource.indexOf('function shouldCheckAppRelease(', actionEnd);
+const kernelActionSource = configSource.slice(actionEnd, kernelActionEnd);
 assert.match(actionSource, /appState\.releaseMeta\?\.appVersion/);
 assert.doesNotMatch(actionSource, /update_release|update_miclash/,
 	'toolbar comparison must consume normalized release state only');
@@ -60,29 +62,53 @@ if (!String.prototype.format) Object.defineProperty(String.prototype, 'format', 
 	configurable: true,
 	value(...values) { let index = 0; return this.replace(/%s/g, () => String(values[index++])); }
 });
+function compareFixtureVersions(left, right) {
+	const a = String(left).split('.').map(Number), b = String(right).split('.').map(Number);
+	for (let i = 0; i < Math.max(a.length, b.length); i++) {
+		if ((a[i] || 0) < (b[i] || 0)) return -1;
+		if ((a[i] || 0) > (b[i] || 0)) return 1;
+	}
+	return 0;
+}
 function evaluatedAction(local, latest, autoMajorMiclash, channel = 'release') {
 	const state = { versions: { app: local }, releaseMeta: { appVersion: latest },
 		settings: { autoMajorMiclash, miclashReleaseChannel: channel } };
 	return Function('appState', 'normalizeAppVersion', 'compareNumericVersions',
 		'normalizeReleaseChannel', '_', `${actionSource}; return resolveAppActionState();`)(
 		state, (value) => String(value || '').replace(/^v/, ''),
-		(left, right) => {
-			const a = String(left).split('.').map(Number), b = String(right).split('.').map(Number);
-			for (let i = 0; i < Math.max(a.length, b.length); i++) {
-				if ((a[i] || 0) < (b[i] || 0)) return -1;
-				if ((a[i] || 0) > (b[i] || 0)) return 1;
-			}
-			return 0;
-		}, (value) => value === 'prerelease' ? 'prerelease' : 'release', (value) => value);
+		compareFixtureVersions,
+		(value) => value === 'prerelease' ? 'prerelease' : 'release', (value) => value);
+}
+function evaluatedKernelAction(installed, local, latest) {
+	const state = {
+		kernelStatus: { installed, version: local },
+		versions: { clash: local },
+		releaseMeta: { kernelVersion: latest }
+	};
+	return Function('appState', 'normalizeVersion', 'compareNumericVersions', '_',
+		`${kernelActionSource}; return resolveKernelActionState();`)(
+		state, (value) => String(value || '').replace(/^v/, ''),
+		compareFixtureVersions, (value) => value);
 }
 assert.deepEqual(evaluatedAction('1.0.0', '2.0.0', true), {
 	kind: 'update', scheduled: true, targetVersion: '2.0.0', iconName: 'clock',
 	className: 'cbi-button-positive',
 	title: 'Major update 2.0.0 is scheduled for the night. Click to update now.'
 });
+assert.deepEqual(evaluatedAction('1.0.0', '1.1.0', false), {
+	kind: 'update', targetVersion: '1.1.0', iconName: 'download',
+	className: 'cbi-button-positive', title: 'Update MiClash to 1.1.0'
+});
+assert.equal(evaluatedAction('1.1.0', '1.1.0', false).title, 'Reinstall MiClash');
 assert.equal(evaluatedAction('1.0.0', '2.0.0', false).scheduled, undefined);
 assert.equal(evaluatedAction('1.0.0', '1.1.0', true).scheduled, undefined);
 assert.equal(evaluatedAction('1.0.0', '2.0.0', true, 'prerelease').scheduled, undefined);
+assert.deepEqual(evaluatedKernelAction(true, '1.0.0', '1.1.0'), {
+	kind: 'update', targetVersion: '1.1.0', iconName: 'download',
+	className: 'cbi-button-positive', title: 'Update Mihomo to 1.1.0'
+});
+assert.equal(evaluatedKernelAction(true, '1.1.0', '1.1.0').title, 'Reinstall Mihomo');
+assert.equal(evaluatedKernelAction(false, '', '1.1.0').targetVersion, undefined);
 assert.match(configSource, /data-target-version/,
 	'scheduled-night indicator must expose its target version');
 

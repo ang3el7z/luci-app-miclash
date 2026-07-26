@@ -594,9 +594,10 @@ function resolveAppActionState() {
 		}
 		return {
 			kind: 'update',
+			targetVersion: latest,
 			iconName: 'download',
 			className: 'cbi-button-positive',
-			title: _('Update MiClash')
+			title: _('Update MiClash to %s').format(latest)
 		};
 	}
 
@@ -632,9 +633,10 @@ function resolveKernelActionState() {
 	if (hasUpdate) {
 		return {
 			kind: 'update',
+			targetVersion: latest,
 			iconName: 'download',
 			className: 'cbi-button-positive',
-			title: _('Update Kernel')
+			title: _('Update Mihomo to %s').format(latest)
 		};
 	}
 
@@ -642,7 +644,7 @@ function resolveKernelActionState() {
 		kind: 'reinstall',
 		iconName: 'refresh',
 		className: 'cbi-button-neutral',
-		title: _('Reinstall Kernel')
+		title: _('Reinstall Mihomo')
 	};
 }
 

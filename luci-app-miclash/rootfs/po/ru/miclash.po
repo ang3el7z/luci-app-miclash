@@ -367,6 +367,9 @@ msgstr "Скачать обновление"
 msgid "Reinstall Kernel"
 msgstr "Переустановить ядро"
 
+msgid "Reinstall Mihomo"
+msgstr "Переустановить Mihomo"
+
 msgid "Downloading..."
 msgstr "Загрузка..."
 
@@ -755,6 +758,12 @@ msgstr "Установить MiClash"
 
 msgid "Update MiClash"
 msgstr "Обновить MiClash"
+
+msgid "Update MiClash to %s"
+msgstr "Обновить MiClash до %s"
+
+msgid "Update Mihomo to %s"
+msgstr "Обновить Mihomo до %s"
 
 msgid "Reinstall MiClash"
 msgstr "Переустановить MiClash"

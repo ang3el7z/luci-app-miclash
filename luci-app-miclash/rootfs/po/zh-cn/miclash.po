@@ -360,6 +360,9 @@ msgstr "下载更新"
 msgid "Reinstall Kernel"
 msgstr "重新安装内核"
 
+msgid "Reinstall Mihomo"
+msgstr "重新安装 Mihomo"
+
 msgid "Downloading..."
 msgstr "正在下载..."
 
@@ -1097,6 +1100,12 @@ msgstr "更新内核"
 
 msgid "Update MiClash"
 msgstr "更新 MiClash"
+
+msgid "Update MiClash to %s"
+msgstr "将 MiClash 更新到 %s"
+
+msgid "Update Mihomo to %s"
+msgstr "将 Mihomo 更新到 %s"
 
 msgid "Updating MiClash package on router..."
 msgstr "正在路由器上更新 MiClash 软件包..."
