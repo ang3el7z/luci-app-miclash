@@ -15,14 +15,19 @@ let operations = {
 let actions = [];
 let readiness_deadlines = [];
 let service_stages = [];
+let boot_enabled = false;
 let service = {
 	start: (profile) => push(actions, 'start:' + profile),
 	stop: (profile) => push(actions, 'stop:' + profile),
+	enable: () => { push(actions, 'enable'); boot_enabled = true; return true; },
+	disable: () => { push(actions, 'disable'); boot_enabled = false; return true; },
+	enabled: () => boot_enabled,
 	reload: (profile) => { push(actions, 'reload:' + profile); return { ok: true }; },
 	restart_service: (profile) => push(actions, 'restart:' + profile),
 	recover_network: () => { push(actions, 'recover-network'); return true; },
 	wait_ready: (deadline, profile, options) => {
 		push(readiness_deadlines, deadline);
+		push(actions, options?.stopped === true ? 'ready:stopped' : 'ready:running');
 		return { ok: true };
 	}
 };
@@ -150,13 +155,111 @@ for (let action in [ 'start', 'stop', 'reload', 'restart' ]) {
 	submitted[length(submitted) - 1].worker({ stage: (name) => push(service_stages, name) });
 }
 assert_equal(join(',', actions),
-	'start:config.yaml,stop:config.yaml,reload:config.yaml,restart:config.yaml');
+	'start:config.yaml,ready:running,enable,stop:config.yaml,ready:stopped,disable,' +
+	'reload:config.yaml,ready:running,restart:config.yaml,ready:running');
 assert_equal(join(',', readiness_deadlines), '31000,6000,31000,31000');
 assert_equal(join(',', service_stages),
 	'service_start,service_start_dispatched,service_start_readiness,ready,' +
 	'service_stop,service_stop_dispatched,service_stop_readiness,ready,' +
 	'service_reload,service_reload_dispatched,service_reload_readiness,ready,' +
 	'service_restart,service_restart_dispatched,service_restart_readiness,ready');
+
+let failed_actions = [];
+let failure_mode = 'readiness';
+let failure_intent = false;
+let failure_service = {
+	start: (profile) => push(failed_actions, 'start:' + profile),
+	stop: (profile) => {
+		push(failed_actions, 'stop:' + profile);
+		if (failure_mode == 'rollback-stop') die('INTERNAL');
+	},
+	enable: () => {
+		push(failed_actions, 'enable');
+		if (failure_mode == 'enable') die('HEALTH_FAILED');
+		failure_intent = true;
+		return true;
+	},
+	disable: () => {
+		push(failed_actions, 'disable');
+		if (failure_mode == 'rollback') die('INTERNAL');
+		failure_intent = false;
+		return true;
+	},
+	enabled: () => failure_mode == 'verify' ? false :
+		(failure_mode == 'stop-enabled' ? true : failure_intent),
+	reload: (profile) => {
+		push(failed_actions, 'reload:' + profile);
+		return failure_mode == 'reload' ? { ok: false } : { ok: true };
+	},
+	restart_service: (profile) => push(failed_actions, 'restart:' + profile),
+	recover_network: () => true,
+	wait_ready: (deadline, profile, options) => {
+		push(failed_actions, options?.stopped === true ? 'ready:stopped' : 'ready:running');
+		return failure_mode == 'readiness' || failure_mode == 'rollback' ||
+			failure_mode == 'rollback-stop' || failure_mode == 'restart'
+			? { ok: false } : { ok: true };
+	}
+};
+let failure_app = application.create({
+	operations, service: failure_service, settings, config, state, memory, devices,
+	notifications, telegram,
+	system: { schedule_uninstall: () => true },
+	clock: { now: () => 1000 }
+});
+failure_app.service_start('config.yaml', 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'HEALTH_FAILED');
+assert_equal(join(',', failed_actions),
+	'start:config.yaml,ready:running,stop:config.yaml,disable');
+
+failed_actions = [];
+failure_mode = 'rollback-stop';
+failure_app.service_start('config.yaml', 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'HEALTH_FAILED');
+assert_equal(join(',', failed_actions),
+	'start:config.yaml,ready:running,stop:config.yaml,disable');
+
+failed_actions = [];
+failure_mode = 'stop-enabled';
+failure_app.service_stop('config.yaml', 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'HEALTH_FAILED');
+assert_equal(join(',', failed_actions),
+	'stop:config.yaml,ready:stopped,disable');
+assert_equal(failure_intent, false);
+
+failed_actions = [];
+failure_mode = 'enable';
+failure_app.service_start('config.yaml', 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'HEALTH_FAILED');
+assert_equal(join(',', failed_actions),
+	'start:config.yaml,ready:running,enable,stop:config.yaml,disable');
+assert_equal(failure_intent, false);
+
+failed_actions = [];
+failure_mode = 'verify';
+failure_app.service_start('config.yaml', 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'HEALTH_FAILED');
+assert_equal(join(',', failed_actions),
+	'start:config.yaml,ready:running,enable,stop:config.yaml,disable');
+assert_equal(failure_intent, false);
+
+failed_actions = [];
+failure_mode = 'rollback';
+failure_app.service_start('config.yaml', 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'HEALTH_FAILED');
+assert_equal(join(',', failed_actions),
+	'start:config.yaml,ready:running,stop:config.yaml,disable');
+
+failed_actions = [];
+failure_mode = 'reload';
+failure_app.service_reload('config.yaml', 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'HEALTH_FAILED');
+assert_equal(join(',', failed_actions), 'reload:config.yaml');
+
+failed_actions = [];
+failure_mode = 'restart';
+failure_app.service_restart('config.yaml', 'luci');
+assert_throws(() => submitted[length(submitted) - 1].worker({ stage: () => null }), 'HEALTH_FAILED');
+assert_equal(join(',', failed_actions), 'restart:config.yaml,ready:running');
 let network_recovery = app.network_recover('luci');
 submitted[length(submitted) - 1].worker({ stage: () => null });
 assert_equal(network_recovery.id, submitted[length(submitted) - 1].record.id);

@@ -3,6 +3,7 @@ import { profile_name } from 'miclash.schema';
 import * as mihomo_api from 'miclash.mihomo-api';
 
 const SERVICE = 'clash';
+const INIT_ACTION_TIMEOUT_MS = 15000;
 
 function component(name, state, detail) {
 	let record = { component: name, state, ready: state == 'ready' };
@@ -93,16 +94,36 @@ export function create(runtime) {
 		try { connection().call('service', 'state', { name: SERVICE, spawn: false }); }
 		catch (error) { fail('HEALTH_FAILED'); }
 	};
-	function start_service() {
+	function init_action(action) {
 		let result;
 		try {
 			result = runtime.process.run({
 				command: '/etc/init.d/clash',
-				args: [ 'start' ]
+				args: [ action ],
+				timeout_ms: INIT_ACTION_TIMEOUT_MS
 			});
 		}
 		catch (error) { fail('HEALTH_FAILED'); }
-		if (result?.code != 0)
+		if (type(result?.code) != 'int')
+			fail('HEALTH_FAILED');
+		return result.code;
+	};
+	function enabled() {
+		let code = init_action('enabled');
+		if (code == 0) return true;
+		if (code == 1) return false;
+		fail('HEALTH_FAILED');
+	};
+	function enable() {
+		if (init_action('enable') != 0) fail('HEALTH_FAILED');
+		return true;
+	};
+	function disable() {
+		if (init_action('disable') != 0) fail('HEALTH_FAILED');
+		return true;
+	};
+	function start_service() {
+		if (init_action('start') != 0)
 			fail('HEALTH_FAILED');
 	};
 	function start(value) {
@@ -283,7 +304,7 @@ export function create(runtime) {
 	};
 
 	return {
-		observe, diagnostics, start, stop, reload, restart_core, restart_service, wait_ready, recover,
+		observe, diagnostics, enabled, enable, disable, start, stop, reload, restart_core, restart_service, wait_ready, recover,
 		health: (value) => wait_ready(runtime.clock.now() + 5000, value).ok
 	};
 };

@@ -229,7 +229,7 @@ let transientPollAttempts = 0;
 const transientPollEvents = [];
 replies.set('operation_get', async () => {
 	transientPollAttempts++;
-	if (transientPollAttempts === 1)
+	if (transientPollAttempts <= 2)
 		throw new Error('XHR request aborted by browser');
 	return { operation: { id: 'op_transient', state: 'success' } };
 });
@@ -247,11 +247,52 @@ scheduled.delete(transientTimer);
 retryTransient();
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(transientPollAttempts, 2);
+assert.deepEqual(transientPollEvents, [],
+	'multiple transient browser-aborted operation polls must remain pending');
+assert.equal(scheduled.size, 1,
+	'multiple transient browser-aborted operation polls must be retried');
+const [ secondTransientTimer, secondRetryTransient ] = scheduled.entries().next().value;
+scheduled.delete(secondTransientTimer);
+secondRetryTransient();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(transientPollAttempts, 3);
 assert.equal(transientPollEvents.length, 1);
 assert.equal(transientPollEvents[0].error, undefined);
 assert.equal(transientPollEvents[0].record.state, 'success');
+assert.equal(scheduled.size, 0,
+	'a terminal operation must stop polling after bounded transient retries');
 cancelTransient();
 transientClient.destroy();
+
+let cappedPollAttempts = 0;
+const cappedPollEvents = [];
+replies.set('operation_get', async () => {
+	cappedPollAttempts++;
+	throw new Error('XHR request aborted by browser');
+});
+const cappedClient = moduleApi.create();
+cappedClient.watchOperation('op_transient_cap',
+	(record, error) => cappedPollEvents.push({ record, error }));
+for (let attempt = 0; attempt <= 15; attempt++) {
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(cappedPollAttempts, attempt + 1);
+	if (attempt < 15) {
+		assert.deepEqual(cappedPollEvents, [],
+			'transient retry budget must not report an early terminal error');
+		assert.equal(scheduled.size, 1,
+			'transient retry budget must schedule exactly one next poll');
+		const [ timer, retry ] = scheduled.entries().next().value;
+		scheduled.delete(timer);
+		retry();
+	}
+}
+assert.equal(cappedPollEvents.length, 1,
+	'exhausted transient retry budget must report exactly one terminal error');
+assert.equal(cappedPollEvents[0].record, null);
+assert.match(cappedPollEvents[0].error.message, /XHR request aborted by browser/);
+assert.equal(scheduled.size, 0,
+	'exhausted transient retry budget must stop polling');
+cappedClient.destroy();
 
 let uploaded = Buffer.alloc(0), uploadSeq = 0;
 replies.set('transfer_begin', (direction, kind) => direction === 'upload'

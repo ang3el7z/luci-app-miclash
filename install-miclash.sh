@@ -13,6 +13,7 @@ MICLASH_TAG_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases
 MIHOMO_BASE="https://github.com/MetaCubeX/mihomo/releases"
 MIHOMO_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 CLASH_BIN="/opt/clash/bin/clash"
+CLASH_INIT="/etc/init.d/clash"
 MICLASH_APK_URL=""
 MICLASH_IPK_URL=""
 MICLASH_APK_SHA256_URL=""
@@ -35,6 +36,7 @@ CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
 MAX_BACKEND_RELOAD_WAIT=30
+CLASH_RESTORE_WAIT_SECONDS=15
 PKG_FILE=""
 TEMP_FILES=""
 TEMP_DIRS=""
@@ -108,7 +110,7 @@ validate_status_authority() {
     printf '%s\n' "$operation" | grep -Eq '^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$' || return 1
     printf '%s\n' "$CURRENT_TOKEN" | grep -Eq '^[0-9a-f]{32}$' || return 1
     printf '%s\n' "$STATUS_TARGET_VERSION" |
-        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
     case "$STATUS_SERVICE_WAS_RUNNING" in 0|1) ;; *) return 1 ;; esac
     if [ -e "$STATUS_FILE" ] || [ -L "$STATUS_FILE" ]; then
         [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] || return 1
@@ -225,7 +227,7 @@ installed_miclash_version() {
 version_major() {
     normalized="$(normalize_version "$1")"
     printf '%s\n' "$normalized" |
-        grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+        grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
     printf '%s' "${normalized%%.*}"
 }
 
@@ -558,7 +560,7 @@ validate_miclash_release_file() {
     [ -f "$release_file" ] && [ -s "$release_file" ] || return 1
     case "$requested_manager" in apk|opkg) ;; *) return 1 ;; esac
     printf '%s\n' "$expected_tag" |
-        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' || return 1
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
 
     tag_count="$(exact_value_count "$expected_tag" json_string_values "$release_file" tag_name)" || return 1
     [ "$tag_count" = 1 ] || return 1
@@ -661,7 +663,7 @@ stable_catalog_tags_newest_first() {
 select_terminal_release() {
     if [ -n "$MICLASH_TARGET_TAG" ]; then
         printf '%s\n' "$MICLASH_TARGET_TAG" |
-            grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' \
+            grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' \
             || die "Invalid requested MiClash tag"
         fetch_miclash_exact_release "$MICLASH_TARGET_TAG" ||
             die "Requested MiClash release was not found: $MICLASH_TARGET_TAG"
@@ -791,6 +793,47 @@ remove_miclash() {
     fi
 }
 
+repair_installed_prerm_upgrade_classification() {
+    path="$1"
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    [ ! -L "$path" ] && [ -f "$path" ] || return 1
+    [ "$(stat -c '%u:%a:%h' "$path" 2>/dev/null)" = '0:755:1' ] || return 1
+    [ "$(readlink -f "$path" 2>/dev/null)" = "$path" ] || return 1
+    size="$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')" || return 1
+    case "$size" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$size" -le 8192 ] || return 1
+    grep -Fq '/usr/share/miclash/package-remove' "$path" || return 0
+    if grep -Fq 'case "${2:-${1:-}}" in' "$path" || {
+        grep -Fq 'PACKAGE_ACTION="${2:-${1:-}}"' "$path" &&
+            grep -Fq 'case "$PACKAGE_ACTION" in' "$path"
+    }; then
+        ! grep -Fq 'case "$1" in' "$path"
+        return
+    fi
+    [ "$(grep -Fc 'case "$1" in' "$path")" = 1 ] || return 1
+
+    tmp="$path.upgrade-compat.$$"
+    [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 1
+    (
+        umask 077
+        set -C
+        : > "$tmp"
+    ) || return 1
+    if ! sed 's/case "$1" in/case "${2:-${1:-}}" in/' "$path" > "$tmp" ||
+       ! chmod 0755 "$tmp" ||
+       ! grep -Fq 'case "${2:-${1:-}}" in' "$tmp" ||
+       grep -Fq 'case "$1" in' "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -f "$tmp" "$path" || {
+        rm -f "$tmp"
+        return 1
+    }
+    [ ! -L "$path" ] && [ -f "$path" ] &&
+        [ "$(stat -c '%u:%a:%h' "$path" 2>/dev/null)" = '0:755:1' ]
+}
+
 install_miclash() {
     case "$INSTALL_ACTION" in
         update)    log "Updating MiClash to v${MICLASH_VER}..." ;;
@@ -798,6 +841,11 @@ install_miclash() {
         *)         log "Installing MiClash v${MICLASH_VER}..." ;;
     esac
 
+    if [ "$PKG_MGR" = "opkg" ]; then
+        repair_installed_prerm_upgrade_classification \
+            /usr/lib/opkg/info/luci-app-miclash.prerm-pkg \
+            || die "Failed to prepare the installed package upgrade hook"
+    fi
     create_marker "$NO_AUTOSTART_CLASH_MARKER" \
         || die "Failed to prepare package service state"
     if [ -n "$STATUS_FILE" ]; then
@@ -885,12 +933,6 @@ schedule_backend_reload() {
         # to reach LuCI before replacing the daemon process.
         /bin/busybox sleep 5
         /etc/init.d/miclashd restart
-        if [ -e /etc/miclash/package-upgrade-state ]; then
-            /usr/share/miclash/package-upgrade-recover \
-                /etc/miclash/package-upgrade-state ||
-                logger -t miclash -p daemon.err \
-                    "package upgrade recovery remains pending after backend reload"
-        fi
     ) >/dev/null 2>&1 &
 }
 
@@ -1092,6 +1134,62 @@ install_mihomo() {
     fi
 }
 
+clash_is_running() {
+    [ -x "$CLASH_INIT" ] || return 1
+    "$CLASH_INIT" running >/dev/null 2>&1 || pidof clash >/dev/null 2>&1
+}
+
+marker_tracked() {
+    tracked_marker="$1"
+    for owned_marker in $OWNED_MARKERS; do
+        [ "$owned_marker" = "$tracked_marker" ] && return 0
+    done
+    return 1
+}
+
+clear_clash_no_autostart_marker() {
+    [ -e "$NO_AUTOSTART_CLASH_MARKER" ] || [ -L "$NO_AUTOSTART_CLASH_MARKER" ] || return 0
+    marker_tracked "$NO_AUTOSTART_CLASH_MARKER" \
+        || die "Refusing clash no-autostart marker from another transaction"
+    marker_owned "$NO_AUTOSTART_CLASH_MARKER" \
+        || die "Refusing untrusted clash no-autostart marker"
+    rm -f "$NO_AUTOSTART_CLASH_MARKER" \
+        || die "Failed to clear clash no-autostart marker"
+}
+
+restore_clash_intent() {
+    [ -x "$CLASH_INIT" ] || die "clash service is unavailable after installation"
+
+    if [ "$CLASH_WAS_ENABLED" = "1" ] || [ "$CLASH_WAS_RUNNING" = "1" ]; then
+        log "Restoring clash service enable state..."
+        "$CLASH_INIT" enable || die "Failed to enable clash service"
+        "$CLASH_INIT" enabled >/dev/null 2>&1 \
+            || die "clash service enable state was not restored"
+    else
+        "$CLASH_INIT" disable || die "Failed to disable clash service"
+        if "$CLASH_INIT" enabled >/dev/null 2>&1; then
+            die "clash service disable state was not restored"
+        fi
+    fi
+
+    if [ "$CLASH_WAS_RUNNING" != "1" ]; then
+        if clash_is_running; then
+            "$CLASH_INIT" stop || die "Failed to preserve stopped clash state"
+        fi
+        clash_is_running && die "clash service unexpectedly remained running"
+        return 0
+    fi
+
+    log "Restarting clash service after Mihomo installation..."
+    "$CLASH_INIT" start || die "Failed to restart clash service"
+    waited=0
+    while ! clash_is_running && [ "$waited" -lt "$CLASH_RESTORE_WAIT_SECONDS" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    clash_is_running || die "clash service did not become running after installation"
+}
+
 main() {
     sep
     printf "  %sMiClash Auto-Installer%s\n" "$B" "$N"
@@ -1121,9 +1219,14 @@ main() {
     sep
 
     CLASH_WAS_ENABLED=0
-    if [ -x /etc/init.d/clash ] && /etc/init.d/clash enabled 2>/dev/null; then
+    if [ -x "$CLASH_INIT" ] && "$CLASH_INIT" enabled 2>/dev/null; then
         CLASH_WAS_ENABLED=1
         info "clash service was enabled before update"
+    fi
+    CLASH_WAS_RUNNING=0
+    if clash_is_running; then
+        CLASH_WAS_RUNNING=1
+        info "clash service was running before update"
     fi
 
     if [ "$INSTALL_ACTION" = "skip" ]; then
@@ -1132,18 +1235,17 @@ main() {
         install_miclash
     fi
 
-    if [ "$CLASH_WAS_ENABLED" = "1" ] && [ -x /etc/init.d/clash ]; then
-        log "Restoring clash service enable state..."
-        /etc/init.d/clash enable || warn "Failed to re-enable clash service"
-    fi
     sep
 
-    if [ -x /etc/init.d/clash ] && pidof clash >/dev/null 2>&1; then
+    if clash_is_running; then
         warn "Stopping running clash service before Mihomo install..."
-        /etc/init.d/clash stop || warn "Failed to stop clash before Mihomo update"
+        "$CLASH_INIT" stop || die "Failed to stop clash before Mihomo update"
+        clash_is_running && die "clash service remained running before Mihomo update"
     fi
 
     install_mihomo
+    clear_clash_no_autostart_marker
+    restore_clash_intent
     sep
 
     log "Installation complete"

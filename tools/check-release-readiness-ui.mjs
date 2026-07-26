@@ -33,6 +33,13 @@ const readyApi = {
 assert.equal((await releaseWith(readyApi).getLatestMiClashRelease(false)).version,
 	'v2.0.0');
 
+const releaseHelpers = releaseWith(readyApi);
+assert.equal(releaseHelpers.parseVersion('MiClash v2.5.2_rc1', ''), '2.5.2_rc1');
+assert.equal(releaseHelpers.normalizeAppVersion('v2.5.2_rc1-r1'), '2.5.2_rc1');
+assert.equal(releaseHelpers.compareNumericVersions('2.5.2_rc1', '2.5.2'), -1);
+assert.equal(releaseHelpers.compareNumericVersions('2.5.2', '2.5.2_rc1'), 1);
+assert.equal(releaseHelpers.compareNumericVersions('2.5.2_rc1', '2.5.2_rc2'), -1);
+
 const mihomoApi = {
 	async update_release() { return { version: 'v1.2.3' }; },
 	destroy() {}
@@ -75,8 +82,8 @@ function evaluatedAction(local, latest, autoMajorMiclash, channel = 'release') {
 		settings: { autoMajorMiclash, miclashReleaseChannel: channel } };
 	return Function('appState', 'normalizeAppVersion', 'compareNumericVersions',
 		'normalizeReleaseChannel', '_', `${actionSource}; return resolveAppActionState();`)(
-		state, (value) => String(value || '').replace(/^v/, ''),
-		compareFixtureVersions,
+		state, releaseHelpers.normalizeAppVersion,
+		releaseHelpers.compareNumericVersions,
 		(value) => value === 'prerelease' ? 'prerelease' : 'release', (value) => value);
 }
 function evaluatedKernelAction(installed, local, latest) {
@@ -103,6 +110,8 @@ assert.equal(evaluatedAction('1.1.0', '1.1.0', false).title, 'Reinstall MiClash'
 assert.equal(evaluatedAction('1.0.0', '2.0.0', false).scheduled, undefined);
 assert.equal(evaluatedAction('1.0.0', '1.1.0', true).scheduled, undefined);
 assert.equal(evaluatedAction('1.0.0', '2.0.0', true, 'prerelease').scheduled, undefined);
+assert.equal(evaluatedAction('2.5.2_rc1-r1', 'v2.5.2', false).title,
+	'Update MiClash to 2.5.2');
 assert.deepEqual(evaluatedKernelAction(true, '1.0.0', '1.1.0'), {
 	kind: 'update', targetVersion: '1.1.0', iconName: 'download',
 	className: 'cbi-button-positive', title: 'Update Mihomo to 1.1.0'

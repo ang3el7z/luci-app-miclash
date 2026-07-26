@@ -184,4 +184,8 @@ if run_installer ready-release-selection-test --manager opkg \
     exit 1
 fi
 
+selected="$(run_installer ready-release-selection-test \
+    --manager apk --fixture-dir "$fixtures" --target-tag v2.5.2_rc1)"
+[ "$selected" = v2.5.2_rc1 ]
+
 echo 'ready release selection tests passed'

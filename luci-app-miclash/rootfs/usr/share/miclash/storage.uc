@@ -44,6 +44,12 @@ function same_identity(left, right) {
 		left.nlink == right?.nlink && left.size == right?.size && left.type == right?.type;
 };
 
+function same_file_object(left, right) {
+	return same_device(left, right) && left?.type == 'file' && right?.type == 'file' &&
+		left.inode != null && left.inode == right?.inode &&
+		left.nlink == 1 && right.nlink == 1;
+};
+
 function trusted_directory(stat) {
 	return stat?.type == 'directory' && stat.uid === 0 && stat.gid === 0 &&
 		type(stat.mode) == 'int' && (stat.mode & 0o022) == 0;
@@ -226,6 +232,142 @@ export function atomic_write(runtime, path, data, mode) {
 		}
 		if (owned != null) {
 			try { runtime.fs.unlink(owned); } catch (unlink_error) {}
+		}
+		let code = error?.code ?? error?.message;
+		fail(code == 'INVALID_ARGUMENT' ? 'INVALID_ARGUMENT' : 'INTERNAL');
+	}
+};
+
+export function atomic_copy(runtime, source, destination, mode, expected_digest) {
+	valid_path(source);
+	valid_path(destination);
+	if (source == destination || type(mode) != 'int' || mode < 0 || mode > 0o7777 ||
+	    !valid_digest(expected_digest) || type(runtime?.fs) != 'object' ||
+	    type(runtime?.digest) != 'object' || type(runtime?.clock?.now) != 'function')
+		fail('INVALID_ARGUMENT');
+
+	let source_directory = secure_directory(runtime, source);
+	let destination_directory = secure_directory(runtime, destination);
+	let source_stat = runtime.fs.lstat(source);
+	if (source_stat?.type != 'file' || source_stat.nlink != 1 ||
+	    source_stat.uid !== 0 || source_stat.gid !== 0 ||
+	    type(source_stat.mode) != 'int' || (source_stat.mode & 0o022) != 0 ||
+	    runtime.fs.realpath(source) != canonical_member(source_directory, source) ||
+	    runtime.digest.sha256_file(source) != expected_digest)
+		fail('INVALID_ARGUMENT');
+
+	let source_handle = null;
+	let destination_handle = null;
+	let source_closed = false;
+	let destination_closed = false;
+	let owned = null;
+	let opened_destination = null;
+	let id = operation_id(runtime);
+
+	try {
+		source_handle = runtime.fs.open(source, 'r', 0);
+		let opened_source = source_handle == null ? null : runtime.fs.fstat(source_handle);
+		if (!same_identity(source_stat, opened_source))
+			fail('INVALID_ARGUMENT');
+
+		for (let attempt = 0; attempt < 16; attempt++) {
+			let candidate = temp_path(runtime, destination, id);
+			destination_handle = runtime.fs.open(candidate, 'wx', 0o600);
+			if (destination_handle != null) {
+				owned = candidate;
+				opened_destination = runtime.fs.fstat(destination_handle);
+				let created = runtime.fs.lstat(owned);
+				if (!same_file_object(opened_destination, created) ||
+				    created.uid !== 0 || created.gid !== 0 || created.mode != 0o600 ||
+				    runtime.fs.realpath(owned) !=
+				      canonical_member(destination_directory, owned))
+					fail('INTERNAL');
+				break;
+			}
+		}
+		if (destination_handle == null)
+			fail('INTERNAL');
+
+		let total = 0;
+		while (true) {
+			let chunk = runtime.fs.read(source_handle, 65536);
+			if (type(chunk) != 'string' || length(chunk) > 65536)
+				fail('INTERNAL');
+			if (!length(chunk))
+				break;
+			if (total + length(chunk) > source_stat.size)
+				fail('INVALID_ARGUMENT');
+			let offset = 0;
+			while (offset < length(chunk)) {
+				let written = runtime.fs.write(destination_handle, substr(chunk, offset));
+				if (type(written) != 'int' || written <= 0 ||
+				    written > length(chunk) - offset)
+					fail('INTERNAL');
+				offset += written;
+			}
+			total += length(chunk);
+		}
+		if (total != source_stat.size || runtime.fs.flush(destination_handle) != true)
+			fail('INTERNAL');
+		if (runtime.fs.close(destination_handle) != true)
+			fail('INTERNAL');
+		destination_closed = true;
+		if (runtime.fs.close(source_handle) != true)
+			fail('INTERNAL');
+		source_closed = true;
+		if (runtime.fs.chmod(owned, mode) != true)
+			fail('INTERNAL');
+
+		let copied_stat = runtime.fs.lstat(owned);
+		if (copied_stat?.type != 'file' || copied_stat.nlink != 1 ||
+		    copied_stat.uid !== 0 || copied_stat.gid !== 0 ||
+		    copied_stat.size != source_stat.size || copied_stat.mode != mode ||
+		    runtime.fs.realpath(owned) != canonical_member(destination_directory, owned) ||
+		    runtime.digest.sha256_file(owned) != expected_digest)
+			fail('INTERNAL');
+
+		let current_source = runtime.fs.lstat(source);
+		let current_source_directory = secure_directory(runtime, source);
+		let current_destination_directory = secure_directory(runtime, destination);
+		if (!same_identity(source_stat, current_source) ||
+		    runtime.fs.realpath(source) != canonical_member(current_source_directory, source) ||
+		    runtime.digest.sha256_file(source) != expected_digest ||
+		    source_directory.canonical != current_source_directory.canonical ||
+		    !same_directory_authority(source_directory.stat, current_source_directory.stat) ||
+		    destination_directory.canonical != current_destination_directory.canonical ||
+		    !same_directory_authority(destination_directory.stat,
+			    current_destination_directory.stat))
+			fail('INVALID_ARGUMENT');
+
+		let verified_copy = runtime.fs.lstat(owned);
+		if (!same_identity(copied_stat, verified_copy) ||
+		    runtime.fs.realpath(owned) != canonical_member(current_destination_directory, owned) ||
+		    runtime.digest.sha256_file(owned) != expected_digest)
+			fail('INVALID_ARGUMENT');
+		if (runtime.fs.rename(owned, destination) != true)
+			fail('INTERNAL');
+
+		owned = null;
+		return true;
+	}
+	catch (error) {
+		if (destination_handle != null && !destination_closed) {
+			try { runtime.fs.close(destination_handle); } catch (close_error) {}
+			destination_closed = true;
+		}
+		if (source_handle != null && !source_closed) {
+			try { runtime.fs.close(source_handle); } catch (close_error) {}
+			source_closed = true;
+		}
+		if (owned != null) {
+			try {
+				let current = runtime.fs.lstat(owned);
+				if (same_file_object(opened_destination, current) &&
+				    runtime.fs.realpath(owned) ==
+				      canonical_member(destination_directory, owned))
+					runtime.fs.unlink(owned);
+			}
+			catch (unlink_error) {}
 		}
 		let code = error?.code ?? error?.message;
 		fail(code == 'INVALID_ARGUMENT' ? 'INVALID_ARGUMENT' : 'INTERNAL');
