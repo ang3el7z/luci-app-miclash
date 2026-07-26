@@ -33,6 +33,11 @@ function curl_request(filesystem, args) {
 	return { output: output?.[1], header: header?.[1], url: url?.[1] };
 };
 
+function assert_intent_unchanged(service_calls, label) {
+	for (let call in service_calls)
+		assert_true(call != 'enabled' && call != 'enable' && call != 'disable', label);
+};
+
 function environment(options) {
 	options ??= {};
 	let old = options.old ?? 'old mihomo binary';
@@ -48,7 +53,18 @@ function environment(options) {
 		'/var/run/miclash', '/opt/clash/bin/previous' ])
 		if (filesystem.lstat(directory) == null)
 			filesystem.mkdir(directory);
+	if (options.previous_device != null)
+		filesystem.set_device('/opt/clash/bin/previous', options.previous_device);
+	for (let path, content in options.extra_files ?? {}) {
+		filesystem.writefile(path, content);
+		filesystem.chmod(path, options.extra_modes?.[path] ?? 0o700);
+	}
 	filesystem.chmod('/opt/clash/bin/clash', 0o700);
+	for (let target in options.extra_binary_links ?? [])
+		filesystem.link('/opt/clash/bin/clash', target);
+	if (options.fail_startup_link_cleanup)
+		filesystem.fail_unlink_once_matching =
+			'/opt/clash/bin/previous/mihomo-';
 	filesystem.chmod('/usr/libexec/miclash/decompress-gzip', 0o755);
 	filesystem.chmod('/bin/busybox', 0o755);
 	if (options.foreign_bin_parent) filesystem.set_uid('/opt/clash/bin', 1000);
@@ -115,13 +131,33 @@ function environment(options) {
 		'mihomo-linux-arm64-v1.2.3.gz';
 	responses[asset_url] = gzip_body;
 	let service_calls = [], wait_calls = [], curl_urls = [], running = options.running === true,
-		start_count = 0;
+		enabled = options.enabled === true, start_count = 0;
 	let stop_count = 0, stopped_wait_failed = false;
+	let unknown_after_stop = options.unknown_after_stop === true, observe_count = 0;
 	let readiness = [ ...(options.readiness ?? []) ], wait_count = 0;
 	let service = {
-		observe: () => ({ state: running ? 'running' : 'stopped', running }),
+		observe: () => {
+			observe_count++;
+			if (options.unknown_observe_at == observe_count)
+				return { state: 'unknown', running: false };
+			if (!running && stop_count > 0 && unknown_after_stop) {
+				unknown_after_stop = false;
+				return { state: 'unknown', running: false };
+			}
+			if (!running && options.hardlink_reports_missing_kernel &&
+			    filesystem.lstat('/opt/clash/bin/clash')?.nlink == 2)
+				return { state: 'missing_kernel', running: false };
+			return { state: running ? 'running' : 'stopped', running };
+		},
+		enabled: () => { push(service_calls, 'enabled'); return enabled; },
+		enable: () => { push(service_calls, 'enable'); enabled = true; },
+		disable: () => { push(service_calls, 'disable'); enabled = false; },
 		stop: () => {
-			push(service_calls, 'stop'); running = false; stop_count++;
+			push(service_calls, 'stop'); stop_count++;
+			if (!(options.stop_stays_running_once && stop_count == 1))
+				running = false;
+			if (options.restore_write_fail && stop_count == 2)
+				filesystem.fail_rename_once = true;
 			if (options.stop_throw_once && stop_count == 1) die('HEALTH_FAILED');
 		},
 		start: () => {
@@ -132,13 +168,15 @@ function environment(options) {
 		wait_ready: (deadline, profile, wait_options) => {
 			push(wait_calls, { deadline, profile, options: wait_options ?? {} });
 			wait_count++;
+			if (wait_options?.stopped === true &&
+			    options.hardlink_reports_missing_kernel &&
+			    filesystem.lstat('/opt/clash/bin/clash')?.nlink == 2)
+				return { ok: false, timed_out: true, components: [] };
 			if (options.wait_stopped_fail_once && wait_options?.stopped === true &&
 			    !stopped_wait_failed) {
 				stopped_wait_failed = true;
 				return { ok: false, timed_out: true, components: [] };
 			}
-			if (options.restore_write_fail && wait_count == 3)
-				filesystem.fail_rename_once = true;
 			let ok = length(readiness) ? shift(readiness) : true;
 			if (ok && options.tamper_binary_after_new_ready &&
 			    wait_options?.stopped !== true && start_count == 1)
@@ -192,7 +230,15 @@ function environment(options) {
 		}
 		else if (request.command == '/bin/busybox') {
 			let key = request.command + ':' + join(' ', request.args);
-			if (request.args[0] == 'ash' && request.args[1] == '-n') {
+			if (request.args[0] == 'ln') {
+				if (filesystem.link(request.args[1], request.args[2]) != true)
+					process.replies[key] = { code: 1 };
+				else if (options.link_reports_failure)
+					process.replies[key] = { code: 1 };
+				else if (options.link_throws_after_create)
+					die('INTERNAL');
+			}
+			else if (request.args[0] == 'ash' && request.args[1] == '-n') {
 				if (options.fail_installer_syntax)
 					process.replies[key] = { code: 2 };
 				if (options.replace_ash_during_syntax) filesystem.bump_inode('/bin/busybox');
@@ -234,7 +280,7 @@ function environment(options) {
 		runtime, operations: ops, service,
 		settings: { get: () => ({ updates: {
 			mihomo_release_channel: options.channel ?? 'release',
-			miclash_release_channel: 'release'
+			miclash_release_channel: options.miclash_channel ?? 'release'
 		} }) }
 	};
 	return { filesystem, clock, process, digest, ops, service_calls, wait_calls, curl_urls,
@@ -245,7 +291,33 @@ assert_equal(type(updates.create), 'function');
 let stable = environment();
 for (let method in [ 'release_info', 'update_mihomo', 'rollback_mihomo',
 	'update_miclash', 'update_miclash_scheduled', 'status' ])
-	assert_equal(type(stable.updater[method]), 'function', method + ' is exported');
+assert_equal(type(stable.updater[method]), 'function', method + ' is exported');
+
+let orphan_token = '0123456789abcdef0123456789abcdef';
+let orphan_hash = sprintf('%064d', 1);
+let orphan_handoff =
+	'/tmp/miclash/updates/handoff-1700000000000-00000001-0123456789abcdef.status';
+let orphan_atomic = '/opt/clash/bin/previous/.mihomo-' + orphan_hash +
+	'.miclash.1700000000000-1.abcdef01';
+let orphaned = environment({ extra_files: {
+	['/tmp/miclash/updates/' + orphan_token]: 'decompressed orphan',
+	['/tmp/miclash/updates/' + orphan_token + '.gz']: 'compressed orphan',
+	[orphan_handoff]: 'handoff orphan',
+	[orphan_atomic]: 'partial previous snapshot',
+	'/tmp/miclash/updates/administrator-note': 'keep',
+	'/opt/clash/bin/previous/administrator-note': 'keep'
+}, extra_modes: {
+	['/tmp/miclash/updates/' + orphan_token + '.gz']: 0o600,
+	[orphan_handoff]: 0o600,
+	[orphan_atomic]: 0o600
+} });
+assert_equal(orphaned.filesystem.exists('/tmp/miclash/updates/' + orphan_token), false);
+assert_equal(orphaned.filesystem.exists('/tmp/miclash/updates/' + orphan_token + '.gz'), false);
+assert_equal(orphaned.filesystem.exists(orphan_handoff), false);
+assert_equal(orphaned.filesystem.exists(orphan_atomic), false);
+assert_equal(orphaned.filesystem.readfile('/tmp/miclash/updates/administrator-note'), 'keep');
+assert_equal(orphaned.filesystem.readfile(
+	'/opt/clash/bin/previous/administrator-note'), 'keep');
 
 let info = stable.updater.release_info({ kind: 'mihomo' });
 assert_equal(info.version, 'v1.2.3');
@@ -278,6 +350,28 @@ for (let call in verified.process.calls) {
 assert_equal(length(bounded_unpack), 1);
 assert_equal(length(bounded_unpack[0].args), 3);
 assert_equal(bounded_unpack[0].args[2], '1024');
+
+// A 256 MB router cannot afford full ucode strings for both the old and new
+// Mihomo binaries. Large executables must only move through bounded fs reads.
+let bounded_memory = environment();
+bounded_memory.filesystem.on_readfile = (path) => {
+	if (path == '/opt/clash/bin/clash' ||
+	    (substr(path, 0, length('/tmp/miclash/updates/')) ==
+	      '/tmp/miclash/updates/' && substr(path, -3) != '.gz') ||
+	    substr(path, 0, length('/opt/clash/bin/previous/')) ==
+	      '/opt/clash/bin/previous/')
+		die('large binary readfile is forbidden');
+};
+let bounded_memory_op = bounded_memory.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+bounded_memory.clock.advance(0);
+assert_equal(bounded_memory.ops.get(bounded_memory_op.id).state, 'success');
+assert_equal(bounded_memory.filesystem.files['/opt/clash/bin/clash'],
+	'new mihomo binary');
+assert_true(length(bounded_memory.filesystem.calls.read) >= 3,
+	'candidate, snapshot and install use streamed reads');
+for (let call in bounded_memory.filesystem.calls.read)
+	assert_true(call.amount <= 65536, 'Mihomo stream exceeded the memory bound');
 
 let without_digest_release = json(fixture('mihomo-release.json'));
 let without_digest = environment({ responses: {
@@ -345,6 +439,51 @@ let previous_id = 'mihomo-' + old_hash;
 assert_equal(stopped.filesystem.readfile('/opt/clash/bin/previous/' + previous_id),
 	'old mihomo binary');
 assert_equal(stopped.updater.status().previous_id, previous_id);
+assert_equal(length(stopped.filesystem.calls.link), 1,
+	'old Mihomo snapshot uses one same-filesystem hardlink');
+for (let call in stopped.filesystem.calls.read)
+	assert_true(call.path != '/opt/clash/bin/clash',
+		'preserving Mihomo must not write a second full old-binary copy');
+
+let cross_device_snapshot = environment({ running: true, previous_device: 2 });
+let cross_device_op = cross_device_snapshot.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+cross_device_snapshot.clock.advance(0);
+assert_equal(cross_device_snapshot.ops.get(cross_device_op.id).state, 'failure',
+	'preservation rejects a previous directory on another filesystem');
+assert_equal(length(cross_device_snapshot.service_calls), 0);
+
+// A prior rollback snapshot with the same hash is replaced by a hardlink
+// before install, releasing its duplicate flash blocks on small overlays.
+let reused_snapshot = environment();
+reused_snapshot.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
+	'old mihomo binary');
+reused_snapshot.filesystem.chmod('/opt/clash/bin/previous/' + previous_id, 0o700);
+let reused_snapshot_op = reused_snapshot.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+reused_snapshot.clock.advance(0);
+assert_equal(reused_snapshot.ops.get(reused_snapshot_op.id).state, 'success');
+assert_equal(length(reused_snapshot.filesystem.calls.link), 1);
+assert_equal(reused_snapshot.filesystem.readfile(
+	'/opt/clash/bin/previous/' + previous_id), 'old mihomo binary');
+
+let interrupted_link = environment({ extra_binary_links: [
+	'/opt/clash/bin/previous/' + previous_id
+] });
+assert_equal(interrupted_link.filesystem.lstat('/opt/clash/bin/clash').nlink, 1,
+	'updater startup normalizes an exact interrupted preservation link');
+assert_equal(interrupted_link.filesystem.lstat(
+	'/opt/clash/bin/previous/' + previous_id), null,
+	'updater startup removes only the exact previous name after interruption');
+assert_throws(() => environment({
+	extra_binary_links: [ '/opt/clash/bin/previous/' + previous_id ],
+	fail_startup_link_cleanup: true
+}), 'INTERNAL');
+let interrupted_link_op = interrupted_link.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+interrupted_link.clock.advance(0);
+assert_equal(interrupted_link.ops.get(interrupted_link_op.id).state, 'success',
+	'interrupted hardlink snapshot is normalized before the next update');
 
 let running = environment({ running: true });
 let running_update = running.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
@@ -352,27 +491,97 @@ running.clock.advance(0);
 assert_equal(running.ops.get(running_update.id).state, 'success');
 assert_equal(join(',', running.service_calls), 'stop,start');
 assert_equal(running.filesystem.readfile('/opt/clash/bin/clash'), 'new mihomo binary');
+assert_intent_unchanged(running.service_calls,
+	'Mihomo update must restore runtime without changing durable enable state');
+
+// The service observer rejects nlink=2 as missing_kernel while the old binary
+// is hardlinked for a storage-free snapshot. Stop confirmation must rely only
+// on the process no longer running until atomic install restores nlink=1.
+let linked_stop = environment({ running: true, hardlink_reports_missing_kernel: true });
+let linked_stop_update = linked_stop.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+linked_stop.clock.advance(0);
+assert_equal(linked_stop.ops.get(linked_stop_update.id).state, 'success',
+	'nlink=2 missing_kernel observation is a valid stopped transition');
+assert_equal(join(',', linked_stop.service_calls), 'stop,start');
+
+let unknown_stop = environment({ running: true, unknown_after_stop: true });
+let unknown_stop_update = unknown_stop.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+unknown_stop.clock.advance(0);
+assert_equal(unknown_stop.ops.get(unknown_stop_update.id).state, 'failure',
+	'unknown observation does not prove the process stopped');
+assert_equal(unknown_stop.filesystem.readfile('/opt/clash/bin/clash'),
+	'old mihomo binary');
 
 // Failed readiness restores the exact old binary and proves it starts. A
 // failure of that restoration is a distinct INTERNAL terminal state.
-let unhealthy = environment({ running: true, readiness: [ true, false, true, true ] });
+let unhealthy = environment({ running: true, readiness: [ false, true, true ] });
 let unhealthy_update = unhealthy.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
 unhealthy.clock.advance(0);
 assert_equal(unhealthy.ops.get(unhealthy_update.id).state, 'failure');
 assert_equal(unhealthy.ops.get(unhealthy_update.id).error.code, 'HEALTH_FAILED');
 assert_equal(unhealthy.filesystem.readfile('/opt/clash/bin/clash'), 'old mihomo binary');
 assert_equal(join(',', unhealthy.service_calls), 'stop,start,stop,start');
+let restored_from_previous = false;
+for (let call in unhealthy.filesystem.calls.rename)
+	if (substr(call.from, 0, length('/opt/clash/bin/previous/mihomo-')) ==
+	    '/opt/clash/bin/previous/mihomo-' && call.to == '/opt/clash/bin/clash')
+		restored_from_previous = true;
+assert_equal(restored_from_previous, true,
+	'failed readiness atomically moves the preserved inode back over BINARY');
 
 let restore_failed = environment({ running: true,
-	readiness: [ true, false, true ], restore_write_fail: true });
+	readiness: [ false, true ], restore_write_fail: true });
 let restore_failed_update = restore_failed.updater.update_mihomo(
 	{ version: 'v1.2.3' }, 'luci');
 restore_failed.clock.advance(0);
 assert_equal(restore_failed.ops.get(restore_failed_update.id).state, 'failure');
 assert_equal(restore_failed.ops.get(restore_failed_update.id).error.code, 'INTERNAL');
+assert_true(restore_failed.filesystem.lstat('/opt/clash/bin/clash') != null,
+	'failed atomic rollback never leaves the kernel path absent');
+
+let stopped_unknown_recovery = environment({
+	fail_binary_write: true, unknown_observe_at: 3
+});
+let stopped_unknown_op = stopped_unknown_recovery.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+stopped_unknown_recovery.clock.advance(0);
+assert_equal(stopped_unknown_recovery.ops.get(stopped_unknown_op.id).state, 'failure');
+assert_equal(stopped_unknown_recovery.updater.status().recovery_state, 'failed',
+	'unknown observation cannot prove a stopped-service recovery');
 
 // Explicit rollback consumes only the opaque previous id and itself uses the
-// same stopped/running atomic transaction.
+// same stopped/running atomic transaction without touching durable intent.
+let stopped_rollback = environment({ old: 'current binary' });
+stopped_rollback.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
+	'old mihomo binary');
+stopped_rollback.filesystem.chmod('/opt/clash/bin/previous/' + previous_id, 0o700);
+let stopped_rollback_op = stopped_rollback.updater.rollback_mihomo(
+	{ id: previous_id }, 'luci');
+stopped_rollback.clock.advance(0);
+assert_equal(stopped_rollback.ops.get(stopped_rollback_op.id).state, 'success');
+assert_equal(stopped_rollback.filesystem.readfile('/opt/clash/bin/clash'),
+	'old mihomo binary');
+assert_intent_unchanged(stopped_rollback.service_calls,
+	'Mihomo stopped rollback must preserve runtime and durable enable state');
+assert_equal(length(stopped_rollback.service_calls), 0);
+assert_equal(stopped_rollback.updater.status().service_was_running, false);
+assert_equal(stopped_rollback.updater.status().postcheck, 'stopped');
+
+let noop_rollback = environment({ running: true });
+noop_rollback.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
+	'old mihomo binary');
+noop_rollback.filesystem.chmod('/opt/clash/bin/previous/' + previous_id, 0o700);
+let noop_rollback_op = noop_rollback.updater.rollback_mihomo(
+	{ id: previous_id }, 'luci');
+noop_rollback.clock.advance(0);
+assert_equal(noop_rollback.ops.get(noop_rollback_op.id).state, 'success',
+	'rollback to the already active hash is a verified no-op');
+assert_equal(length(noop_rollback.service_calls), 0);
+assert_equal(noop_rollback.filesystem.readfile('/opt/clash/bin/clash'),
+	'old mihomo binary');
+
 let rollback = environment({ old: 'current binary', running: true });
 rollback.filesystem.writefile('/opt/clash/bin/previous/' + previous_id,
 	'old mihomo binary');
@@ -383,6 +592,8 @@ assert_equal(rollback.ops.get(rollback_op.id).state, 'success',
 	sprintf('%J', rollback.ops.get(rollback_op.id)));
 assert_equal(rollback.filesystem.readfile('/opt/clash/bin/clash'), 'old mihomo binary');
 assert_equal(join(',', rollback.service_calls), 'stop,start');
+assert_intent_unchanged(rollback.service_calls,
+	'Mihomo rollback must restore runtime without changing durable enable state');
 
 // Exact architecture suffix selection is closed over known OpenWrt targets;
 // duplicate matching release assets are never resolved by array order.
@@ -481,6 +692,16 @@ assert_equal(app_info.readiness, 'ready');
 let apk_info = environment({ manager: 'apk' }).updater.release_info({ kind: 'miclash' });
 assert_equal(apk_info.ready, true);
 assert_equal(apk_info.readiness, 'ready');
+let apk_rc_release = replace(fixture('miclash-release.json'), /v9\.9\.9/g, 'v2.5.2_rc1');
+apk_rc_release = replace(apk_rc_release, /9\.9\.9/g, '2.5.2_rc1');
+apk_rc_release = replace(apk_rc_release, '"prerelease": false', '"prerelease": true');
+let apk_rc = environment({ manager: 'apk', miclash_channel: 'prerelease', responses: {
+	[MICLASH_RELEASES]: '[' + apk_rc_release + ']'
+} });
+let apk_rc_info = apk_rc.updater.release_info({ kind: 'miclash' });
+assert_equal(apk_rc_info.version, 'v2.5.2_rc1');
+assert_equal(apk_rc_info.ready, true);
+assert_equal(apk_rc_info.readiness, 'ready');
 
 let pending_release = fixture('miclash-release-incomplete.json');
 let pending = environment({ responses: { [MICLASH_LATEST]: pending_release } });
@@ -546,12 +767,16 @@ assert_equal(running_app_update.updater.status().service_was_running, true);
 assert_equal(running_app_update.updater.status().postcheck, 'ready');
 assert_true(length(running_app_update.wait_calls) > 0,
 	'running app update requires a fresh readiness check');
+assert_intent_unchanged(running_app_update.service_calls,
+	'running MiClash update must leave durable intent to package recovery');
 
 let stopped_app_started = environment({ installer_starts_service: true });
 let stopped_app_op = stopped_app_started.updater.update_miclash(
 	{ version: 'v9.9.9' }, 'telegram');
 stopped_app_started.clock.advance(0);
 assert_equal(stopped_app_started.ops.get(stopped_app_op.id).state, 'success');
+assert_intent_unchanged(stopped_app_started.service_calls,
+	'stopped MiClash update must leave durable intent to package recovery');
 assert_equal(stopped_app_started.service_calls[0], 'stop');
 assert_equal(stopped_app_started.updater.status().postcheck, 'stopped');
 
@@ -645,7 +870,7 @@ assert_throws(() => environment({ responses: {
 // Once the new bytes are installed, every start/readiness exception enters the
 // same automatic restore path rather than leaving an unready new kernel behind.
 let start_throw = environment({ running: true, new_start_throw: true,
-	readiness: [ true, true, true ] });
+	readiness: [ true, true ] });
 let start_throw_op = start_throw.updater.update_mihomo({ version: 'v1.2.3' }, 'luci');
 start_throw.clock.advance(0);
 assert_equal(start_throw.ops.get(start_throw_op.id).state, 'failure');
@@ -678,7 +903,7 @@ assert_equal(length(empty_ash), 0, 'empty installer is never syntax-checked or e
 // exact old bytes are restored and the originally running service is proven.
 for (let recovery_case in [
 	{ stop_throw_once: true },
-	{ wait_stopped_fail_once: true },
+	{ stop_stays_running_once: true, hardlink_reports_missing_kernel: true },
 	{ fail_binary_write: true },
 	{ partial_binary_write: true }
 ]) {
@@ -700,13 +925,13 @@ for (let recovery_case in [
 for (let recovery_kind in [ 'update', 'rollback' ]) {
 	for (let recovery_proof in [
 		{ name: 'old start throws', options: { old_start_throw: true,
-			readiness: [ true, false, true ] }, applied: false },
+			readiness: [ false ] }, applied: false },
 		{ name: 'old readiness fails', options: {
-			readiness: [ true, false, true, false ] }, applied: false },
+			readiness: [ false, false ] }, applied: false },
 		{ name: 'old verification throws', options: {
-			readiness: [ true, false, true ] }, applied: null, verify_throw: true },
+			readiness: [ false ] }, applied: null, verify_throw: true },
 		{ name: 'old restore rename throws', options: {
-			readiness: [ true, false, true ] }, applied: null, rename_throw: true }
+			readiness: [ false ] }, applied: null, rename_throw: true }
 	]) {
 		let recovery_options = { ...recovery_proof.options, running: true };
 		if (recovery_kind == 'rollback') recovery_options.old = 'current binary';
@@ -769,11 +994,12 @@ assert_equal(tampered_ready.ops.get(tampered_ready_op.id).state, 'failure');
 assert_equal(tampered_ready.filesystem.readfile('/opt/clash/bin/clash'),
 	'old mihomo binary');
 
-// The exact old destination and its parent authority are re-proven after
-// preservation and before the first service transition or destination write.
+// The exact old destination and its parent authority are re-proven before the
+// first service transition or destination write. A race removes only the
+// hardlink created by this operation and leaves the running service untouched.
 for (let old_race in [ 'replacement', 'hash', 'mode', 'authority' ]) {
 	let raced_old = environment({ running: true }), armed = true;
-	raced_old.filesystem.on_rename = (from, to) => {
+	raced_old.filesystem.on_link = (from, to) => {
 		if (!armed || substr(to, 0, length('/opt/clash/bin/previous/mihomo-')) !=
 		    '/opt/clash/bin/previous/mihomo-') return;
 		if (old_race == 'replacement')
@@ -797,12 +1023,60 @@ for (let old_race in [ 'replacement', 'hash', 'mode', 'authority' ]) {
 	raced_old.clock.advance(0);
 	assert_equal(raced_old.ops.get(raced_old_op.id).state, 'failure', old_race);
 	assert_equal(length(raced_old.service_calls), 0,
-		old_race + ' race fails before stop');
+		old_race + ' race fails before stop: ' +
+		sprintf('%J', raced_old.service_calls));
+	if (old_race != 'authority')
+		assert_equal(raced_old.filesystem.lstat(
+			'/opt/clash/bin/previous/' + previous_id), null,
+			old_race + ' removes the exact hardlink created by the failed operation');
 	let destination_writes = 0;
 	for (let rename in raced_old.filesystem.calls.rename)
 		if (rename.to == '/opt/clash/bin/clash') destination_writes++;
 	assert_equal(destination_writes, 0,
 		old_race + ' race fails before destination write');
+}
+
+// Failure to persist the transition stage happens after preservation but
+// before service stop. The operation must remove its exact hardlink so the
+// normal service observer does not remain stuck in missing_kernel.
+let transition_journal_failure = environment({ running: true });
+transition_journal_failure.filesystem.on_link = (from, to) => {
+	if (substr(to, 0, length('/opt/clash/bin/previous/mihomo-')) ==
+	    '/opt/clash/bin/previous/mihomo-')
+		transition_journal_failure.filesystem.fail_open_once_matching =
+			'/tmp/miclash/operations/';
+		transition_journal_failure.filesystem.fail_open_matching_count = 16;
+};
+let transition_journal_op = transition_journal_failure.updater.update_mihomo(
+	{ version: 'v1.2.3' }, 'luci');
+transition_journal_failure.clock.advance(0);
+assert_equal(transition_journal_failure.ops.get(transition_journal_op.id).state,
+	'failure');
+assert_equal(length(transition_journal_failure.service_calls), 0);
+assert_equal(transition_journal_failure.filesystem.lstat(
+	'/opt/clash/bin/previous/' + previous_id), null,
+	'failed transition journal removes the exact created hardlink');
+assert_equal(transition_journal_failure.filesystem.lstat(
+	'/opt/clash/bin/clash').nlink, 1);
+
+// A process wrapper may report failure or throw after ln has already created
+// the hardlink. Both outcomes clean only that exact link before service stop.
+for (let link_failure in [ 'reply', 'throw' ]) {
+	let failed_link = environment({
+		link_reports_failure: link_failure == 'reply',
+		link_throws_after_create: link_failure == 'throw',
+		running: true
+	});
+	let failed_link_op = failed_link.updater.update_mihomo(
+		{ version: 'v1.2.3' }, 'luci');
+	failed_link.clock.advance(0);
+	assert_equal(failed_link.ops.get(failed_link_op.id).state, 'failure',
+		link_failure);
+	assert_equal(length(failed_link.service_calls), 0, link_failure);
+	assert_equal(failed_link.filesystem.lstat(
+		'/opt/clash/bin/previous/' + previous_id), null, link_failure);
+	assert_equal(failed_link.filesystem.lstat('/opt/clash/bin/clash').nlink, 1,
+		link_failure);
 }
 
 // Rollback runs the same candidate -v and Active -t pipeline before its first

@@ -15,6 +15,25 @@ function runtime(initial) {
 	};
 };
 
+let hardlink_fs = fakes.fs({ '/opt/clash/bin/clash': 'old' });
+hardlink_fs.chmod('/opt/clash/bin/clash', 0o700);
+assert_equal(hardlink_fs.link('/opt/clash/bin/clash',
+	'/opt/clash/bin/previous'), true);
+let linked_writer = hardlink_fs.open('/opt/clash/bin/clash', 'w', 0o600);
+assert_true(linked_writer != null);
+assert_equal(hardlink_fs.write(linked_writer, 'new'), 3);
+assert_equal(hardlink_fs.close(linked_writer), true);
+assert_equal(hardlink_fs.readfile('/opt/clash/bin/clash'), 'new');
+assert_equal(hardlink_fs.readfile('/opt/clash/bin/previous'), 'new');
+assert_equal(hardlink_fs.lstat('/opt/clash/bin/clash').inode,
+	hardlink_fs.lstat('/opt/clash/bin/previous').inode);
+assert_equal(hardlink_fs.lstat('/opt/clash/bin/clash').nlink, 2);
+assert_equal(hardlink_fs.rename('/opt/clash/bin/clash',
+	'/opt/clash/bin/previous'), true);
+assert_equal(hardlink_fs.lstat('/opt/clash/bin/clash').nlink, 2,
+	'rename between names of one inode is a no-op');
+assert_equal(hardlink_fs.lstat('/opt/clash/bin/previous').nlink, 2);
+
 let rt = runtime({ '/opt/clash/config.yaml': 'old' });
 assert_equal(storage.atomic_write(rt, '/opt/clash/config.yaml', 'new', 0o600), true);
 assert_equal(rt.fs.readfile('/opt/clash/config.yaml'), 'new');
@@ -135,6 +154,106 @@ assert_equal(length(digest_write.digest.calls.data), 1);
 assert_equal(length(digest_write.digest.calls.file), 1);
 assert_equal(index(digest_write.fs.calls.readfile,
 	digest_write.fs.temp_paths()[0]), -1);
+
+// Large binaries are copied in bounded chunks directly between file handles.
+// Neither the source nor destination may be materialized as one ucode string.
+let streamed_data = sprintf('%0150000d', 0);
+let streamed_source = '/tmp/miclash/updates/candidate';
+let streamed_destination = '/opt/clash/bin/clash';
+let streamed = runtime({
+	[streamed_source]: streamed_data,
+	[streamed_destination]: 'old'
+});
+streamed.fs.chmod(streamed_source, 0o700);
+streamed.fs.write_results = [ 2, 1 ];
+let streamed_hash = require('digest').sha256(streamed_data);
+assert_equal(storage.atomic_copy(streamed, streamed_source,
+	streamed_destination, 0o700, streamed_hash), true);
+assert_equal(streamed.fs.files[streamed_destination], streamed_data);
+assert_equal(streamed.fs.mode(streamed_destination), 0o700);
+assert_equal(index(streamed.fs.calls.readfile, streamed_source), -1);
+assert_equal(index(streamed.fs.calls.readfile, streamed_destination), -1);
+assert_true(length(streamed.fs.calls.read) > 2);
+for (let call in streamed.fs.calls.read)
+	assert_true(call.amount <= 65536, 'stream copy read exceeded the memory bound');
+assert_true(length(streamed.fs.calls.write) > length(streamed.fs.calls.read),
+	'partial writes are retried without another full read');
+
+let wrong_stream_hash = runtime({
+	[streamed_source]: streamed_data,
+	[streamed_destination]: 'old'
+});
+wrong_stream_hash.fs.chmod(streamed_source, 0o700);
+assert_throws(() => storage.atomic_copy(wrong_stream_hash, streamed_source,
+	streamed_destination, 0o700, sprintf('%064d', 0)), 'INVALID_ARGUMENT');
+assert_equal(wrong_stream_hash.fs.files[streamed_destination], 'old');
+assert_equal(wrong_stream_hash.fs.exists(wrong_stream_hash.fs.temp_paths()[0]), false);
+
+let changing_stream_source = runtime({
+	[streamed_source]: streamed_data,
+	[streamed_destination]: 'old'
+});
+changing_stream_source.fs.chmod(streamed_source, 0o700);
+changing_stream_source.fs.on_lstat = (path, count) => {
+	if (path == streamed_source && count == 2)
+		changing_stream_source.fs.bump_inode(path);
+};
+assert_throws(() => storage.atomic_copy(changing_stream_source, streamed_source,
+	streamed_destination, 0o700, streamed_hash), 'INVALID_ARGUMENT');
+assert_equal(changing_stream_source.fs.files[streamed_destination], 'old');
+
+for (let failure in [ 'read', 'write', 'flush', 'close', 'chmod', 'rename' ]) {
+	let interrupted_copy = runtime({
+		[streamed_source]: streamed_data,
+		[streamed_destination]: 'old'
+	});
+	interrupted_copy.fs.chmod(streamed_source, 0o700);
+	interrupted_copy.fs.fail_on = failure;
+	assert_throws(() => storage.atomic_copy(interrupted_copy, streamed_source,
+		streamed_destination, 0o700, streamed_hash), 'INTERNAL', failure);
+	assert_equal(interrupted_copy.fs.files[streamed_destination], 'old', failure);
+	let copy_temp = interrupted_copy.fs.temp_paths()[0];
+	if (copy_temp != null)
+		assert_equal(interrupted_copy.fs.exists(copy_temp), false, failure);
+}
+
+let corrupted_copy = runtime({
+	[streamed_source]: streamed_data,
+	[streamed_destination]: 'old'
+});
+corrupted_copy.fs.chmod(streamed_source, 0o700);
+corrupted_copy.fs.corrupt_on_close = true;
+assert_throws(() => storage.atomic_copy(corrupted_copy, streamed_source,
+	streamed_destination, 0o700, streamed_hash), 'INTERNAL');
+assert_equal(corrupted_copy.fs.files[streamed_destination], 'old');
+assert_equal(corrupted_copy.fs.exists(corrupted_copy.fs.temp_paths()[0]), false);
+
+for (let raced_directory in [ '/tmp/miclash/updates', '/opt/clash/bin' ]) {
+	let directory_race = runtime({
+		[streamed_source]: streamed_data,
+		[streamed_destination]: 'old'
+	});
+	directory_race.fs.chmod(streamed_source, 0o700);
+	directory_race.fs.on_lstat = (path, count) => {
+		if (path == raced_directory && count == 2)
+			directory_race.fs.bump_inode(path);
+	};
+	assert_throws(() => storage.atomic_copy(directory_race, streamed_source,
+		streamed_destination, 0o700, streamed_hash), 'INVALID_ARGUMENT');
+	assert_equal(directory_race.fs.files[streamed_destination], 'old');
+}
+
+let cross_device_copy = runtime({
+	[streamed_source]: streamed_data,
+	[streamed_destination]: 'old'
+});
+cross_device_copy.fs.chmod(streamed_source, 0o700);
+cross_device_copy.fs.set_device('/tmp/miclash/updates', 20);
+cross_device_copy.fs.set_device(streamed_source, 20);
+cross_device_copy.fs.set_device('/opt/clash/bin', 21);
+assert_equal(storage.atomic_copy(cross_device_copy, streamed_source,
+	streamed_destination, 0o700, streamed_hash), true);
+assert_equal(cross_device_copy.fs.files[streamed_destination], streamed_data);
 
 let overlay_source = '/opt/clash/.config.yaml.miclash.1700000000000-1.abcdef01';
 let overlay_replace = runtime({ [overlay_source]: 'new', '/opt/clash/config.yaml': 'old' });

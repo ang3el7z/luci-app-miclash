@@ -53,6 +53,13 @@ function same_node(left, right) {
 	       left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
 };
 
+function same_linked_node(left, right, nlink) {
+	return left?.type == 'file' && right?.type == 'file' &&
+	       left.nlink == nlink && right.nlink == nlink &&
+	       left.inode == right.inode &&
+	       left.dev?.major == right.dev?.major && left.dev?.minor == right.dev?.minor;
+};
+
 function same_object(left, right) {
 	return left?.type != null && left.type == right?.type &&
 	       left.inode == right?.inode && left.dev?.major == right.dev?.major &&
@@ -253,7 +260,7 @@ function architecture(runtime) {
 
 function version(value) {
 	if (type(value) != 'string' || !match(value,
-	    /^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$/))
+	    /^v?[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$/))
 		invalid();
 	return substr(value, 0, 1) == 'v' ? value : 'v' + value;
 };
@@ -423,6 +430,25 @@ function file_snapshot(runtime, path, authority, required_mode) {
 		authority, required_mode };
 };
 
+function file_reference(runtime, path, authority, required_mode) {
+	if (authority != null) verify_authority(runtime, authority);
+	let before = runtime.fs.lstat(path);
+	if (before?.type != 'file' || before.nlink != 1 ||
+	    (required_mode != null && before.mode != required_mode) ||
+	    (before.uid != null && before.uid != 0) || runtime.fs.realpath(path) != path)
+		errors.fail(before == null ? 'NOT_FOUND' : 'INTERNAL');
+	let hash = runtime.digest.sha256_file(path);
+	let after = runtime.fs.lstat(path);
+	if (type(hash) != 'string' || !match(hash, /^[0-9a-f]{64}$/) ||
+	    !same_node(before, after) ||
+	    (required_mode != null && after.mode != required_mode) ||
+	    runtime.fs.realpath(path) != path ||
+	    runtime.digest.sha256_file(path) != hash)
+		errors.fail('INTERNAL');
+	if (authority != null) verify_authority(runtime, authority);
+	return { path, identity: after, hash, authority, required_mode };
+};
+
 function validate_kernel_candidate(runtime, kernel) {
 	verify_owned(runtime, kernel);
 	if (!response_ok(run_checked(runtime, kernel, { command: kernel.path,
@@ -452,6 +478,7 @@ function prepare_kernel(runtime, resolved) {
 		errors.fail('INTERNAL');
 	let gz = write_exclusive(runtime, UPDATE_ROOT + '/' + token + '.gz', compressed,
 		0o600, authority);
+	compressed = null;
 	let kernel_path = substr(gz.path, 0, length(gz.path) - 3), kernel = null;
 	let failure = null;
 	try {
@@ -471,13 +498,14 @@ function prepare_kernel(runtime, resolved) {
 		    runtime.fs.chmod(kernel_path, 0o700) != true)
 			errors.fail('VALIDATION_FAILED');
 		identity = runtime.fs.lstat(kernel_path);
-		let content = runtime.fs.readfile(kernel_path);
-		if (identity?.mode != 0o700 || type(content) != 'string' ||
-		    runtime.digest.sha256_file(kernel_path) != runtime.digest.sha256(content))
+		let hash = runtime.digest.sha256_file(kernel_path);
+		if (identity?.mode != 0o700 || type(hash) != 'string' ||
+		    !match(hash, /^[0-9a-f]{64}$/))
 			errors.fail('INTERNAL');
-		kernel = { path: kernel_path, identity, content,
-			hash: runtime.digest.sha256(content), published_checksum_verified: verified,
+		kernel = { path: kernel_path, identity,
+			hash, published_checksum_verified: verified,
 			authority, mode: 0o700 };
+		verify_owned(runtime, kernel);
 		validate_kernel_candidate(runtime, kernel);
 	}
 	catch (error) { failure = errors.normalize(error).code; }
@@ -497,19 +525,115 @@ function previous_authority(runtime, bin_authority) {
 	return authority;
 };
 
+function remove_orphan(runtime, path, authority) {
+	verify_authority(runtime, authority);
+	let identity = runtime.fs.lstat(path);
+	if (identity?.type != 'file' || identity.nlink != 1 ||
+	    (identity.mode != 0o600 && identity.mode != 0o700) ||
+	    (identity.uid != null && identity.uid != 0) ||
+	    runtime.fs.realpath(path) != path)
+		errors.fail('INTERNAL');
+	let record = { path, identity, authority, mode: identity.mode,
+		hash: runtime.digest.sha256_file(path) };
+	verify_owned(runtime, record);
+	remove_owned(runtime, record);
+};
+
+function cleanup_orphaned_updates(runtime) {
+	try {
+		let update = update_authority(runtime);
+		for (let name in runtime.fs.lsdir(UPDATE_ROOT) ?? [])
+			if (match(name, /^[0-9a-f]{32}(\.(gz|sh))?$/) ||
+			    match(name,
+			      /^handoff-[0-9]{13}-[0-9]{8}-[0-9a-f]{16}\.status$/))
+				remove_orphan(runtime, UPDATE_ROOT + '/' + name, update);
+	}
+	catch (error) {}
+
+	try {
+		let bin = binary_authority(runtime);
+		let previous = previous_authority(runtime, bin);
+		for (let name in runtime.fs.lsdir(PREVIOUS_ROOT) ?? [])
+			if (match(name,
+			    /^\.mihomo-[0-9a-f]{64}\.miclash\.[0-9]+-[0-9]+\.[0-9A-Fa-f]{8}$/))
+				remove_orphan(runtime, PREVIOUS_ROOT + '/' + name, previous);
+		for (let name in runtime.fs.lsdir('/opt/clash/bin') ?? [])
+			if (match(name, /^\.clash\.miclash\.[0-9]+-[0-9]+\.[0-9A-Fa-f]{8}$/))
+				remove_orphan(runtime, '/opt/clash/bin/' + name, bin);
+	}
+	catch (error) {}
+
+};
+
+function verify_linked_pair(runtime, active, preserved) {
+	verify_authority(runtime, active.authority);
+	verify_authority(runtime, preserved.authority);
+	let left = runtime.fs.lstat(active.path);
+	let right = runtime.fs.lstat(preserved.path);
+	if (!same_linked_node(left, right, 2) || left.mode != 0o700 || right.mode != 0o700 ||
+	    (left.uid != null && left.uid != 0) || (right.uid != null && right.uid != 0) ||
+	    runtime.fs.realpath(active.path) != active.path ||
+	    runtime.fs.realpath(preserved.path) != preserved.path ||
+	    runtime.digest.sha256_file(active.path) != active.hash ||
+	    runtime.digest.sha256_file(preserved.path) != active.hash)
+		errors.fail('INTERNAL');
+	verify_authority(runtime, active.authority);
+	verify_authority(runtime, preserved.authority);
+	preserved.identity = right;
+	preserved.hash = active.hash;
+	return preserved;
+};
+
+function discard_linked_pair(runtime, active, preserved) {
+	verify_linked_pair(runtime, active, preserved);
+	if (runtime.fs.unlink(preserved.path) != true ||
+	    runtime.fs.lstat(preserved.path) != null ||
+	    !verify_snapshot(runtime, active))
+		errors.fail('INTERNAL');
+	return true;
+};
+
 function preserve(runtime, snapshot, bin_authority) {
 	let authority = previous_authority(runtime, bin_authority);
 	let id = 'mihomo-' + snapshot.hash;
 	let path = PREVIOUS_ROOT + '/' + id;
 	let current = runtime.fs.lstat(path);
-	if (current == null)
-		storage.atomic_write(runtime, path, snapshot.content, 0o700);
-	else {
-		let existing = file_snapshot(runtime, path, authority, 0o700);
-		if (existing.hash != snapshot.hash)
+	let preserved = { path, identity: current, hash: snapshot.hash,
+		authority, required_mode: 0o700, mode: 0o700, id };
+	if (current != null) {
+		let active = runtime.fs.lstat(snapshot.path);
+		if (same_linked_node(active, current, 2))
+			return verify_linked_pair(runtime, snapshot, preserved);
+		let existing = file_reference(runtime, path, authority, 0o700);
+		if (existing.hash != snapshot.hash || runtime.fs.unlink(path) != true)
 			errors.fail('INTERNAL');
+		verify_authority(runtime, authority);
 	}
-	return id;
+	if (!verify_snapshot(runtime, snapshot) || runtime.fs.lstat(path) != null)
+		errors.fail('INTERNAL');
+	let helper = busybox_capability(runtime);
+	verify_file(runtime, helper, [ helper.mode ]);
+	let failure = null;
+	try {
+		let reply = runtime.process.run({ command: BUSYBOX,
+			args: [ 'ln', snapshot.path, path ], timeout_ms: 5000 });
+		verify_file(runtime, helper, [ helper.mode ]);
+		if (!response_ok(reply))
+			errors.fail('INTERNAL');
+		preserved.identity = runtime.fs.lstat(path);
+		return verify_linked_pair(runtime, snapshot, preserved);
+	}
+	catch (error) { failure = errors.normalize(error).code; }
+	try {
+		verify_authority(runtime, authority);
+		let created = runtime.fs.lstat(path);
+		if (!same_object(snapshot.identity, created) ||
+		    runtime.fs.realpath(path) != path || runtime.fs.unlink(path) != true)
+			errors.fail('INTERNAL');
+		verify_authority(runtime, authority);
+	}
+	catch (cleanup_error) {}
+	errors.fail(failure);
 };
 
 function prune_previous(runtime, protected_id, bin_authority) {
@@ -531,7 +655,7 @@ function prune_previous(runtime, protected_id, bin_authority) {
 			push(owned, victim);
 			continue;
 		}
-		let snapshot = file_snapshot(runtime, PREVIOUS_ROOT + '/' + victim,
+		let snapshot = file_reference(runtime, PREVIOUS_ROOT + '/' + victim,
 			authority, 0o700);
 		if ('mihomo-' + snapshot.hash != victim ||
 		    runtime.fs.unlink(snapshot.path) != true)
@@ -543,26 +667,52 @@ function previous(runtime, id) {
 	if (type(id) != 'string' || !match(id, /^mihomo-[0-9a-f]{64}$/))
 		invalid();
 	let authority = previous_authority(runtime, binary_authority(runtime));
-	let snapshot = file_snapshot(runtime, PREVIOUS_ROOT + '/' + id, authority, 0o700);
+	let snapshot = file_reference(runtime, PREVIOUS_ROOT + '/' + id, authority, 0o700);
 	if ('mihomo-' + snapshot.hash != id)
 		errors.fail('CORRUPT_STATE');
 	snapshot.mode = 0o700;
 	return snapshot;
 };
 
+function normalize_interrupted_pair(runtime, authority, current) {
+	let hash = runtime.digest.sha256_file(BINARY);
+	if (current?.type != 'file' || current.nlink != 2 ||
+	    type(hash) != 'string' || !match(hash, /^[0-9a-f]{64}$/))
+		errors.fail('INTERNAL');
+	let previous = previous_authority(runtime, authority);
+	let path = PREVIOUS_ROOT + '/mihomo-' + hash;
+	let preserved = { path, identity: runtime.fs.lstat(path), hash,
+		authority: previous, required_mode: 0o700, mode: 0o700,
+		id: 'mihomo-' + hash };
+	let active = { path: BINARY, identity: current, hash, authority,
+		required_mode: 0o700 };
+	verify_linked_pair(runtime, active, preserved);
+	if (runtime.fs.unlink(path) != true)
+		errors.fail('INTERNAL');
+	current = runtime.fs.lstat(BINARY);
+	if (runtime.fs.lstat(path) != null || current?.nlink != 1)
+		errors.fail('INTERNAL');
+	let normalized = file_reference(runtime, BINARY, authority, 0o700);
+	if (normalized.hash != hash)
+		errors.fail('INTERNAL');
+	return normalized.identity;
+};
+
 function binary_snapshot(runtime, authority) {
 	verify_authority(runtime, authority);
 	let current = runtime.fs.lstat(BINARY);
-	if (current?.type != 'file' || current.nlink != 1 ||
+	if (current?.type != 'file' || (current.nlink != 1 && current.nlink != 2) ||
 	    (current.uid != null && current.uid != 0) || runtime.fs.realpath(BINARY) != BINARY ||
 	    runtime.fs.chmod(BINARY, 0o700) != true)
 		errors.fail(current == null ? 'NOT_FOUND' : 'INTERNAL');
-	return file_snapshot(runtime, BINARY, authority, 0o700);
+	if (current.nlink == 2)
+		current = normalize_interrupted_pair(runtime, authority, current);
+	return file_reference(runtime, BINARY, authority, 0o700);
 };
 
 function verify_binary(runtime, authority, expected_hash) {
 	verify_authority(runtime, authority);
-	let current = file_snapshot(runtime, BINARY, authority, 0o700);
+	let current = file_reference(runtime, BINARY, authority, 0o700);
 	if (current.hash != expected_hash)
 		errors.fail('INTERNAL');
 	verify_authority(runtime, authority);
@@ -577,37 +727,74 @@ function observed_service(app) {
 	return observed;
 };
 
+function stop_observation(app) {
+	let observed = app.service.observe('config.yaml');
+	if (type(observed) != 'object' || type(observed.running) != 'bool' ||
+	    (observed.running && observed.state != 'running') ||
+	    (!observed.running && observed.state != 'stopped' &&
+	      observed.state != 'missing_kernel'))
+		errors.fail('HEALTH_FAILED');
+	return observed;
+};
+
+function wait_not_running(app, deadline) {
+	while (true) {
+		let observed = stop_observation(app);
+		if (!observed.running)
+			return true;
+		let now = app.runtime.clock.now();
+		if (now >= deadline)
+			return false;
+		app.runtime.clock.sleep(min(100, deadline - now));
+	}
+};
+
 function recover_kernel(app, authority, old, was_running, transaction) {
 	let runtime = app.runtime;
 	transaction.stage = 'recovery';
-	let observed = observed_service(app);
+	let observed = stop_observation(app);
 	if (observed.running) {
 		app.service.stop('config.yaml');
-		if (app.service.wait_ready(runtime.clock.now() + 5000,
-		    'config.yaml', { stopped: true })?.ok !== true)
+		if (!wait_not_running(app, runtime.clock.now() + 5000))
 			errors.fail('INTERNAL');
 	}
 	let exact_old = false;
-	try {
+	let active = runtime.fs.lstat(BINARY);
+	if (active?.nlink == 2) {
+		let linked_active = { path: BINARY, identity: active, hash: old.hash,
+			authority, required_mode: 0o700 };
+		verify_linked_pair(runtime, linked_active, old);
+		if (runtime.fs.unlink(old.path) != true)
+			errors.fail('INTERNAL');
 		exact_old = verify_binary(runtime, authority, old.hash)?.hash == old.hash;
-		if (exact_old) {
-			transaction.applied = false;
-			transaction.sha256 = old.hash;
-		}
 	}
-	catch (error) {
-		transaction.applied = null;
-		transaction.sha256 = null;
-		exact_old = false;
+	else {
+		try {
+			exact_old = verify_binary(runtime, authority, old.hash)?.hash == old.hash;
+		}
+		catch (error) { exact_old = false; }
 	}
 	if (!exact_old) {
 		transaction.applied = null;
 		transaction.sha256 = null;
-		storage.atomic_write(runtime, BINARY, old.content, 0o700);
+		let preserved = file_reference(runtime, old.path, old.authority, 0o700);
+		if (preserved.hash != old.hash)
+			errors.fail('INTERNAL');
+		let current = runtime.fs.lstat(BINARY);
+		if (current != null) {
+			let installed = file_reference(runtime, BINARY, authority, 0o700);
+			if (installed.hash == old.hash)
+				errors.fail('INTERNAL');
+		}
+		verify_authority(runtime, authority);
+		verify_authority(runtime, old.authority);
+		if (!verify_snapshot(runtime, preserved) ||
+		    runtime.fs.rename(old.path, BINARY) != true)
+			errors.fail('INTERNAL');
 		verify_binary(runtime, authority, old.hash);
-		transaction.applied = false;
-		transaction.sha256 = old.hash;
 	}
+	transaction.applied = false;
+	transaction.sha256 = old.hash;
 	if (was_running) {
 		app.service.start('config.yaml');
 		if (app.service.wait_ready(runtime.clock.now() + 15000,
@@ -620,47 +807,63 @@ function recover_kernel(app, authority, old, was_running, transaction) {
 			errors.fail(errors.normalize(error).code);
 		}
 	}
-	else if (observed_service(app).running)
-		errors.fail('INTERNAL');
+	else {
+		let final = stop_observation(app);
+		if (final.state != 'stopped')
+			errors.fail('INTERNAL');
+	}
 	transaction.recovery_state = 'restored';
 };
 
 function install_kernel(app, candidate, resolved, ctx, transaction) {
 	let runtime = app.runtime, authority = binary_authority(runtime);
 	let old = binary_snapshot(runtime, authority);
+	let observed = observed_service(app);
 	transaction.applied = false;
 	transaction.sha256 = old.hash;
+	if (resolved.version == null && candidate.hash == old.hash) {
+		verify_owned(runtime, candidate);
+		if (observed.running && app.service.wait_ready(runtime.clock.now() + 15000,
+		    'config.yaml', {})?.ok !== true)
+			errors.fail('HEALTH_FAILED');
+		verify_binary(runtime, authority, old.hash);
+		transaction.applied = true;
+		transaction.recovery_state = 'not_needed';
+		return { previous_id: 'mihomo-' + old.hash, sha256: old.hash,
+			service_was_running: observed.running,
+			postcheck: observed.running ? 'ready' : 'stopped' };
+	}
 	ctx.stage('preserve', 50, 'preserve');
-	let previous_id = preserve(runtime, old, authority);
-	ctx.stage('transition', 55, 'transition');
+	if (!verify_snapshot(runtime, old))
+		errors.fail('INTERNAL');
+	verify_owned(runtime, candidate);
+	let preserved = preserve(runtime, old, authority);
 	try {
-		if (!verify_snapshot(runtime, old)) errors.fail('INTERNAL');
-		verify_authority(runtime, authority);
+		verify_linked_pair(runtime, old, preserved);
+		ctx.stage('transition', 55, 'transition');
 	}
 	catch (error) {
-		transaction.applied = null;
-		transaction.sha256 = null;
-		errors.fail(errors.normalize(error).code);
+		let original = errors.normalize(error).code;
+		try { discard_linked_pair(runtime, old, preserved); }
+		catch (cleanup_error) { errors.fail('INTERNAL'); }
+		errors.fail(original);
 	}
-	verify_owned(runtime, candidate);
-	let observed = observed_service(app), began = false;
+	let began = true;
 	transaction.stage = 'transition';
 	transaction.recovery_state = 'not_needed';
 	try {
-		ctx.stage('install', 75, 'install');
 		if (observed.running) {
-			began = true;
 			app.service.stop('config.yaml');
-			if (app.service.wait_ready(runtime.clock.now() + 5000,
-			    'config.yaml', { stopped: true })?.ok !== true)
+			if (!wait_not_running(app, runtime.clock.now() + 5000))
 				errors.fail('HEALTH_FAILED');
 		}
-		began = true;
+		verify_linked_pair(runtime, old, preserved);
+		ctx.stage('install', 75, 'install');
 		verify_authority(runtime, authority);
 		verify_owned(runtime, candidate);
 		transaction.applied = null;
 		transaction.sha256 = null;
-		storage.atomic_write(runtime, BINARY, candidate.content, 0o700);
+		storage.atomic_copy(runtime, candidate.path, BINARY, 0o700, candidate.hash);
 		verify_binary(runtime, authority, candidate.hash);
 		transaction.applied = true;
 		transaction.sha256 = candidate.hash;
@@ -677,15 +880,21 @@ function install_kernel(app, candidate, resolved, ctx, transaction) {
 				errors.fail('HEALTH_FAILED');
 			verify_binary(runtime, authority, candidate.hash);
 		}
-		prune_previous(runtime, previous_id, authority);
-		return { previous_id, sha256: candidate.hash,
+		let final_preserved = file_reference(runtime, preserved.path,
+			preserved.authority, 0o700);
+		if (final_preserved.hash != old.hash)
+			errors.fail('INTERNAL');
+		prune_previous(runtime, preserved.id, authority);
+		return { previous_id: preserved.id, sha256: candidate.hash,
 			service_was_running: observed.running,
 			postcheck: observed.running ? 'ready' : 'stopped' };
 	}
 	catch (error) {
 		let original = errors.normalize(error).code;
 		if (began) {
-			try { recover_kernel(app, authority, old, observed.running, transaction); }
+			try {
+				recover_kernel(app, authority, preserved, observed.running, transaction);
+			}
 			catch (recovery_error) {
 				transaction.recovery_state = 'failed';
 				errors.fail('INTERNAL');
@@ -794,6 +1003,12 @@ export function create(app) {
 	    type(app?.operations?.submit) != 'function' || type(app?.service?.observe) != 'function' ||
 	    type(app?.settings?.get) != 'function')
 		invalid();
+	cleanup_orphaned_updates(app.runtime);
+	let current = app.runtime.fs.lstat(BINARY);
+	if (current?.nlink == 2) {
+		let authority = binary_authority(app.runtime);
+		normalize_interrupted_pair(app.runtime, authority, current);
+	}
 	let last = { state: 'idle', kind: null, stage: 'idle', operation_id: null,
 		version: null, sha256: null, published_checksum_verified: null,
 		previous_id: null, error_code: null, applied: null, recovery_state: null,
