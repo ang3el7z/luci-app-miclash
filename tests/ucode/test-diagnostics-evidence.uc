@@ -224,6 +224,32 @@ assert_equal(length(filter(adapter_commands,
 	(command) => command == '/bin/ubus call service list')), 0,
 	'unrelated full procd state is never reused for other collectors');
 
+let apk_commands = [];
+let apk_sections = evidence_module.create({ fs: { popen: (command, mode) => {
+	push(apk_commands, command);
+	let replies = {
+		'/usr/bin/apk info --all luci-app-miclash': {
+			output: 'luci-app-miclash-2.5.0-r1 description:\nMiClash\n', close: 0 }
+	};
+	let reply = replies[command];
+	if (reply == null) return null;
+	let read = false;
+	return {
+		read: () => { if (read) return ''; read = true; return reply.output; },
+		close: () => reply.close
+	};
+} } }, {
+	procd: domain_present, dns: domain_present, routes: domain_present,
+	interfaces: domain_present, tun_tproxy: domain_present, guard: domain_present,
+	schedulers: domain_present, memory: domain_present, operations: domain_present,
+	recovery: domain_present
+}).sections();
+let apk_packages = find_section(apk_sections, 'packages');
+assert_equal(apk_packages.state, 'present',
+	'OpenWrt 25 package evidence uses the installed /usr/bin/apk');
+assert_equal(apk_packages.manager, 'apk');
+assert_true(index(apk_commands, '/usr/bin/apk info --all luci-app-miclash') >= 0);
+
 function iptables_mangle(pr_id, ou_id) {
 	return '*mangle\n:PREROUTING ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\n' +
 		':MCL_AN_PR - [0:0]\n:MCL_PR_' + pr_id + ' - [0:0]\n' +

@@ -124,7 +124,11 @@ function collect_packages(runtime) {
 		opkg = capture(runtime, '/bin/opkg status luci-app-miclash', SECTION_LIMIT);
 	if (opkg.ok === true)
 		return present('opkg', { manager: 'opkg', packages: opkg_packages(opkg.output) });
-	let apk = capture(runtime, '/sbin/apk info --all luci-app-miclash', SECTION_LIMIT);
+	let apk = capture(runtime, '/usr/bin/apk info --all luci-app-miclash', SECTION_LIMIT);
+	if (apk.ok !== true)
+		apk = capture(runtime, '/sbin/apk info --all luci-app-miclash', SECTION_LIMIT);
+	if (apk.ok !== true)
+		apk = capture(runtime, '/bin/apk info --all luci-app-miclash', SECTION_LIMIT);
 	if (apk.ok === true) {
 		let records = [];
 		for (let line in split(apk.output, '\n'))

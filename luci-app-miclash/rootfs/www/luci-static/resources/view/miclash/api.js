@@ -68,12 +68,19 @@ const TERMINAL = new Set(['success', 'failure', 'interrupted']);
 const MAX_TRANSFER = 16777216;
 const MAX_CHUNK = 49152;
 const MAX_TRANSFER_CHUNKS = Math.ceil(MAX_TRANSFER / MAX_CHUNK);
+const MAX_TRANSIENT_OPERATION_POLL_FAILURES = 15;
 
 function apiError(code, message, details) {
 	const error = new Error(String(message || code || 'INTERNAL'));
 	error.code = String(code || 'INTERNAL');
 	if (details != null) error.details = details;
 	return error;
+}
+
+function isTransientOperationPollError(error) {
+	const message = String(error?.message || error || '').toLowerCase();
+	return error?.code === 'RPC_ERROR' &&
+		/(xhr request (?:aborted by browser|failed)|network ?error|failed to fetch|load failed)/.test(message);
 }
 
 function normalizeReply(reply, operation) {
@@ -297,20 +304,29 @@ function createClient(options) {
 		watchOperation(operationId, callback, interval) {
 			if (typeof operationId !== 'string' || typeof callback !== 'function')
 				throw apiError('INVALID_ARGUMENT', 'Operation watcher arguments are invalid');
-			let cancelled = false, ownedTimer = null;
+			let cancelled = false, ownedTimer = null, transientFailures = 0;
 			const delay = Math.max(250, Math.min(5000, Number(interval) || 1000));
 			const poll = async () => {
 				if (cancelled || destroyed) return;
 				try {
 					const reply = await client.operation_get(operationId);
 					if (cancelled || destroyed) return;
+					transientFailures = 0;
 					callback(reply.operation);
 					if (TERMINAL.has(reply.operation && reply.operation.state)) {
 						emitChange('operation_get', operationId, reply.operation.state);
 						return;
 					}
 				} catch (error) {
-					if (!cancelled && !destroyed) callback(null, error);
+					if (!cancelled && !destroyed) {
+						if (isTransientOperationPollError(error) &&
+						    ++transientFailures <= MAX_TRANSIENT_OPERATION_POLL_FAILURES) {
+							// Backend replacement during a package update briefly aborts
+							// LuCI XHRs. The operation journal survives that replacement.
+						} else {
+							callback(null, error);
+						}
+					}
 				}
 				if (!cancelled && !destroyed) {
 					ownedTimer = timerSet(() => {

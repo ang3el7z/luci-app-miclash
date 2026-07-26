@@ -225,6 +225,34 @@ assert.equal(scheduled.size, 1);
 cancel();
 assert.equal(scheduled.size, 0, 'subscription cancellation must clear its pending poll');
 
+let transientPollAttempts = 0;
+const transientPollEvents = [];
+replies.set('operation_get', async () => {
+	transientPollAttempts++;
+	if (transientPollAttempts === 1)
+		throw new Error('XHR request aborted by browser');
+	return { operation: { id: 'op_transient', state: 'success' } };
+});
+const transientClient = moduleApi.create();
+const cancelTransient = transientClient.watchOperation('op_transient',
+	(record, error) => transientPollEvents.push({ record, error }));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(transientPollAttempts, 1);
+assert.deepEqual(transientPollEvents, [],
+	'a transient browser-aborted operation poll must remain pending');
+assert.equal(scheduled.size, 1,
+	'a transient browser-aborted operation poll must be retried');
+const [ transientTimer, retryTransient ] = scheduled.entries().next().value;
+scheduled.delete(transientTimer);
+retryTransient();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(transientPollAttempts, 2);
+assert.equal(transientPollEvents.length, 1);
+assert.equal(transientPollEvents[0].error, undefined);
+assert.equal(transientPollEvents[0].record.state, 'success');
+cancelTransient();
+transientClient.destroy();
+
 let uploaded = Buffer.alloc(0), uploadSeq = 0;
 replies.set('transfer_begin', (direction, kind) => direction === 'upload'
 	? { transfer_id: 'a'.repeat(64), chunk_size: 4, expires_at: 1 }
@@ -382,6 +410,7 @@ replies.set('transfer_finish', { completed: true });
 await moduleApi.create().downloadChunks('report', 'rpt_' + 'f'.repeat(32), {});
 assert.equal(zeroReads, 0, 'zero-sized download must finalize without a read');
 
+replies.set('operation_get', { operation: { id: 'op_1', state: 'running' } });
 const destroyClient = moduleApi.create();
 destroyClient.watchOperation('op_1', () => {});
 await new Promise((resolve) => setImmediate(resolve));

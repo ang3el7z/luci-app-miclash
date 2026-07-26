@@ -174,21 +174,18 @@ define Package/$(PKG_NAME)/postinst
 #!/bin/sh
 ROOT="$${IPKG_INSTROOT:-}"
 MICLASH_UPGRADE_STATE="$$ROOT/etc/miclash/package-upgrade-state"
+APP_UPDATE_MARKER="/tmp/miclash-package-no-autostart-autoupdate"
+consume_app_update_marker() {
+	[ ! -L "$$APP_UPDATE_MARKER" ] && [ -f "$$APP_UPDATE_MARKER" ] || return 1
+	[ "$$(stat -c '%u:%a:%h' "$$APP_UPDATE_MARKER" 2>/dev/null)" = "0:600:1" ] || return 1
+	[ "$$(readlink -f "$$APP_UPDATE_MARKER" 2>/dev/null)" = "$$APP_UPDATE_MARKER" ] || return 1
+	rm -f "$$APP_UPDATE_MARKER" || return 1
+}
 recover_upgrade_state() {
 	[ -e "$$MICLASH_UPGRADE_STATE" ] || return 0
 	[ -x /usr/share/miclash/package-upgrade-recover ] || return 1
 	/usr/share/miclash/package-upgrade-recover "$$MICLASH_UPGRADE_STATE" || return 1
 	return 0
-}
-restore_service_intent() {
-	[ -e "$$MICLASH_UPGRADE_STATE" ] || return 0
-	service_running="$$(sed -n 's/^service_running=\([01]\)$$/\1/p' "$$MICLASH_UPGRADE_STATE")"
-	case "$$service_running" in
-		0) /etc/init.d/clash stop || return 1 ;;
-		1) ;;
-		*) return 1 ;;
-	esac
-	rm -f "$$MICLASH_UPGRADE_STATE" || return 1
 }
 if [ -f "$$ROOT/opt/clash/.config.yaml.upgrade.bak" ]; then
 	mv "$$ROOT/opt/clash/.config.yaml.upgrade.bak" "$$ROOT/opt/clash/config.yaml"
@@ -205,8 +202,14 @@ rm -rf "$$ROOT/opt/clash/history" "$$ROOT/etc/miclash/backups" || exit 1
 	/etc/init.d/miclash-guard start || exit 1
 	/etc/init.d/miclashd enable || exit 1
 	/etc/init.d/miclashd start || exit 1
-	recover_upgrade_state || exit 1
-	restore_service_intent || exit 1
+	if consume_app_update_marker; then
+		# The current miclashd owns this package transaction and cannot answer
+		# a synchronous postinst ubus callback. Its detached reload worker
+		# performs durable recovery after the new backend is running.
+		:
+	else
+		recover_upgrade_state || exit 1
+	fi
 	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
 	rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*
 

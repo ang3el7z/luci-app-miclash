@@ -800,8 +800,10 @@ install_miclash() {
 
     create_marker "$NO_AUTOSTART_CLASH_MARKER" \
         || die "Failed to prepare package service state"
-    create_marker "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
-        || die "Failed to prepare package service state"
+    if [ -n "$STATUS_FILE" ]; then
+        create_marker "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
+            || die "Failed to prepare app update service state"
+    fi
     if [ "$INSTALL_ACTION" = "reinstall" ]; then
         create_marker "$HARD_REINSTALL_MARKER" || die "Failed to prepare hard reinstall"
     fi
@@ -883,6 +885,12 @@ schedule_backend_reload() {
         # to reach LuCI before replacing the daemon process.
         /bin/busybox sleep 5
         /etc/init.d/miclashd restart
+        if [ -e /etc/miclash/package-upgrade-state ]; then
+            /usr/share/miclash/package-upgrade-recover \
+                /etc/miclash/package-upgrade-state ||
+                logger -t miclash -p daemon.err \
+                    "package upgrade recovery remains pending after backend reload"
+        fi
     ) >/dev/null 2>&1 &
 }
 
