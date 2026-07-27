@@ -1,0 +1,73 @@
+#!/usr/bin/ucode
+
+import * as uloop from 'uloop';
+import * as runtime_module from 'miclash.runtime';
+import * as settings_module from 'miclash.settings';
+import * as http_module from 'miclash.http';
+import * as transport_module from 'miclash.telegram-transport';
+import * as poller_module from 'miclash.telegram-poller';
+import * as poller_runtime_module from 'miclash.telegram-poller-runtime';
+
+if (uloop.init() !== true)
+	die('INTERNAL');
+
+let runtime = runtime_module.create();
+let transport = transport_module.create({ runtime, http: http_module });
+let control_processes = [];
+
+function process(command, args, callback) {
+	let handle = uloop.process(command, args, null, callback);
+	if (handle == null)
+		return null;
+	let pid = handle.pid();
+	if (type(pid) != 'int' || pid < 2) {
+		try { handle.delete(); } catch (error) {}
+		return null;
+	}
+	return { pid, handle };
+};
+
+function signal_process(pid, signal) {
+	if (type(pid) != 'int' || pid < 2 || (signal != 'TERM' && signal != 'KILL'))
+		return false;
+	let control;
+	control = uloop.process('/bin/kill', [ '-' + signal, sprintf('%d', pid) ], null, () => {
+		let offset = index(control_processes, control);
+		if (offset >= 0)
+			splice(control_processes, offset, 1);
+	});
+	if (control == null)
+		return false;
+	push(control_processes, control);
+	return true;
+}
+
+let controller = poller_runtime_module.create({
+	load_settings: () => settings_module.load(runtime),
+	connect: () => runtime.ubus.connect(),
+	transport,
+	http: http_module,
+	runtime,
+	poll_timeout_seconds: poller_module.poll_timeout_seconds,
+	retry_delay_ms: poller_module.retry_delay_ms,
+	timer: (delay, callback) => uloop.timer(delay, callback),
+	process,
+	signal_process,
+	end: () => uloop.end(),
+	logger: runtime.logger
+});
+
+let termination = uloop.signal('SIGTERM', () => controller.shutdown());
+let interruption = uloop.signal('SIGINT', () => controller.shutdown());
+if (termination == null || interruption == null) {
+	controller.shutdown();
+	uloop.done();
+	die('INTERNAL');
+}
+
+controller.start();
+uloop.run();
+controller.shutdown();
+try { termination.delete(); } catch (error) {}
+try { interruption.delete(); } catch (error) {}
+uloop.done();

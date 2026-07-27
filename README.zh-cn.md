@@ -2,95 +2,218 @@
 阅读语言：<a href="README.md">English</a> | <a href="README.ru.md">Русский</a> | <strong>中文</strong>
 </p>
 
-<img width="881" height="889" alt="MiClash screenshot" src="https://github.com/user-attachments/assets/c53492ae-5318-4f34-802e-393306c109f3" />
+<img width="881" height="889" alt="MiClash 截图" src="https://github.com/user-attachments/assets/c53492ae-5318-4f34-802e-393306c109f3" />
 
 # MiClash
 
-用于在 OpenWrt 上管理 Mihomo/Clash 的 LuCI 应用。
+MiClash 是用于管理 Mihomo 的 LuCI 应用，在同一界面中提供订阅、路由、Guard、诊断、更新、通知和恢复功能。
 
-## 自动安装
+**要求：** 使用 firewall4 的 OpenWrt 24.10+。OpenWrt 25.12+ 使用 APK，OpenWrt 24.10 使用 opkg。
 
-推荐方式（`wget`，即使已安装的 `curl` 损坏也可以使用）：
+## 安装
+
+安装器会检测软件包管理器，检查最新 20 个稳定版本，并选择第一个文件和校验和均已完整发布的版本。如果新 tag 仍在构建，则安装上一个已就绪版本。安装器会验证 `.sha256`，在需要时修复不匹配的 `zlib`/`libcurl4`；如果已安装 MiClash，还可选择更新、重新安装、删除或退出。LuCI 内的更新**不会回退**：它会等待最新版本的文件发布，然后再次检查。
+
+使用 `wget`：
 
 ```sh
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-备用方式（`curl`）：
+<details>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
+
+通过 `gh-proxy.com`：
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+
+<details>
+<summary><strong>🟡 改用 curl</strong></summary>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-自动安装脚本会检查 `curl` 是否真的可以启动。如果系统中已有的 `curl` 因为缺少或不匹配的 `zlib`/`libcurl4` 而无法运行，脚本会在获取 MiClash release 前自动修复这些软件包。
+<blockquote>
+<details>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
-如果已经安装了 `luci-app-miclash`，交互式安装脚本会提供 `update / reinstall / delete / skip` 选项。
-通过 `wget ... | ash` 或 `curl ... | ash` 且没有 TTY 运行时，脚本不会自动删除软件包；它会选择更安全的 `update` 或 `skip`。
-
-## OpenWrt 25.x
+通过 `gh-proxy.com`：
 
 ```sh
-apk update
-apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64
-curl --version >/dev/null 2>&1 || apk fix zlib libcurl4 curl
-curl --version >/dev/null 2>&1 || exit 1
-release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash-${release#v}.apk" -o /tmp/luci-app-miclash.apk
-apk add /tmp/luci-app-miclash.apk --allow-untrusted
-rm -f /tmp/luci-app-miclash.apk
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-## OpenWrt 23.05.x - 24.10.x
+通过 jsDelivr：
 
 ```sh
-opkg update
-opkg install --force-reinstall zlib libcurl4 curl
-opkg install kmod-nft-tproxy kmod-tun coreutils-base64
-curl --version >/dev/null 2>&1 || exit 1
-release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash_${release#v}_all.ipk" -o /tmp/luci-app-miclash.ipk
-opkg install /tmp/luci-app-miclash.ipk
-rm -f /tmp/luci-app-miclash.ipk
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
 ```
 
-对于使用 `firewall3` 的旧版 OpenWrt，请安装 `iptables-mod-tproxy`，而不是 `kmod-nft-tproxy`。
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
 
-## Mihomo
+</details>
+</blockquote>
 
-安装 MiClash 后，打开 LuCI -> Services -> MiClash -> Settings -> Kernel，并在界面中安装 Mihomo 内核。
-MiClash 会检测路由器架构，下载匹配的压缩包，替换 `/opt/clash/bin/clash`，并在服务已运行时重启服务。
+</details>
 
-也可以手动安装：
+<details>
+<summary><strong>🔴 从 v0.9.x 升级到 v2.x</strong></summary>
+
+已安装 v0.9.x 的设备应只运行一次独立的过渡脚本：
 
 ```sh
-mkdir -p /opt/clash/bin
-release=$(curl -s -L https://github.com/MetaCubeX/mihomo/releases/latest | grep "title>Release" | cut -d " " -f 4)
-curl -L "https://github.com/MetaCubeX/mihomo/releases/download/${release}/mihomo-linux-arm64-${release}.gz" -o /tmp/clash.gz
-gunzip -c /tmp/clash.gz > /opt/clash/bin/clash
-chmod 0755 /opt/clash/bin/clash
-rm -f /tmp/clash.gz
+wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
 ```
 
-其他架构请在 Mihomo releases 页面选择对应文件：<https://github.com/MetaCubeX/mihomo/releases>。
+<blockquote>
+<details>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
 
-## 功能
-
-- 原生 MiClash LuCI 页面，不需要单独的自定义主题开关。
-- Clash 服务控制：start、stop、restart、reload。
-- YAML 配置编辑器，应用前会进行验证。
-- 将订阅下载到 `/opt/clash/config.yaml`。
-- 本地 rulesets 存放在 `/opt/clash/lst`。
-- 支持 TPROXY/TUN/MIXED、接口选择、QUIC 阻断、rules/providers 使用 tmpfs。
-- 通过路由器端脚本更新 MiClash 和 Mihomo，避免 LuCI 在 UI 中长时间等待操作完成。
-
-## 卸载
+通过 `gh-proxy.com`：
 
 ```sh
-# OpenWrt 25.x:
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+</blockquote>
+
+<blockquote>
+<details>
+<summary><strong>🟡 改用 curl</strong></summary>
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+<blockquote>
+<details>
+<summary><strong>🔵 无法从 GitHub 下载？显示备用命令</strong></summary>
+
+通过 `gh-proxy.com`：
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+通过 jsDelivr：
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+这些是第三方下载方式。更新后，jsDelivr 可能会在短时间内提供缓存的 `main` 版本。
+
+</details>
+</blockquote>
+
+</details>
+</blockquote>
+
+脚本会验证已就绪的稳定 v2 版本，将配置文件、订阅 URL 和兼容的 UI 设置临时保存到 `/root/miclash-v09-backup-*`，然后安装 v2 和全新的 Mihomo 内核。providers/runtime 缓存不会迁移，而是由 v2 重新创建。脚本不提供自动 rollback 或 journal；仅在安装失败时保留临时 backup。
+
+在短暂的替换期间 Guard 不工作。如果受保护流量绝不能直连，请从本地网络执行升级。
+
+</details>
+
+## 快速开始
+
+打开 **LuCI → 服务 → MiClash**。
+
+1. 终端安装脚本会自动安装 Mihomo。
+2. 添加订阅或编辑 YAML 配置。
+3. 验证 YAML；此操作不会更改当前路由。
+4. 应用它，使配置生效。
+5. 选择 TPROXY、TUN 或 MIXED，并设置所需接口。
+6. 检查受保护设备，然后启用 Guard。
+
+无效配置不会被应用，之前的活动配置会继续运行。
+
+## 主要功能
+
+- **配置：** 直接编辑 YAML、验证和原子应用。
+- **订阅与更新：** 三个 URL、手动或定时刷新，以及安全的 MiClash 和 Mihomo 更新。
+- **路由：** TPROXY、TUN、MIXED、接口包含/排除、自动 LAN/WAN、QUIC 和本地 rulesets。
+- **诊断：** Mihomo、DNS、firewall、routing 和 Guard 状态、脱敏报告以及 route test。
+- **自恢复：** 修复 drift，并按 `reload → 内核 restart → 服务 restart` 逐级恢复。
+- **通知（notification）：** 在 LuCI 或 Telegram 中显示故障、Internet 恢复、更新、Guard 和 Memory Guard 事件。
+- **设备策略（device policies）：** 计划任务以及 inherit/proxy/direct/block；Guard 始终优先。
+
+## Guard 与恢复
+
+`miclashd` 是 MiClash 唯一的 backend；LuCI 和 Telegram 使用其类型化 `ubus` API。UCI 设置位于 `/etc/config/miclash`，配置文件、rulesets 和内核位于 `/opt/clash`。
+
+- Guard 采用 fail-closed，在 Mihomo 就绪前保护所选流量。
+- 服务、内核、更新或修复失败不会关闭保护；只有明确关闭 Guard 才能解除 latch。
+- 配置会先验证，失败时 rollback 部分 DNS/firewall/routing 修改。
+- Mihomo 更新使用 staging，并可恢复上一个内核。
+- Memory Guard 只在 Mihomo 异常增长且存在内存压力时动作，检查每个恢复阶段，并在全部失败后进入长 cooldown。
+
+`/etc/config/miclash` 可能包含订阅 URL 和 Telegram token，应只允许 root 读取。
+
+## Telegram 控制
+
+在 **设置 → Telegram** 中启用集成，填写 **BotFather** 提供的 token 和你的数字 user ID。Token 按 secret 保存且不会返回 LuCI；留空会保留已有 token。
+
+Bot 仅使用出站 HTTPS long polling，只接受已授权的 private chat，校验 sender/chat ID，并拒绝 group、channel、edited message 和重复消息。`/start` 和 `/menu` 会打开本地化的单消息控制面板；命令列表仅显示 `/menu`，所有操作均通过按钮完成。危险操作需要确认。操作结果和自动通知会持久排队，直到 Telegram 确认送达。日志以文件下载，内容与 LuCI 中显示的同一份受限原始快照一致。诊断支持 Silent、Lite 和 Full 三种隐私模式。
+
+```text
+/start /menu
+```
+
+## 诊断
+
+常规排查请打开 **MiClash → 设置 → 组件 → 诊断**：
+
+- **Silent** 仅包含最少的系统健康信息，适合公开问题报告。
+- **Lite** 包含已脱敏的诊断、配置摘要和近期事件，推荐用于大多数支持请求。
+- **Full** 可能包含私有配置和密钥，仅可交给可信支持人员。
+
+如果 LuCI 无法使用，请通过 SSH 执行：
+
+```sh
+/etc/init.d/miclashd status
+/etc/init.d/clash status
+ubus call miclash status '{}'
+ubus call miclash health '{}'
+logread | grep -E '(miclash|mihomo|clash)'
+```
+
+使用“路由检查”卡片中的**路由测试**检查所选路径。Guard 启用时不要手动删除其 nftables/routing 规则或安全锁。
+
+## 删除（removal）
+
+```sh
+# OpenWrt 25.12+：
 apk del luci-app-miclash
 
-# OpenWrt 23.05.x - 24.10.x:
+# OpenWrt 24.10：
 opkg remove luci-app-miclash
+```
 
+删除时会先停止服务，并恢复 MiClash 管理的 DNS/firewall/routing 设置。`/opt/clash` 会保留；复制所需文件后可手动永久删除：
+
+```sh
 rm -rf /opt/clash
 ```

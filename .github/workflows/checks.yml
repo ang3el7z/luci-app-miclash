@@ -1,0 +1,289 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    types:
+      - labeled
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  repository-checks:
+    name: Repository checks
+    if: ${{ github.event_name == 'push' || github.event.label.name == 'ci-approved' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install gettext
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq gettext
+
+      - name: Run repository checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          for check in tools/check-*.mjs; do
+            node "$check"
+          done
+
+      - name: Parse JSON files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files -z '*.json' |
+            xargs -0 -r -n1 node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))'
+
+      - name: Check PO files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files -z '*.po' |
+            xargs -0 -r -n1 msgfmt --check --output-file=/dev/null
+
+      - name: Check shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n install-miclash.sh install-miclash-upgrade-0-9-x-to-2.x.x.sh tools/*.sh \
+            luci-app-miclash/rootfs/etc/init.d/* \
+            luci-app-miclash/rootfs/usr/share/miclash/mutation-lock.sh \
+            luci-app-miclash/rootfs/usr/share/miclash/package-remove \
+            luci-app-miclash/rootfs/usr/share/miclash/package-release
+
+      - name: Check GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+  ucode-tests:
+    name: Host ucode tests
+    if: ${{ github.event_name == 'push' || github.event.label.name == 'ci-approved' }}
+    runs-on: ubuntu-22.04
+    env:
+      UCODE_REVISION: 3f64c8089bf3ea4847c96b91df09fbfcaec19e1d
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq cmake build-essential busybox-static libjson-c-dev libmd-dev pkg-config iproute2 util-linux
+
+      - name: Restore host ucode build
+        id: ucode-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ucode-build
+          key: ${{ runner.os }}-ucode-${{ env.UCODE_REVISION }}-digest-socket
+
+      - name: Build OpenWrt 24.10 ucode revision
+        if: steps.ucode-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/jow-/ucode.git "$RUNNER_TEMP/ucode-src"
+          git -C "$RUNNER_TEMP/ucode-src" checkout --detach "$UCODE_REVISION"
+          cmake -S "$RUNNER_TEMP/ucode-src" -B "$RUNNER_TEMP/ucode-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDIGEST_SUPPORT=ON \
+            -DFS_SUPPORT=ON \
+            -DMATH_SUPPORT=ON \
+            -DSOCKET_SUPPORT=ON \
+            -DNL80211_SUPPORT=OFF \
+            -DRESOLV_SUPPORT=OFF \
+            -DRTNL_SUPPORT=OFF \
+            -DSTRUCT_SUPPORT=ON \
+            -DUBUS_SUPPORT=OFF \
+            -DUCI_SUPPORT=OFF \
+            -DULOOP_SUPPORT=OFF \
+            -DDEBUG_SUPPORT=ON \
+            -DLOG_SUPPORT=OFF
+          cmake --build "$RUNNER_TEMP/ucode-build" --parallel
+
+      - name: Verify host ucode
+        shell: bash
+        run: |
+          set -euo pipefail
+          UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode"
+          output="$("$UCODE_BIN" -e 'print("ucode host binary ready\n")')"
+          test "$output" = "ucode host binary ready"
+
+      - name: Run ucode tests
+        shell: bash
+        run: |
+          sudo env \
+            UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
+            tools/run-ucode-tests.sh
+
+      - name: Run isolated routing lifecycle and producer deadline gates
+        shell: bash
+        run: |
+          sudo env \
+            UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" \
+            tools/check-routing-netns.sh
+
+      - name: Run native backend lifecycle gates
+        shell: bash
+        run: |
+          env UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" tools/check-native-cutover.sh
+          sudo env UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" tools/check-dns-lifecycle.sh
+          sudo env UCODE_BIN="$RUNNER_TEMP/ucode-build/ucode" \
+            LD_LIBRARY_PATH="$RUNNER_TEMP/ucode-build" tools/check-guard-runtime.sh
+          sudo tools/check-package-cleanup.sh
+          sudo tools/check-package-release.sh
+          sudo tools/check-package-removal.sh
+          sudo tools/check-package-upgrade-prerm.sh
+          sudo tools/check-package-upgrade-recovery.sh
+          sudo tools/check-hard-reinstall-marker.sh
+          sudo tools/check-mutation-lock.sh
+          sudo tools/check-ready-release-selection.sh
+          sudo tools/check-terminal-service-restore.sh
+          sudo tools/check-update-status-protocol.sh
+
+  package-build:
+    name: Package build (${{ matrix.package_manager }}, OpenWrt ${{ matrix.sdk_version }}, ${{ matrix.arch }})
+    if: ${{ github.event_name == 'push' || github.event.label.name == 'ci-approved' }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk_version: "24.10.7"
+            package_manager: opkg
+            arch: x86/64
+          - sdk_version: "25.12.5"
+            package_manager: apk
+            arch: x86/64
+          - sdk_version: "25.12.5"
+            package_manager: apk
+            arch: mediatek/filogic
+    env:
+      PACKAGE_NAME: luci-app-miclash
+      SDK_NAME: -sdk-
+      SDK_URL_PATH: https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/targets/${{ matrix.arch }}/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install SDK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq \
+            bison build-essential clang file flex g++ gawk gcc-multilib gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools rsync swig unzip wget xsltproc zstd
+
+      - name: Create build directories
+        run: |
+          echo "SDK_DL_DIR=$(mktemp -d)" >> "$GITHUB_ENV"
+          echo "SDK_HOME=$(mktemp -d)" >> "$GITHUB_ENV"
+
+      - name: Download and verify OpenWrt SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SDK_DL_DIR"
+
+          if ! wget -q -O - "$SDK_URL_PATH/sha256sums" | grep -- "$SDK_NAME" > sha256sums.small 2>/dev/null; then
+            echo "Cannot find SDK archive in sha256sums for $SDK_URL_PATH" >&2
+            exit 1
+          fi
+
+          SDK_FILE="$(cut -d' ' -f2 < sha256sums.small | sed 's/*//g')"
+          wget -q -O "$SDK_FILE" "$SDK_URL_PATH/$SDK_FILE"
+
+          if ! sha256sum -c ./sha256sums.small >/dev/null 2>&1; then
+            echo "SDK checksum verification failed." >&2
+            exit 1
+          fi
+
+          tar -xf "$SDK_FILE" -C "$SDK_HOME" --strip=1
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SDK_HOME"
+          ./scripts/feeds update > /dev/null 2>&1
+          ./scripts/feeds install -a > /dev/null 2>&1
+          if [ "${{ matrix.package_manager }}" = apk ] && [ "${{ matrix.arch }}" = x86/64 ]; then
+            sed -i 's/^PKG_VERSION:=.*/PKG_VERSION:=2.5.2_rc1/' \
+              "${{ github.workspace }}/luci-app-miclash/Makefile"
+          fi
+          ln -s "${{ github.workspace }}/luci-app-miclash" "package/$PACKAGE_NAME"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("Config-build.in")
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          current = ""
+          package_defaults = 0
+          required_defaults = {"PACKAGE_kmod-nf-tproxy"}
+          retained_defaults = set()
+          for index, line in enumerate(lines):
+              if line.startswith("config "):
+                  current = line.removeprefix("config ").strip()
+              replacement = None
+              if current.startswith("PACKAGE_") and line.strip() == "default m":
+                  if current in required_defaults:
+                      retained_defaults.add(current)
+                  else:
+                      replacement = "default n"
+                      package_defaults += 1
+              elif current in {"ALL", "ALL_KMODS", "ALL_NONSHARED", "BUILDBOT"} and \
+                   line.strip() == "default y":
+                  replacement = "default n"
+              if replacement is not None:
+                  indent = line[:len(line) - len(line.lstrip())]
+                  ending = "\n" if line.endswith("\n") else ""
+                  lines[index] = f"{indent}{replacement}{ending}"
+          if package_defaults == 0 or retained_defaults != required_defaults:
+              raise SystemExit("SDK package defaults were not found")
+          with path.open("w", encoding="utf-8", newline="\n") as handle:
+              handle.write("".join(lines))
+          PY
+          printf '%s\n' \
+            '# CONFIG_ALL is not set' \
+            '# CONFIG_ALL_KMODS is not set' \
+            '# CONFIG_ALL_NONSHARED is not set' \
+            '# CONFIG_BUILDBOT is not set' \
+            'CONFIG_PACKAGE_kmod-nf-tproxy=m' \
+            'CONFIG_PACKAGE_luci-app-miclash=m' > .config
+          make defconfig > /dev/null 2>&1
+          grep -qx '# CONFIG_ALL is not set' .config
+          grep -qx '# CONFIG_ALL_KMODS is not set' .config
+          grep -qx '# CONFIG_ALL_NONSHARED is not set' .config
+          grep -qx '# CONFIG_BUILDBOT is not set' .config
+          grep -qx 'CONFIG_PACKAGE_luci-app-miclash=m' .config
+          grep -qx 'CONFIG_PACKAGE_kmod-nf-tproxy=m' .config
+          selected_kmods="$(grep -Ec '^CONFIG_PACKAGE_kmod-.*=[ym]$' .config || true)"
+          selected_modules="$(grep -Ec '^CONFIG_PACKAGE_.*=m$' .config || true)"
+          test "$selected_kmods" -le 64
+          test "$selected_modules" -le 64
+          if grep -q '^CONFIG_PACKAGE_kmod-hwmon-nct6775=m$' .config; then
+            echo "SDK-wide kernel modules remained selected." >&2
+            exit 1
+          fi
+          make -j"$(nproc)" "package/${PACKAGE_NAME}/compile" V=s
+
+          case "${{ matrix.package_manager }}" in
+            opkg) package="$(find "$SDK_HOME/bin" -type f -name "${PACKAGE_NAME}_*.ipk" -print -quit)" ;;
+            apk) package="$(find "$SDK_HOME/bin" -type f -name "${PACKAGE_NAME}-*.apk" -print -quit)" ;;
+            *) echo "Unsupported package manager: ${{ matrix.package_manager }}" >&2; exit 1 ;;
+          esac
+          test -n "$package" && test -s "$package"
+          if [ "${{ matrix.package_manager }}" = apk ] && [ "${{ matrix.arch }}" = x86/64 ]; then
+            case "${package##*/}" in
+              "${PACKAGE_NAME}-2.5.2_rc1-r1.apk") ;;
+              *) echo "Unexpected release-candidate apk name: ${package##*/}" >&2; exit 1 ;;
+            esac
+          fi
+          ls -lh "$package"

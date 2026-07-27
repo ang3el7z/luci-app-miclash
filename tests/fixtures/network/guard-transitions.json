@@ -1,0 +1,50 @@
+[
+  {
+    "name": "boot-with-no-daemon",
+    "old": { "desired_on": true, "bootstrap_installed": false, "main_rules_present": false },
+    "next": { "desired_on": true, "event": "boot", "main_rules_present": false },
+    "expected_plan": [ "install_bootstrap" ]
+  },
+  {
+    "name": "daemon-crash",
+    "old": { "desired_on": true, "bootstrap_installed": true, "main_rules_present": true },
+    "next": { "desired_on": true, "event": "daemon_crash", "main_rules_present": false },
+    "expected_plan": [ "daemon_exit", "verify_bootstrap" ]
+  },
+  {
+    "name": "rules-rebuild",
+    "old": { "desired_on": true, "bootstrap_installed": true, "main_rules_present": true },
+    "next": { "desired_on": true, "event": "rules_rebuild", "main_rules_present": true },
+    "expected_plan": [ "verify_bootstrap", "remove_main_rules", "install_main_rules" ]
+  },
+  {
+    "name": "mihomo-restart",
+    "old": { "desired_on": true, "bootstrap_installed": true, "main_rules_present": true },
+    "next": { "desired_on": true, "event": "mihomo_restart", "main_rules_present": true },
+    "expected_plan": [ "verify_bootstrap" ]
+  },
+  {
+    "name": "guard-on-to-off",
+    "old": { "desired_on": true, "bootstrap_installed": true, "main_rules_present": true },
+    "next": { "desired_on": false, "event": "explicit_disable", "main_rules_present": false },
+    "expected_plan": [ "persist_off", "remove_main_rules", "remove_bootstrap" ]
+  },
+  {
+    "name": "guard-off-to-on",
+    "old": { "desired_on": false, "bootstrap_installed": false, "main_rules_present": false },
+    "next": { "desired_on": true, "event": "explicit_enable", "main_rules_present": false },
+    "expected_plan": [ "install_bootstrap", "persist_on" ]
+  },
+  {
+    "name": "package-upgrade",
+    "old": { "desired_on": true, "bootstrap_installed": true, "main_rules_present": true },
+    "next": { "desired_on": true, "event": "package_upgrade", "main_rules_present": false },
+    "expected_plan": [ "verify_bootstrap", "replace_package" ]
+  },
+  {
+    "name": "wan-interface-change",
+    "old": { "desired_on": true, "bootstrap_installed": true, "main_rules_present": true },
+    "next": { "desired_on": true, "event": "wan_change", "main_rules_present": true },
+    "expected_plan": [ "verify_bootstrap", "remove_main_rules", "install_main_rules" ]
+  }
+]

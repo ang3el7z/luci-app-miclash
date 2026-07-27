@@ -1,72 +1,55 @@
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const configPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js';
-const settingsModelPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/settings-model.js';
-const makefilePath = 'luci-app-miclash/Makefile';
-const source = readFileSync(configPath, 'utf8');
-const settingsModel = readFileSync(settingsModelPath, 'utf8');
-const makefile = readFileSync(makefilePath, 'utf8');
+const config = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js', 'utf8');
+const model = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/settings-model.js', 'utf8');
 
-let failed = false;
+const start = config.indexOf('async function saveAllSettings(');
+const end = config.indexOf('function bindSettingsPaneEvents()', start);
+assert.ok(start >= 0 && end > start, 'unified settings save flow is missing');
+const save = config.slice(start, end);
+const managementStart = config.indexOf('const managementOwner =');
+const managementEnd = config.indexOf('view_miclash_utils.bumpRpcTimeout()', managementStart);
+const management = config.slice(managementStart, managementEnd);
 
-function check(condition, message) {
-	if (!condition) {
-		console.error(message);
-		failed = true;
-	}
-}
+assert.match(save, /managementOwner\.collectPatch\(\)/,
+	'unified save does not collect Memory, Telegram, and notification settings');
+assert.match(save, /operationalSettingsChanged\(/,
+	'unified save does not classify service-affecting changes');
+assert.match(save, /configApi\.settings_set\(/,
+	'passive settings are not persisted through typed settings_set');
+assert.match(save, /if \(runtimeChanged\)[\s\S]*saveOperationalSettings\(/,
+	'operational apply is not conditional');
+assert.doesNotMatch(save, /restartOrReloadServiceOrThrow\(['"]restart/,
+	'unified settings save still forces an unconditional full restart');
+assert.match(save, /guard_transition/,
+	'Guard transition is not handled independently');
+assert.match(management, /async function applyPending\(\)[\s\S]*panels\[1\]\.applyChanges\(\)/,
+	'management owner must expose pending device policy application');
+assert.match(save, /await managementOwner\.applyPending\(\)[\s\S]*await managementOwner\.markSaved\(\)/,
+	'device policy drafts must apply before unified settings completion');
+assert.match(config, /_\('Apply Settings'\)/,
+	'the page-level action must describe applying all staged changes');
+assert.doesNotMatch(config, /_\('Save Settings'\)/,
+	'the obsolete page-level action label must be removed');
 
-const settingsSaveStart = source.indexOf("const saveBtn = pane.querySelector('#sbox-settings-save');");
-const settingsSaveEnd = source.indexOf('const releaseChannelChanged', settingsSaveStart);
-const settingsSaveBlock = settingsSaveStart >= 0 && settingsSaveEnd > settingsSaveStart
-	? source.slice(settingsSaveStart, settingsSaveEnd)
-	: '';
+assert.match(model, /function operationalSettingsChanged\(/,
+	'service-impact classifier is missing');
+assert.match(model, /api\.operational_settings_apply\(/,
+	'service-affecting changes do not use the atomic operational transaction');
+const settingsObject = model.slice(model.indexOf('const settings = {'), model.indexOf('await waitOperation', model.indexOf('const settings = {')));
+assert.doesNotMatch(settingsObject, /updates\s*:/,
+	'passive update settings are coupled to Mihomo operational apply');
 
-const controlEventsStart = source.indexOf('function bindControlAndHeaderEvents()');
-const restartButtonStart = source.indexOf("const restartBtn = pageRoot.querySelector('#sbox-restart');", controlEventsStart);
-const restartButtonEnd = source.indexOf('const dashboardBtn', restartButtonStart);
-const restartButtonBlock = restartButtonStart >= 0 && restartButtonEnd > restartButtonStart
-	? source.slice(restartButtonStart, restartButtonEnd)
-	: '';
-const proxyModeStart = source.indexOf('async function switchProxyModeFromHeader(targetMode)');
-const proxyModeEnd = source.indexOf('async function loadClashLogs()', proxyModeStart);
-const proxyModeBlock = proxyModeStart >= 0 && proxyModeEnd > proxyModeStart
-	? source.slice(proxyModeStart, proxyModeEnd)
-	: '';
+const proxyStart = config.indexOf('async function switchProxyModeFromHeader(');
+const proxyEnd = config.indexOf('async function loadClashLogs()', proxyStart);
+assert.doesNotMatch(config.slice(proxyStart, proxyEnd), /restartOrReloadServiceOrThrow\(['"]restart/,
+	'proxy-mode operational apply is followed by a duplicate full restart');
 
-check(/async function withRestartButtonFeedback\(fn\)/.test(source),
-	'Missing withRestartButtonFeedback(fn) helper.');
-check(settingsSaveBlock.includes('await withRestartButtonFeedback(async () => {'),
-	'Settings save restart must show the same service feedback as the Restart button.');
-check(settingsSaveBlock.includes('const wasRunning = await getServiceStatus();'),
-	'Settings save must check whether MiClash is running before restart.');
-check(settingsSaveBlock.includes('if (wasRunning)') &&
-	settingsSaveBlock.includes("await restartOrReloadServiceOrThrow('restart'"),
-	'Settings save must restart only when MiClash was already running.');
-check(/await restartOrReloadServiceOrThrow\('restart'(?:,|\))/.test(settingsSaveBlock),
-	'Settings save must still restart the Clash service.');
-check(source.includes('async function refreshGuardRulesOrThrow()') &&
-	source.includes("fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh'])"),
-	'Settings save must expose a guard_refresh helper for live protection rules.');
-check(settingsSaveBlock.includes('await refreshGuardRulesOrThrow();'),
-	'Settings save must refresh guard rules without starting a stopped service.');
-check(proxyModeBlock.includes('const wasRunning = await getServiceStatus();'),
-	'Proxy mode switch must check whether MiClash is running before restart.');
-check(proxyModeBlock.includes('if (wasRunning)') &&
-	proxyModeBlock.includes("await restartOrReloadServiceOrThrow('restart'"),
-	'Proxy mode switch must restart only when MiClash was already running.');
-check(restartButtonBlock.includes('withRestartButtonFeedback(async () => {'),
-	'The Restart button must use the shared restart feedback helper.');
-check(!restartButtonBlock.includes('withButtons(restartBtn'),
-	'The Restart button should not bypass service restart feedback.');
-check(settingsModel.includes('const settings = await view_miclash_store.readSettingsMap();') &&
-	settingsModel.includes('await view_miclash_store.writeSettingsMap(settings);') &&
-	!settingsModel.includes('await view_miclash_store.writeTextFile(SETTINGS_PATH, settingsContent);'),
-	'Operational settings save must preserve existing settings keys such as subscription URLs.');
-check(makefile.includes('/opt/clash/settings') &&
-	makefile.includes('.settings.upgrade.bak') &&
-	makefile.includes('/opt/clash/bin/clash-rules guard_refresh'),
-	'Package upgrade scripts must preserve /opt/clash/settings and apply restored guard state.');
+const controlStart = config.indexOf('function bindControlAndHeaderEvents()');
+const restartStart = config.indexOf("const restartBtn = pageRoot.querySelector('#sbox-restart');", controlStart);
+const restartEnd = config.indexOf('const dashboardBtn', restartStart);
+assert.match(config.slice(restartStart, restartEnd), /withRestartButtonFeedback/,
+	'explicit Restart button lost service feedback');
 
-if (failed) process.exit(1);
-console.log('settings restart feedback check passed');
+console.log('conditional settings apply check passed');

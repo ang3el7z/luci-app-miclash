@@ -1,0 +1,4 @@
+{
+  "observed_at": 1710000000,
+  "data": "1710003600 AC:BB:CC:DD:EE:10 192.168.1.10 kitchen client-a\n1710003600 ac:bb:cc:dd:ee:11 192.168.1.11 kitchen client-b\n1710003600 02:11:22:33:44:55 192.168.1.20 phone *\n"
+}

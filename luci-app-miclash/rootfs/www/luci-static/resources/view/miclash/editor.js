@@ -73,29 +73,16 @@ function createTextareaEditor(target, content) {
 
 	const api = {
 		container: target,
-		session: {
-			setMode: function() {}
-		},
+		session: { setMode: function() {} },
 		setOptions: function() {},
-		setValue: function(value) {
-			textarea.value = String(value || '');
-		},
-		getValue: function() {
-			return textarea.value;
-		},
+		setValue: function(value) { textarea.value = String(value || ''); },
+		getValue: function() { return textarea.value; },
 		clearSelection: function() {
-			try {
-				textarea.selectionStart = 0;
-				textarea.selectionEnd = 0;
-			} catch (e) {}
+			try { textarea.selectionStart = 0; textarea.selectionEnd = 0; } catch (e) {}
 		},
 		resize: function() {},
-		focus: function() {
-			textarea.focus();
-		},
-		destroy: function() {
-			target.textContent = '';
-		}
+		focus: function() { textarea.focus(); },
+		destroy: function() { target.textContent = ''; }
 	};
 
 	api.setValue(content);
@@ -111,12 +98,7 @@ async function createEditor(host, content, options) {
 	try {
 		await loadAce();
 		const editor = window.ace.edit(target);
-		editor.setOptions({
-			showPrintMargin: false,
-			wrap: false,
-			useWorker: false,
-			fontSize: '12px'
-		});
+		editor.setOptions({ showPrintMargin: false, wrap: false, useWorker: false, fontSize: '12px' });
 		editor.session.setUseWorker(false);
 		editor.session.setMode('ace/mode/' + (opts.mode || 'yaml'));
 		installLuciAceTheme();

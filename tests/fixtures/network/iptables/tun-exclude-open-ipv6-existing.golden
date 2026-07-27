@@ -1,0 +1,29 @@
+# MiClash intended iptables contract v1
+ipset create miclash_local6 hash:net family inet6 -exist
+ipset flush miclash_local6
+ipset add miclash_local6 ::/128 -exist
+ipset add miclash_local6 ::1/128 -exist
+ipset add miclash_local6 fc00::/7 -exist
+ipset add miclash_local6 fe80::/10 -exist
+ipset add miclash_local6 ff00::/8 -exist
+ip6tables -t mangle -N MICLASH_PREROUTING
+ip6tables -t mangle -N MICLASH_PROXY
+ip6tables -t mangle -N MICLASH_OUTPUT
+ip6tables -t mangle -A PREROUTING -j MICLASH_PREROUTING
+ip6tables -t mangle -A OUTPUT -j MICLASH_OUTPUT
+ip6tables -t mangle -A MICLASH_PREROUTING -i wan6 -j RETURN
+ip6tables -t mangle -A MICLASH_PREROUTING -j MICLASH_PROXY
+ip6tables -t mangle -A MICLASH_PROXY -m set --match-set miclash_local6 dst -j RETURN
+ip6tables -t mangle -A MICLASH_PROXY -d 2620:fe::fe -j RETURN
+ip6tables -t mangle -A MICLASH_PROXY -p udp --dport 443 -j DROP
+ip6tables -t mangle -A MICLASH_PROXY -p tcp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_PROXY -p udp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0002 -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0xff00/0xff00 -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -m set --match-set miclash_local6 dst -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -d 2620:fe::fe -j RETURN
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p tcp -j MARK --set-mark 0x1
+ip6tables -t mangle -A MICLASH_OUTPUT -m mark --mark 0x0 -p udp -j MARK --set-mark 0x1
+ip6tables -t filter -I INPUT 1 -i clash-tun -j ACCEPT
+ip6tables -t filter -I FORWARD 1 -i clash-tun -j ACCEPT
+ip6tables -t filter -I FORWARD 1 -o clash-tun -j ACCEPT

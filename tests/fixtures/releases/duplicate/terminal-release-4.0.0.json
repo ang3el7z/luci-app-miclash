@@ -1,0 +1,12 @@
+{
+  "tag_name": "v4.0.0",
+  "draft": false,
+  "prerelease": false,
+  "assets": [
+    { "name": "install-miclash.sh.sha256", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v4.0.0/install-miclash.sh.sha256" },
+    { "name": "install-miclash.sh.sha256", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v4.0.0/install-miclash.sh.sha256" },
+    { "name": "miclash-release-manifest.json", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v4.0.0/miclash-release-manifest.json" },
+    { "name": "luci-app-miclash_4.0.0_all.ipk", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v4.0.0/luci-app-miclash_4.0.0_all.ipk" },
+    { "name": "luci-app-miclash_4.0.0_all.ipk.sha256", "browser_download_url": "https://github.com/ang3el7z/luci-app-miclash/releases/download/v4.0.0/luci-app-miclash_4.0.0_all.ipk.sha256" }
+  ]
+}

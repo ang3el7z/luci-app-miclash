@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "result": [
+    {
+      "update_id": 700,
+      "message": {
+        "message_id": 70,
+        "from": { "id": 42, "is_bot": false, "first_name": "Owner" },
+        "chat": { "id": 42, "type": "private" },
+        "date": 1710000000,
+        "text": "/menu"
+      }
+    },
+    {
+      "update_id": 702,
+      "message": {
+        "message_id": 72,
+        "from": { "id": 42, "is_bot": false, "first_name": "Owner" },
+        "chat": { "id": 42, "type": "private" },
+        "date": 1710000000,
+        "text": "/start"
+      }
+    }
+  ]
+}

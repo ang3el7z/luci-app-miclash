@@ -1,0 +1,310 @@
+import { fail } from 'miclash.errors';
+import { profile_name } from 'miclash.schema';
+import * as mihomo_api from 'miclash.mihomo-api';
+
+const SERVICE = 'clash';
+const INIT_ACTION_TIMEOUT_MS = 15000;
+
+function component(name, state, detail) {
+	let record = { component: name, state, ready: state == 'ready' };
+	if (detail != null)
+		record.detail = detail;
+	return record;
+};
+
+export function create(runtime) {
+	if (type(runtime?.fs?.lstat) != 'function' || type(runtime?.ubus?.connect) != 'function' ||
+	    type(runtime?.clock?.now) != 'function' || type(runtime?.clock?.sleep) != 'function' ||
+	    type(runtime?.http?.request) != 'function' || type(runtime?.process?.run) != 'function')
+		fail('INVALID_ARGUMENT');
+	let poll_interval = runtime.service_options?.poll_interval_ms ?? 100;
+	if (type(poll_interval) != 'int' || poll_interval < 1 || poll_interval > 1000)
+		fail('INVALID_ARGUMENT');
+
+	function profile(value) { return profile_name(value ?? 'config.yaml'); };
+	function connection() {
+		let result = runtime.ubus.connect();
+		if (result == null || type(result.call) != 'function')
+			fail('INTERNAL');
+		return result;
+	};
+	function diagnostic_integer(value) {
+		return type(value) == 'int' && value >= 0 ? value : null;
+	};
+	function diagnostics(value) {
+		profile(value);
+		let reply;
+		try { reply = connection().call('service', 'list', { name: SERVICE, verbose: true }); }
+		catch (error) { return { state: 'unknown', running: false, registered: false,
+			instances: [] }; }
+		if (type(reply) != 'object')
+			return { state: 'unknown', running: false, registered: false, instances: [] };
+		let registered = reply?.[SERVICE];
+		if (type(registered) != 'object') {
+			let kernel = runtime.fs.lstat('/opt/clash/bin/clash');
+			return {
+				state: kernel?.type == 'file' && kernel.nlink == 1 ? 'stopped' : 'missing_kernel',
+				running: false, registered: false, instances: []
+			};
+		}
+		let instances = registered.instances;
+		if (instances != null && type(instances) != 'object')
+			return { state: 'unknown', running: false, registered: true, instances: [] };
+		let records = [], running = false, pid = null;
+		if (instances != null) for (let name, instance in instances) {
+			if (type(instance) != 'object') continue;
+			let record = {
+				name: type(name) == 'string' && match(name, /^[A-Za-z0-9._-]{1,64}$/)
+					? name : 'instance',
+				running: instance.running === true
+			};
+			for (let field in [ 'pid', 'exit_code', 'term_timeout', 'respawn_count' ]) {
+				let number = diagnostic_integer(instance[field]);
+				if (number != null) record[field] = number;
+			}
+			if (type(instance.respawn) == 'object') {
+				let respawn = {};
+				for (let field in [ 'threshold', 'timeout', 'retry' ]) {
+					let number = diagnostic_integer(instance.respawn[field]);
+					if (number != null) respawn[field] = number;
+				}
+				if (length(respawn)) record.respawn = respawn;
+			}
+			if (record.running) {
+				running = true;
+				if (record.pid != null && pid == null) pid = record.pid;
+			}
+			push(records, record);
+		}
+		if (running)
+			return { state: 'running', running: true, registered: true, pid,
+				instances: records };
+		let kernel = runtime.fs.lstat('/opt/clash/bin/clash');
+		if (kernel?.type != 'file' || kernel.nlink != 1)
+			return { state: 'missing_kernel', running: false, registered: true,
+				instances: records };
+		return { state: 'stopped', running: false, registered: true, instances: records };
+	};
+	function observe(value) {
+		let result = diagnostics(value);
+		return { state: result.state, running: result.running,
+			pid: result.pid ?? null };
+	};
+	function stop_service() {
+		try { connection().call('service', 'state', { name: SERVICE, spawn: false }); }
+		catch (error) { fail('HEALTH_FAILED'); }
+	};
+	function init_action(action) {
+		let result;
+		try {
+			result = runtime.process.run({
+				command: '/etc/init.d/clash',
+				args: [ action ],
+				timeout_ms: INIT_ACTION_TIMEOUT_MS
+			});
+		}
+		catch (error) { fail('HEALTH_FAILED'); }
+		if (type(result?.code) != 'int')
+			fail('HEALTH_FAILED');
+		return result.code;
+	};
+	function enabled() {
+		let code = init_action('enabled');
+		if (code == 0) return true;
+		if (code == 1) return false;
+		fail('HEALTH_FAILED');
+	};
+	function enable() {
+		if (init_action('enable') != 0) fail('HEALTH_FAILED');
+		return true;
+	};
+	function disable() {
+		if (init_action('disable') != 0) fail('HEALTH_FAILED');
+		return true;
+	};
+	function start_service() {
+		if (init_action('start') != 0)
+			fail('HEALTH_FAILED');
+	};
+	function start(value) {
+		value = profile(value);
+		let observed = observe(value);
+		if (observed.state == 'missing_kernel')
+			fail('NOT_FOUND');
+		if (observed.running)
+			return { changed: false, state: 'running' };
+		if (observed.state != 'stopped')
+			fail('HEALTH_FAILED');
+		// The package manager invokes this init script once with a secure
+		// no-autostart marker. That invocation intentionally registers no procd
+		// instance. A later explicit start must therefore enter rc.common again;
+		// `service state spawn=true` cannot spawn an instance that does not exist.
+		start_service();
+		return { changed: true, state: 'starting' };
+	};
+	function stop(value) {
+		value = profile(value);
+		let observed = observe(value);
+		if (observed.state == 'stopped')
+			return { changed: false, state: 'stopped' };
+		if (observed.state != 'running')
+			fail('HEALTH_FAILED');
+		stop_service();
+		return { changed: true, state: 'stopping' };
+	};
+	function reload(value, controller_config) {
+		value = profile(value);
+		return mihomo_api.request(runtime, 'PUT', '/configs?force=true', {
+			path: '/opt/clash/' + value
+		}, value, controller_config);
+	};
+	function restart_core(value, controller_config) {
+		value = profile(value);
+		return mihomo_api.request(runtime, 'POST', '/restart', {}, value, controller_config);
+	};
+	function wait_stopped(value, deadline) {
+		while (true) {
+			if (observe(value).state == 'stopped')
+				return true;
+			let now = runtime.clock.now();
+			if (now >= deadline)
+				return false;
+			runtime.clock.sleep(min(poll_interval, deadline - now));
+		}
+	};
+	function restart_service(value) {
+		value = profile(value);
+		let observed = observe(value);
+		if (observed.state == 'missing_kernel')
+			fail('NOT_FOUND');
+		if (observed.state == 'unknown')
+			fail('HEALTH_FAILED');
+		stop_service();
+		if (!wait_stopped(value, runtime.clock.now() + 5000))
+			fail('HEALTH_FAILED');
+		start_service();
+		return { changed: true, state: 'restarting' };
+	};
+	function observer_record(name, argument) {
+		let observer = runtime.observers?.[name];
+		if (type(observer) != 'function')
+			return component(name, 'unknown');
+		let result;
+		try { result = observer(argument); }
+		catch (error) { return component(name, 'failed'); }
+		let record = component(name, result?.ready === true ? 'ready' : (result?.state ?? 'failed'));
+		for (let field in [ 'observed_at', 'generation', 'enabled' ])
+			if (result?.[field] != null) record[field] = result[field];
+		return record;
+	};
+	function once(value, options) {
+		let records = [];
+		let observed = observe(value);
+		if (options.stopped) {
+			let process = component('process', observed.state);
+			process.ready = observed.state == 'stopped';
+			push(records, process);
+			return records;
+		}
+		push(records, component('process', observed.running ? 'ready' : observed.state));
+		if (!observed.running)
+			return records;
+		let api;
+		try { api = mihomo_api.request(runtime, 'GET', '/version', null, value); }
+		catch (error) { api = null; }
+		push(records, component('api', api?.ok === true ? 'ready' : 'failed'));
+		if (api?.ok !== true)
+			return records;
+		// A cold start proves the process/controller before MiClash assumes DNS,
+		// firewall or routing ownership. Those network observers are intentionally
+		// evaluated only after the atomic handoff has completed.
+		if (options.core_only === true)
+			return records;
+		if (options.proxy_mode != null)
+			push(records, observer_record('dataplane', options.proxy_mode));
+		push(records, observer_record('dns'));
+		if (options.tun_required)
+			push(records, observer_record('tun'));
+		push(records, observer_record('policy'));
+		push(records, observer_record('forward'));
+		if (type(options.guard_enabled) == 'bool') {
+			let observer = runtime.observers?.guard, result;
+			try { result = observer?.(options.guard_enabled); }
+			catch (error) { result = null; }
+			let record = component('guard', result?.ready === true ? 'ready' : 'failed');
+			for (let field in [ 'observed_at', 'generation', 'enabled' ])
+				if (result?.[field] != null) record[field] = result[field];
+			push(records, record);
+		}
+		return records;
+	};
+	function all_ready(records) {
+		if (!length(records)) return false;
+		for (let record in records)
+			if (!record.ready) return false;
+		return true;
+	};
+	function wait_ready(deadline, value, options) {
+		value = profile(value);
+		options ??= {};
+		if (type(deadline) != 'int' || deadline < runtime.clock.now() ||
+		    type(options) != 'object')
+			fail('INVALID_ARGUMENT');
+		let records;
+		while (true) {
+			records = once(value, options);
+			if (all_ready(records))
+				return { ok: true, timed_out: false, components: records };
+			let now = runtime.clock.now();
+			if (now >= deadline)
+				return { ok: false, timed_out: true, components: records };
+			runtime.clock.sleep(min(poll_interval, deadline - now));
+		}
+	};
+	function recover(value, controller_config, options) {
+		value = profile(value);
+		options = { ...(options ?? {}) };
+		if (type(options) != 'object') fail('INVALID_ARGUMENT');
+		if (options.proxy_mode == null) {
+			let selected = null;
+			try { selected = runtime.uci.cursor().get('miclash', 'core', 'proxy_mode'); }
+			catch (error) {}
+			options.proxy_mode = selected == 'tun' || selected == 'mixed' ? selected : 'tproxy';
+		}
+		if (options.proxy_mode != 'tproxy' && options.proxy_mode != 'tun' &&
+		    options.proxy_mode != 'mixed')
+			fail('INVALID_ARGUMENT');
+		if (options.proxy_mode == 'tun' || options.proxy_mode == 'mixed')
+			options.tun_required = true;
+		let ready = null;
+		try {
+			let result = reload(value, controller_config);
+			if (result === true || result?.ok === true) {
+				ready = wait_ready(runtime.clock.now() + 5000, value, options);
+				if (ready.ok) return { ok: true, stage: 'reload', ready };
+			}
+		}
+		catch (error) {}
+		try {
+			let result = restart_core(value, controller_config);
+			if (result === true || result?.ok === true) {
+				ready = wait_ready(runtime.clock.now() + 5000, value, options);
+				if (ready.ok) return { ok: true, stage: 'restart_core', ready };
+			}
+		}
+		catch (error) {}
+		try {
+			restart_service(value);
+			ready = wait_ready(runtime.clock.now() + 5000, value, options);
+			return { ok: ready.ok === true, stage: 'restart_service', ready };
+		}
+		catch (error) {
+			return { ok: false, stage: 'restart_service', ready };
+		}
+	};
+
+	return {
+		observe, diagnostics, enabled, enable, disable, start, stop, reload, restart_core, restart_service, wait_ready, recover,
+		health: (value) => wait_ready(runtime.clock.now() + 5000, value).ok
+	};
+};

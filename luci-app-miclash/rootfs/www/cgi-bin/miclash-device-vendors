@@ -1,0 +1,15 @@
+#!/bin/sh
+
+UPDATED="/etc/miclash/device-vendors.db"
+BUNDLED="/www/luci-static/resources/view/miclash/device-vendors.db"
+SOURCE="$BUNDLED"
+
+if [ ! -L "$UPDATED" ] && [ -f "$UPDATED" ] && \
+	[ "$(stat -c '%u:%a:%h' "$UPDATED" 2>/dev/null)" = '0:644:1' ]; then
+	SOURCE="$UPDATED"
+fi
+
+printf 'Content-Type: text/plain; charset=utf-8\r\n'
+printf 'Cache-Control: no-store\r\n'
+printf 'X-Content-Type-Options: nosniff\r\n\r\n'
+exec cat "$SOURCE"

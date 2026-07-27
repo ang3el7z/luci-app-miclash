@@ -1,0 +1,10 @@
+{
+  "update_id": 103,
+  "message": {
+    "message_id": 13,
+    "from": { "id": 42, "is_bot": false, "first_name": "Owner" },
+    "chat": { "id": -10042, "type": "supergroup" },
+    "date": 1710000000,
+    "text": "/status"
+  }
+}

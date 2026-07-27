@@ -1,10 +1,10 @@
 'use strict';
-'require fs';
+'require view.miclash.api';
 
 function parseVersion(raw, fallback) {
 	const str = String(raw || '').trim();
 	if (!str) return fallback;
-	const matched = str.match(/(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/);
+	const matched = str.match(/(\d+\.\d+\.\d+(?:(?:[-+][\w.-]+)|(?:_rc\d+))?)/);
 	return matched ? matched[1] : str.split('\n')[0];
 }
 
@@ -48,9 +48,7 @@ function parseVersionFromOpkgStatus(raw, packageNames) {
 function normalizeAppVersion(version) {
 	const str = String(version || '').trim();
 	if (!str) return '';
-	const numeric = str.match(/^\d+(?:\.\d+)+/);
-	if (numeric && numeric[0]) return numeric[0];
-	return str.replace(/-r\d+$/i, '').replace(/-\d+$/, '');
+	return str.replace(/^v/i, '').replace(/-r\d+$/i, '').replace(/-\d+$/, '');
 }
 
 function normalizeVersion(str) {
@@ -70,22 +68,20 @@ function normalizeGithubRelease(data) {
 }
 
 async function fetchGithubRelease(kind, includePrereleases) {
+	const api = view_miclash_api.create();
 	try {
 		const channel = includePrereleases ? 'prerelease' : 'release';
-		const result = await fs.exec('/opt/clash/bin/miclash-update', ['release', kind, channel]);
-		if (result.code !== 0 || !result.stdout) return null;
-		const data = JSON.parse(result.stdout);
-		if (Array.isArray(data)) {
-			for (let i = 0; i < data.length; i++) {
-				const release = normalizeGithubRelease(data[i]);
-				if (release) return release;
-			}
-			return null;
-		}
-		return normalizeGithubRelease(data);
+		const data = await api.update_release(kind, channel);
+		if (!data || typeof data.version !== 'string') return null;
+		if (kind === 'miclash' && data.ready !== true) return null;
+		const assets = data.asset_name ? [ {
+			name: String(data.asset_name), browser_download_url: 'managed-by-miclash'
+		} ] : [];
+		return { version: data.version, assets, prerelease: channel === 'prerelease',
+			architecture: data.architecture || '' };
 	} catch (e) {
 		return null;
-	}
+	} finally { api.destroy(); }
 }
 
 function getLatestMihomoRelease(includePrereleases) {
@@ -97,24 +93,46 @@ function getLatestMiClashRelease(includePrereleases) {
 }
 
 function compareNumericVersions(left, right) {
-	const normalize = (value) => {
-		const matched = String(value || '').trim().match(/\d+(?:\.\d+)+/);
-		if (!matched || !matched[0]) return null;
-		return matched[0].split('.').map((item) => parseInt(item, 10));
+	const parse = (value) => {
+		const matched = String(value || '').trim().match(
+			/^v?(\d+(?:\.\d+)+)(?:(?:_rc(\d+))|(?:[-.]([0-9A-Za-z][0-9A-Za-z.-]*)))?$/
+		);
+		if (!matched) return null;
+		const suffix = matched[2] != null
+			? [ 'rc', parseInt(matched[2], 10) ]
+			: (matched[3] == null ? null : matched[3].split(/[.-]/).map((item) =>
+				/^\d+$/.test(item) ? parseInt(item, 10) : item.toLowerCase()));
+		return {
+			numeric: matched[1].split('.').map((item) => parseInt(item, 10)),
+			suffix
+		};
 	};
 
-	const l = normalize(left);
-	const r = normalize(right);
+	const l = parse(left);
+	const r = parse(right);
 	if (!l || !r) return null;
 
-	const len = Math.max(l.length, r.length);
+	const len = Math.max(l.numeric.length, r.numeric.length);
 	for (let i = 0; i < len; i++) {
-		const a = i < l.length ? l[i] : 0;
-		const b = i < r.length ? r[i] : 0;
+		const a = i < l.numeric.length ? l.numeric[i] : 0;
+		const b = i < r.numeric.length ? r.numeric[i] : 0;
 		if (a < b) return -1;
 		if (a > b) return 1;
 	}
 
+	if (l.suffix == null || r.suffix == null) {
+		if (l.suffix == null && r.suffix == null) return 0;
+		return l.suffix == null ? 1 : -1;
+	}
+	for (let i = 0; i < Math.max(l.suffix.length, r.suffix.length); i++) {
+		if (i >= l.suffix.length) return -1;
+		if (i >= r.suffix.length) return 1;
+		const a = l.suffix[i], b = r.suffix[i];
+		if (a === b) continue;
+		if (typeof a === 'number' && typeof b !== 'number') return -1;
+		if (typeof a !== 'number' && typeof b === 'number') return 1;
+		return a < b ? -1 : 1;
+	}
 	return 0;
 }
 

@@ -1,0 +1,81 @@
+{
+  "defaults": {
+    "sample_interval_ms": 60000,
+    "sustained_samples": 5,
+    "warmup_ms": 900000,
+    "baseline_samples": 6,
+    "anomaly_percent": 150,
+    "anomaly_growth_kb": 16384,
+    "reserve_percent": 10,
+    "reserve_min_kb": 16384,
+    "reserve_max_kb": 65536,
+    "drop_percent": 10,
+    "drop_min_kb": 8192,
+    "success_cooldown_ms": 21600000,
+    "failure_cooldown_ms": 86400000,
+    "normal_rearm_ms": 1800000
+  },
+  "routers": [
+    { "name": "64-mib", "total_kb": 65536, "reserve_kb": 16384 },
+    { "name": "256-mib", "total_kb": 262144, "reserve_kb": 26214 },
+    { "name": "2048-mib", "total_kb": 2097152, "reserve_kb": 65536 }
+  ],
+  "safe_settings": {
+    "sample_interval_ms": 10000,
+    "sustained_samples": 2,
+    "warmup_ms": 60000,
+    "baseline_samples": 3,
+    "anomaly_percent": 110,
+    "anomaly_growth_kb": 4096,
+    "reserve_percent": 5,
+    "reserve_min_kb": 4096,
+    "reserve_max_kb": 8192,
+    "drop_percent": 5,
+    "drop_min_kb": 1024,
+    "success_cooldown_ms": 60000,
+    "failure_cooldown_ms": 60000,
+    "normal_rearm_ms": 60000
+  },
+  "baseline": {
+    "samples_kb": [60000, 62000, 61000, 63000, 59000, 64000],
+    "median_kb": 61500
+  },
+  "ladder": ["reload", "restart_core", "restart_service"],
+  "recovery_cases": [
+    {
+      "name": "reload-success",
+      "ready": [true],
+      "rss_after_kb": [80000],
+      "actions": ["reload"],
+      "result": "success"
+    },
+    {
+      "name": "core-success-after-insufficient-reload",
+      "ready": [true, true],
+      "rss_after_kb": [90000, 79000],
+      "actions": ["reload", "restart_core"],
+      "result": "success"
+    },
+    {
+      "name": "service-success-after-not-ready-core",
+      "ready": [false, false, true],
+      "rss_after_kb": [92000, 91000, 80000],
+      "actions": ["reload", "restart_core", "restart_service"],
+      "result": "success"
+    },
+    {
+      "name": "stage-relative-drop-requires-service",
+      "ready": [true, true, true],
+      "rss_after_kb": [84000, 80000, 70000],
+      "actions": ["reload", "restart_core", "restart_service"],
+      "result": "success"
+    },
+    {
+      "name": "full-ladder-failure",
+      "ready": [true, true, true],
+      "rss_after_kb": [92000, 91000, 90000],
+      "actions": ["reload", "restart_core", "restart_service"],
+      "result": "failed"
+    }
+  ]
+}

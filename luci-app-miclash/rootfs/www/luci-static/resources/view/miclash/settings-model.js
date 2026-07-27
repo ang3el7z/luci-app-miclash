@@ -1,12 +1,40 @@
 'use strict';
-'require fs';
-'require network';
-'require view.miclash.store';
+'require view.miclash.api';
 'require view.miclash.release';
-'require view.miclash.package';
 
-const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
-const SETTINGS_PATH = view_miclash_store.SETTINGS_PATH;
+async function withApi(callback) {
+	const api = view_miclash_api.create();
+	try { return await callback(api); }
+	finally { api.destroy(); }
+}
+
+function operationError(record) {
+	const error = new Error(record?.error?.message || 'Operation failed');
+	error.code = record?.error?.code || 'HEALTH_FAILED';
+	return error;
+}
+
+function waitOperation(api, reply) {
+	const id = reply?.operation_id;
+	if (typeof id !== 'string' || !id.length) return Promise.reject(new Error('Invalid operation response'));
+	return new Promise((resolve, reject) => {
+		let cancel = null;
+		const finish = (callback, value) => {
+			if (typeof cancel === 'function') cancel();
+			callback(value);
+		};
+		cancel = api.watchOperation(id, (record, error) => {
+			if (error) return finish(reject, error);
+			if (record?.state === 'success') return finish(resolve, record);
+			if (record?.state === 'failure' || record?.state === 'interrupted')
+				return finish(reject, operationError(record));
+		});
+	});
+}
+
+function configContent(reply) {
+	return typeof reply === 'string' ? reply : String(reply?.content || '');
+}
 
 function createInterfaceEntry(name) {
 	let category = 'other';
@@ -30,86 +58,35 @@ function createInterfaceEntry(name) {
 	};
 }
 
-async function getNetworkInterfaces() {
-	const result = [];
-	const seen = new Set();
-
-	const pushIface = (name) => {
-		const clean = String(name || '').trim();
-		if (!clean || clean === 'lo' || clean === 'clash-tun' || seen.has(clean)) return;
-		seen.add(clean);
-		result.push(createInterfaceEntry(clean));
-	};
-
-	try {
-		const r = await fs.exec('/bin/ls', ['/sys/class/net/']);
-		if (r.code === 0 && r.stdout) {
-			String(r.stdout).split('\n').forEach(pushIface);
-		}
-	} catch (e) {}
-
-	try {
-		const r = await fs.exec('/sbin/ip', ['link', 'show']);
-		if (r.code === 0 && r.stdout) {
-			String(r.stdout).split('\n').forEach((line) => {
-				const m = line.match(/^\d+:\s+([^:@]+)/);
-				if (m && m[1]) pushIface(m[1]);
-			});
-		}
-	} catch (e) {}
-
-	try {
-		const devices = await network.getDevices();
-		devices.forEach((dev) => {
-			const n = dev.getName && dev.getName();
-			if (n) pushIface(n);
-		});
-	} catch (e) {}
-
-	try {
-		const nets = await network.getNetworks();
-		nets.forEach((net) => {
-			const dev = net.getL3Device && net.getL3Device();
-			const n = dev && dev.getName && dev.getName();
-			if (n) pushIface(n);
-		});
-	} catch (e) {}
-
+async function getNetworkSnapshot() {
+	const reply = await withApi((api) => api.network_interfaces());
+	const result = Array.isArray(reply?.interfaces)
+		? reply.interfaces.filter((name) => typeof name === 'string').map(createInterfaceEntry) : [];
 	const order = ['wan', 'ethernet', 'wifi', 'vpn', 'virtual', 'other'];
-	return result.sort((a, b) => {
+	const interfaces = result.sort((a, b) => {
 		const ca = order.indexOf(a.category);
 		const cb = order.indexOf(b.category);
 		if (ca !== cb) return ca - cb;
 		return a.name.localeCompare(b.name);
 	});
+	return {
+		interfaces,
+		detectedLan: typeof reply?.detected_lan === 'string' ? reply.detected_lan : '',
+		detectedWan: typeof reply?.detected_wan === 'string' ? reply.detected_wan : ''
+	};
+}
+
+async function getNetworkInterfaces() {
+	return (await getNetworkSnapshot()).interfaces;
 }
 
 async function getHwidValues() {
-	try {
-		let hwid = 'unknown';
-		try {
-			const macResult = await fs.exec('/bin/sh', ['-c',
-				"cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | md5sum | cut -c1-14"
-			]);
-			if (macResult.code === 0 && macResult.stdout) hwid = macResult.stdout.trim();
-		} catch (e) {}
-
-		let verOs = 'unknown';
-		try {
-			const detectedVersion = await view_miclash_package.getOpenWrtReleaseVersion();
-			if (detectedVersion) verOs = detectedVersion;
-		} catch (e) {}
-
-		let deviceModel = 'Router';
-		try {
-			const modelResult = await fs.exec('/bin/sh', ['-c', 'cat /tmp/sysinfo/model 2>/dev/null']);
-			if (modelResult.code === 0 && modelResult.stdout) deviceModel = modelResult.stdout.trim();
-		} catch (e) {}
-
-		return { hwid, verOs, deviceModel };
-	} catch (e) {
-		return { hwid: 'unknown', verOs: 'unknown', deviceModel: 'Router' };
-	}
+	const info = await withApi((api) => api.system_info());
+	return {
+		hwid: String(info?.hwid || 'unknown'),
+		verOs: String(info?.openwrt_version || 'unknown'),
+		deviceModel: String(info?.model || 'Router')
+	};
 }
 
 function addHwidToYaml(yamlContent, userAgent, deviceOS, hwid, verOs, deviceModel) {
@@ -273,34 +250,8 @@ function transformProxyMode(content, proxyMode, tunStack) {
 
 async function detectCurrentProxyMode() {
 	try {
-		const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
-		if (!configContent) return 'tproxy';
-
-		const lines = configContent.split('\n');
-		let hasTproxy = false;
-		let hasTun = false;
-
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			const trimmed = line.trim();
-
-			if (/^tproxy-port:/.test(trimmed) && !trimmed.startsWith('#')) hasTproxy = true;
-			if (/^tun:/.test(trimmed)) {
-				for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
-					const next = lines[j].trim();
-					if (/^enable:\s*true/.test(next)) {
-						hasTun = true;
-						break;
-					}
-					if (/^[a-zA-Z]/.test(next) && !next.startsWith('#')) break;
-				}
-			}
-		}
-
-		if (hasTproxy && hasTun) return 'mixed';
-		if (hasTun) return 'tun';
-		if (hasTproxy) return 'tproxy';
-		return 'tproxy';
+		const settings = await withApi((api) => api.settings_get());
+		return normalizeProxyMode(settings?.core?.proxy_mode);
 	} catch (e) {
 		return 'tproxy';
 	}
@@ -314,13 +265,15 @@ function defaultOperationalSettings() {
 		autoDetectLan: true,
 		autoDetectWan: true,
 		blockQuic: true,
-		internetOnlyMiclash: false,
 		useTmpfsRules: true,
+		internetOnlyMiclash: false,
 		enableMemoryGuard: false,
 		autoHideNotifications: true,
 		autoUpdateConfig: true,
 		autoUpdateIntervalHours: '4',
+		autoUpdateIntervalSource: 'manual',
 		autoUpdateIntervalStored: false,
+		autoMajorMiclash: true,
 		miclashReleaseChannel: 'release',
 		mihomoReleaseChannel: 'release',
 		detectedLan: '',
@@ -339,50 +292,41 @@ function normalizeAutoUpdateIntervalHours(value) {
 	return parsed > 0 ? String(parsed) : '4';
 }
 
+function operationalSettingsFromTyped(source) {
+		const settings = defaultOperationalSettings();
+		const core = source?.core || {}, interfaces = source?.interfaces || {};
+		const updates = source?.updates || {}, memory = source?.memory || {};
+		const notifications = source?.notifications || {};
+		settings.mode = interfaces.mode || settings.mode;
+		settings.proxyMode = normalizeProxyMode(core.proxy_mode);
+		settings.tunStack = core.tun_stack || settings.tunStack;
+		settings.autoDetectLan = interfaces.auto_detect_lan !== false;
+		settings.autoDetectWan = interfaces.auto_detect_wan !== false;
+		settings.blockQuic = core.block_quic !== false;
+		settings.useTmpfsRules = core.use_tmpfs_rules !== false;
+		settings.enableMemoryGuard = memory.enabled === true;
+		settings.autoHideNotifications = notifications.auto_hide !== false;
+		settings.autoUpdateConfig = updates.auto_subscription !== false;
+		settings.autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(updates.interval_hours);
+		settings.autoUpdateIntervalSource = updates.interval_source === 'provider' ? 'provider' : 'manual';
+		settings.autoUpdateIntervalStored = true;
+		settings.autoMajorMiclash = updates.auto_major_miclash !== false;
+		settings.miclashReleaseChannel = view_miclash_release.normalizeReleaseChannel(updates.miclash_release_channel);
+		settings.mihomoReleaseChannel = view_miclash_release.normalizeReleaseChannel(updates.mihomo_release_channel);
+		settings.detectedLan = String(interfaces.detected_lan || '');
+		settings.detectedWan = String(interfaces.detected_wan || '');
+		settings.includedInterfaces = Array.isArray(interfaces.included) ? interfaces.included.slice() : [];
+		settings.excludedInterfaces = Array.isArray(interfaces.excluded) ? interfaces.excluded.slice() : [];
+		settings.enableHwid = core.hwid_enabled === true;
+		settings.hwidUserAgent = String(core.hwid_user_agent || 'MiClash');
+		settings.hwidDeviceOS = String(core.hwid_device_os || 'OpenWrt');
+		settings.internetOnlyMiclash = source?.guard?.enabled === true;
+		return settings;
+	}
+
 async function loadOperationalSettings() {
 	try {
-		const content = await L.resolveDefault(fs.read(SETTINGS_PATH), '');
-		const settings = defaultOperationalSettings();
-
-		String(content || '').split('\n').forEach((line) => {
-			const idx = line.indexOf('=');
-			if (idx === -1) return;
-			const key = line.slice(0, idx).trim();
-			const value = line.slice(idx + 1).trim();
-
-			switch (key) {
-				case 'INTERFACE_MODE': settings.mode = value; break;
-				case 'PROXY_MODE': settings.proxyMode = value; break;
-				case 'TUN_STACK': settings.tunStack = value || 'system'; break;
-				case 'AUTO_DETECT_LAN': settings.autoDetectLan = value === 'true'; break;
-				case 'AUTO_DETECT_WAN': settings.autoDetectWan = value === 'true'; break;
-				case 'BLOCK_QUIC': settings.blockQuic = value === 'true'; break;
-				case 'INTERNET_ONLY_MICLASH': settings.internetOnlyMiclash = value === 'true'; break;
-				case 'USE_TMPFS_RULES': settings.useTmpfsRules = value === 'true'; break;
-				case 'ENABLE_MEMORY_GUARD': settings.enableMemoryGuard = value === 'true'; break;
-				case 'AUTO_HIDE_NOTIFICATIONS': settings.autoHideNotifications = value !== 'false'; break;
-				case 'AUTO_UPDATE_CONFIG': settings.autoUpdateConfig = value !== 'false'; break;
-				case 'AUTO_UPDATE_INTERVAL_HOURS':
-					settings.autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(value);
-					settings.autoUpdateIntervalStored = true;
-					break;
-				case 'MICLASH_RELEASE_CHANNEL': settings.miclashReleaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
-				case 'MIHOMO_RELEASE_CHANNEL': settings.mihomoReleaseChannel = view_miclash_release.normalizeReleaseChannel(value); break;
-				case 'DETECTED_LAN': settings.detectedLan = value; break;
-				case 'DETECTED_WAN': settings.detectedWan = value; break;
-				case 'INCLUDED_INTERFACES':
-					settings.includedInterfaces = value ? value.split(',').map((i) => i.trim()).filter(Boolean) : [];
-					break;
-				case 'EXCLUDED_INTERFACES':
-					settings.excludedInterfaces = value ? value.split(',').map((i) => i.trim()).filter(Boolean) : [];
-					break;
-				case 'ENABLE_HWID': settings.enableHwid = value === 'true'; break;
-				case 'HWID_USER_AGENT': settings.hwidUserAgent = value || 'MiClash'; break;
-				case 'HWID_DEVICE_OS': settings.hwidDeviceOS = value || 'OpenWrt'; break;
-			}
-		});
-
-		return settings;
+		return operationalSettingsFromTyped(await withApi((api) => api.settings_get()));
 	} catch (e) {
 		return defaultOperationalSettings();
 	}
@@ -399,41 +343,8 @@ async function loadInterfacesByMode(mode) {
 
 async function detectLanBridge() {
 	try {
-		try {
-			const nets = await network.getNetworks();
-			for (let i = 0; i < nets.length; i++) {
-				const net = nets[i];
-				if (net.getName && net.getName() === 'lan') {
-					const dev = net.getL3Device && net.getL3Device();
-					if (dev && dev.getName && dev.getName()) return dev.getName();
-				}
-			}
-		} catch (e) {}
-
-		const ipResult = await fs.exec('/sbin/ip', ['addr', 'show']);
-		if (ipResult.code === 0 && ipResult.stdout) {
-			const lines = String(ipResult.stdout).split('\n');
-			let currentIface = '';
-
-			for (let i = 0; i < lines.length; i++) {
-				const line = lines[i];
-				const ifaceMatch = line.match(/^\d+:\s+([^:@]+):/);
-				if (ifaceMatch) {
-					currentIface = ifaceMatch[1];
-					continue;
-				}
-
-				const ipMatch = line.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
-				if (ipMatch && currentIface && currentIface !== 'lo') {
-					const ip = ipMatch[1];
-					if (/^192\.168\.|^10\.|^172\.(1[6-9]|2[0-9]|3[01])\./.test(ip)) {
-						if (/^(br-|bridge)/.test(currentIface) || currentIface === 'lan') return currentIface;
-					}
-				}
-			}
-		}
-
-		return null;
+		const reply = await withApi((api) => api.network_interfaces());
+		return typeof reply?.detected_lan === 'string' && reply.detected_lan ? reply.detected_lan : null;
 	} catch (e) {
 		return null;
 	}
@@ -441,34 +352,53 @@ async function detectLanBridge() {
 
 async function detectWanInterface() {
 	try {
-		try {
-			const nets = await network.getNetworks();
-			for (let i = 0; i < nets.length; i++) {
-				const net = nets[i];
-				if ((net.getName && net.getName() === 'wan') || (net.getName && net.getName() === 'wan6')) {
-					const dev = net.getL3Device && net.getL3Device();
-					if (dev && dev.getName && dev.getName()) return dev.getName();
-				}
-			}
-		} catch (e) {}
-
-		const routeContent = await L.resolveDefault(fs.read('/proc/net/route'), '');
-		const lines = String(routeContent).split('\n');
-		for (let i = 0; i < lines.length; i++) {
-			const fields = lines[i].split('\t');
-			if (fields[1] === '00000000' && fields[0] !== 'Iface') return fields[0];
-		}
-
-		return null;
+		const reply = await withApi((api) => api.network_interfaces());
+		return typeof reply?.detected_wan === 'string' && reply.detected_wan ? reply.detected_wan : null;
 	} catch (e) {
 		return null;
 	}
 }
 
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, enableMemoryGuard, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours) {
+function sameStringSet(left, right) {
+	const a = Array.from(new Set((left || []).map(String))).sort();
+	const b = Array.from(new Set((right || []).map(String))).sort();
+	return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function operationalSettingsChanged(current, next, detected) {
+	current = current || {};
+	next = next || {};
+	detected = detected || {};
+	const scalarPairs = [
+		[ current.mode || 'exclude', next.mode || 'exclude' ],
+		[ normalizeProxyMode(current.proxyMode), normalizeProxyMode(next.proxyMode) ],
+		[ current.tunStack || 'system', next.tunStack || 'system' ],
+		[ current.autoDetectLan !== false, next.autoDetectLan !== false ],
+		[ current.autoDetectWan !== false, next.autoDetectWan !== false ],
+		[ current.blockQuic !== false, next.blockQuic !== false ],
+		[ current.useTmpfsRules !== false, next.useTmpfsRules !== false ],
+		[ current.enableHwid === true, next.enableHwid === true ],
+		[ String(current.hwidUserAgent || 'MiClash'), String(next.hwidUserAgent || 'MiClash') ],
+		[ String(current.hwidDeviceOS || 'OpenWrt'), String(next.hwidDeviceOS || 'OpenWrt') ]
+	];
+	if (scalarPairs.some(([ before, after ]) => before !== after)) return true;
+
+	const currentMode = current.mode || 'exclude';
+	const selected = currentMode === 'explicit'
+		? (current.includedInterfaces || []).slice()
+		: (current.excludedInterfaces || []).slice();
+	const detectedLan = current.detectedLan || detected.detectedLan || '';
+	const detectedWan = current.detectedWan || detected.detectedWan || '';
+	if (currentMode === 'explicit' && current.autoDetectLan !== false && detectedLan)
+		selected.push(detectedLan);
+	if (currentMode !== 'explicit' && current.autoDetectWan !== false && detectedWan)
+		selected.push(detectedWan);
+	return !sameStringSet(selected, next.selected || []);
+}
+
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, autoMajorMiclash) {
 	let detectedLan = '';
 	let detectedWan = '';
-	const cleanAutoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalHours);
 
 	if (autoDetectLan) detectedLan = await detectLanBridge() || '';
 	if (autoDetectWan) detectedWan = await detectWanInterface() || '';
@@ -483,57 +413,41 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 	const includedInterfaces = mode === 'explicit' ? cleanInterfaces : [];
 	const excludedInterfaces = mode === 'exclude' ? cleanInterfaces : [];
 
-	const settings = await view_miclash_store.readSettingsMap();
-	settings.INTERFACE_MODE = mode;
-	settings.PROXY_MODE = proxyMode;
-	settings.TUN_STACK = tunStack;
-	settings.AUTO_DETECT_LAN = autoDetectLan;
-	settings.AUTO_DETECT_WAN = autoDetectWan;
-	settings.BLOCK_QUIC = blockQuic;
-	settings.INTERNET_ONLY_MICLASH = internetOnlyMiclash;
-	settings.USE_TMPFS_RULES = useTmpfsRules;
-	settings.ENABLE_MEMORY_GUARD = enableMemoryGuard;
-	settings.AUTO_HIDE_NOTIFICATIONS = autoHideNotifications !== false;
-	settings.AUTO_UPDATE_CONFIG = autoUpdateConfig !== false;
-	settings.AUTO_UPDATE_INTERVAL_HOURS = cleanAutoUpdateIntervalHours;
-	settings.MICLASH_RELEASE_CHANNEL = view_miclash_release.normalizeReleaseChannel(miclashReleaseChannel);
-	settings.MIHOMO_RELEASE_CHANNEL = view_miclash_release.normalizeReleaseChannel(mihomoReleaseChannel);
-	settings.DETECTED_LAN = detectedLan;
-	settings.DETECTED_WAN = detectedWan;
-	settings.INCLUDED_INTERFACES = includedInterfaces.join(',');
-	settings.EXCLUDED_INTERFACES = excludedInterfaces.join(',');
-	settings.ENABLE_HWID = enableHwid;
-	settings.HWID_USER_AGENT = hwidUserAgent;
-	settings.HWID_DEVICE_OS = hwidDeviceOS;
-
-	await view_miclash_store.writeSettingsMap(settings);
-
-	const configContent = await L.resolveDefault(fs.read(CONFIG_PATH), '');
-	if (configContent) {
-		let updatedConfig = transformProxyMode(configContent, proxyMode, tunStack);
+	return withApi(async (api) => {
+		const activeConfig = configContent(await api.config_read('config.yaml'));
+		let updatedConfig = transformProxyMode(activeConfig, proxyMode, tunStack);
 		if (enableHwid) {
-			const hwidValues = await getHwidValues();
-			updatedConfig = addHwidToYaml(
-				updatedConfig,
-				hwidUserAgent,
-				hwidDeviceOS,
-				hwidValues.hwid,
-				hwidValues.verOs,
-				hwidValues.deviceModel
-			);
+			const info = await api.system_info();
+			updatedConfig = addHwidToYaml(updatedConfig, hwidUserAgent, hwidDeviceOS,
+				String(info?.hwid || 'unknown'), String(info?.openwrt_version || 'unknown'),
+				String(info?.model || 'Router'));
 		}
-		await view_miclash_store.writeTextFile(CONFIG_PATH, updatedConfig);
-	}
+		const settings = {
+			core: { proxy_mode: normalizeProxyMode(proxyMode), tun_stack: tunStack,
+				block_quic: !!blockQuic, use_tmpfs_rules: !!useTmpfsRules,
+				hwid_enabled: !!enableHwid, hwid_user_agent: String(hwidUserAgent || 'MiClash'),
+				hwid_device_os: String(hwidDeviceOS || 'OpenWrt') },
+			interfaces: { mode, auto_detect_lan: !!autoDetectLan, auto_detect_wan: !!autoDetectWan,
+				detected_lan: detectedLan, detected_wan: detectedWan,
+				included: includedInterfaces, excluded: excludedInterfaces }
+		};
+		await waitOperation(api, await api.operational_settings_apply(
+			'config.yaml', updatedConfig, settings, 'luci'));
+		return true;
+	});
 }
 
 return L.Class.extend({
+	getNetworkSnapshot: getNetworkSnapshot,
 	getNetworkInterfaces: getNetworkInterfaces,
 	transformProxyMode: transformProxyMode,
 	detectCurrentProxyMode: detectCurrentProxyMode,
+	operationalSettingsFromTyped: operationalSettingsFromTyped,
 	loadOperationalSettings: loadOperationalSettings,
 	loadInterfacesByMode: loadInterfacesByMode,
 	detectLanBridge: detectLanBridge,
 	detectWanInterface: detectWanInterface,
 	saveOperationalSettings: saveOperationalSettings,
+	operationalSettingsChanged: operationalSettingsChanged,
 	normalizeProxyMode: normalizeProxyMode
 });

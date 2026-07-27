@@ -1,0 +1,17 @@
+{
+  "graph_order": ["guard", "firewall", "routing", "dns", "mihomo", "scheduler", "telegram"],
+  "downstream": {
+    "guard": ["guard", "firewall", "routing", "dns", "mihomo", "scheduler", "telegram"],
+    "firewall": ["firewall", "routing", "dns", "mihomo", "scheduler", "telegram"],
+    "routing": ["routing", "dns", "mihomo", "scheduler", "telegram"],
+    "dns": ["dns", "mihomo", "scheduler", "telegram"],
+    "mihomo": ["mihomo", "scheduler", "telegram"],
+    "scheduler": ["scheduler", "telegram"],
+    "telegram": ["telegram"]
+  },
+  "mihomo_ladder": ["reload", "restart_core", "restart_service"],
+  "backoff_minutes": [1, 5, 15, 30, 60, 60],
+  "persistent_fields": ["version", "circuit", "phase", "failure_count", "next_retry", "failure_id", "failure_sequence", "last_result"],
+  "phases": ["idle", "queued", "inflight"],
+  "action_events": ["action_attempt", "action_outcome"]
+}

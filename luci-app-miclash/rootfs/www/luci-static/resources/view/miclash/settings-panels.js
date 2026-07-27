@@ -1,0 +1,521 @@
+'use strict';
+'require baseclass';
+'require ui';
+'require view.miclash.background-refresh';
+'require view.miclash.ui-shell';
+
+const SOURCE = 'luci';
+const POLL_MS = 30000;
+const MAX_POLL_MS = 300000;
+const KNOWN_CHANNELS = [ 'luci', 'syslog', 'telegram' ];
+const KNOWN_EVENTS = [ 'guard_outage', 'failure', 'recovery', 'fail_closed',
+	'direct_fallback', 'memory_action', 'memory_outcome', 'subscription_outcome',
+	'update_outcome', 'internet_restored' ];
+const LUCI_ONLY_EVENTS = [ 'miclash_event' ];
+const MEMORY_FIELDS = {
+	sample_interval_ms: [ 10000, 3600000, 60000 ], sustained_samples: [ 2, 60, 5 ],
+	warmup_ms: [ 60000, 86400000, 900000 ], baseline_samples: [ 3, 60, 6 ],
+	anomaly_percent: [ 110, 500, 150 ], anomaly_growth_kb: [ 4096, 262144, 16384 ],
+	reserve_percent: [ 5, 50, 10 ], reserve_min_kb: [ 4096, 262144, 16384 ],
+	reserve_max_kb: [ 8192, 1048576, 65536 ], drop_percent: [ 5, 90, 10 ],
+	drop_min_kb: [ 1024, 262144, 8192 ], success_cooldown_ms: [ 60000, 604800000, 21600000 ],
+	failure_cooldown_ms: [ 60000, 604800000, 86400000 ], normal_rearm_ms: [ 60000, 86400000, 1800000 ]
+};
+const MEMORY_LABELS = {
+	sample_interval_ms: () => _('Sample interval (ms)'), sustained_samples: () => _('Sustained samples'),
+	warmup_ms: () => _('Warm-up time (ms)'), baseline_samples: () => _('Baseline samples'),
+	anomaly_percent: () => _('Anomaly threshold (%)'), anomaly_growth_kb: () => _('Anomaly growth (KiB)'),
+	reserve_percent: () => _('Memory reserve (%)'), reserve_min_kb: () => _('Minimum reserve (KiB)'),
+	reserve_max_kb: () => _('Maximum reserve (KiB)'), drop_percent: () => _('Required drop (%)'),
+	drop_min_kb: () => _('Minimum drop (KiB)'), success_cooldown_ms: () => _('Success cooldown (ms)'),
+	failure_cooldown_ms: () => _('Failure cooldown (ms)'), normal_rearm_ms: () => _('Normal rearm delay (ms)')
+};
+const EVENT_LABELS = {
+	miclash_event: () => _('MiClash events'),
+	guard_outage: () => _('Guard outage'), failure: () => _('Component failure'), recovery: () => _('Recovery'),
+	fail_closed: () => _('Fail-closed protection'), direct_fallback: () => _('Direct fallback'),
+	memory_action: () => _('Memory action'), memory_outcome: () => _('Memory outcome'),
+	subscription_outcome: () => _('Subscription result'), update_outcome: () => _('Update result'),
+	internet_restored: () => _('Internet restored')
+};
+
+function value(value, fallback) { return value == null || value === '' ? (fallback || '-') : String(value); }
+function exactTelegramId(value) { return /^(?:[1-9][0-9]{0,31})$/.test(String(value || '').trim()); }
+function normalizeTelegramIds(value) {
+	if (!String(value || '').trim()) return '';
+	const seen = new Set();
+	for (const item of String(value || '').split(',')) {
+		const id = item.trim();
+		if (!exactTelegramId(id)) throw new Error(_('Enter exact numeric Telegram user IDs separated by commas.'));
+		seen.add(id);
+	}
+	return Array.from(seen).join(', ');
+}
+function exactTelegramToken(value) { return /^(?:[1-9][0-9]{0,19}:[A-Za-z0-9_-]{8,128})$/.test(String(value || '').trim()); }
+function telegramTokenMask(length) {
+	const count = Number(length);
+	return Number.isSafeInteger(count) && count > 0 && count <= 149 ? '*'.repeat(count) : '';
+}
+function integer(value, bounds, name) {
+	const text = String(value == null ? '' : value).trim();
+	if (!/^[0-9]+$/.test(text)) throw new Error(_('%s must be an integer.').format(name));
+	const number = Number(text);
+	if (!Number.isSafeInteger(number) || number < bounds[0] || number > bounds[1])
+		throw new Error(_('%s is outside the safe range.').format(name));
+	return number;
+}
+function label(text, input) {
+	const id = input.getAttribute('id');
+	return E('label', id ? { 'for': id } : {}, text);
+}
+function field(id, title, input) {
+	input.setAttribute('id', id);
+	return E('div', { 'class': 'sbox-management-field' }, [ label(title, input), input ]);
+}
+function check(id, title, checked, group, name) {
+	const attrs = { 'id': id, 'type': 'checkbox' };
+	if (checked) attrs.checked = 'checked';
+	if (group) attrs['data-' + group] = name;
+	return E('label', { 'class': 'sbox-checkbox-row', 'for': id }, [ E('input', attrs), E('span', {}, title) ]);
+}
+function action(labelText, action, positive) {
+	return E('button', { 'type': 'button', 'class': 'cbi-button ' + (positive ? 'cbi-button-apply' : 'cbi-button-neutral'),
+		'data-action': action }, labelText);
+}
+function operationError(record) {
+	const error = new Error(record?.error?.message || _('Operation failed.'));
+	error.code = record?.error?.code || 'OPERATION_FAILED';
+	return error;
+}
+
+function create(options) {
+	options = options || {};
+	const api = options.api, doc = options.document || document, win = options.window || window;
+	if (!api || typeof api.memoryStatus !== 'function' || typeof api.memorySettings !== 'function' ||
+		typeof api.memoryResetBaseline !== 'function' || typeof api.telegram_status !== 'function' ||
+		typeof api.telegram_settings !== 'function' || typeof api.telegram_test !== 'function' ||
+		typeof api.notificationSettings !== 'function' || typeof api.testNotification !== 'function' ||
+		typeof api.settings_get !== 'function' ||
+		typeof api.watchOperation !== 'function') throw new Error('Typed settings API is required');
+	let host = null, destroyed = false, generation = 0, timer = null, busy = false,
+		dirty = false, retryMs = POLL_MS;
+	let refreshPromise = null;
+	let active = false;
+	let hydrated = false;
+	let settingsReady = false, memoryReady = false, telegramReady = false;
+	let notificationTab = 'luci';
+	let state = { desired: {}, memory: {}, memorySettings: {}, telegram: {}, telegramSettings: {}, notifications: {} };
+	const cancels = new Set();
+
+	function report(error, context) {
+		if (destroyed) return;
+		if (typeof options.onError === 'function') options.onError(error, context || {});
+		else ui.addNotification(null, E('p', {}, String(error?.message || error)), 'error');
+	}
+	const backgroundRefresh = view_miclash_background_refresh.create(report);
+	function progress(message, record) {
+		if (typeof options.onProgress === 'function') options.onProgress(message, record || null);
+	}
+	function publishNotificationSettings() {
+		if (typeof options.onNotificationSettings !== 'function') return;
+		const desired = state.desired?.notifications || {};
+		options.onNotificationSettings({
+			auto_hide: desired.auto_hide !== false,
+			luci_enabled: desired.luci_enabled === true,
+			luci_events: Array.isArray(desired.luci_events) ? desired.luci_events.slice() : []
+		});
+	}
+	function clearTimer() { if (timer != null) win.clearTimeout(timer); timer = null; }
+	function schedule(delay) {
+		clearTimer();
+		if (destroyed || !active || doc.hidden || !host) return;
+		timer = win.setTimeout(() => { timer = null; backgroundRefresh.run(() => refresh()); }, delay || retryMs);
+	}
+	function awaitOperation(reply, title) {
+		const id = reply?.operation_id;
+		if (typeof id !== 'string' || !id.length) return Promise.reject(new Error(_('Invalid operation response.')));
+		return new Promise((resolve, reject) => {
+			let finished = false, cancel = null;
+			const done = (callback, argument) => {
+				if (finished) return; finished = true;
+				if (cancel) { cancels.delete(cancel); cancel(); }
+				callback(argument);
+			};
+			cancel = api.watchOperation(id, (record, error) => {
+				if (destroyed) return done(reject, new Error('CANCELLED'));
+				if (error) return done(reject, error);
+				progress(title, record);
+				if (record?.state === 'success') done(resolve, record);
+				else if (record?.state === 'failure' || record?.state === 'interrupted') done(reject, operationError(record));
+			});
+			if (!finished && typeof cancel === 'function') cancels.add(cancel);
+		});
+	}
+
+	function memorySection() {
+		if (!settingsReady || !memoryReady) return loadingPane(_('Memory monitoring'));
+		const desired = state.desired.memory || {}, current = state.memory || {};
+		const settings = Object.assign({}, Object.fromEntries(Object.entries(MEMORY_FIELDS).map(([ name, bound ]) => [ name, bound[2] ])),
+			state.memorySettings || {}, desired || {});
+		const expertFields = Object.entries(MEMORY_FIELDS).map(([ name, bounds ]) => field(
+			'sbox-memory-' + name.replaceAll('_', '-'), MEMORY_LABELS[name](),
+			E('input', { 'type': 'number', 'class': 'cbi-input-text', 'min': bounds[0], 'max': bounds[1],
+				'step': '1', 'value': settings[name] })
+		));
+		const children = [
+			E('h4', {}, _('Memory monitoring')),
+			check('sbox-management-memory-enabled', _('Monitor abnormal Mihomo memory usage'), desired.enabled === true),
+			E('p', { 'class': 'sbox-muted sbox-settings-help' },
+				_('Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure.')),
+			E('details', { 'class': 'sbox-management-expert' }, [
+				E('summary', {}, _('Expert settings')),
+				E('p', { 'class': 'sbox-muted' }, _('Adaptive defaults are recommended. Unsafe values are rejected.')),
+				E('div', { 'class': 'sbox-management-form-grid' }, expertFields)
+			])
+		];
+		if (desired.enabled === true && current.baseline_rss_kb != null)
+			children.push(E('div', { 'class': 'sbox-management-actions' }, [ action(_('Reset baseline'), 'memory-reset') ]));
+		return E('section', { 'class': 'sbox-integration-pane sbox-memory-pane', 'data-panel': 'memory' }, children);
+	}
+
+	function telegramSection() {
+		if (!settingsReady || !telegramReady) return loadingPane(_('Telegram'));
+		const desired = state.desired.telegram || {}, settings = state.telegramSettings || {}, status = state.telegram || {};
+		const userId = settings.user_id ? normalizeTelegramIds(settings.user_id) : '';
+		const tokenMask = status.bot_configured === true ? telegramTokenMask(status.bot_length) : '';
+		const configured = tokenMask.length > 0;
+		const tokenInput = E('input', { 'id': 'sbox-telegram-token', 'type': 'password', 'class': 'cbi-input-text',
+			'value': tokenMask, 'autocomplete': 'new-password',
+			'data-token-mask': tokenMask });
+		const reveal = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-neutral sbox-secret-reveal',
+			'data-action': 'telegram-token-visibility', 'aria-label': _('Show token'), 'aria-pressed': 'false',
+			'hidden': configured ? null : 'hidden' });
+		const reveal_icon = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		reveal_icon.setAttribute('aria-hidden', 'true');
+		reveal_icon.setAttribute('viewBox', '0 0 24 24');
+		reveal_icon.setAttribute('focusable', 'false');
+		reveal_icon.setAttribute('style', 'fill: none; stroke: currentColor; stroke-width: 2;');
+		const reveal_path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+		reveal_path.setAttribute('d', 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z');
+		const reveal_pupil = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
+		reveal_pupil.setAttribute('cx', '12');
+		reveal_pupil.setAttribute('cy', '12');
+		reveal_pupil.setAttribute('r', '3.5');
+		reveal_icon.append(reveal_path, reveal_pupil);
+		reveal.append(reveal_icon);
+		const tokenField = E('div', { 'class': 'sbox-management-field' }, [
+			E('label', { 'for': 'sbox-telegram-token' }, _('BotFather token')),
+			E('div', { 'class': 'sbox-secret-input' }, [ tokenInput, reveal ])
+		]);
+		const userInput = E('input', { 'id': 'sbox-telegram-user-id', 'type': 'text',
+			'class': 'cbi-input-text', 'value': userId, 'inputmode': 'numeric', 'autocomplete': 'off' });
+		const userField = E('div', { 'class': 'sbox-management-field' }, [
+			label(_('Allowed Telegram user IDs'), userInput),
+			userInput,
+			E('p', { 'class': 'sbox-muted', 'data-telegram-id-hint': 'true' },
+				_('List IDs separated by commas.'))
+		]);
+		const pollTimeout = Number.isInteger(desired.poll_timeout_seconds) ? desired.poll_timeout_seconds : 25;
+		const timeoutField = field('sbox-telegram-poll-timeout', _('Telegram polling timeout (seconds)'), E('input', {
+			'type': 'number', 'class': 'cbi-input-text', 'min': '5', 'max': '50', 'step': '1', 'value': pollTimeout
+		}));
+		const children = [
+			E('h4', {}, _('Telegram')),
+			check('sbox-telegram-enabled', _('Enable Telegram control'), desired.enabled === true),
+			E('div', { 'class': 'sbox-telegram-fields' }, [ tokenField, userField, timeoutField ])
+		];
+		if (desired.enabled === true)
+			children.push(E('div', { 'class': 'sbox-management-actions' }, [
+				action(_('Send test'), 'telegram-test')
+			]));
+		return E('section', { 'class': 'sbox-integration-pane sbox-telegram-pane',
+			'data-panel': 'telegram' }, children);
+	}
+
+	function protectionIntegrationSection() {
+		return E('article', {
+			'class': 'sbox-settings-card sbox-integration-card sbox-protection-integration-card sbox-management-card sbox-management-wide'
+		}, [ memorySection(), telegramSection() ]);
+	}
+
+	function notificationSection() {
+		const desired = state.desired.notifications || {}, runtime = state.notifications || {};
+		const channelLabel = (name) => name === 'syslog' ? _('Logs') : name === 'telegram' ? _('Telegram') : _('LuCI');
+		const tabs = KNOWN_CHANNELS.map((name) => E('button', {
+			'type': 'button',
+			'class': (notificationTab === name ? 'cbi-tab' : 'cbi-tab-disabled') + ' sbox-tab',
+			'role': 'tab',
+			'id': 'sbox-notification-tab-' + name,
+			'data-notification-tab': name,
+			'aria-controls': 'sbox-notification-pane-' + name,
+			'aria-selected': notificationTab === name ? 'true' : 'false'
+		}, channelLabel(name)));
+		const panes = KNOWN_CHANNELS.map((name) => {
+			const configured = desired[name + '_enabled'] ?? runtime[name + '_enabled'];
+			const selected = Array.isArray(desired[name + '_events']) ? desired[name + '_events'] :
+				(Array.isArray(runtime[name + '_events']) ? runtime[name + '_events'] : []);
+			const enabled = check('sbox-notify-enabled-' + name, _('Enabled'), configured === true,
+				'notification-enabled', name);
+			const channelEvents = name === 'luci' ? [ ...LUCI_ONLY_EVENTS, ...KNOWN_EVENTS ] : KNOWN_EVENTS;
+			const events = channelEvents.map((event) => {
+				const node = check('sbox-notify-' + name + '-' + event, EVENT_LABELS[event](),
+					selected.includes(event), 'notification-event', event);
+				const input = node.querySelector('input');
+				if (input) input.setAttribute('data-notification-channel', name);
+				return node;
+			});
+			const children = [
+				enabled,
+				E('h5', {}, _('Notification events')),
+				E('div', { 'class': 'sbox-management-switches sbox-notification-event-grid' }, events)
+			];
+			if (name === 'luci')
+				children.splice(1, 0, check('sbox-notification-auto-hide',
+					_('Automatically close LuCI notifications'), desired.auto_hide !== false));
+			if (configured === true) {
+				const test = action(_('Send test'), 'notification-test');
+				test.setAttribute('data-notification-test', name);
+				children.push(E('div', { 'class': 'sbox-management-actions' }, [ test ]));
+			}
+			return E('section', {
+				'class': 'sbox-notification-pane',
+				'role': 'tabpanel',
+				'id': 'sbox-notification-pane-' + name,
+				'data-notification-pane': name,
+				'aria-labelledby': 'sbox-notification-tab-' + name,
+				'hidden': notificationTab === name ? null : 'hidden'
+			}, children);
+		});
+		return E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-notifications-card sbox-management-card sbox-management-wide',
+			'data-panel': 'notifications' }, [
+			E('h4', {}, _('Notifications')),
+			E('div', { 'class': 'cbi-tabmenu sbox-tabs sbox-notification-tabs', 'role': 'tablist' }, tabs),
+			...panes
+		]);
+	}
+	function loadingPane(title) {
+		return E('section', { 'class': 'sbox-integration-pane' }, [
+			E('h4', {}, title),
+			view_miclash_ui_shell.loadingBlock({ kind: 'normal', lines: 4 })
+		]);
+	}
+	function paintLoading() {
+		if (!host || destroyed) return;
+		host.replaceChildren(
+			E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-protection-integration-card sbox-management-card sbox-management-wide' }, [
+				loadingPane(_('Memory monitoring')), loadingPane(_('Telegram'))
+			]),
+			E('article', { 'class': 'sbox-settings-card sbox-integration-card sbox-notifications-card sbox-management-card sbox-management-wide' }, [
+				E('h4', {}, _('Notifications')),
+				view_miclash_ui_shell.loadingBlock({ kind: 'normal', lines: 5 })
+			])
+		);
+	}
+
+	function paint() {
+		if (!host || destroyed) return;
+		host.replaceChildren(protectionIntegrationSection(), notificationSection());
+		bind();
+	}
+	function formPatch() {
+		const memory = { enabled: !!host.querySelector('#sbox-management-memory-enabled')?.checked };
+		for (const [ name, bounds ] of Object.entries(MEMORY_FIELDS)) {
+			const input = host.querySelector('#sbox-memory-' + name.replaceAll('_', '-'));
+			memory[name] = integer(input?.value, bounds, name);
+		}
+		if (memory.reserve_min_kb > memory.reserve_max_kb ||
+			memory.failure_cooldown_ms < memory.success_cooldown_ms ||
+			memory.warmup_ms < memory.sample_interval_ms)
+			throw new Error(_('Memory expert settings are internally inconsistent.'));
+		const enabled = !!host.querySelector('#sbox-telegram-enabled')?.checked;
+		const tokenInput = host.querySelector('#sbox-telegram-token');
+		const token = String(tokenInput?.value || '').trim();
+		const tokenMask = String(tokenInput?.dataset.tokenMask || '');
+		const userId = normalizeTelegramIds(host.querySelector('#sbox-telegram-user-id')?.value || '');
+		if (token !== tokenMask && token && !exactTelegramToken(token)) throw new Error(_('Enter a valid BotFather token.'));
+		const normalizedUserIds = userId ? normalizeTelegramIds(userId) : '';
+		const hasToken = token === tokenMask ? tokenMask.length > 0 : exactTelegramToken(token);
+		if (enabled && !(hasToken && normalizedUserIds))
+			throw new Error(_('Enabling Telegram requires a BotFather token and exact user IDs.'));
+		const telegram = { enabled, user_id: normalizedUserIds };
+		telegram.poll_timeout_seconds = integer(host.querySelector('#sbox-telegram-poll-timeout')?.value,
+			[ 5, 50 ], _('Telegram polling timeout'));
+		if (token !== tokenMask) telegram.token = token;
+		const notifications = {
+			auto_hide: !!host.querySelector('#sbox-notification-auto-hide')?.checked
+		};
+		for (const channel of KNOWN_CHANNELS) {
+			notifications[channel + '_enabled'] =
+				!!host.querySelector('[data-notification-enabled="' + channel + '"]')?.checked;
+			notifications[channel + '_events'] = Array.from(host.querySelectorAll(
+				'[data-notification-channel="' + channel + '"][data-notification-event]'))
+				.filter((input) => input.checked)
+				.map((input) => input.getAttribute('data-notification-event'))
+				.filter((event) => (channel === 'luci' ?
+					[ ...LUCI_ONLY_EVENTS, ...KNOWN_EVENTS ] : KNOWN_EVENTS).includes(event));
+		}
+		return { memory, telegram, notifications };
+	}
+	function collectPatch() {
+		if (!host || destroyed) throw new Error(_('Settings panel is not available.'));
+		if (!hydrated) throw new Error(_('Settings panel is still loading.'));
+		if (!memoryReady || !telegramReady) throw new Error(_('Settings panel is still loading.'));
+		return formPatch();
+	}
+	async function markSaved() {
+		dirty = false;
+		await refresh(true, true);
+	}
+	async function sendTelegramTest() {
+		progress(_('Sending Telegram test message…'));
+		const reply = await api.telegram_test();
+		if (reply?.sent !== true) throw new Error(_('Telegram test message was not sent.'));
+		if (typeof options.onSuccess === 'function') options.onSuccess(_('Telegram test message sent.'));
+	}
+	async function withBusy(button, callback) {
+		if (busy || destroyed) return;
+		busy = true; if (button) button.disabled = true;
+		try { return await callback(); }
+		finally { busy = false; if (button && !destroyed) button.disabled = false; }
+	}
+	function bind() {
+		const markDirty = () => { dirty = true; };
+		function updateTelegramTokenReveal() {
+			const input = host.querySelector('#sbox-telegram-token');
+			const reveal = host.querySelector('[data-action="telegram-token-visibility"]');
+			if (!input || !reveal) return;
+			const length = String(input.value || '').length;
+			reveal.hidden = !length;
+		}
+		for (const input of [ ...host.querySelectorAll('input'), ...host.querySelectorAll('select') ]) {
+			input.addEventListener('input', markDirty);
+			input.addEventListener('change', markDirty);
+		}
+		const telegramToken = host.querySelector('#sbox-telegram-token');
+		if (telegramToken) telegramToken.addEventListener('input', updateTelegramTokenReveal);
+		updateTelegramTokenReveal();
+		for (const tab of host.querySelectorAll('[data-notification-tab]'))
+			tab.addEventListener('click', () => {
+				const selected = tab.getAttribute('data-notification-tab');
+				if (!KNOWN_CHANNELS.includes(selected)) return;
+				notificationTab = selected;
+				for (const button of host.querySelectorAll('[data-notification-tab]')) {
+					const active = button.getAttribute('data-notification-tab') === selected;
+					button.classList.toggle('cbi-tab', active);
+					button.classList.toggle('cbi-tab-disabled', !active);
+					button.setAttribute('aria-selected', active ? 'true' : 'false');
+				}
+				for (const pane of host.querySelectorAll('[data-notification-pane]'))
+					pane.hidden = pane.getAttribute('data-notification-pane') !== selected;
+			});
+		for (const button of host.querySelectorAll('[data-action]')) button.addEventListener('click', () => {
+			const actionName = button.getAttribute('data-action');
+			const testAction = [ 'telegram-test', 'notification-test' ].includes(actionName);
+			const run = () => withBusy(testAction ? null : button, async () => {
+				if (actionName === 'telegram-token-visibility') {
+					const input = host.querySelector('#sbox-telegram-token');
+					if (!input || !input.value) return;
+					const visible = input.type !== 'text';
+					input.type = visible ? 'text' : 'password';
+					button.setAttribute('aria-label', visible ? _('Hide token') : _('Show token'));
+					button.setAttribute('aria-pressed', visible ? 'true' : 'false');
+				}
+				else if (actionName === 'memory-reset') {
+					await awaitOperation(await api.memoryResetBaseline(SOURCE), _('Resetting memory baseline…'));
+					await refresh(true);
+				}
+				else if (actionName === 'telegram-test') {
+					await sendTelegramTest();
+				}
+				else if (actionName === 'notification-test') {
+					const channel = button.getAttribute('data-notification-test');
+					if (!KNOWN_CHANNELS.includes(channel)) throw new Error(_('Invalid notification channel.'));
+					const reply = await api.testNotification(channel);
+					if (reply?.sent !== true) throw new Error(_('Notification test message was not sent.'));
+				}
+			});
+			const promise = testAction
+				? view_miclash_ui_shell.withButtons(button, run)
+				: run();
+			promise.catch(report);
+		});
+	}
+
+	function refresh(force, replaceForm) {
+		if (destroyed || !active && !force || doc.hidden && !force) return;
+		if (refreshPromise) return refreshPromise;
+		const token = ++generation;
+		const running = (async () => {
+			try {
+				const repaint = () => {
+					if (destroyed || token !== generation || (dirty || busy) && !replaceForm) return;
+					paint();
+				};
+				const replies = await Promise.allSettled([
+					Promise.resolve().then(() => api.settings_get()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						const desired = reply || {};
+						state = { ...state, desired, memorySettings: desired.memory || {},
+							telegramSettings: desired.telegram || {}, notifications: desired.notifications || {} };
+						settingsReady = true; hydrated = true; publishNotificationSettings(); repaint();
+					}),
+					Promise.resolve().then(() => api.memoryStatus()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						state = { ...state, memory: reply || {} }; memoryReady = true; repaint();
+					}),
+					Promise.resolve().then(() => api.telegram_status()).then((reply) => {
+						if (destroyed || token !== generation) return;
+						state = { ...state, telegram: reply || {} }; telegramReady = true; repaint();
+					})
+				]);
+				const failed = replies.find((reply) => reply.status === 'rejected');
+				if (failed) throw failed.reason;
+				retryMs = POLL_MS;
+				if (replaceForm || (!dirty && !busy)) paint();
+			}
+			catch (error) { retryMs = Math.min(MAX_POLL_MS, Math.max(POLL_MS, retryMs * 2)); throw error; }
+			finally { if (!destroyed && token === generation) schedule(); }
+		})();
+		const tracked = running.finally(() => {
+			if (refreshPromise === tracked) refreshPromise = null;
+		});
+		refreshPromise = tracked;
+		return refreshPromise;
+	}
+	function visibilitychange() {
+		if (doc.hidden) clearTimer();
+		else if (active) backgroundRefresh.run(() => refresh());
+	}
+	function mount(node) {
+		host = node; destroyed = false;
+		if (hydrated) paint(); else paintLoading();
+		if (active) backgroundRefresh.run(() => refresh());
+		return host;
+	}
+	function setActive(value) {
+		active = value === true;
+		if (!active) { clearTimer(); return false; }
+		if (!destroyed && !doc.hidden) backgroundRefresh.run(() => refresh());
+		return true;
+	}
+	function destroy() {
+		if (destroyed) return; destroyed = true; generation++; clearTimer();
+		doc.removeEventListener('visibilitychange', visibilitychange);
+		for (const cancel of cancels) cancel(); cancels.clear();
+		if (typeof api.destroy === 'function') api.destroy(); host = null;
+	}
+	doc.addEventListener('visibilitychange', visibilitychange);
+	return { mount, refresh, setActive, destroy, collectPatch, markSaved, ready: () => hydrated,
+		exactTelegramId, exactTelegramToken, telegramTokenMask };
+}
+
+return baseclass.extend({
+	create,
+	exactTelegramId, exactTelegramToken, telegramTokenMask,
+	KNOWN_EVENTS,
+	LUCI_ONLY_EVENTS,
+	KNOWN_CHANNELS,
+	MEMORY_FIELDS,
+	MEMORY_LABELS,
+	EVENT_LABELS
+});

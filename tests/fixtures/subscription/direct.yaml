@@ -1,0 +1,7 @@
+mode: rule
+proxies:
+  - name: fixture
+    type: direct
+proxy-groups: []
+rules:
+  - MATCH,DIRECT

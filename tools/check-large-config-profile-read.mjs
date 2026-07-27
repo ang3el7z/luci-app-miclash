@@ -23,42 +23,22 @@ function blockBetween(startNeedle, endNeedle, source = store) {
 const readConfigBlock = blockBetween('async function readConfigFileByName', 'async function writeConfigFileByName');
 const ensureProfilesBlock = blockBetween('async function ensureConfigProfilesReady', 'async function readSubscriptionUrl');
 
-check(store.includes('CONFIG_READ_CHUNK_LINES') &&
-	store.includes('async function readLargeTextFile(') &&
-	store.includes('sed -n "${2},${3}p" "$1"'),
-	'Store must read large config files in bounded line chunks instead of one rpcd file.read response.');
+check(store.includes('async function readLargeTextFile(') &&
+	store.includes('api.config_read(profile)') && !store.includes("'require fs'"),
+	'Store must delegate bounded config reads to the typed backend.');
 
-check(readConfigBlock.includes('readLargeTextFile(path)') &&
-	!readConfigBlock.includes('fs.read(path)'),
-	'readConfigFileByName must use chunked reads so large backup configs can be shown in the editor.');
+check(readConfigBlock.includes('api.config_read(') && !readConfigBlock.includes('fs.'),
+	'readConfigFileByName must use the typed config reader.');
 
-check(store.includes('async function pathExists(') &&
-	store.includes('fs.stat(path)'),
-	'Store must check profile existence with stat, not by reading full file content.');
+check(store.includes('async function pathExists(') && store.includes('api.config_list()'),
+	'Store must check profile existence through the typed config inventory.');
 
-check(!ensureProfilesBlock.includes('fs.read(path)') &&
-	ensureProfilesBlock.includes('pathExists(path)'),
-	'ensureConfigProfilesReady must not overwrite large backup configs when file.read hits rpcd response limits.');
+check(!ensureProfilesBlock.includes('fs.') && ensureProfilesBlock.includes('api.config_list()') &&
+	!ensureProfilesBlock.includes('api.config_read(') &&
+	ensureProfilesBlock.includes('names.has(profile.name)'),
+	'ensureConfigProfilesReady must trust typed inventory and seed only missing files without rereading content.');
 
-check(acl.includes('"/bin/sh": [ "exec" ]'),
-	'ACL must allow /bin/sh exec for chunked large config reads.');
-
-[
-	'/opt/clash/config.yaml',
-	'/opt/clash/config2.yaml',
-	'/opt/clash/config3.yaml'
-].forEach((path) => {
-	check(acl.includes(`"${path}": [ "read", "stat" ]`),
-		`ACL must allow file.stat for ${path} so large existing configs are not treated as missing.`);
-});
-
-[
-	'/opt/clash/config.yaml',
-	'/opt/clash/config2.yaml',
-	'/opt/clash/config3.yaml'
-].forEach((path) => {
-	check(acl.includes(`"${path}": [ "write", "stat" ]`),
-		`Write ACL must also allow file.stat for ${path} because LuCI sessions can check writable paths through the write scope.`);
-});
+check(!acl.includes('"file"') && acl.includes('"config_read"') && acl.includes('"config_apply"'),
+	'ACL must grant typed config methods without filesystem or shell authority.');
 
 console.log('large config profile read check passed');

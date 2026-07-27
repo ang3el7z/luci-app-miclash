@@ -1,0 +1,426 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "contract": "Canonical outputs describe intended corrected MiClash network semantics, not an unreviewed transcript of legacy side effects.",
+    "normalization": "UTF-8, LF, one deterministic command per line, no timestamps, PIDs, counters, handles, or host observations.",
+    "rationale": "Named representative scenarios cover each required dimension without a Cartesian product; later compiler tasks compare their normalized output to these files.",
+    "corrections": [
+      {
+        "id": "guard-provider-client-bypass",
+        "legacy_observation": "Legacy provider exclusions can permit protected clients to reach a proxy server directly.",
+        "intended_semantics": "When Guard is ON, omit client-side proxy-server bypass; retain OUTPUT bypass solely to prevent router-originated proxy loops.",
+        "scenarios": [
+          "tproxy-explicit-guard-ipv4-quic",
+          "mixed-explicit-guard-provider-bypass",
+          "tun-explicit-existing-clash-tun"
+        ]
+      },
+      {
+        "id": "guard-empty-wan-detection",
+        "legacy_observation": "An empty WAN detection result must not be interpreted as permission to forward.",
+        "intended_semantics": "When Guard is ON, drop all non-local forwarding for every active address family after local, DHCP, DNAT, and clash-tun exceptions, regardless of WAN discovery or connection state.",
+        "scenarios": [
+          "tproxy-explicit-empty-detection-guard",
+          "tun-exclude-empty-detection-guard"
+        ]
+      },
+      {
+        "id": "explicit-empty-interface-set",
+        "legacy_observation": "Falling through from an empty explicit interface selection can accidentally proxy unrelated input.",
+        "intended_semantics": "An empty explicit selection proxies no client ingress; Guard remains independent and fail-closed.",
+        "scenarios": [
+          "tproxy-explicit-empty-detection-guard"
+        ]
+      },
+      {
+        "id": "existing-clash-tun-route",
+        "legacy_observation": "A surviving clash-tun during restart can retain stale or missing policy routes.",
+        "intended_semantics": "Reconciliation replaces the owned default route through clash-tun immediately and idempotently.",
+        "scenarios": [
+          "tun-exclude-open-ipv6-existing",
+          "mixed-explicit-guard-provider-bypass",
+          "tun-explicit-existing-clash-tun"
+        ]
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "tproxy-explicit-guard-ipv4-quic",
+      "proxy_mode": "tproxy",
+      "interface_mode": "explicit",
+      "lan": [
+        "br-lan"
+      ],
+      "wan": [
+        "pppoe-wan"
+      ],
+      "guard": true,
+      "quic": true,
+      "server_ips": [
+        "8.8.8.8"
+      ],
+      "fakeip_cidrs": [],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "Baseline explicit IPv4 TPROXY with QUIC rejection and fail-closed client forwarding.",
+      "expected": {
+        "nft": "tproxy-explicit-guard-ipv4-quic.golden",
+        "iptables": "tproxy-explicit-guard-ipv4-quic.golden",
+        "routes": "tproxy-explicit-guard-ipv4-quic.golden"
+      }
+    },
+    {
+      "name": "tproxy-exclude-open-dualstack-multiwan",
+      "proxy_mode": "tproxy",
+      "interface_mode": "exclude",
+      "lan": [
+        "br-lan"
+      ],
+      "wan": [
+        "pppoe-wan",
+        "wwan0"
+      ],
+      "guard": false,
+      "quic": false,
+      "server_ips": [
+        "1.1.1.1",
+        "2606:4700:4700::1111"
+      ],
+      "fakeip_cidrs": [],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4",
+        "ipv6"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "Guard-off dual-stack exclusion with two WANs and client plus router provider bypass.",
+      "expected": {
+        "nft": "tproxy-exclude-open-dualstack-multiwan.golden",
+        "iptables": "tproxy-exclude-open-dualstack-multiwan.golden",
+        "routes": "tproxy-exclude-open-dualstack-multiwan.golden"
+      }
+    },
+    {
+      "name": "tun-explicit-guard-fakeip-ipv4",
+      "proxy_mode": "tun",
+      "interface_mode": "explicit",
+      "lan": [
+        "br-lan"
+      ],
+      "wan": [
+        "eth1"
+      ],
+      "guard": true,
+      "quic": false,
+      "server_ips": [],
+      "fakeip_cidrs": [
+        "198.18.0.0/16",
+        "8.8.4.0/24"
+      ],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "TUN startup before clash-tun exists with fake-IP whitelist destination marking.",
+      "expected": {
+        "nft": "tun-explicit-guard-fakeip-ipv4.golden",
+        "iptables": "tun-explicit-guard-fakeip-ipv4.golden",
+        "routes": "tun-explicit-guard-fakeip-ipv4.golden"
+      }
+    },
+    {
+      "name": "tun-exclude-open-ipv6-existing",
+      "proxy_mode": "tun",
+      "interface_mode": "exclude",
+      "lan": [
+        "br-lan"
+      ],
+      "wan": [
+        "wan6"
+      ],
+      "guard": false,
+      "quic": true,
+      "server_ips": [
+        "2620:fe::fe"
+      ],
+      "fakeip_cidrs": [],
+      "device_policies": [],
+      "ip_families": [
+        "ipv6"
+      ],
+      "existing_clash_tun": true,
+      "rationale": "IPv6 TUN fast restart reuses an existing clash-tun and installs its route immediately.",
+      "expected": {
+        "nft": "tun-exclude-open-ipv6-existing.golden",
+        "iptables": "tun-exclude-open-ipv6-existing.golden",
+        "routes": "tun-exclude-open-ipv6-existing.golden"
+      }
+    },
+    {
+      "name": "mixed-explicit-guard-devices-dualstack",
+      "proxy_mode": "mixed",
+      "interface_mode": "explicit",
+      "lan": [
+        "br-lan",
+        "wlan0"
+      ],
+      "wan": [
+        "eth1"
+      ],
+      "guard": true,
+      "quic": true,
+      "server_ips": [],
+      "fakeip_cidrs": [],
+      "device_policies": [
+        {
+          "id": "quarantined-camera",
+          "mac": "02:00:00:00:00:40",
+          "action": "block",
+          "schedule": null
+        },
+        {
+          "id": "work-laptop",
+          "mac": "02:00:00:00:00:41",
+          "action": "direct",
+          "schedule": {
+            "days": [ "mon", "tue", "wed", "thu", "fri" ],
+            "start": "08:00",
+            "end": "18:00",
+            "timezone": "router"
+          }
+        },
+        {
+          "id": "media-player",
+          "mac": "02:00:00:00:00:42",
+          "action": "proxy",
+          "schedule": null
+        },
+        {
+          "id": "default-phone",
+          "mac": "02:00:00:00:00:43",
+          "action": "inherit",
+          "schedule": null
+        }
+      ],
+      "ip_families": [
+        "ipv4",
+        "ipv6"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "Dual-stack MIXED split with MAC-stable device identity, block precedence, a Guard-bypassing Direct exception, and legacy compiler coverage for proxy/inherit records.",
+      "expected": {
+        "nft": "mixed-explicit-guard-devices-dualstack.golden",
+        "iptables": "mixed-explicit-guard-devices-dualstack.golden",
+        "routes": "mixed-explicit-guard-devices-dualstack.golden"
+      }
+    },
+    {
+      "name": "mixed-exclude-open-quic-multiwan",
+      "proxy_mode": "mixed",
+      "interface_mode": "exclude",
+      "lan": [
+        "br-lan"
+      ],
+      "wan": [
+        "eth1",
+        "wwan0"
+      ],
+      "guard": false,
+      "quic": true,
+      "server_ips": [],
+      "fakeip_cidrs": [],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "MIXED exclusion covers TCP TPROXY, UDP TUN, QUIC rejection, and multiple WAN exclusions.",
+      "expected": {
+        "nft": "mixed-exclude-open-quic-multiwan.golden",
+        "iptables": "mixed-exclude-open-quic-multiwan.golden",
+        "routes": "mixed-exclude-open-quic-multiwan.golden"
+      }
+    },
+    {
+      "name": "tproxy-explicit-empty-detection-guard",
+      "proxy_mode": "tproxy",
+      "interface_mode": "explicit",
+      "lan": [],
+      "wan": [],
+      "guard": true,
+      "quic": false,
+      "server_ips": [],
+      "fakeip_cidrs": [],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4",
+        "ipv6"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "No detected interfaces means explicit proxy selection is empty while Guard blocks every non-local forwarding family.",
+      "expected": {
+        "nft": "tproxy-explicit-empty-detection-guard.golden",
+        "iptables": "tproxy-explicit-empty-detection-guard.golden",
+        "routes": "tproxy-explicit-empty-detection-guard.golden"
+      }
+    },
+    {
+      "name": "tun-exclude-empty-detection-guard",
+      "proxy_mode": "tun",
+      "interface_mode": "exclude",
+      "lan": [],
+      "wan": [],
+      "guard": true,
+      "quic": false,
+      "server_ips": [],
+      "fakeip_cidrs": [],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "No exclusions means proxy all input, but missing WAN detection still invokes Guard's all-non-local fallback.",
+      "expected": {
+        "nft": "tun-exclude-empty-detection-guard.golden",
+        "iptables": "tun-exclude-empty-detection-guard.golden",
+        "routes": "tun-exclude-empty-detection-guard.golden"
+      }
+    },
+    {
+      "name": "mixed-explicit-guard-provider-bypass",
+      "proxy_mode": "mixed",
+      "interface_mode": "explicit",
+      "lan": [
+        "br-lan"
+      ],
+      "wan": [
+        "eth1"
+      ],
+      "guard": true,
+      "quic": false,
+      "server_ips": [
+        "9.9.9.9",
+        "2620:fe::9"
+      ],
+      "fakeip_cidrs": [],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4",
+        "ipv6"
+      ],
+      "existing_clash_tun": true,
+      "rationale": "Guard ON suppresses client provider bypass while router output keeps loop-prevention bypass.",
+      "expected": {
+        "nft": "mixed-explicit-guard-provider-bypass.golden",
+        "iptables": "mixed-explicit-guard-provider-bypass.golden",
+        "routes": "mixed-explicit-guard-provider-bypass.golden"
+      }
+    },
+    {
+      "name": "mixed-exclude-fakeip-whitelist",
+      "proxy_mode": "mixed",
+      "interface_mode": "exclude",
+      "lan": [
+        "br-lan"
+      ],
+      "wan": [
+        "eth1"
+      ],
+      "guard": false,
+      "quic": false,
+      "server_ips": [],
+      "fakeip_cidrs": [
+        "198.18.0.0/16",
+        "1.0.0.0/24"
+      ],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "Fake-IP whitelist marking preserves the MIXED TCP and UDP route split.",
+      "expected": {
+        "nft": "mixed-exclude-fakeip-whitelist.golden",
+        "iptables": "mixed-exclude-fakeip-whitelist.golden",
+        "routes": "mixed-exclude-fakeip-whitelist.golden"
+      }
+    },
+    {
+      "name": "tproxy-exclude-device-policies",
+      "proxy_mode": "tproxy",
+      "interface_mode": "exclude",
+      "lan": [
+        "br-lan"
+      ],
+      "wan": [
+        "eth1"
+      ],
+      "guard": true,
+      "quic": true,
+      "server_ips": [],
+      "fakeip_cidrs": [],
+      "device_policies": [
+        {
+          "id": "blocked-console",
+          "mac": "02:00:00:00:00:50",
+          "action": "block",
+          "schedule": {
+            "days": [ "sat", "sun" ],
+            "start": "00:00",
+            "end": "23:59",
+            "timezone": "router"
+          }
+        },
+        {
+          "id": "proxied-tablet",
+          "mac": "02:00:00:00:00:51",
+          "action": "proxy",
+          "schedule": null
+        }
+      ],
+      "ip_families": [
+        "ipv4"
+      ],
+      "existing_clash_tun": false,
+      "rationale": "Scheduled MAC policies are resolved before compilation; block precedes proxy marking without weakening Guard.",
+      "expected": {
+        "nft": "tproxy-exclude-device-policies.golden",
+        "iptables": "tproxy-exclude-device-policies.golden",
+        "routes": "tproxy-exclude-device-policies.golden"
+      }
+    },
+    {
+      "name": "tun-explicit-existing-clash-tun",
+      "proxy_mode": "tun",
+      "interface_mode": "explicit",
+      "lan": [
+        "br-guest"
+      ],
+      "wan": [
+        "eth1"
+      ],
+      "guard": true,
+      "quic": true,
+      "server_ips": [
+        "149.112.112.112"
+      ],
+      "fakeip_cidrs": [],
+      "device_policies": [],
+      "ip_families": [
+        "ipv4"
+      ],
+      "existing_clash_tun": true,
+      "rationale": "TUN explicit restart with an existing device verifies immediate route repair and guarded provider semantics.",
+      "expected": {
+        "nft": "tun-explicit-existing-clash-tun.golden",
+        "iptables": "tun-explicit-existing-clash-tun.golden",
+        "routes": "tun-explicit-existing-clash-tun.golden"
+      }
+    }
+  ]
+}

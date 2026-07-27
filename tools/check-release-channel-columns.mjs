@@ -21,10 +21,10 @@ function check(condition, message) {
 
 check(settings.includes('miclashReleaseChannel') && settings.includes('mihomoReleaseChannel'),
 	'Settings model must expose separate MiClash and Mihomo release channels.');
-check(settings.includes("case 'MICLASH_RELEASE_CHANNEL'") && settings.includes("case 'MIHOMO_RELEASE_CHANNEL'"),
+check(settings.includes('updates.miclash_release_channel') && settings.includes('updates.mihomo_release_channel'),
 	'Settings model must read MICLASH_RELEASE_CHANNEL and MIHOMO_RELEASE_CHANNEL.');
-check(settings.includes('settings.MICLASH_RELEASE_CHANNEL =') && settings.includes('settings.MIHOMO_RELEASE_CHANNEL ='),
-	'Settings model must write MICLASH_RELEASE_CHANNEL and MIHOMO_RELEASE_CHANNEL.');
+check(config.includes('miclash_release_channel:') && config.includes('mihomo_release_channel:'),
+	'Unified Settings save must write MICLASH_RELEASE_CHANNEL and MIHOMO_RELEASE_CHANNEL.');
 check(!settings.includes("case 'RELEASE_CHANNEL'") && !settings.includes("'RELEASE_CHANNEL='"),
 	'Settings model must not keep the old shared RELEASE_CHANNEL fallback/write path.');
 
@@ -33,17 +33,17 @@ check(config.includes('includeMiClashPrereleases') && config.includes('includeMi
 check(config.includes('sbox-miclash-release-channel') && config.includes('sbox-mihomo-release-channel'),
 	'Settings UI must render separate radio groups for MiClash and Mihomo.');
 check(config.includes('function buildReleaseChannelSectionHtml(') &&
-	config.includes('sbox-settings-overview') &&
-	config.includes('sbox-release-channel-section cbi-section sbox-settings-block') &&
-	config.indexOf('buildReleaseChannelSectionHtml(s)') < config.indexOf("'<div class=\"sbox-settings-grid\">'") &&
+	config.includes('sbox-settings-zone-updates') &&
+	config.includes('sbox-settings-pair-grid') &&
+	config.includes('sbox-release-channel-section sbox-settings-card sbox-updates-card') &&
 	!config.includes('sbox-settings-subtitle') &&
 	!config.includes("'<label>' + safeText(_('Release channels')) + '</label>'"),
-	'Release channel settings must render as a top overview section, not inside Additional.');
-const releaseOverviewStart = config.indexOf('buildReleaseChannelSectionHtml(s)');
-const settingsGridStart = config.indexOf("'<div class=\"sbox-settings-grid\">'");
-check(releaseOverviewStart !== -1 && settingsGridStart !== -1 &&
-	!config.slice(releaseOverviewStart, settingsGridStart).includes('sbox-settings-gap'),
-	'Release channel overview must flow directly into the settings grid without an extra spacer.');
+	'Release channels must render in their own semantic card beside Additional.');
+check(config.includes('sbox-major-update-policy') &&
+	config.indexOf('id="sbox-auto-major-miclash"') > config.indexOf('sbox-release-channel-grid'),
+	'Major MiClash updates must be visually separated from the channel radio groups.');
+check(config.indexOf('id="sbox-auto-update-config"') > config.indexOf('class="sbox-runtime-switches"'),
+	'Configuration auto-update must live in Additional rather than in release channels.');
 check(!config.includes('sbox-settings-gap') && !style.includes('.sbox-settings-gap'),
 	'Settings pane must not keep the removed vertical spacer markup or CSS.');
 check(!config.includes('id="sbox-release-channel"'),
@@ -53,11 +53,10 @@ check(config.includes('miclashReleaseChannel') && config.includes('mihomoRelease
 
 check(style.includes('.sbox-release-channel-grid') && style.includes('.sbox-release-channel-column'),
 	'CSS must style the two-column release channel picker.');
-check(style.includes('.sbox-settings-overview') &&
-	style.includes('grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);') &&
+check(style.includes('.sbox-settings-pair-grid') &&
 	style.includes('.sbox-release-channel-section') &&
-	style.includes('.sbox-release-channel-section .sbox-release-channel-grid'),
-	'Release channel section must occupy the top-right overview area with compact columns.');
+	style.includes('.sbox-major-update-policy'),
+	'Release channel and Additional cards must share the responsive pair grid.');
 
 if (failed) process.exit(1);
 console.log('release channel columns check passed');

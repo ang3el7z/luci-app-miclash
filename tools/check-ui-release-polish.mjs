@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 const config = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js', 'utf8');
 const css = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css', 'utf8');
 const ru = readFileSync('luci-app-miclash/rootfs/po/ru/miclash.po', 'utf8');
+const settingsPanels = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/settings-panels.js', 'utf8');
+const uiShell = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/ui-shell.js', 'utf8');
+const devicesPanel = readFileSync('luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/devices-panel.js', 'utf8');
 
 function cssBlock(selector) {
 	const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -21,8 +24,17 @@ const rulesetsBody = cssBlock('.sbox-modal-wide .sbox-rulesets-modal-body');
 const iconButton = cssBlock('.sbox-icon-button');
 const versionActionButton = cssBlock('.sbox-version-action-button');
 const versionActionIcon = cssBlock('.sbox-version-action-icon');
+const loadingSurface = cssBlock('.sbox-loading-surface');
+const loadingMotion = cssBlock('.sbox-loading-surface::after');
 
 const checks = [
+	{
+		name: 'shared loading surfaces are accessible and motion-aware',
+		pass: uiShell.includes('function loadingBlock') && uiShell.includes('function loadingHtml') &&
+			uiShell.includes("'aria-busy': 'true'") && uiShell.includes("_('Loading…')") &&
+			/min-height:/.test(loadingSurface) && /animation:/.test(loadingMotion) &&
+			css.includes('@media (prefers-reduced-motion: reduce)')
+	},
 	{
 		name: 'wide modal stays inside LuCI modal padding',
 		pass: /box-sizing:\s*border-box;/.test(modalWide) && /max-width:\s*100%;/.test(modalWide)
@@ -38,11 +50,35 @@ const checks = [
 			!/sbox-clear-sub-url[\s\S]{0,260}>(?:x|&times;)<\/button>/.test(config)
 	},
 	{
-		name: 'operation status error bar is passive and auto-clears instead of adding inline controls',
+		name: 'operation errors persist as dismissible assertive live alerts',
 		pass: !config.includes('sbox-operation-status-detail') &&
-			!config.includes('sbox-operation-status-close') &&
-			config.includes('autoClearMs == null ? 3000') &&
-			config.includes('dismissible: false')
+			config.includes('sbox-operation-dismiss') &&
+			config.includes("type === 'error' ? 'alert' : 'status'") &&
+			config.includes('autoClearMs: opts.autoClearMs == null ? 0') &&
+			config.includes('dismissible: true')
+	},
+	{
+		name: 'primary controls expose accessible names and tab state',
+		pass: /sbox-mode-select[^>]*aria-label/.test(config) &&
+			/sbox-config-select[^>]*aria-label/.test(config) &&
+			/sbox-subscription-url[^>]*aria-label/.test(config) &&
+			settingsPanels.includes("'role': 'tablist'") &&
+			settingsPanels.includes("'aria-controls': 'sbox-notification-pane-' + name") &&
+			settingsPanels.includes("'aria-selected': notificationTab === name ? 'true' : 'false'") &&
+			uiShell.includes("const tabName = tab.getAttribute('data-' + tabAttr)") &&
+			uiShell.includes("const pane = paneNodes[tabName]") &&
+			uiShell.includes("setAttribute('aria-pressed'") && uiShell.includes("setAttribute('aria-controls'")
+	},
+	{
+		name: 'periodic panel repaints are not broad live regions',
+		pass: !/sbox-diagnostics-summary[^>]*aria-live/.test(config) &&
+			!/sbox-management-(?:settings|devices)[^>]*aria-live/.test(config)
+	},
+	{
+		name: 'device choices are localized',
+		pass: devicesPanel.includes("inherit: () => _('Inherit')") &&
+			devicesPanel.includes("() => _('Monday')") &&
+			!devicesPanel.includes('}), String(day)')
 	},
 	{
 		name: 'header version actions render normalized SVG icons instead of font glyphs',
@@ -101,6 +137,13 @@ const checks = [
 			config.includes("_('Clear editor content')") &&
 			!config.includes("id=\"sbox-stop\" type=\"button\" class=\"cbi-button cbi-button-negative sbox-service-button\"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop'))") &&
 			!config.includes("id=\"sbox-clear-editor\" type=\"button\" class=\"cbi-button cbi-button-negative\">' + safeText(_('Clear'))")
+	},
+	{
+		name: 'release freshness is cached and concurrent checks are coalesced',
+		pass: config.includes('let releaseRefreshPromise = null') &&
+			config.includes('Date.now() - appState.releaseMeta.checkedAt < UPDATE_CHECK_MS') &&
+			config.includes('if (releaseRefreshPromise) return releaseRefreshPromise') &&
+			config.includes("refreshReleaseMeta({ force: false })")
 	}
 ];
 

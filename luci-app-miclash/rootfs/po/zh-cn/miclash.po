@@ -65,14 +65,8 @@ msgstr "Clash 配置"
 msgid "Your current Clash config. When applied, the changes will be saved and the service will be restarted."
 msgstr "当前 Clash 配置。应用后将保存更改并重启服务。"
 
-msgid "Save & Restart core"
-msgstr "保存并重启内核"
 
-msgid "Save & Reload config"
-msgstr "保存并重载配置"
 
-msgid "More actions"
-msgstr "更多操作"
 
 msgid "Unable to start and enable service: %s"
 msgstr "无法启动并启用服务：%s"
@@ -95,8 +89,6 @@ msgstr "无法打开控制面板：%s"
 msgid "Configuration saved successfully."
 msgstr "配置已成功保存。"
 
-msgid "Configuration test failed — service not reloaded. Please fix the errors below:"
-msgstr "配置测试失败，服务未重载。请修复以下错误："
 
 msgid "unknown error"
 msgstr "未知错误"
@@ -113,29 +105,13 @@ msgstr "服务仍在重启中——在慢速连接下可能需要更长时间。
 msgid "Unable to save contents: %s"
 msgstr "无法保存内容：%s"
 
-msgid "Reload configuration via Mihomo API — active connections are preserved. Firewall rules are NOT rebuilt; use \"Save & Restart core\" when changing external-controller / tproxy-port / tun / fake-ip-filter-mode / proxy mode."
-msgstr "通过 Mihomo API 重载配置，保留现有连接。防火墙规则不会重建；修改 external-controller / tproxy-port / tun / fake-ip-filter-mode / 代理模式时请使用“保存并重启内核”。"
 
-msgid "Full restart: stops and starts the Mihomo core, rebuilds firewall rules and refreshes subscription IPs. Active connections are dropped."
-msgstr "完整重启：停止并启动 Mihomo 内核，重建防火墙规则并刷新订阅 IP。现有连接会断开。"
 
-msgid "Service is not running — config reload requires a running Mihomo instance. Use \"Save & Restart core\" instead."
-msgstr "服务未运行，配置重载需要正在运行的 Mihomo 实例。请改用“保存并重启内核”。"
 
-msgid "Config reload failed (%s, HTTP %s). %s Try \"Save & Restart core\" for a full restart."
-msgstr "配置重载失败（%s，HTTP %s）。%s 请尝试使用“保存并重启内核”进行完整重启。"
 
-msgid "(Hint: the system curl has no HTTPS support. Install curl-ssl, or use plain external-controller for hot reload.)"
-msgstr "（提示：系统 curl 不支持 HTTPS。请安装 curl-ssl，或使用普通 external-controller 进行热重载。）"
 
-msgid "Config reloaded, but updating subscription IP cache failed: %s"
-msgstr "配置已重载，但更新订阅 IP 缓存失败：%s"
 
-msgid "Config reloaded via Mihomo API — active connections preserved."
-msgstr "已通过 Mihomo API 重载配置，现有连接已保留。"
 
-msgid "Config reload error: %s. Try \"Save & Restart core\" for a full restart."
-msgstr "配置重载错误：%s。请尝试使用“保存并重启内核”进行完整重启。"
 
 msgid "--- Log truncated, skipped %d older lines ---"
 msgstr "--- 日志已截断，跳过 %d 行较早日志 ---"
@@ -155,11 +131,7 @@ msgstr "创建新列表"
 msgid "Here you can manage local lists for use in rule-providers."
 msgstr "可在此管理供 rule-providers 使用的本地列表。"
 
-msgid "No local lists yet. Click \"Create New List\" to add one."
-msgstr "暂无本地列表。点击“创建新列表”添加一个。"
 
-msgid "%d entries"
-msgstr "%d 条目"
 
 msgid "Example usage in your config.yaml:"
 msgstr "在 config.yaml 中的用法示例："
@@ -212,11 +184,7 @@ msgstr "已存在同名列表。"
 msgid "TECHNICAL"
 msgstr "技术项"
 
-msgid "IP-CIDR List (fake-ip whitelist/rule mode)"
-msgstr "IP-CIDR 列表（fake-ip 白名单/规则模式）"
 
-msgid "This list is used by the firewall (nftables/iptables) to mark traffic to specified IPs and subnets for proxying when fake-ip-filter-mode is set to \"whitelist\" or \"rule\" (both modes leave part of the traffic on real IPs, which still needs to be proxied). Enter one IPv4 address or CIDR per line (e.g. 8.8.8.8 or 1.2.3.0/24). Lines starting with # are treated as comments. Saving applies changes immediately without restarting Mihomo."
-msgstr "当 fake-ip-filter-mode 设置为“whitelist”或“rule”时，此列表由防火墙（nftables/iptables）用于标记发往指定 IP 和网段的流量以便代理（这两种模式都会让部分流量保留真实 IP，而这些流量仍需要代理）。每行输入一个 IPv4 地址或 CIDR（例如 8.8.8.8 或 1.2.3.0/24）。以 # 开头的行视为注释。保存后立即生效，无需重启 Mihomo。"
 
 msgid "IP-CIDR whitelist saved and firewall rules updated."
 msgstr "IP-CIDR 白名单已保存，防火墙规则已更新。"
@@ -227,23 +195,11 @@ msgstr "IP-CIDR 白名单已保存，但防火墙更新失败：%s"
 msgid "Failed to save IP-CIDR whitelist: %s"
 msgstr "保存 IP-CIDR 白名单失败：%s"
 
-msgid "The block between # AUTO-BEGIN and # AUTO-END is generated automatically from IP-CIDR entries found in rule-providers referenced by non-DIRECT rules. In fake-ip-filter-mode: whitelist, dns.fake-ip-filter: RULE-SET:<name> entries (colon syntax) are merged as well. In fake-ip-filter-mode: rule, dns.fake-ip-filter: entries of the form RULE-SET,<name>,fake-ip are merged (Mihomo routing-style syntax for that mode; real-ip rows are ignored). It is refreshed on service start, on every clash-rules update (cron, every 30 min) and on \"Save\" / \"Regenerate now\". Edit only the area OUTSIDE the markers — everything inside will be overwritten. Set AUTO_FAKEIP_WHITELIST=false in /opt/clash/settings to disable auto-generation and manage the list by hand."
-msgstr "# AUTO-BEGIN 和 # AUTO-END 之间的区块会根据非 DIRECT 规则引用的 rule-providers 中的 IP-CIDR 条目自动生成。在 fake-ip-filter-mode: whitelist 模式下，也会合并 dns.fake-ip-filter 中形如 RULE-SET:<name> 的条目（冒号语法）。在 fake-ip-filter-mode: rule 模式下，会合并 dns.fake-ip-filter 中形如 RULE-SET,<name>,fake-ip 的条目（该模式的 Mihomo 路由式语法；real-ip 行会被忽略）。它会在服务启动、每次 clash-rules update（cron，每 30 分钟）以及点击“保存”/“立即重新生成”时刷新。请只编辑标记之外的区域，标记内的内容会被覆盖。若要关闭自动生成并手动维护列表，请在 /opt/clash/settings 中设置 AUTO_FAKEIP_WHITELIST=false。"
 
-msgid "Regenerate now"
-msgstr "立即重新生成"
 
-msgid "Regenerating..."
-msgstr "正在重新生成..."
 
-msgid "IP-CIDR whitelist regenerated from rule-providers."
-msgstr "已从 rule-providers 重新生成 IP-CIDR 白名单。"
 
-msgid "Regeneration failed: %s"
-msgstr "重新生成失败：%s"
 
-msgid "Failed to regenerate IP-CIDR whitelist: %s"
-msgstr "重新生成 IP-CIDR 白名单失败：%s"
 
 msgid "WAN Interfaces"
 msgstr "WAN 接口"
@@ -404,6 +360,9 @@ msgstr "下载更新"
 msgid "Reinstall Kernel"
 msgstr "重新安装内核"
 
+msgid "Reinstall Mihomo"
+msgstr "重新安装 Mihomo"
+
 msgid "Downloading..."
 msgstr "正在下载..."
 
@@ -415,9 +374,6 @@ msgstr "刷新状态"
 
 msgid "Restart Service"
 msgstr "重启服务"
-
-msgid "Save Settings"
-msgstr "保存设置"
 
 msgid "Clear All Interfaces"
 msgstr "清除所有接口"
@@ -473,17 +429,9 @@ msgstr "重启 Clash 服务失败：%s"
 msgid "Downloading mihomo kernel..."
 msgstr "正在下载 Mihomo 内核..."
 
-msgid "Mihomo kernel installed successfully. The service was stopped for a safe replacement — press \"Restart Service\" to activate the new kernel."
-msgstr "Mihomo 内核已成功安装。为安全替换已停止服务，请点击“重启服务”激活新内核。"
 
-msgid "Failed to install new binary: %s"
-msgstr "安装新二进制文件失败：%s"
 
-msgid "Failed to set executable permissions: %s"
-msgstr "设置可执行权限失败：%s"
 
-msgid "WARNING: Binary at %s is not executable after chmod (mode: %s). Check filesystem permissions, then manually run: chmod 0755 %s"
-msgstr "警告：%s 在 chmod 后仍不可执行（模式：%s）。请检查文件系统权限，然后手动运行：chmod 0755 %s"
 
 msgid "unknown"
 msgstr "未知"
@@ -506,8 +454,6 @@ msgstr "最新发布是预发布版本"
 msgid "Download failed: %s"
 msgstr "下载失败：%s"
 
-msgid "Extraction failed: %s"
-msgstr "解压失败：%s"
 
 msgid "Failed to read /sys/class/net:"
 msgstr "读取 /sys/class/net 失败："
@@ -593,35 +539,19 @@ msgstr "User-Agent"
 msgid "Device OS"
 msgstr "设备 OS"
 
-msgid "Values sent in HTTP headers of proxy-provider requests (User-Agent / x-device-os)."
-msgstr "proxy-provider 请求 HTTP 头中发送的值（User-Agent / x-device-os）。"
 
 msgid "Adding HWID headers to configuration..."
 msgstr "正在向配置添加 HWID 请求头..."
 
-msgid "MiClash"
-msgstr "MiClash"
 
-msgid "Checking for updates..."
-msgstr "正在检查更新..."
 
-msgid "Up to date"
-msgstr "已是最新"
 
-msgid "New version available: %s"
-msgstr "有新版本可用：%s"
 
-msgid "Update check failed"
-msgstr "检查更新失败"
 
 msgid "Download"
 msgstr "下载"
 
-msgid "by"
-msgstr "作者"
 
-msgid "Donate"
-msgstr "捐赠"
 
 msgid "Support the author"
 msgstr "支持作者"
@@ -931,6 +861,15 @@ msgstr "请先安装 Mihomo 内核。"
 msgid "Mode"
 msgstr "模式"
 
+msgid "Operating mode"
+msgstr "运行模式"
+
+msgid "Exclusions"
+msgstr "排除"
+
+msgid "Selected interfaces"
+msgstr "已选接口"
+
 msgid "Mode: Exclude (proxy all except selected interfaces)"
 msgstr "模式：排除（代理除所选接口以外的所有接口）"
 
@@ -985,8 +924,8 @@ msgstr "端口 %s 未在监听"
 msgid "Pre-release"
 msgstr "预发布"
 
-msgid "Proxy mode switched to %s. Service restarted."
-msgstr "代理模式已切换为 %s。服务已重启。"
+msgid "Proxy mode switched to %s."
+msgstr "代理模式已切换为 %s。"
 
 msgid "Proxy mode: %s"
 msgstr "代理模式：%s"
@@ -1162,6 +1101,12 @@ msgstr "更新内核"
 msgid "Update MiClash"
 msgstr "更新 MiClash"
 
+msgid "Update MiClash to %s"
+msgstr "将 MiClash 更新到 %s"
+
+msgid "Update Mihomo to %s"
+msgstr "将 Mihomo 更新到 %s"
+
 msgid "Updating MiClash package on router..."
 msgstr "正在路由器上更新 MiClash 软件包..."
 
@@ -1330,8 +1275,8 @@ msgstr "清除订阅 URL"
 msgid "Clearing subscription URL..."
 msgstr "正在清除订阅 URL..."
 
-msgid "Client devices only through MiClash (Protection)"
-msgstr "设备仅通过 MiClash（保护）"
+msgid "Direct connection guard"
+msgstr "直连防护"
 
 msgid "Failed to clear subscription URL: %s"
 msgstr "清除订阅 URL 失败：%s"
@@ -1350,6 +1295,12 @@ msgstr "更新"
 
 msgid "Auto-update config"
 msgstr "自动更新配置"
+
+msgid "Every:"
+msgstr "每隔："
+
+msgid "Interval set by subscription"
+msgstr "间隔由订阅设定"
 
 msgid "hours"
 msgstr "小时"
@@ -1385,3 +1336,1119 @@ msgstr "学习 Mihomo 的正常内存占用，仅在系统持续内存压力下�
 
 msgid "Failed to synchronize memory guard service."
 msgstr "无法同步内存监控服务。"
+
+msgid "Ready"
+msgstr "就绪"
+
+msgid "Degraded"
+msgstr "性能下降"
+
+msgid "Failed"
+msgstr "失败"
+
+msgid "Unknown"
+msgstr "未知"
+
+msgid "None"
+msgstr "无"
+
+msgid "Configured"
+msgstr "已配置"
+
+msgid "Not configured"
+msgstr "未配置"
+
+msgid "Disabled"
+msgstr "已禁用"
+
+msgid "Enabled and configured"
+msgstr "已启用并配置"
+
+msgid "Enabled, not configured"
+msgstr "已启用但未配置"
+
+msgid "Component status"
+msgstr "组件状态"
+
+msgid "Components"
+msgstr "组件"
+
+msgid "Mihomo"
+msgstr "Mihomo"
+
+msgid "DNS"
+msgstr "DNS"
+
+msgid "Firewall"
+msgstr "防火墙"
+
+msgid "Routing"
+msgstr "路由"
+
+msgid "RSS"
+msgstr "RSS"
+
+msgid "Baseline"
+msgstr "基线"
+
+msgid "Pressure"
+msgstr "内存压力"
+
+msgid "Inactive"
+msgstr "未生效"
+
+msgid "Stopped"
+msgstr "已停止"
+
+msgid "Cooldown"
+msgstr "冷却期"
+
+msgid "Last repair"
+msgstr "上次修复"
+
+msgid "Subscription activation"
+msgstr "订阅激活"
+
+msgid "Telegram"
+msgstr "Telegram"
+
+msgid "Diagnostic actions"
+msgstr "诊断操作"
+
+msgid "Details"
+msgstr "详情"
+
+msgid "Download diagnostic report"
+msgstr "下载诊断报告"
+
+msgid "Route test"
+msgstr "路由测试"
+
+msgid "Unknown error"
+msgstr "未知错误"
+
+msgid "Component evidence"
+msgstr "组件依据"
+
+msgid "Last self-heal"
+msgstr "上次自动修复"
+
+msgid "MiClash diagnostics"
+msgstr "MiClash 诊断"
+
+msgid "Invalid diagnostic report response"
+msgstr "诊断报告响应无效"
+
+msgid "Expected route: %s"
+msgstr "预期路由：%s"
+
+msgid "Optional device"
+msgstr "设备（可选）"
+
+msgid "Optional interface"
+msgstr "接口（可选）"
+
+msgid "Run route test"
+msgstr "运行路由测试"
+
+msgid "Domain or IP address"
+msgstr "域名或 IP 地址"
+
+msgid "Device (optional)"
+msgstr "设备（可选）"
+
+msgid "Interface (optional)"
+msgstr "接口（可选）"
+
+msgid "Enter a valid domain or IP address"
+msgstr "请输入有效的域名或 IP 地址"
+
+msgid "Device or interface is invalid"
+msgstr "设备或接口无效"
+
+msgid "Enabled"
+msgstr "已启用"
+
+msgid "Draft"
+msgstr "草稿"
+
+msgid "Validate"
+msgstr "验证"
+
+msgid "Apply"
+msgstr "应用"
+
+msgid "History"
+msgstr "历史"
+
+msgid "Configuration history"
+msgstr "配置历史"
+
+msgid "Close configuration history"
+msgstr "关闭配置历史"
+
+msgid "Configuration revisions"
+msgstr "配置版本"
+
+msgid "Open in editor"
+msgstr "在编辑器中打开"
+
+msgid "Restore"
+msgstr "恢复"
+
+msgid "Manual"
+msgstr "手动"
+
+msgid "Subscription"
+msgstr "订阅"
+
+msgid "Before restore"
+msgstr "恢复前"
+
+msgid "External change"
+msgstr "外部更改"
+
+msgid "Revision"
+msgstr "版本"
+
+msgid "Source"
+msgstr "来源"
+
+msgid "Created"
+msgstr "创建时间"
+
+msgid "Validation"
+msgstr "验证"
+
+msgid "Activation"
+msgstr "激活"
+
+msgid "Loading diff…"
+msgstr "正在加载差异…"
+
+msgid "No differences from the newest revision."
+msgstr "与最新版本没有差异。"
+
+msgid "Loading history…"
+msgstr "正在加载历史…"
+
+msgid "No configuration revisions yet."
+msgstr "尚无配置版本。"
+
+msgid "Unsaved local Draft found"
+msgstr "发现未保存的本地草稿"
+
+msgid "A browser crash copy differs from the router Draft. Choose which content to open; neither copy will be deleted."
+msgstr "浏览器崩溃副本与路由器草稿不同。请选择要打开的内容；两个副本都不会被删除。"
+
+msgid "Open local copy"
+msgstr "打开本地副本"
+
+msgid "Keep router Draft"
+msgstr "保留路由器草稿"
+
+msgid "Applying configuration..."
+msgstr "正在应用配置..."
+
+msgid "Configuration applied."
+msgstr "配置已应用。"
+
+msgid "Failed to open history: %s"
+msgstr "无法打开历史：%s"
+
+msgid "An operation is already running."
+msgstr "已有操作正在运行。"
+
+msgid "A browser crash copy differs from the router Draft. Choose the local copy to keep it, or keep the router Draft and discard the local crash copy."
+msgstr "浏览器崩溃副本与路由器草稿不同。选择本地副本以保留它，或保留路由器草稿并丢弃本地崩溃副本。"
+
+msgid "Active configuration changed; Draft preserved."
+msgstr "活动配置已更改；草稿已保留。"
+
+msgid "Saving Draft"
+msgstr "正在保存草稿"
+
+msgid "Validating Draft"
+msgstr "正在验证草稿"
+
+msgid "Applying Draft"
+msgstr "正在应用草稿"
+
+msgid "Automatic"
+msgstr "自动"
+
+msgid "LuCI"
+msgstr "LuCI"
+
+msgid "System"
+msgstr "系统"
+
+msgid "Corrupt revision"
+msgstr "损坏的版本"
+
+msgid "Unknown source"
+msgstr "未知来源"
+
+msgid "Operation cancelled"
+msgstr "操作已取消"
+
+msgid "Selected revision is the newest retained revision."
+msgstr "所选版本是最新保留版本。"
+
+msgid "Compared with newest retained revision:"
+msgstr "与最新保留版本比较："
+
+msgid "No differences between the selected retained revisions."
+msgstr "所选保留版本之间没有差异。"
+
+msgid "This revision is corrupt and cannot be opened or restored."
+msgstr "此版本已损坏，无法打开或恢复。"
+msgid "%s is outside the safe range."
+msgstr "%s 超出安全范围。"
+
+msgid "%s must be an integer."
+msgstr "%s 必须是整数。"
+
+msgid "Actions"
+msgstr "操作"
+
+msgid "Adaptive defaults are recommended. Unsafe values are rejected."
+msgstr "建议使用自适应默认值；不安全的数值会被拒绝。"
+
+msgid "Allowed Telegram user ID"
+msgstr "允许的 Telegram 用户 ID"
+
+msgid "Allowed Telegram user IDs"
+msgstr "允许的 Telegram 用户 ID"
+
+msgid "Telegram polling timeout (seconds)"
+msgstr "Telegram 轮询超时（秒）"
+
+msgid "Telegram polling timeout"
+msgstr "Telegram 轮询超时"
+
+msgid "List IDs separated by commas."
+msgstr "请用逗号分隔 ID。"
+
+msgid "Backup and restore"
+msgstr "备份与恢复"
+
+msgid "Backup archive changed while reading."
+msgstr "读取时备份归档已发生变化。"
+
+msgid "Backup archive size is outside the safe limit."
+msgstr "备份归档大小超出安全限制。"
+
+msgid "Backup completed but returned no safe backup ID."
+msgstr "备份已完成，但未返回安全的备份 ID。"
+
+msgid "Backup inspection"
+msgstr "备份检查"
+
+msgid "Backups are validated and previewed before restore."
+msgstr "恢复前会验证并预览备份。"
+
+msgid "BotFather token"
+msgstr "BotFather 令牌"
+
+msgid "Channels"
+msgstr "通道"
+
+msgid "Choose a backup archive first."
+msgstr "请先选择备份归档。"
+
+msgid "Configured; leave blank to keep"
+msgstr "已配置；留空以保留"
+
+msgid "Contents"
+msgstr "内容"
+
+msgid "Create and download"
+msgstr "创建并下载"
+
+msgid "Creating backup…"
+msgstr "正在创建备份…"
+
+msgid "Current IP"
+msgstr "当前 IP"
+
+msgid "Deleting device policy…"
+msgstr "正在删除设备策略…"
+
+msgid "Device policies"
+msgstr "设备策略"
+
+msgid "Device policy"
+msgstr "设备策略"
+
+msgid "Edit"
+msgstr "编辑"
+
+msgid "Enable Telegram control"
+msgstr "启用 Telegram 控制"
+
+msgid "Enabling Telegram requires a BotFather token and exact user ID."
+msgstr "启用 Telegram 需要 BotFather 令牌和精确的用户 ID。"
+
+msgid "Enabling Telegram requires a BotFather token and exact user IDs."
+msgstr "启用 Telegram 需要 BotFather 令牌和准确的用户 ID。"
+
+msgid "End"
+msgstr "结束"
+
+msgid "Enter a valid MAC address such as AA:BB:CC:DD:EE:FF."
+msgstr "请输入有效的 MAC 地址，例如 AA:BB:CC:DD:EE:FF。"
+
+msgid "Enter an exact numeric Telegram user ID."
+msgstr "请输入精确的数字 Telegram 用户 ID。"
+
+msgid "Enter exact numeric Telegram user IDs separated by commas."
+msgstr "请输入以逗号分隔的准确 Telegram 数字用户 ID。"
+
+msgid "Sending Telegram test message…"
+msgstr "正在发送 Telegram 测试消息…"
+
+msgid "Telegram test message sent."
+msgstr "Telegram 测试消息已发送。"
+
+msgid "Enter a valid BotFather token."
+msgstr "请输入有效的 BotFather 令牌。"
+
+msgid "Enter valid schedule days, times, and IANA timezone."
+msgstr "请输入有效的计划日期、时间和 IANA 时区。"
+
+msgid "Events"
+msgstr "事件"
+
+msgid "Expert settings"
+msgstr "专家设置"
+
+msgid "Priority: Block → Direct → Inherit"
+msgstr "优先级：阻止 → 直连 → 继承"
+
+msgid "Direct devices use the router shared DNS. If Mihomo fails unexpectedly, access by domain name may be temporarily unavailable."
+msgstr "直连设备仍使用路由器的共享 DNS。若 Mihomo 意外故障，通过域名访问可能会暂时不可用。"
+
+msgid "Hostname"
+msgstr "主机名"
+
+msgid "Include secrets"
+msgstr "包含机密"
+
+msgid "Inspect"
+msgstr "检查"
+
+msgid "Inspect import"
+msgstr "检查导入"
+
+msgid "Invalid backup ID."
+msgstr "备份 ID 无效。"
+
+msgid "Invalid backup import response."
+msgstr "备份导入响应无效。"
+
+msgid "Invalid backup inspection response."
+msgstr "备份检查响应无效。"
+
+msgid "Invalid backup payload."
+msgstr "备份数据无效。"
+
+msgid "Invalid backup/import ID."
+msgstr "备份或导入 ID 无效。"
+
+msgid "Invalid device policy."
+msgstr "设备策略无效。"
+
+msgid "Invalid notification channel."
+msgstr "通知通道无效。"
+
+msgid "Invalid operation response."
+msgstr "操作响应无效。"
+
+msgid "Last action"
+msgstr "上次操作"
+
+msgid "Last seen"
+msgstr "最后出现"
+
+msgid "MAC"
+msgstr "MAC"
+
+msgid "Memory expert settings are internally inconsistent."
+msgstr "内存专家设置相互冲突。"
+
+msgid "Memory monitoring"
+msgstr "内存监控"
+
+msgid "No backups yet."
+msgstr "暂无备份。"
+
+msgid "No devices discovered."
+msgstr "未发现设备。"
+
+msgid "Notifications"
+msgstr "通知"
+
+msgid "Only this exact user ID is accepted in a private chat."
+msgstr "私聊中仅接受此精确用户 ID。"
+
+msgid "Operation failed."
+msgstr "操作失败。"
+
+msgid "Policy"
+msgstr "策略"
+
+msgid "Poller is running"
+msgstr "轮询器正在运行"
+
+msgid "Poller is stopped"
+msgstr "轮询器已停止"
+
+msgid "Reset baseline"
+msgstr "重置基线"
+
+msgid "Resetting memory baseline…"
+msgstr "正在重置内存基线…"
+
+msgid "Restore inspected backup"
+msgstr "恢复已检查的备份"
+
+msgid "Restore plan"
+msgstr "恢复计划"
+
+msgid "Restoring backup…"
+msgstr "正在恢复备份…"
+
+msgid "Review this exact manifest before restore. Restore uses only the opaque inspection ID."
+msgstr "恢复前请检查此清单。恢复仅使用不透明的检查 ID。"
+
+msgid "Save management settings"
+msgstr "保存管理设置"
+
+msgid "Saving device policy…"
+msgstr "正在保存设备策略…"
+
+msgid "Saving management settings…"
+msgstr "正在保存管理设置…"
+
+msgid "Schedule days"
+msgstr "计划日期"
+
+msgid "secret"
+msgstr "机密"
+
+msgid "Send test"
+msgstr "发送测试"
+
+msgid "Set policy"
+msgstr "设置策略"
+
+msgid "Size"
+msgstr "大小"
+
+msgid "Telegram test message was not sent."
+msgstr "Telegram 测试消息未发送。"
+
+msgid "The masked token cannot be saved as a replacement."
+msgstr "不能将掩码令牌保存为替代令牌。"
+
+msgid "Timezone"
+msgstr "时区"
+
+msgid "Unknown device"
+msgstr "未知设备"
+
+msgid "Use schedule"
+msgstr "使用计划"
+
+msgid "Warning: a backup with secrets contains subscription credentials and private configuration. Store it safely."
+msgstr "警告：包含机密的备份含有订阅凭据和私有配置，请妥善保管。"
+msgid "Enable scheduled backups"
+msgstr "启用计划备份"
+
+msgid "Retention"
+msgstr "保留数量"
+
+msgid "Retention must be between 1 and 100."
+msgstr "保留数量必须在 1 到 100 之间。"
+
+msgid "Save backup settings"
+msgstr "保存备份设置"
+
+msgid "Saving backup settings…"
+msgstr "正在保存备份设置…"
+msgid "Anomaly growth (KiB)"
+msgstr "异常增长量 (KiB)"
+
+msgid "Anomaly threshold (%)"
+msgstr "异常阈值 (%)"
+
+msgid "Baseline samples"
+msgstr "基线样本数"
+
+msgid "Component failure"
+msgstr "组件故障"
+
+msgid "Direct fallback"
+msgstr "直连回退"
+
+msgid "Fail-closed protection"
+msgstr "故障关闭保护"
+
+msgid "Failure cooldown (ms)"
+msgstr "失败冷却时间 (ms)"
+
+msgid "Guard outage"
+msgstr "保护故障"
+
+msgid "Internet restored"
+msgstr "互联网已恢复"
+
+msgid "Maximum reserve (KiB)"
+msgstr "最大预留 (KiB)"
+
+msgid "Memory action"
+msgstr "内存操作"
+
+msgid "Memory outcome"
+msgstr "内存恢复结果"
+
+msgid "Memory reserve (%)"
+msgstr "内存预留 (%)"
+
+msgid "Minimum drop (KiB)"
+msgstr "最小下降量 (KiB)"
+
+msgid "Minimum reserve (KiB)"
+msgstr "最小预留 (KiB)"
+
+msgid "Normal rearm delay (ms)"
+msgstr "正常重新启用延迟 (ms)"
+
+msgid "Recovery"
+msgstr "恢复"
+
+msgid "Required drop (%)"
+msgstr "要求下降比例 (%)"
+
+msgid "Sample interval (ms)"
+msgstr "采样间隔 (ms)"
+
+msgid "Subscription result"
+msgstr "订阅结果"
+
+msgid "Success cooldown (ms)"
+msgstr "成功冷却时间 (ms)"
+
+msgid "Sustained samples"
+msgstr "持续样本数"
+
+msgid "Update result"
+msgstr "更新结果"
+
+msgid "Warm-up time (ms)"
+msgstr "预热时间 (ms)"
+
+msgid "Expires"
+msgstr "过期时间"
+
+msgid "Inspected"
+msgstr "检查时间"
+
+msgid "Inspection ID"
+msgstr "检查 ID"
+
+msgid "Invalid timezone response."
+msgstr "时区列表响应无效。"
+
+msgid "Notification test message was not sent."
+msgstr "测试通知未发送。"
+
+msgid "public"
+msgstr "公开"
+
+msgid "Source ID"
+msgstr "来源 ID"
+
+msgid "Backup interval (hours)"
+msgstr "备份间隔（小时）"
+
+msgid "Backup interval must be between 1 and 168 hours."
+msgstr "备份间隔必须在 1 到 168 小时之间。"
+
+msgid "Backup manifest"
+msgstr "备份清单"
+
+msgid "Backup result"
+msgstr "备份结果"
+
+msgid "Choose a valid UTC schedule time."
+msgstr "请选择有效的 UTC 计划时间。"
+
+msgid "Schedule anchor (UTC)"
+msgstr "计划基准时间（UTC）"
+
+msgid "Applying protection setting..."
+msgstr "正在应用保护设置..."
+
+msgid "Guard transition failed."
+msgstr "无法切换保护状态。"
+
+msgid "The provider update interval will be learned during the next protected subscription update. The selected interval is used until then."
+msgstr "提供方更新间隔将在下一次受保护的订阅更新时获取。在此之前将使用所选间隔。"
+
+msgid "Sections"
+msgstr "分区"
+
+msgid "Subscription URL"
+msgstr "订阅 URL"
+
+msgid "Inherit"
+msgstr "继承"
+
+msgid "Proxy"
+msgstr "代理"
+
+msgid "Direct"
+msgstr "直连"
+
+msgid "Block"
+msgstr "阻止"
+
+msgid "Monday"
+msgstr "星期一"
+
+msgid "Tuesday"
+msgstr "星期二"
+
+msgid "Wednesday"
+msgstr "星期三"
+
+msgid "Thursday"
+msgstr "星期四"
+
+msgid "Friday"
+msgstr "星期五"
+
+msgid "Saturday"
+msgstr "星期六"
+
+msgid "Sunday"
+msgstr "星期日"
+
+msgid "Automatically install major MiClash updates at night"
+msgstr "夜间自动安装 MiClash 主版本更新"
+
+msgid "Major update %s is scheduled for the night. Click to update now."
+msgstr "主版本更新 %s 已计划在夜间安装。点击可立即更新。"
+
+msgid "Config #1"
+msgstr "配置 #1"
+
+msgid "Config #2"
+msgstr "配置 #2"
+
+msgid "Config #3"
+msgstr "配置 #3"
+
+msgid "Management settings are not ready."
+msgstr "管理设置尚未就绪。"
+
+msgid "Settings panel is not available."
+msgstr "设置面板不可用。"
+
+msgid "Settings are not ready."
+msgstr "设置尚未就绪。"
+
+msgid "Applying Mihomo settings..."
+msgstr "正在应用 Mihomo 设置..."
+
+msgid "Failed to apply Mihomo settings."
+msgstr "无法应用 Mihomo 设置。"
+
+msgid "Settings saved and applied."
+msgstr "设置已保存并应用。"
+
+msgid "Action"
+msgstr "操作"
+
+msgid "Change policy"
+msgstr "更改策略"
+
+msgid "Device"
+msgstr "设备"
+
+msgid "IP"
+msgstr "IP"
+
+msgid "Offline"
+msgstr "离线"
+
+msgid "Online"
+msgstr "在线"
+
+msgid "State"
+msgstr "状态"
+msgid "Automatically close LuCI notifications"
+msgstr "自动关闭 LuCI 通知"
+
+msgid "Delivery channels"
+msgstr "发送渠道"
+
+msgid "Hide token"
+msgstr "隐藏令牌"
+
+msgid "Loading…"
+msgstr "正在加载…"
+
+msgid "Notification events"
+msgstr "通知事件"
+
+msgid "Settings panel is still loading."
+msgstr "设置仍在加载。"
+
+msgid "Show token"
+msgstr "显示令牌"
+
+msgid "Telegram token is not configured."
+msgstr "尚未配置 Telegram 令牌。"
+
+msgid "Last automatic recovery"
+msgstr "上次自动恢复"
+
+msgid "Not required"
+msgstr "无需执行"
+
+msgid "Waiting for Mihomo"
+msgstr "正在等待 Mihomo"
+
+msgid "Warming up"
+msgstr "正在预热"
+
+msgid "Learning baseline"
+msgstr "正在学习基线"
+
+msgid "Monitoring"
+msgstr "监控中"
+
+msgid "Mihomo memory (RSS)"
+msgstr "Mihomo 内存 (RSS)"
+
+msgid "Status"
+msgstr "状态"
+
+msgid "Recovery queued"
+msgstr "恢复已排队"
+
+msgid "Recovery in progress"
+msgstr "正在恢复"
+
+msgid "Recovery postponed"
+msgstr "恢复已推迟"
+
+msgid "Waiting to resume monitoring"
+msgstr "等待恢复监控"
+
+msgid "Cooldown until %s"
+msgstr "冷却至 %s"
+
+msgid "Paused after failed recovery"
+msgstr "恢复失败后暂停"
+
+msgid "Paused after failed recovery until %s"
+msgstr "恢复失败后暂停至 %s"
+
+msgid "Not learned yet"
+msgstr "尚未学习"
+
+msgid "Reload"
+msgstr "重新加载"
+
+msgid "Restart core"
+msgstr "重启 Mihomo 内核"
+
+msgid "Restart service"
+msgstr "完整重启服务"
+
+msgid "Success"
+msgstr "成功"
+
+msgid "Monitoring resumed"
+msgstr "监控已恢复"
+
+msgid "Service was busy"
+msgstr "服务正忙"
+
+msgid "Interrupted"
+msgstr "已中断"
+
+msgid "Invalid diagnostics response"
+msgstr "诊断响应无效"
+
+msgid "Now: %s"
+msgstr "当前：%s"
+
+msgid "Saving…"
+msgstr "正在保存…"
+
+msgid "This device uses a private MAC address. The policy remains linked to this address and may stop applying if it changes."
+msgstr "此设备使用私有 MAC 地址。策略仍绑定到此地址，如果地址发生变化，策略可能不再生效。"
+
+msgid "No MiClash or Mihomo records match the current log level yet. Current level: %s"
+msgstr "当前日志级别下尚无 MiClash 或 Mihomo 记录。当前级别：%s"
+
+msgid "Online devices are shown only for interfaces in the current traffic scope. Saved policies remain visible while devices are offline."
+msgstr "仅显示当前流量范围内接口上的在线设备。设备离线时，已保存的策略仍会显示。"
+
+msgid "Clock unavailable"
+msgstr "无法确定时间"
+
+msgid "Config auto-update"
+msgstr "配置自动更新"
+
+msgid "Configuration error"
+msgstr "配置错误"
+
+msgid "MiClash auto-update"
+msgstr "MiClash 自动更新"
+
+msgid "Scheduled"
+msgstr "已计划"
+
+msgid "Updating"
+msgstr "正在更新"
+
+msgid "Provider synchronization"
+msgstr "代理提供者同步"
+
+msgid "Synchronized"
+msgstr "已同步"
+
+msgid "Waiting for providers"
+msgstr "等待代理提供者"
+
+msgid "Error"
+msgstr "错误"
+
+msgid "Waiting"
+msgstr "等待中"
+
+msgid "OpenWrt"
+msgstr "OpenWrt"
+
+msgid "Apply Settings"
+msgstr "应用设置"
+
+msgid "Save required"
+msgstr "需要保存"
+
+msgid "Reset"
+msgstr "重置"
+
+msgid "Device policies are busy."
+msgstr "正在应用设备策略。"
+
+msgid "Device policies are not ready."
+msgstr "设备策略尚未就绪。"
+
+msgid "Resetting device policy…"
+msgstr "正在重置设备策略…"
+
+msgid "Invalid operation response"
+msgstr "操作响应无效"
+
+msgid "Restore OpenWrt network"
+msgstr "恢复 OpenWrt 网络"
+
+msgid "OpenWrt network restored"
+msgstr "OpenWrt 网络已恢复"
+
+msgid "Developer"
+msgstr "开发者"
+
+msgid "Developer tools"
+msgstr "开发者工具"
+
+msgid "This hidden session stays open for 10 minutes. These emergency actions can interrupt access to the router."
+msgstr "此隐藏会话开放 10 分钟。紧急操作可能会中断对路由器的访问。"
+
+msgid "Stop Mihomo and remove MiClash DNS, firewall and routing ownership. Remove Guard first if it is enabled."
+msgstr "停止 Mihomo 并移除 MiClash 对 DNS、防火墙和路由的控制。如果 Guard 已启用，请先将其移除。"
+
+msgid "Restore network"
+msgstr "恢复网络"
+
+msgid "Remove Guard"
+msgstr "移除 Guard"
+
+msgid "Disable Guard and remove its active fail-closed rules."
+msgstr "禁用 Guard 并移除其活动的故障关闭规则。"
+
+msgid "Remove MiClash"
+msgstr "移除 MiClash"
+
+msgid "Remove MiClash through the OpenWrt package manager after its normal network cleanup."
+msgstr "完成常规网络清理后，通过 OpenWrt 包管理器移除 MiClash。"
+
+msgid "Stop Mihomo and remove all MiClash-owned DNS, firewall and routing state?"
+msgstr "停止 Mihomo 并移除所有由 MiClash 管理的 DNS、防火墙和路由状态？"
+
+msgid "If Guard is enabled, remove it first. No Internet connection is required."
+msgstr "如果 Guard 已启用，请先将其移除。此操作无需互联网连接。"
+
+msgid "Restoring OpenWrt network…"
+msgstr "正在恢复 OpenWrt 网络…"
+
+msgid "Disable Guard and remove all active fail-closed Guard rules?"
+msgstr "禁用 Guard 并移除所有活动的故障关闭规则？"
+
+msgid "Devices may use a direct connection after this action."
+msgstr "执行此操作后，设备可能会使用直连。"
+
+msgid "Removing Guard…"
+msgstr "正在移除 Guard…"
+
+msgid "Guard removed."
+msgstr "Guard 已移除。"
+
+msgid "Remove MiClash from this router?"
+msgstr "从此路由器移除 MiClash？"
+
+msgid "The normal package removal protocol restores OpenWrt networking first. This page will become unavailable."
+msgstr "标准包移除流程会先恢复 OpenWrt 网络。此页面随后将不可用。"
+
+msgid "MiClash removal was not accepted."
+msgstr "MiClash 移除请求未被接受。"
+
+msgid "MiClash removal started."
+msgstr "MiClash 移除已开始。"
+msgid "MiClash events"
+msgstr "MiClash 事件"
+
+msgid "Choose how much information to include in the diagnostic report."
+msgstr "选择诊断报告中要包含的信息量。"
+
+msgid "Collecting configuration"
+msgstr "正在收集配置"
+
+msgid "Collecting logs"
+msgstr "正在收集日志"
+
+msgid "Collecting network state"
+msgstr "正在收集网络状态"
+
+msgid "Collecting operations"
+msgstr "正在收集操作记录"
+
+msgid "Collecting provider state"
+msgstr "正在收集提供程序状态"
+
+msgid "Collecting system state"
+msgstr "正在收集系统状态"
+
+msgid "Confirm Full diagnostic report"
+msgstr "确认完整诊断报告"
+
+msgid "Creating report"
+msgstr "正在创建报告"
+
+msgid "Download Full"
+msgstr "下载完整报告"
+
+msgid "Download Lite"
+msgstr "下载精简报告"
+
+msgid "Download Silent"
+msgstr "下载静默报告"
+
+msgid "Finalizing report"
+msgstr "正在完成报告"
+
+msgid "Full"
+msgstr "完整"
+
+msgid "Full reports may include secrets such as subscription credentials and private configuration."
+msgstr "完整报告可能包含订阅凭据和私有配置等机密信息。"
+
+msgid "I understand, download Full"
+msgstr "我已了解，下载完整报告"
+
+msgid "Includes private configuration and secrets. Use only with trusted support."
+msgstr "包含私有配置和机密信息。仅应与受信任的支持人员使用。"
+
+msgid "Lite"
+msgstr "精简"
+
+msgid "Lite is recommended for most support requests."
+msgstr "大多数支持请求建议使用精简报告。"
+
+msgid "Minimal system health only. Best for public issue reports."
+msgstr "仅包含最少的系统健康信息，最适合公开问题报告。"
+
+msgid "Preparing report"
+msgstr "正在准备报告"
+
+msgid "Redacted diagnostics, configuration summary, and recent events."
+msgstr "已脱敏的诊断信息、配置摘要和最近事件。"
+
+msgid "Silent"
+msgstr "静默"
+
+msgid "Store this report safely and share it only with trusted support."
+msgstr "请安全保存此报告，并且只与受信任的支持人员分享。"
+
+msgid "Validating report"
+msgstr "正在验证报告"
+msgid "Diagnostics"
+msgstr "诊断"
+
+msgid "Loading service state…"
+msgstr "正在加载服务状态…"
+
+msgid "Performance"
+msgstr "性能"
+
+msgid "Local browser measurements only. RPC arguments and payloads are never recorded."
+msgstr "仅记录浏览器本地测量数据，绝不记录 RPC 参数或负载。"
+
+msgid "Refresh"
+msgstr "刷新"
+
+msgid "No measurements yet."
+msgstr "暂无测量数据。"
+
+msgid "Metric"
+msgstr "指标"
+
+msgid "Calls"
+msgstr "调用次数"
+
+msgid "Errors"
+msgstr "错误"
+
+msgid "Average, ms"
+msgstr "平均值，毫秒"
+
+msgid "Maximum, ms"
+msgstr "最大值，毫秒"
+
+msgid "Total, ms"
+msgstr "总计，毫秒"
+
+msgid "RPC methods"
+msgstr "RPC 方法"
+
+msgid "Page and action timings"
+msgstr "页面和操作耗时"
+
+msgid "Search logs"
+msgstr "搜索日志"
+
+msgid "Next match"
+msgstr "下一个匹配项"
+
+msgid "Previous match"
+msgstr "上一个匹配项"
+
+msgid "Developer mode: %d taps remaining."
+msgstr "开发者模式：还需点击 %d 次。"

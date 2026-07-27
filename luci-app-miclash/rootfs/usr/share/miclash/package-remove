@@ -1,0 +1,196 @@
+#!/bin/sh
+
+set -u
+
+# Package-owner authority is internal to this fixed entrypoint. Ignore any
+# caller-provided join/package environment before loading the shared helper.
+unset MICLASH_MUTATION_LOCK_TOKEN MICLASH_MUTATION_LOCK_PACKAGE
+
+LOCK_HELPER="/usr/share/miclash/mutation-lock.sh"
+[ -r "$LOCK_HELPER" ] || { echo 'MiClash package removal refused: mutation lock unavailable' >&2; exit 1; }
+. "$LOCK_HELPER" || exit 1
+
+BARRIER="/var/run/miclash/package-removal"
+MANIFEST="/var/run/miclash/routing-ownership.json"
+DNS_MANIFEST="/etc/miclash/dns-ownership.json"
+RELEASE_SOURCE="/usr/share/miclash/package-release"
+RELEASE_DIR="/var/run/miclash/package-removal-release"
+WAIT_ATTEMPTS=50
+MUTATION_LOCK_HELD=0
+
+release_mutation_lock() {
+	[ "$MUTATION_LOCK_HELD" = 1 ] || return 0
+	miclash_mutation_lock_leave || return 1
+	MUTATION_LOCK_HELD=0
+}
+
+trap 'release_mutation_lock >/dev/null 2>&1 || true' EXIT
+trap 'exit 1' HUP INT TERM
+
+refuse() {
+	echo "MiClash package removal refused: $*" >&2
+	return 1
+}
+
+establish_barrier() {
+	mkdir -p /var/run/miclash || return 1
+	chown 0:0 /var/run/miclash 2>/dev/null || return 1
+	chmod 0700 /var/run/miclash || return 1
+	if [ ! -e "$BARRIER" ]; then
+		mkdir "$BARRIER" 2>/dev/null || return 1
+	fi
+	[ ! -L "$BARRIER" ] || return 1
+	[ -d "$BARRIER" ] || return 1
+	chown 0:0 "$BARRIER" 2>/dev/null || return 1
+	chmod 0700 "$BARRIER" || return 1
+	[ "$(stat -c '%u:%a' "$BARRIER" 2>/dev/null)" = '0:700' ] || return 1
+	return 0
+}
+
+stop_disable() {
+	service="$1"
+	[ -x "/etc/init.d/$service" ] || return 0
+	"/etc/init.d/$service" stop >/dev/null 2>&1 || return 1
+	"/etc/init.d/$service" disable >/dev/null 2>&1 || return 1
+}
+
+quiesce_update_triggers() {
+	stop_disable miclashd || return 1
+	return 0
+}
+
+delete_clash_and_wait() {
+	[ -x /etc/init.d/clash ] || return 1
+	command -v ubus >/dev/null 2>&1 || return 1
+	/etc/init.d/clash stop >/dev/null 2>&1 || return 1
+	/etc/init.d/clash disable >/dev/null 2>&1 || return 1
+	i=0
+	while [ "$i" -lt "$WAIT_ATTEMPTS" ]; do
+		state="$(ubus call service list '{"name":"clash"}' 2>/dev/null)" || return 1
+		if ! printf '%s' "$state" | grep -q '"clash"'; then
+			return 0
+		fi
+		sleep 0.1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+run_routing_cleanup() {
+	command -v ucode >/dev/null 2>&1 || return 1
+	[ -f /usr/share/miclash/routing-cleanup.uc ] || return 1
+	ucode -L '/usr/share/*.uc' /usr/share/miclash/routing-cleanup.uc >/dev/null 2>&1 || return 1
+	[ -f "$MANIFEST" ]
+}
+
+run_dns_cleanup() {
+	command -v ucode >/dev/null 2>&1 || return 1
+	[ -f /usr/share/miclash/dns-cleanup.uc ] || return 1
+	ucode -L '/usr/share/*.uc' /usr/share/miclash/dns-cleanup.uc >/dev/null 2>&1 || return 1
+	[ -f "$DNS_MANIFEST" ] || [ -f "$RELEASE_DIR/dns-ownership.json" ]
+}
+
+run_preserve_cleanup() {
+	[ -f /usr/share/miclash/firewall-cleanup.uc ] || return 1
+	/usr/bin/ucode -L '/usr/share/*.uc' /usr/share/miclash/firewall-cleanup.uc >/dev/null 2>&1
+}
+
+establish_package_guard() {
+	[ -f /usr/share/miclash/guard-runtime.uc ] || return 1
+	MICLASH_MUTATION_LOCK_PACKAGE=1 /usr/bin/ucode -L '/usr/share/*.uc' \
+		/usr/share/miclash/guard-runtime.uc protect >/dev/null 2>&1 || return 1
+	MICLASH_MUTATION_LOCK_PACKAGE=1 /usr/bin/ucode -L '/usr/share/*.uc' \
+		/usr/share/miclash/guard-runtime.uc verify-protected >/dev/null 2>&1
+}
+
+prepare_completion_marker() {
+	rm -f "$BARRIER/complete.pending" "$BARRIER/complete" || return 1
+	printf 'complete\n' > "$BARRIER/complete.pending" || return 1
+	chown 0:0 "$BARRIER/complete.pending" 2>/dev/null || return 1
+	chmod 0600 "$BARRIER/complete.pending" || return 1
+}
+
+prepare_release_state() {
+	[ -x "$RELEASE_SOURCE" ] || return 1
+	if [ ! -e "$RELEASE_DIR" ] && [ ! -L "$RELEASE_DIR" ]; then
+		mkdir "$RELEASE_DIR" 2>/dev/null || return 1
+	fi
+	[ ! -L "$RELEASE_DIR" ] && [ -d "$RELEASE_DIR" ] || return 1
+	chown 0:0 "$RELEASE_DIR" 2>/dev/null || return 1
+	chmod 0700 "$RELEASE_DIR" || return 1
+	[ "$(stat -c '%u:%a' "$RELEASE_DIR" 2>/dev/null)" = 0:700 ] || return 1
+	rm -f "$RELEASE_DIR/helper.pending" "$RELEASE_DIR/pending" \
+		"$RELEASE_DIR/complete.pending" "$RELEASE_DIR/complete" || return 1
+	[ ! -e "$RELEASE_DIR/barrier-complete.hold" ] || return 1
+	cp "$RELEASE_SOURCE" "$RELEASE_DIR/helper.pending" || return 1
+	chown 0:0 "$RELEASE_DIR/helper.pending" 2>/dev/null || return 1
+	chmod 0700 "$RELEASE_DIR/helper.pending" || return 1
+	mv "$RELEASE_DIR/helper.pending" "$RELEASE_DIR/helper" || return 1
+	printf 'pending\n' > "$RELEASE_DIR/pending" || return 1
+	chown 0:0 "$RELEASE_DIR/pending" 2>/dev/null || return 1
+	chmod 0600 "$RELEASE_DIR/pending" || return 1
+	return 0
+}
+
+protect_dns_proof() {
+	# Firewall cleanup runs after the first DNS cleanup and may take arbitrary
+	# time. Re-enter the transactional owner under the same package lease so the
+	# exact clean snapshot is freshly verified immediately before export.
+	run_dns_cleanup || return 1
+	if [ -e "$DNS_MANIFEST" ] || [ -L "$DNS_MANIFEST" ]; then
+		[ ! -L "$DNS_MANIFEST" ] && [ -f "$DNS_MANIFEST" ] || return 1
+		[ "$(stat -c '%u:%a' "$DNS_MANIFEST" 2>/dev/null)" = 0:600 ] || return 1
+		[ ! -e "$RELEASE_DIR/dns-ownership.json" ] && \
+			[ ! -L "$RELEASE_DIR/dns-ownership.json" ] || return 1
+		mv "$DNS_MANIFEST" "$RELEASE_DIR/dns-ownership.json" || return 1
+	fi
+	[ ! -L "$RELEASE_DIR/dns-ownership.json" ] && \
+		[ -f "$RELEASE_DIR/dns-ownership.json" ] && \
+		[ "$(stat -c '%u:%a' "$RELEASE_DIR/dns-ownership.json" 2>/dev/null)" = 0:600 ] || return 1
+	grep -Eq '"owner"[[:space:]]*:[[:space:]]*"miclash"' "$RELEASE_DIR/dns-ownership.json" || return 1
+	grep -Eq '"state"[[:space:]]*:[[:space:]]*"clean"' "$RELEASE_DIR/dns-ownership.json" || return 1
+	grep -Eq '"transition"[[:space:]]*:[[:space:]]*null' "$RELEASE_DIR/dns-ownership.json" || return 1
+	grep -Eq '"clean"[[:space:]]*:[[:space:]]*\{' "$RELEASE_DIR/dns-ownership.json" || return 1
+	[ ! -e "$DNS_MANIFEST" ] && [ ! -L "$DNS_MANIFEST" ]
+}
+
+commit_release_state() {
+	printf 'complete\n' > "$RELEASE_DIR/complete.pending" || return 1
+	chown 0:0 "$RELEASE_DIR/complete.pending" 2>/dev/null || return 1
+	chmod 0600 "$RELEASE_DIR/complete.pending" || return 1
+	mv "$RELEASE_DIR/complete.pending" "$RELEASE_DIR/complete" || return 1
+	rm -f "$RELEASE_DIR/pending" || return 1
+	return 0
+}
+
+establish_barrier || { refuse 'cannot establish root-owned barrier'; exit 1; }
+prepare_release_state || { refuse 'cannot prepare retryable release state'; exit 1; }
+miclash_mutation_lock_enter_package_owner 30000 || { refuse 'cannot acquire shared mutation lock'; exit 1; }
+MUTATION_LOCK_HELD=1
+establish_package_guard || { refuse 'cannot establish package-authorized Guard'; exit 1; }
+quiesce_update_triggers || { refuse 'cannot quiesce update and daemon writers'; exit 1; }
+delete_clash_and_wait || { refuse 'Clash procd instance did not quiesce'; exit 1; }
+run_routing_cleanup || { refuse 'exact routing cleanup failed'; exit 1; }
+run_dns_cleanup || { refuse 'exact DNS cleanup failed'; exit 1; }
+run_preserve_cleanup || { refuse 'firewall cleanup failed'; exit 1; }
+protect_dns_proof || { refuse 'cannot protect DNS clean proof'; exit 1; }
+prepare_completion_marker || { refuse 'cannot prepare completion marker'; exit 1; }
+if ! mv "$BARRIER/complete.pending" "$BARRIER/complete"; then
+	refuse 'cannot commit completion marker'
+	exit 1
+fi
+if ! commit_release_state; then
+	rm -f "$BARRIER/complete" "$RELEASE_DIR/complete" 2>/dev/null || true
+	refuse 'cannot commit retryable release state'
+	exit 1
+fi
+# Manifest unlink is the final prerm operation. The primary Guard remains
+# installed and verified throughout; the copied postrm helper is its sole
+# finalization authority after package mutator absence has been proved.
+if rm -f "$MANIFEST"; then
+	exit 0
+fi
+rm -f "$BARRIER/complete" 2>/dev/null || true
+rm -f "$RELEASE_DIR/complete" 2>/dev/null || true
+refuse 'cannot finalize ownership manifest removal'
+exit 1

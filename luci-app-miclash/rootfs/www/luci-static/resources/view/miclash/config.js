@@ -1,6 +1,5 @@
 'use strict';
 'require view';
-'require fs';
 'require ui';
 'require view.miclash.utils';
 'require view.miclash.store';
@@ -12,10 +11,18 @@
 'require view.miclash.ui-shell';
 'require view.miclash.subscription';
 'require view.miclash.editor';
+'require view.miclash.api';
+'require view.miclash.diagnostics-panel';
+'require view.miclash.settings-panels';
+'require view.miclash.devices-panel';
+'require view.miclash.notification-poller';
+'require view.miclash.performance';
+'require view.miclash.performance-panel';
 
 const CONFIG_PATH = view_miclash_store.CONFIG_PATH;
 const MAIN_CONFIG_NAME = view_miclash_store.MAIN_CONFIG_NAME;
 const CONFIG_PROFILES = view_miclash_store.CONFIG_PROFILES;
+const selectActiveOperation = view_miclash_store.selectActiveOperation;
 const RULESET_PATH = view_miclash_rulesets_model.RULESET_PATH;
 const FAKEIP_WHITELIST_FILENAME = view_miclash_rulesets_model.FAKEIP_WHITELIST_FILENAME;
 const UPDATE_CHECK_MS = 10 * 60 * 1000;
@@ -27,6 +34,10 @@ const SERVICE_JOB_POLL_MS = 1000;
 const SERVICE_JOB_TIMEOUT_MS = 3 * 60 * 1000;
 const OPERATION_TOKEN_STORAGE_PREFIX = 'miclash-operation-token-';
 const AUTO_UPDATE_PRESET_INTERVAL_HOURS = ['2', '4', '12', '24'];
+const DEVELOPER_TAP_COUNT = 7;
+const DEVELOPER_TAP_HINT_COUNT = 5;
+const DEVELOPER_TAP_WINDOW_MS = 5000;
+const DEVELOPER_SESSION_MS = 10 * 60 * 1000;
 
 let editor = null;
 let pageRoot = null;
@@ -37,21 +48,148 @@ let operationAutoClearTimer = null;
 let controlPollBusy = false;
 let rulesetMainEditor = null;
 let rulesetWhitelistEditor = null;
-
+let configApi = null;
+let visibilityChangeHandler = null;
+let subscriptionUpdateBusy = false;
+let logsLoaded = false;
+let logsRefreshPromise = null;
+let logSearch = createLogSearchState();
+let pageGeneration = 0;
+let sessionExpired = false;
+let cfgTabSetter = null;
+let developerVisible = false;
+let developerTapTimes = [];
+let developerExpiryTimer = null;
+let releaseRefreshPromise = null;
+const performanceOwner = view_miclash_performance_panel.create();
+const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
+	createClient: () => view_miclash_api.create(),
+	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
+});
+const notificationOwner = (() => {
+	let poller = null, generation = 0;
+	function destroy() {
+		generation++;
+		if (!poller) return false;
+		const owned = poller; poller = null;
+		owned.destroy();
+		return true;
+	}
+	function replace() {
+		destroy();
+		const token = ++generation;
+		const api = view_miclash_api.create();
+		poller = view_miclash_notification_poller.create({
+			api,
+			onEvent: (event) => {
+				if (token !== generation) return;
+				const severity = String(event?.severity || 'info');
+				const kind = /^(?:warning|error|critical)$/.test(severity) ? 'error' : 'info';
+				notify(kind, [ event?.title, event?.message ].filter(Boolean).join(': '), event?.type);
+			},
+			onError: () => {}
+		});
+		api.notificationSettings().then((settings) => {
+			if (token === generation) applyNotificationSettings(settings);
+		}).catch(() => {});
+		poller.start();
+		return poller;
+	}
+	return { replace, destroy };
+})();
+const managementOwner = (() => {
+	let panels = null;
+	function destroy() {
+		if (!panels) return false;
+		const owned = panels; panels = null;
+		for (const panel of owned) panel.destroy();
+		return true;
+	}
+	function replace() {
+		destroy();
+		const factories = [ view_miclash_settings_panels, view_miclash_devices_panel ];
+		const created = [];
+		try {
+			for (const factory of factories) created.push(factory.create({
+				api: view_miclash_api.create(),
+				onError: (error, context) => {
+					if (!context?.background) setOperationError(error);
+					notify('error', error?.message || error);
+				},
+				onNotificationSettings: (settings) => {
+					applyNotificationSettings(settings);
+				},
+				onProgress: (message, operation) => setOperationStatus('running', message, {
+					detail: operation?.stage || '', context: 'management'
+				}),
+				onSuccess: (message) => {
+					setOperationSuccess(message);
+					notify('info', message);
+				}
+			}));
+		} catch (error) {
+			for (const panel of created) panel.destroy();
+			throw error;
+		}
+		panels = created;
+		return panels;
+	}
+	function mount(root) {
+		if (!panels || !root) return;
+		const hosts = [ '#sbox-management-settings', '#sbox-management-devices' ];
+		for (let i = 0; i < panels.length; i++) {
+			const host = root.querySelector(hosts[i]); if (host) panels[i].mount(host);
+		}
+	}
+	function collectPatch() {
+		if (!panels || typeof panels[0]?.collectPatch !== 'function')
+			throw new Error(_('Management settings are not ready.'));
+		return panels[0].collectPatch();
+	}
+	async function applyPending() {
+		if (!panels || typeof panels[1]?.applyChanges !== 'function')
+			throw new Error(_('Device policies are not ready.'));
+		return panels[1].applyChanges();
+	}
+	async function markSaved() {
+		if (!panels) return;
+		for (const panel of panels)
+			if (typeof panel.markSaved === 'function') await panel.markSaved();
+	}
+	function refresh(force) {
+		if (!panels) return Promise.resolve([]);
+		return Promise.all(panels.map((panel) =>
+			typeof panel.refresh === 'function'
+				? Promise.resolve(panel.refresh(force === true)).catch(() => undefined)
+				: Promise.resolve(undefined)));
+	}
+	function setActive(active) {
+		if (!panels) return false;
+		for (const panel of panels)
+			if (typeof panel.setActive === 'function') panel.setActive(active);
+		return true;
+	}
+	return { replace, mount, destroy, collectPatch, applyPending, markSaved, refresh, setActive,
+		ready: () => panels != null };
+})();
 view_miclash_utils.bumpRpcTimeout();
 
 const appState = {
 	versions: { app: 'unknown', clash: 'unknown' },
 	kernelStatus: { installed: false, version: null },
+	serviceStateLoading: true,
 	serviceRunning: false,
 	serviceHealth: 'unknown',
 	serviceState: {},
+	guardObservedState: 'loading',
 	proxyMode: 'tproxy',
 	configContent: '',
 	subscriptionUrl: '',
 	selectedConfigName: MAIN_CONFIG_NAME,
 	configProfiles: CONFIG_PROFILES.slice(),
 	settings: null,
+	notificationAutoHide: true,
+	notificationSettings: { luci_enabled: false, luci_events: [] },
 	interfaces: [],
 	selectedInterfaces: [],
 	detectedLan: '',
@@ -65,20 +203,42 @@ const appState = {
 		kernelVersion: '',
 		checkedAt: 0
 	},
+	systemMetadataReady: false,
 	serviceActionBusy: false,
 	serviceJobBusy: false,
 	updateJobBusy: false,
 	autoUpdateIntervalProbeBusy: false,
-	autoUpdateIntervalProbeAttempted: false
+	autoUpdateIntervalProbeAttempted: false,
+	configReady: false
 };
 
-function notify(type, message) {
+function applyNotificationSettings(settings) {
+	const source = settings && typeof settings === 'object' ? settings : {};
+	appState.notificationAutoHide = source.auto_hide !== false;
+	appState.notificationSettings = {
+		luci_enabled: source.luci_enabled === true,
+		luci_events: Array.isArray(source.luci_events) ? source.luci_events.slice() : []
+	};
+}
+
+function isLuciNotificationEnabled(eventType) {
+	const settings = appState.notificationSettings || {};
+	return settings.luci_enabled === true && Array.isArray(settings.luci_events) &&
+		settings.luci_events.includes(String(eventType || 'miclash_event'));
+}
+
+function notify(type, message, eventType) {
+	if (type === 'error' && view_miclash_api.isSessionExpired(message)) {
+		suspendForSessionExpiry();
+		return null;
+	}
+	if (!isLuciNotificationEnabled(eventType || 'miclash_event')) return null;
 	const node = ui.addNotification(null, E('p', String(message || '')), type);
 	// "Auto-hide notifications" defaults to true; the toast disappears after a
 	// short timeout (longer for errors so the user has time to read them).
 	// When the user turns the option off, the toast stays until they close it
 	// manually - useful for diagnosing rare issues without losing the message.
-	const autoHide = !appState.settings || appState.settings.autoHideNotifications !== false;
+	const autoHide = appState.notificationAutoHide !== false;
 	if (node && autoHide) {
 		const timeout = type === 'error' ? 10000 : 6000;
 		setTimeout(() => {
@@ -91,9 +251,8 @@ function notify(type, message) {
 
 async function logUiAction(level, message) {
 	const cleanLevel = /^(info|warn|err)$/.test(String(level || '')) ? level : 'info';
-	try {
-		await fs.exec('/usr/bin/logger', ['-p', 'daemon.' + cleanLevel, '-t', 'miclash', String(message || '')]);
-	} catch (e) {}
+	const logger = cleanLevel === 'err' ? console.error : (cleanLevel === 'warn' ? console.warn : console.info);
+	logger.call(console, '[MiClash]', String(message || '').slice(0, 512));
 }
 
 function delay(ms) {
@@ -168,14 +327,39 @@ function clearOperationStatus() {
 }
 
 function setOperationError(error, options) {
+	if (view_miclash_api.isSessionExpired(error)) {
+		suspendForSessionExpiry();
+		return;
+	}
 	const opts = options || {};
 	const detail = getOperationDetail(error);
 	const message = getOperationMessage(error);
 	setOperationStatus('error', _('Error: %s').format(message), Object.assign({
 		detail: detail,
-		dismissible: false,
-		autoClearMs: opts.autoClearMs == null ? 3000 : Number(opts.autoClearMs)
+		dismissible: true,
+		autoClearMs: opts.autoClearMs == null ? 0 : Number(opts.autoClearMs)
 	}, opts));
+}
+
+function suspendForSessionExpiry() {
+	if (sessionExpired) return;
+	sessionExpired = true;
+	controlPollTimer = view_miclash_ui_shell.stopInterval(controlPollTimer);
+	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
+	updatePollTimer = view_miclash_ui_shell.stopInterval(updatePollTimer);
+	diagnosticsOwner.destroy();
+	notificationOwner.destroy();
+	managementOwner.destroy();
+	if (configApi) configApi.destroy();
+}
+
+function suspendForBackendRestart() {
+	controlPollTimer = view_miclash_ui_shell.stopInterval(controlPollTimer);
+	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
+	updatePollTimer = view_miclash_ui_shell.stopInterval(updatePollTimer);
+	diagnosticsOwner.destroy();
+	notificationOwner.destroy();
+	managementOwner.destroy();
 }
 
 function operationStageOptions(initialMessage) {
@@ -196,6 +380,7 @@ function buildInlineIcon(name, className) {
 	const icons = {
 		download: '<path d="M12 3v11"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
 		refresh: '<path d="M20 11a8 8 0 0 0-14.8-4"></path><path d="M5 3v4h4"></path><path d="M4 13a8 8 0 0 0 14.8 4"></path><path d="M19 21v-4h-4"></path>',
+		clock: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path>',
 		x: '<path d="M18 6 6 18"></path><path d="M6 6l12 12"></path>',
 		info: '<path d="M12 11v6"></path><circle cx="12" cy="7" r="1.2"></circle>'
 	};
@@ -205,7 +390,9 @@ function buildInlineIcon(name, className) {
 }
 
 function buildVersionActionIcon(state) {
-	return buildInlineIcon(state && state.iconName === 'refresh' ? 'refresh' : 'download', 'sbox-version-action-icon');
+	const iconName = state && (state.iconName === 'refresh' || state.iconName === 'clock')
+		? state.iconName : 'download';
+	return buildInlineIcon(iconName, 'sbox-version-action-icon');
 }
 
 function isValidUrl(url) {
@@ -222,6 +409,7 @@ const getConfigLabel = view_miclash_store.getConfigLabel;
 const getConfigPathByName = view_miclash_store.getConfigPathByName;
 const readConfigFileByName = view_miclash_store.readConfigFileByName;
 const writeConfigFileByName = view_miclash_store.writeConfigFileByName;
+const swapConfigProfiles = view_miclash_store.swapConfigProfiles;
 const ensureConfigProfilesReady = view_miclash_store.ensureConfigProfilesReady;
 const readSubscriptionUrl = view_miclash_store.readSubscriptionUrl;
 const saveSubscriptionUrl = view_miclash_store.saveSubscriptionUrl;
@@ -236,14 +424,16 @@ const normalizeReleaseChannel = view_miclash_release.normalizeReleaseChannel;
 const compareNumericVersions = view_miclash_release.compareNumericVersions;
 const findKernelAsset = view_miclash_release.findKernelAsset;
 const detectPackageManager = view_miclash_package.detectPackageManager;
+const getNetworkSnapshot = view_miclash_settings_model.getNetworkSnapshot;
 const getNetworkInterfaces = view_miclash_settings_model.getNetworkInterfaces;
 const transformProxyMode = view_miclash_settings_model.transformProxyMode;
 const detectCurrentProxyMode = view_miclash_settings_model.detectCurrentProxyMode;
-const loadOperationalSettings = view_miclash_settings_model.loadOperationalSettings;
+const loadLegacyOperationalSettings = view_miclash_settings_model.loadOperationalSettings;
 const loadInterfacesByMode = view_miclash_settings_model.loadInterfacesByMode;
 const detectLanBridge = view_miclash_settings_model.detectLanBridge;
 const detectWanInterface = view_miclash_settings_model.detectWanInterface;
 const normalizeProxyMode = view_miclash_settings_model.normalizeProxyMode;
+const operationalSettingsChanged = view_miclash_settings_model.operationalSettingsChanged;
 const normalizeRulesetName = view_miclash_rulesets_model.normalizeName;
 const readRulesetsData = () => view_miclash_rulesets_model.readData(CONFIG_PATH);
 const createRulesetFile = view_miclash_rulesets_model.createFile;
@@ -256,56 +446,68 @@ const looksLikeUriSubscription = view_miclash_subscription.looksLikeUriSubscript
 const looksLikeBase64Blob = view_miclash_subscription.looksLikeBase64Blob;
 const looksLikeYamlConfig = view_miclash_subscription.looksLikeYamlConfig;
 
-async function getInstalledPackageVersion(packageName) {
-	const manager = await detectPackageManager();
-	if (!manager) return '';
+async function typedCall(callback) {
+	const owned = !configApi;
+	const api = configApi || view_miclash_api.create();
+	try { return await callback(api); }
+	finally { if (owned) api.destroy(); }
+}
 
-	const args = manager.type === 'apk'
-		? ['list', '-I', packageName]
-		: ['list-installed', packageName];
-	const result = await fs.exec(manager.bin, args);
-	if (!result || result.code !== 0) return '';
+async function typedSettings() { return typedCall((api) => api.settings_get()); }
 
-	const raw = String(result.stdout || '') + '\n' + String(result.stderr || '');
-	const parsed = parsePackageVersion(raw, packageName);
-	return parsed ? normalizeAppVersion(parsed) : '';
+async function loadOperationalSettings() {
+	return loadLegacyOperationalSettings();
+}
+
+function operationFailure(record) {
+	const error = new Error(record?.error?.message || _('Guard transition failed.'));
+	error.code = record?.error?.code || 'HEALTH_FAILED';
+	return error;
+}
+
+function awaitTypedOperation(reply, message) {
+	const id = reply?.operation_id;
+	if (!configApi || typeof configApi.watchOperation !== 'function' || typeof id !== 'string' || !id.length)
+		return Promise.reject(new Error(_('Invalid operation response.')));
+	return new Promise((resolve, reject) => {
+		let done = false, cancel = null;
+		const finish = (callback, value) => {
+			if (done) return;
+			done = true;
+			if (typeof cancel === 'function') cancel();
+			callback(value);
+		};
+		cancel = configApi.watchOperation(id, (record, error) => {
+			if (error) return finish(reject, error);
+			if (record?.stage) setOperationStatus('running', message, { detail: record.stage });
+			if (record?.state === 'success') finish(resolve, record);
+			else if (record?.state === 'failure' || record?.state === 'interrupted')
+				finish(reject, operationFailure(record));
+		});
+	});
+}
+
+async function refreshCanonicalGuardState() {
+	const typed = await typedSettings();
+	const enabled = !!(typed.guard && typed.guard.enabled);
+	if (appState.settings) appState.settings.internetOnlyMiclash = enabled;
+	const checkbox = pageRoot?.querySelector('#sbox-internet-only-miclash');
+	if (checkbox) checkbox.checked = enabled;
+	updateHeaderAndControlDom();
+	return enabled;
 }
 
 async function getVersions() {
-	const info = { app: 'unknown', clash: 'unknown' };
-	const packageName = 'luci-app-miclash';
-
-	try {
-		const clashV = await fs.exec('/opt/clash/bin/clash', ['-v']);
-		const clashVersion = String(clashV.stdout || clashV.stderr || '');
-		if (clashVersion) {
-			info.clash = parseVersion(clashVersion, 'installed');
-		} else {
-			const alt = await fs.exec('/opt/clash/bin/clash', ['version']);
-			info.clash = parseVersion(alt.stdout || alt.stderr, 'installed');
-		}
-	} catch (e) {}
-
-	try {
-		const parsed = await getInstalledPackageVersion(packageName);
-		if (parsed) info.app = parsed;
-	} catch (_) {}
-
-	if (info.app === 'unknown') {
-		try {
-			const opkgStatusRaw = await fs.read('/usr/lib/opkg/status');
-			const parsed = parseVersionFromOpkgStatus(opkgStatusRaw, [packageName]);
-			if (parsed) info.app = normalizeAppVersion(parsed);
-		} catch (_) {}
-	}
-
-	return info;
+	const system = await typedCall((api) => api.system_info());
+	return {
+		app: normalizeAppVersion(system?.app_version || 'unknown'),
+		clash: system?.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : 'unknown'
+	};
 }
 async function detectSystemArchitecture() {
 	try {
-		const releaseInfo = await L.resolveDefault(fs.read('/etc/openwrt_release'), null);
-		const match = String(releaseInfo || '').match(/^DISTRIB_ARCH=['"]?([^'"\n]+)['"]?/m);
-		const distribArch = match ? match[1] : '';
+		const system = await typedCall((api) => api.system_info());
+		const distribArch = String(system?.architecture || '');
 
 		if (!distribArch) return 'amd64';
 		if (distribArch.startsWith('aarch64_')) return 'arm64';
@@ -326,28 +528,11 @@ async function detectSystemArchitecture() {
 }
 
 async function getMihomoStatus() {
-	const binPath = '/opt/clash/bin/clash';
-
 	try {
-		const stat = await L.resolveDefault(fs.stat(binPath), null);
-		if (!stat) return { installed: false, version: null };
-	} catch (e) {
-		return { installed: false, version: null };
-	}
-
-	try {
-		const result = await fs.exec(binPath, ['-v']);
-		const output = String(result.stdout || result.stderr || '').trim();
-		if (output) return { installed: true, version: parseVersion(output, _('Installed')) };
-	} catch (e) {}
-
-	try {
-		const result = await fs.exec(binPath, ['version']);
-		const output = String(result.stdout || result.stderr || '').trim();
-		if (output) return { installed: true, version: parseVersion(output, _('Installed')) };
-	} catch (e) {}
-
-	return { installed: true, version: _('Installed') };
+		const system = await typedCall((api) => api.system_info());
+		return { installed: system?.mihomo?.installed === true,
+			version: system?.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : null };
+	} catch (e) { return { installed: false, version: null }; }
 }
 
 async function ensureMihomoKernelInstalled() {
@@ -395,11 +580,24 @@ function resolveAppActionState() {
 	}
 
 	if (hasUpdate) {
+		const localMajor = /^\d+\.\d+\.\d+$/.test(local) ? parseInt(local.split('.')[0], 10) : null;
+		const latestMajor = /^\d+\.\d+\.\d+$/.test(latest) ? parseInt(latest.split('.')[0], 10) : null;
+		const scheduledMajor = appState.settings?.autoMajorMiclash !== false &&
+			normalizeReleaseChannel(appState.settings?.miclashReleaseChannel) === 'release' &&
+			localMajor != null && latestMajor != null && latestMajor > localMajor;
+		if (scheduledMajor) {
+			return {
+				kind: 'update', scheduled: true, targetVersion: latest,
+				iconName: 'clock', className: 'cbi-button-positive',
+				title: _('Major update %s is scheduled for the night. Click to update now.').format(latest)
+			};
+		}
 		return {
 			kind: 'update',
+			targetVersion: latest,
 			iconName: 'download',
 			className: 'cbi-button-positive',
-			title: _('Update MiClash')
+			title: _('Update MiClash to %s').format(latest)
 		};
 	}
 
@@ -420,7 +618,8 @@ function resolveKernelActionState() {
 	);
 	const latest = normalizeVersion(appState.releaseMeta?.kernelVersion || '');
 	const cmp = compareNumericVersions(local, latest);
-	const hasUpdate = installed && !!latest && (!local || cmp === -1 || (cmp === null && local !== latest));
+	const hasUpdate = installed && !!local && !!latest &&
+		(cmp === -1 || (cmp === null && local !== latest));
 
 	if (!installed) {
 		return {
@@ -434,9 +633,10 @@ function resolveKernelActionState() {
 	if (hasUpdate) {
 		return {
 			kind: 'update',
+			targetVersion: latest,
 			iconName: 'download',
 			className: 'cbi-button-positive',
-			title: _('Update Kernel')
+			title: _('Update Mihomo to %s').format(latest)
 		};
 	}
 
@@ -444,7 +644,7 @@ function resolveKernelActionState() {
 		kind: 'reinstall',
 		iconName: 'refresh',
 		className: 'cbi-button-neutral',
-		title: _('Reinstall Kernel')
+		title: _('Reinstall Mihomo')
 	};
 }
 
@@ -456,33 +656,46 @@ function shouldCheckKernelRelease(force) {
 	return !!force || resolveKernelActionState().kind !== 'update';
 }
 
-async function refreshReleaseMeta(options) {
+function refreshReleaseMeta(options) {
 	const opts = options || {};
 	const force = !!opts.force;
+	if (!force && appState.releaseMeta.checkedAt > 0 &&
+		Date.now() - appState.releaseMeta.checkedAt < UPDATE_CHECK_MS)
+		return Promise.resolve(false);
+	if (releaseRefreshPromise) return releaseRefreshPromise;
 	const checkApp = shouldCheckAppRelease(force);
 	const checkKernel = shouldCheckKernelRelease(force);
 
-	if (!checkApp && !checkKernel) return false;
+	if (!checkApp && !checkKernel) return Promise.resolve(false);
 
-	const [appRelease, kernelRelease] = await Promise.all([
-		checkApp ? getLatestMiClashRelease() : Promise.resolve(null),
-		checkKernel ? getLatestMihomoRelease() : Promise.resolve(null)
-	]);
+	const running = (async () => {
+		const [appRelease, kernelRelease] = await Promise.all([
+			checkApp ? getLatestMiClashRelease() : Promise.resolve(null),
+			checkKernel ? getLatestMihomoRelease() : Promise.resolve(null)
+		]);
 
-	if (checkApp) {
-		appState.releaseMeta.appVersion = appRelease ? normalizeAppVersion(appRelease.version || '') : '';
-	}
-	if (checkKernel) {
-		appState.releaseMeta.kernelVersion = kernelRelease ? normalizeVersion(kernelRelease.version || '') : '';
-	}
-	appState.releaseMeta.checkedAt = Date.now();
-	updateHeaderAndControlDom();
-	return true;
+		if (checkApp) {
+			appState.releaseMeta.appVersion = appRelease ? normalizeAppVersion(appRelease.version || '') : '';
+		}
+		if (checkKernel) {
+			appState.releaseMeta.kernelVersion = kernelRelease ? normalizeVersion(kernelRelease.version || '') : '';
+		}
+		appState.releaseMeta.checkedAt = Date.now();
+		updateHeaderAndControlDom();
+		return true;
+	})();
+	const tracked = running.finally(() => {
+		if (releaseRefreshPromise === tracked) releaseRefreshPromise = null;
+	});
+	releaseRefreshPromise = tracked;
+	return releaseRefreshPromise;
 }
 
-function isRpcReconnectLikeError(message) {
-	const text = String(message || '').toLowerCase();
+function isRpcReconnectLikeError(error) {
+	const text = String(error?.message || error || '').toLowerCase();
 	if (!text) return false;
+	if (text.indexOf('ubus code 7') !== -1) return true;
+	if (text.indexOf('тайм-аут') !== -1) return true;
 	if (text.indexOf('xhr') !== -1 && text.indexOf('timeout') !== -1) return true;
 	if (text.indexOf('request timed out') !== -1) return true;
 	if (text.indexOf('networkerror') !== -1) return true;
@@ -491,60 +704,66 @@ function isRpcReconnectLikeError(message) {
 	return false;
 }
 
-function parseKeyValueStatus(raw) {
-	const status = {};
-	String(raw || '').split(/\r?\n/).forEach((line) => {
-		const idx = line.indexOf('=');
-		if (idx <= 0) return;
-		status[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-	});
-	if (!status.state) status.state = 'idle';
-	return status;
+function isExpectedBackendRestartInterruption(error) {
+	const text = String(error?.message || error || '').toLowerCase();
+	return isRpcReconnectLikeError(error) || text.indexOf('ubus code 4') !== -1 ||
+		text.indexOf('resource not found') !== -1 || text.indexOf('ресурс не найден') !== -1;
 }
 
-function parseMiClashUpdateStatus(raw) {
-	return parseKeyValueStatus(raw);
-}
+async function waitForMiClashBackendRestart(api, options) {
+	const opts = options || {};
+	const timeoutMs = Math.max(1000, Number(opts.timeoutMs) || 30000);
+	const intervalMs = Math.max(10, Number(opts.intervalMs) || 500);
+	const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+	const sleep = typeof opts.sleep === 'function' ? opts.sleep :
+		(delay) => new Promise((resolve) => window.setTimeout(resolve, delay));
+	const deadline = now() + timeoutMs;
+	let unavailable = false;
 
-function parseMiClashServiceStatus(raw) {
-	return parseKeyValueStatus(raw);
-}
-
-async function readMiClashUpdateStatus() {
-	const result = await fs.exec('/opt/clash/bin/miclash-update', ['status']);
-	if (result.code !== 0) {
-		throw new Error(String(result.stderr || result.stdout || _('Failed to read update status.')).trim());
+	while (now() < deadline) {
+		await sleep(intervalMs);
+		try {
+			await api.system_info();
+			if (unavailable) return true;
+		} catch (error) {
+			if (!isExpectedBackendRestartInterruption(error)) throw error;
+			unavailable = true;
+		}
 	}
-	return parseMiClashUpdateStatus(result.stdout || '');
+
+	return false;
 }
 
-function formatMiClashUpdateStatus(status, fallback) {
-	const phase = String(status && status.phase || '').trim();
-	const labels = {
-		queued: _('Starting update job...'),
-		dependencies: _('Installing dependencies...'),
-		download: _('Downloading package...'),
-		install: _('Installing package...'),
-		restart: _('Restarting Clash service...'),
-		done: _('Update completed.')
-	};
-	const translated = labels[phase];
-	if (translated) return translated;
-
-	const message = String(status && status.message || '').trim();
-	return message || fallback || _('Updating MiClash...');
+async function waitForCurrentMiClashBackendRestart() {
+	const probe = view_miclash_api.create({ startupRetryMs: 0 });
+	try {
+		return await waitForMiClashBackendRestart(probe);
+	} finally {
+		probe.destroy();
+	}
 }
 
 async function clearMiClashUpdateStatus() {
-	await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-update', ['clear-status']), null);
+	appState.pendingUpdateOperation = null;
+	clearStoredOperationToken('update');
 }
 
 async function readMiClashServiceState() {
-	const result = await fs.exec('/opt/clash/bin/miclash-service', ['state']);
-	if (result.code !== 0) {
-		throw new Error(String(result.stderr || result.stdout || _('Failed to read service status.')).trim());
-	}
-	return parseMiClashServiceStatus(result.stdout || '');
+	const snapshot = await typedCall((api) => api.overview());
+	const observed = snapshot?.observed || {};
+	const service = observed.service || {};
+	const readiness = observed.readiness || {};
+	const running = service.running === true || service.state === 'running';
+	const current = selectActiveOperation(snapshot?.recent_operations, 'service.');
+	return {
+		service: running ? 'running' : 'stopped',
+		health: running ? (readiness.ok === true ? 'ready' : 'not_ready') : 'stopped',
+		operation: current ? 'running' : 'idle', phase: current?.stage || '',
+		operation_id: current?.id || null,
+		message: readiness?.message || '',
+		desired: snapshot?.desired || null,
+		observedGuard: observed?.guard || { state: 'unknown' }
+	};
 }
 
 function getServiceOperationState(status) {
@@ -558,40 +777,19 @@ function applyServiceState(status) {
 	const operation = getServiceOperationState(state);
 
 	appState.serviceState = state;
+	appState.serviceStateLoading = false;
 	appState.serviceRunning = service === 'running';
 	appState.serviceHealth = health || (appState.serviceRunning ? 'unknown' : 'stopped');
 	appState.serviceJobBusy = operation === 'running';
+	appState.guardObservedState = String(state.observedGuard?.state || 'unknown');
+	if (state.desired?.guard && appState.settings)
+		appState.settings.internetOnlyMiclash = state.desired.guard.enabled === true;
 
 	return state;
 }
 
-function formatMiClashServiceStatus(status, fallback) {
-	const phase = String(status && status.phase || '').trim();
-	const action = String(status && status.action || '').trim();
-	const labels = {
-		queued: _('Starting service job...'),
-		start: _('Starting Clash service...'),
-		stop: _('Stopping Clash service...'),
-		restart: _('Restarting Clash service...'),
-		reload: _('Reloading Mihomo configuration...'),
-		process: _('Checking Clash service process...'),
-		api: _('Checking Clash API...'),
-		dns: _('Checking DNS...'),
-		tun: _('Checking TUN interface...'),
-		policy: _('Checking routing policy...'),
-		forward: _('Checking forwarding rules...'),
-		stopped: _('Checking stopped state...'),
-		done: _('Service operation completed.')
-	};
-	const translated = labels[phase] || labels[action];
-	if (translated) return translated;
-
-	const message = String(status && status.message || '').trim();
-	return message || fallback || _('Updating service status...');
-}
-
 async function clearMiClashServiceStatus() {
-	await L.resolveDefault(fs.exec('/opt/clash/bin/miclash-service', ['clear-status']), null);
+	appState.pendingServiceOperation = null;
 }
 
 function getOperationTokenStorageKey(kind) {
@@ -616,79 +814,46 @@ function clearStoredOperationToken(kind, token) {
 	} catch (e) {}
 }
 
-function createOperationToken(kind) {
-	const token = String(kind || 'operation') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+function setStoredOperationToken(kind, operation) {
+	const token = String(operation?.operation_id || operation?.id || '').trim();
+	if (!token) return;
 	try {
 		window.sessionStorage.setItem(getOperationTokenStorageKey(kind), token);
 	} catch (e) {}
-	return token;
-}
-
-function isCurrentOperationToken(kind, status) {
-	const token = String(status && status.token || '').trim();
-	return !!token && getStoredOperationToken(kind) === token;
 }
 
 async function startMiClashUpdateJob(kind, args) {
 	await clearMiClashUpdateStatus();
-	const token = createOperationToken('update');
-	const result = await fs.exec('/opt/clash/bin/miclash-update', ['job', '--token', token, kind].concat(args || []));
-	if (result.code !== 0) {
-		clearStoredOperationToken('update', token);
-		throw new Error(String(result.stderr || result.stdout || _('Failed to start update job.')).trim());
-	}
+	const reply = kind === 'kernel'
+		? await configApi.update_mihomo(normalizeReleaseChannel(
+			appState.settings?.mihomoReleaseChannel), 'luci')
+		: await configApi.update_miclash(normalizeReleaseChannel(
+			appState.settings?.miclashReleaseChannel), 'luci');
+	appState.pendingUpdateOperation = reply;
+	setStoredOperationToken('update', reply);
 	return true;
 }
 
 async function startMiClashServiceJob(action) {
 	await clearMiClashServiceStatus();
-	const token = createOperationToken('service');
-	const result = await fs.exec('/opt/clash/bin/miclash-service', ['job', '--token', token, action]);
-	if (result.code !== 0) {
-		clearStoredOperationToken('service', token);
-		throw new Error(String(result.stderr || result.stdout || _('Failed to start service job.')).trim());
-	}
+	const method = configApi['service_' + action];
+	if (typeof method !== 'function') throw new Error('Unsupported service action');
+	appState.pendingServiceOperation = await method('config.yaml', 'luci');
+	setStoredOperationToken('service', appState.pendingServiceOperation);
 	return true;
 }
 
 async function pollMiClashUpdateJob(initialMessage, options) {
-	const opts = options || {};
-	const timeoutMs = opts.timeoutMs || UPDATE_JOB_TIMEOUT_MS;
-	const startedAt = Date.now();
 	const fallback = initialMessage || _('Updating MiClash...');
 
 	appState.updateJobBusy = true;
 	setOperationStatus('running', fallback);
 
 	try {
-		while (Date.now() - startedAt < timeoutMs) {
-			await delay(UPDATE_JOB_POLL_MS);
-
-			let status;
-			try {
-				status = await readMiClashUpdateStatus();
-			} catch (e) {
-				if (isRpcReconnectLikeError(e.message)) throw e;
-				setOperationStatus('running', fallback);
-				continue;
-			}
-
-			const state = String(status.state || 'idle');
-			if (state === 'success') {
-				clearStoredOperationToken('update', status.token);
-				clearOperationStatus();
-				return status;
-			}
-			if (state === 'failed') {
-				clearStoredOperationToken('update', status.token);
-				throw new Error(status.message || _('Update failed.'));
-			}
-			if (state === 'running') {
-				setOperationStatus('running', formatMiClashUpdateStatus(status, fallback));
-			}
-		}
-
-		throw new Error(_('Update exceeded timeout. Please check MiClash logs and retry.'));
+		await awaitTypedOperation(appState.pendingUpdateOperation, fallback);
+		clearStoredOperationToken('update');
+		clearOperationStatus();
+		return { state: 'success', phase: 'done', message: '' };
 	} finally {
 		appState.updateJobBusy = false;
 		updateHeaderAndControlDom();
@@ -696,45 +861,17 @@ async function pollMiClashUpdateJob(initialMessage, options) {
 }
 
 async function pollMiClashServiceJob(initialMessage, options) {
-	const opts = options || {};
-	const timeoutMs = opts.timeoutMs || SERVICE_JOB_TIMEOUT_MS;
-	const startedAt = Date.now();
 	const fallback = initialMessage || _('Updating service status...');
 
 	appState.serviceJobBusy = true;
 	setOperationStatus('running', fallback);
 
 	try {
-		while (Date.now() - startedAt < timeoutMs) {
-			await delay(SERVICE_JOB_POLL_MS);
-
-			let status;
-			try {
-				status = await readMiClashServiceState();
-				applyServiceState(status);
-			} catch (e) {
-				if (isRpcReconnectLikeError(e.message)) throw e;
-				setOperationStatus('running', fallback);
-				continue;
-			}
-
-			const state = getServiceOperationState(status);
-			if (state === 'success') {
-				clearStoredOperationToken('service', status.token);
-				await refreshServiceState();
-				clearOperationStatus();
-				return status;
-			}
-			if (state === 'failed') {
-				clearStoredOperationToken('service', status.token);
-				throw new Error(status.message || _('Service operation failed.'));
-			}
-			if (state === 'running') {
-				setOperationStatus('running', formatMiClashServiceStatus(status, fallback));
-			}
-		}
-
-		throw new Error(_('Service operation exceeded timeout. Please retry the action.'));
+		await awaitTypedOperation(appState.pendingServiceOperation, fallback);
+		clearStoredOperationToken('service');
+		const status = await refreshServiceState();
+		clearOperationStatus();
+		return status;
 	} finally {
 		appState.serviceJobBusy = false;
 		updateHeaderAndControlDom();
@@ -747,44 +884,31 @@ async function runMiClashServiceJob(action, initialMessage) {
 }
 
 async function resumeMiClashUpdateJobStatus() {
-	const status = await readMiClashUpdateStatus();
-	const state = String(status.state || 'idle');
-
-	if (state === 'running') {
-		await pollMiClashUpdateJob(formatMiClashUpdateStatus(status, _('Updating MiClash...')));
-		return;
-	}
-	if (state === 'failed' || state === 'success') {
-		if (state === 'failed' && isCurrentOperationToken('update', status)) {
-			setOperationError(new Error(status.message || _('Update failed.')));
-			clearStoredOperationToken('update', status.token);
-			await clearMiClashUpdateStatus();
-			return;
-		}
-		await clearMiClashUpdateStatus();
+	const operationId = getStoredOperationToken('update');
+	if (!operationId) return;
+	appState.pendingUpdateOperation = { operation_id: operationId };
+	try {
+		await pollMiClashUpdateJob(_('Updating MiClash...'));
 		clearOperationStatus();
+	} catch (error) {
+		setOperationError(error);
+	} finally {
+		await clearMiClashUpdateStatus();
 	}
 }
 
 async function resumeMiClashServiceJobStatus() {
-	const status = await readMiClashServiceState();
-	applyServiceState(status);
-	const state = getServiceOperationState(status);
-
-	if (state === 'running') {
-		await pollMiClashServiceJob(formatMiClashServiceStatus(status, _('Updating service status...')));
-		return;
-	}
-	if (state === 'failed' || state === 'success') {
-		if (state === 'failed' && isCurrentOperationToken('service', status)) {
-			setOperationError(new Error(status.message || _('Service operation failed.')));
-			clearStoredOperationToken('service', status.token);
-			await clearMiClashServiceStatus();
-			return;
-		}
-		await refreshServiceState();
-		await clearMiClashServiceStatus();
+	const operationId = getStoredOperationToken('service');
+	if (!operationId) return;
+	appState.pendingServiceOperation = { operation_id: operationId };
+	try {
+		await pollMiClashServiceJob(_('Updating service status...'));
 		clearOperationStatus();
+	} catch (error) {
+		setOperationError(error);
+	} finally {
+		await clearMiClashServiceStatus();
+		clearStoredOperationToken('service', operationId);
 	}
 }
 
@@ -805,11 +929,11 @@ async function installMiClashFromSettings(actionKind) {
 		await startMiClashUpdateJob('app', ['--target-tag', release.version, '--mode', mode]);
 		await pollMiClashUpdateJob(_('Updating MiClash package on router...'));
 	} catch (e) {
-		if (isRpcReconnectLikeError(e.message)) {
+		if (isRpcReconnectLikeError(e)) {
 			notify('info', _('Connection interrupted while finalizing MiClash update. Reloading interface...'));
-			setTimeout(() => {
-				window.location.reload();
-			}, 3000);
+			suspendForBackendRestart();
+			await waitForCurrentMiClashBackendRestart();
+			window.location.reload();
 			return true;
 		}
 		setOperationError(e);
@@ -818,9 +942,10 @@ async function installMiClashFromSettings(actionKind) {
 
 	await logUiAction('info', 'MiClash package installed');
 	notify('info', _('MiClash package installed. Reloading interface...'));
-	setTimeout(() => {
-		window.location.reload();
-	}, 1500);
+	setOperationStatus('running', _('MiClash package installed. Reloading interface...'));
+	suspendForBackendRestart();
+	await waitForCurrentMiClashBackendRestart();
+	window.location.reload();
 	return true;
 }
 
@@ -865,6 +990,7 @@ async function installKernelFromSettings() {
 
 function showModal(options) {
 	const opts = Object.assign({}, options || {}, { mountNode: pageRoot });
+	opts.modalClass = (opts.modalClass ? opts.modalClass + ' ' : '') + 'sbox-modal-responsive-shell';
 	return view_miclash_ui_shell.showModal(opts);
 }
 
@@ -925,13 +1051,34 @@ async function openKernelModal() {
 	}
 }
 
+function actionMetricName(btns) {
+	const values = Array.isArray(btns) ? btns : [ btns ];
+	for (const button of values) {
+		if (!button || typeof button !== 'object') continue;
+		const value = button.id || button.getAttribute?.('data-action') ||
+			button.getAttribute?.('data-developer-action');
+		if (value) return String(value);
+	}
+	return 'control';
+}
+
 async function withButtons(btns, fn) {
-	return view_miclash_ui_shell.withButtons(btns, fn, safeText);
+	const metric = view_miclash_performance.begin('action.' + actionMetricName(btns));
+	try {
+		const result = await view_miclash_ui_shell.withButtons(btns, fn, safeText);
+		view_miclash_performance.end(metric, true);
+		return result;
+	} catch (error) {
+		view_miclash_performance.end(metric, false);
+		throw error;
+	}
 }
 
 async function withServiceButtons(activeBtn, inactiveBtn, fn) {
 	const activeHtml = activeBtn ? activeBtn.innerHTML : '';
 	const inactiveDisabled = inactiveBtn ? inactiveBtn.disabled : false;
+	const metric = view_miclash_performance.begin('action.' + actionMetricName(activeBtn));
+	let succeeded = false;
 
 	appState.serviceActionBusy = true;
 
@@ -943,8 +1090,11 @@ async function withServiceButtons(activeBtn, inactiveBtn, fn) {
 	updateHeaderAndControlDom();
 
 	try {
-		return await fn();
+		const result = await fn();
+		succeeded = true;
+		return result;
 	} finally {
+		view_miclash_performance.end(metric, succeeded);
 		appState.serviceActionBusy = false;
 
 		if (activeBtn && activeBtn.isConnected) {
@@ -1086,13 +1236,6 @@ async function restartOrReloadServiceOrThrow(action, options) {
 	return runMiClashServiceJob(action, message);
 }
 
-async function refreshGuardRulesOrThrow() {
-	const result = await fs.exec('/opt/clash/bin/clash-rules', ['guard_refresh']);
-	if (result.code !== 0) {
-		throw new Error(String(result.stderr || result.stdout || _('Failed to refresh protection rules.')).trim());
-	}
-}
-
 function notifyDetailedError(title, detail) {
 	ui.addNotification(null, E('div', {}, [
 		E('p', String(title || '')),
@@ -1116,22 +1259,9 @@ async function downloadSubscriptionWithProfile(url, profile, deviceHeaders, mode
 	return view_miclash_subscription.downloadWithProfile(url, profile, deviceHeaders, mode);
 }
 
-async function applySubscriptionOnRouter(url, targetName, settings, appVersion, proxyMode, tunStack) {
+async function applySubscriptionOnRouter(targetName) {
 	return view_miclash_subscription.applySubscriptionOnRouter({
-		url: url,
-		targetName: targetName,
-		settings: settings,
-		appVersion: appVersion,
-		proxyMode: proxyMode,
-		tunStack: tunStack
-	});
-}
-
-async function probeSubscriptionUpdateIntervalOnRouter(url, settings, appVersion) {
-	return view_miclash_subscription.probeSubscriptionUpdateIntervalOnRouter({
-		url: url,
-		settings: settings,
-		appVersion: appVersion
+		targetName: targetName
 	});
 }
 
@@ -1160,26 +1290,8 @@ async function applySubscriptionProfileUpdateInterval(hours) {
 }
 
 async function probeAutoUpdateIntervalFromSubscription() {
-	const url = String(await readSubscriptionUrl(MAIN_CONFIG_NAME) || '').trim();
-	if (!url || !isValidUrl(url)) return false;
-
-	setOperationStatus('running', _('Checking subscription update interval...'));
-	try {
-		const settingsMap = await readSettingsMap();
-		const versions = await getVersions();
-		const intervalInfo = await probeSubscriptionUpdateIntervalOnRouter(url, settingsMap, versions.app);
-		const interval = normalizeAutoUpdateIntervalHours(intervalInfo && intervalInfo.profileUpdateIntervalHours);
-		if (!interval) return false;
-
-		await applySubscriptionProfileUpdateInterval(intervalInfo.profileUpdateIntervalHours);
-		return true;
-	} catch (e) {
-		await logUiAction('warn', 'Failed to probe subscription update interval: ' + e.message);
-		return false;
-	} finally {
-		await view_miclash_subscription.cleanupTemp();
-		clearOperationStatus();
-	}
+	notify('info', _('The provider update interval will be learned during the next protected subscription update. The selected interval is used until then.'));
+	return false;
 }
 
 async function testConfigContent(content, keepOnSuccess, targetPath) {
@@ -1279,7 +1391,7 @@ async function openDashboard() {
 			return;
 		}
 
-		const config = await fs.read(CONFIG_PATH);
+		const config = await readConfigFileByName(MAIN_CONFIG_NAME);
 		const configIssue = getDashboardConfigIssue(config);
 		if (configIssue) {
 			notify('error', configIssue);
@@ -1321,14 +1433,7 @@ async function openDashboard() {
 	}
 }
 
-async function syncMemoryGuardServiceOrThrow() {
-	const result = await fs.exec('/opt/clash/bin/miclash-memory-guard', ['sync']);
-	if (result.code !== 0) {
-		throw new Error(String(result.stderr || result.stdout || _('Failed to synchronize memory guard service.')).trim());
-	}
-}
-
-async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, enableMemoryGuard, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, autoHideNotifications, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, options) {
+async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan, autoDetectWan, blockQuic, internetOnlyMiclash, useTmpfsRules, interfaces, enableHwid, hwidUserAgent, hwidDeviceOS, miclashReleaseChannel, mihomoReleaseChannel, autoUpdateConfig, autoUpdateIntervalHours, autoMajorMiclash, options) {
 	const opts = options || {};
 	try {
 		await view_miclash_settings_model.saveOperationalSettings(
@@ -1338,27 +1443,32 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 			autoDetectLan,
 			autoDetectWan,
 			blockQuic,
-			internetOnlyMiclash,
 			useTmpfsRules,
-			enableMemoryGuard,
 			interfaces,
 			enableHwid,
 			hwidUserAgent,
 			hwidDeviceOS,
-			autoHideNotifications,
 			miclashReleaseChannel,
 			mihomoReleaseChannel,
 			autoUpdateConfig,
-			autoUpdateIntervalHours
+			autoUpdateIntervalHours,
+			autoMajorMiclash
 		);
-		await syncMemoryGuardServiceOrThrow();
-
+		const typed = await configApi.settings_get();
+		if (!opts.skipGuard && !!(typed.guard && typed.guard.enabled) !== !!internetOnlyMiclash) {
+			setOperationStatus('running', _('Applying protection setting...'));
+			await awaitTypedOperation(
+				await configApi.guard_transition(!!internetOnlyMiclash, 'luci'),
+				_('Applying protection setting...')
+			);
+		}
 		if (!opts.silent) {
 			notify('info', _('Settings saved.'));
 		}
 		await logUiAction('info', 'Settings saved');
 		return true;
 	} catch (e) {
+		try { await refreshCanonicalGuardState(); } catch (refreshError) {}
 		await logUiAction('err', 'Failed to save settings: ' + e.message);
 		notify('error', _('Failed to save settings: %s').format(e.message));
 		return false;
@@ -1368,7 +1478,6 @@ async function saveOperationalSettings(mode, proxyMode, tunStack, autoDetectLan,
 async function switchProxyModeFromHeader(targetMode) {
 	const nextMode = normalizeProxyMode(targetMode);
 	if (nextMode === appState.proxyMode) return;
-	const wasRunning = await getServiceStatus();
 
 	const current = await loadOperationalSettings();
 	const interfaces = (current.mode === 'explicit'
@@ -1385,28 +1494,19 @@ async function switchProxyModeFromHeader(targetMode) {
 		!!current.blockQuic,
 		!!current.internetOnlyMiclash,
 		!!current.useTmpfsRules,
-		!!current.enableMemoryGuard,
 		interfaces,
 		!!current.enableHwid,
 		current.hwidUserAgent || 'MiClash',
 		current.hwidDeviceOS || 'OpenWrt',
-		current.autoHideNotifications !== false,
 		current.miclashReleaseChannel || 'release',
 		current.mihomoReleaseChannel || 'release',
 		current.autoUpdateConfig !== false,
 		current.autoUpdateIntervalHours || '4',
+		current.autoMajorMiclash !== false,
 		{ silent: true }
 	);
 
 	if (!ok) throw new Error(_('Cannot save proxy mode.'));
-
-	if (wasRunning) {
-		if (!(await validateMainConfigBeforeStart())) return;
-		setOperationStatus('running', _('Restarting Clash service...'));
-		await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
-	} else {
-		await refreshGuardRulesOrThrow();
-	}
 
 	appState.settings = await loadOperationalSettings();
 	appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
@@ -1415,10 +1515,7 @@ async function switchProxyModeFromHeader(targetMode) {
 	appState.proxyMode = normalizeProxyMode(appState.settings.proxyMode || nextMode);
 	appState.serviceRunning = await getServiceStatus();
 
-	const freshConfig = await L.resolveDefault(
-		fs.read(getConfigPathByName(appState.selectedConfigName)),
-		''
-	);
+	const freshConfig = await L.resolveDefault(readConfigFileByName(appState.selectedConfigName), '');
 	appState.configContent = freshConfig;
 	if (editor) {
 		editor.setValue(String(freshConfig || ''), -1);
@@ -1427,9 +1524,7 @@ async function switchProxyModeFromHeader(targetMode) {
 
 	updateHeaderAndControlDom();
 	if (appState.activeCfgTab === 'settings') renderSettingsPane();
-	const message = wasRunning
-		? _('Proxy mode switched to %s. Service restarted.').format(appState.proxyMode)
-		: _('Settings saved.');
+	const message = _('Proxy mode switched to %s.').format(appState.proxyMode);
 	setOperationSuccess(message);
 	notify('info', message);
 }
@@ -1438,10 +1533,26 @@ async function loadClashLogs() {
 	return view_miclash_logs.readRaw();
 }
 
-function formatLogHtml(raw) {
-	if (!raw) return '<span class="sbox-log-muted">No logs yet.</span>';
+function createLogSearchState() {
+	return { query: '', activeIndex: -1, matches: [] };
+}
 
-	const rows = String(raw || '').split('\n')
+function matchOffsets(text, query) {
+	const value = String(text || '');
+	const needle = String(query || '').trim().toLocaleLowerCase();
+	if (!needle) return [];
+	const haystack = value.toLocaleLowerCase();
+	const offsets = [];
+	for (let start = haystack.indexOf(needle); start !== -1;
+		start = haystack.indexOf(needle, start + needle.length))
+		offsets.push([ start, start + needle.length ]);
+	return offsets;
+}
+
+function logRows(raw) {
+	if (!raw) return [];
+
+	return String(raw || '').split('\n')
 		.map((line) => view_miclash_logs.formatLine(line))
 		.map((item) => {
 			if (!item || !item.text) return null;
@@ -1461,17 +1572,107 @@ function formatLogHtml(raw) {
 			};
 		})
 		.filter((item) => !!item && !!item.message);
-
-	if (!rows.length) return '<span class="sbox-log-muted">No logs yet.</span>';
-	return rows.map((item) => {
-		return '<span class="sbox-log-line ' + safeText(item.levelClass || '') + ' ' + safeText(item.daemonClass || '') + '">' +
-			'<span class="sbox-log-time">' + safeText(item.time || '--:--:--') + '</span>' +
-			'<span class="sbox-log-daemon">' + safeText(item.daemon || 'clash') + '</span>' +
-			'<span class="sbox-log-level">' + safeText(item.level || 'MUTED') + '</span>' +
-			'<span class="sbox-log-message">' + safeText(item.message || item.text) + '</span>' +
-		'</span>';
-	}).join('\n');
 }
+
+function appendLogText(parent, text) {
+	const value = String(text || '');
+	let cursor = 0;
+	for (const [ start, end ] of matchOffsets(value, logSearch.query)) {
+		if (start > cursor) parent.appendChild(document.createTextNode(value.slice(cursor, start)));
+		const match = E('mark', { 'class': 'sbox-log-search-match' }, [ value.slice(start, end) ]);
+		logSearch.matches.push(match);
+		parent.appendChild(match);
+		cursor = end;
+	}
+	if (cursor < value.length || !value.length) parent.appendChild(document.createTextNode(value.slice(cursor)));
+}
+
+function updateLogSearchControls(scrollActive) {
+	const toolbar = pageRoot?.querySelector('#sbox-log-search');
+	if (!toolbar) return;
+	toolbar.hidden = !developerVisible;
+	if (!developerVisible) return;
+
+	const total = logSearch.matches.length;
+	if (logSearch.activeIndex >= total) logSearch.activeIndex = total - 1;
+	if (total === 0) logSearch.activeIndex = -1;
+	for (let i = 0; i < total; i++)
+		logSearch.matches[i].classList.toggle('sbox-log-search-match-active', i === logSearch.activeIndex);
+
+	const count = toolbar.querySelector('#sbox-log-search-count');
+	const next = toolbar.querySelector('#sbox-log-search-next');
+	const previous = toolbar.querySelector('#sbox-log-search-previous');
+	if (count) count.textContent = total ? String(logSearch.activeIndex + 1) + ' / ' + String(total) : '0 / 0';
+	if (next) next.disabled = total === 0;
+	if (previous) previous.disabled = total === 0;
+	if (scrollActive && logSearch.activeIndex >= 0)
+		logSearch.matches[logSearch.activeIndex].scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+function renderLogs(options) {
+	const content = pageRoot?.querySelector('#sbox-log-content');
+	if (!content) return;
+	const opts = options || {};
+	const rows = logRows(appState.logsRaw);
+	logSearch.matches = [];
+	content.replaceChildren();
+	if (!rows.length) {
+		content.appendChild(E('span', { 'class': 'sbox-log-muted' }, [
+			_('No MiClash or Mihomo records match the current log level yet. Current level: %s')
+				.format(configuredLogLevel())
+		]));
+	} else {
+		for (let i = 0; i < rows.length; i++) {
+			const item = rows[i];
+			const row = E('span', { 'class': 'sbox-log-line ' + item.levelClass + ' ' + item.daemonClass });
+			const time = E('span', { 'class': 'sbox-log-time' });
+			const daemon = E('span', { 'class': 'sbox-log-daemon' });
+			const level = E('span', { 'class': 'sbox-log-level' });
+			const message = E('span', { 'class': 'sbox-log-message' });
+			appendLogText(time, item.time || '--:--:--');
+			appendLogText(daemon, item.daemon || 'clash');
+			appendLogText(level, item.level || 'MUTED');
+			appendLogText(message, item.message || item.text);
+			row.append(time, daemon, level, message);
+			if (i > 0) content.appendChild(document.createTextNode('\n'));
+			content.appendChild(row);
+		}
+	}
+	if (logSearch.query.trim() && logSearch.activeIndex < 0 && logSearch.matches.length)
+		logSearch.activeIndex = 0;
+	updateLogSearchControls(opts.scrollActive === true);
+	if (opts.followBottom === true) content.scrollTop = content.scrollHeight;
+}
+
+function setLogSearchQuery(value) {
+	const query = String(value || '');
+	if (logSearch.query === query) return;
+	logSearch.query = query;
+	logSearch.activeIndex = -1;
+	renderLogs({ scrollActive: query.trim().length > 0 });
+}
+
+function moveLogSearchResult(direction) {
+	const total = logSearch.matches.length;
+	if (!total) return;
+	const step = direction < 0 ? -1 : 1;
+	const current = logSearch.activeIndex < 0 ? (step < 0 ? 0 : -1) : logSearch.activeIndex;
+	logSearch.activeIndex = (current + step + total) % total;
+	updateLogSearchControls(true);
+}
+
+function clearLogSearch() {
+	logSearch = createLogSearchState();
+	const input = pageRoot?.querySelector('#sbox-log-search-input');
+	if (input) input.value = '';
+	if (pageRoot?.querySelector('#sbox-log-content')) renderLogs();
+}
+
+function configuredLogLevel() {
+	const match = String(appState.configContent || '').match(/^\s*log-level\s*:\s*([^\s#]+)/mi);
+	return match ? String(match[1] || '').trim() : _('unknown');
+}
+
 
 async function initializeConfigEditor(content) {
 	const editorHost = (pageRoot && pageRoot.querySelector('#miclash-editor')) || document.getElementById('miclash-editor');
@@ -1479,6 +1680,101 @@ async function initializeConfigEditor(content) {
 	editor = await view_miclash_editor.createEditor(editorHost, content, { mode: 'yaml' });
 	editor.clearSelection();
 	resizeConfigEditor();
+}
+
+function setConfigWorkspaceReady(ready) {
+	appState.configReady = !!ready;
+	if (!pageRoot) return;
+	[
+		'#sbox-config-select', '#sbox-subscription-url', '#sbox-save-sub-url',
+		'#sbox-update-sub', '#sbox-clear-sub-url', '#sbox-validate', '#sbox-save',
+		'#sbox-clear-editor', '#sbox-set-main-config', '#sbox-open-rulesets'
+	].forEach((selector) => {
+		const control = pageRoot.querySelector(selector);
+		if (control) control.disabled = !ready;
+	});
+}
+
+async function hydrateConfigWorkspace(generation) {
+	const content = await readConfigFileByName(MAIN_CONFIG_NAME);
+	if (generation !== pageGeneration || !pageRoot) return;
+	await ensureConfigProfilesReady(content || '');
+	if (generation !== pageGeneration || !pageRoot) return;
+
+	const subscriptionUrl = await readSubscriptionUrl(MAIN_CONFIG_NAME);
+	if (generation !== pageGeneration || !pageRoot) return;
+
+	appState.configProfiles = CONFIG_PROFILES.slice();
+	appState.selectedConfigName = MAIN_CONFIG_NAME;
+	appState.configContent = String(content || '');
+	appState.subscriptionUrl = String(subscriptionUrl || '');
+	const select = pageRoot.querySelector('#sbox-config-select');
+	const subscription = pageRoot.querySelector('#sbox-subscription-url');
+	if (select) select.innerHTML = buildConfigOptionsHtml();
+	if (subscription) subscription.value = appState.subscriptionUrl;
+
+	await initializeConfigEditor(appState.configContent);
+	if (generation !== pageGeneration || !pageRoot) return;
+	setConfigWorkspaceReady(true);
+}
+
+function beginPageHydration(generation) {
+	return Promise.resolve().then(() => hydrateConfigWorkspace(generation)).catch((error) => {
+		if (generation !== pageGeneration || !pageRoot) return;
+		console.error('[MiClash] Failed to hydrate config workspace:', error);
+		// Keep the editor shimmer visible. A later page visit can retry safely.
+	});
+}
+
+async function hydrateSystemMetadata(generation) {
+	const system = await typedCall((api) => api.system_info());
+	if (generation !== pageGeneration || !pageRoot) return;
+	appState.versions = {
+		app: normalizeAppVersion(system?.app_version || 'unknown'),
+		clash: system?.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : 'unknown'
+	};
+	appState.kernelStatus = {
+		installed: system?.mihomo?.installed === true,
+		version: system?.mihomo?.installed ? String(system.mihomo.version || '') : null
+	};
+	appState.systemMetadataReady = true;
+	updateHeaderAndControlDom();
+}
+
+async function hydrateInitialState(generation) {
+	const [ serviceState, networkSnapshot ] = await Promise.all([
+		readMiClashServiceState(),
+		getNetworkSnapshot()
+	]);
+	if (generation !== pageGeneration || !pageRoot) return;
+	if (serviceState?.desired)
+		appState.settings = view_miclash_settings_model.operationalSettingsFromTyped(serviceState.desired);
+	appState.settings ||= {};
+	appState.interfaces = Array.isArray(networkSnapshot?.interfaces) ? networkSnapshot.interfaces : [];
+	appState.selectedInterfaces = (appState.settings.mode === 'explicit'
+		? appState.settings.includedInterfaces : appState.settings.excludedInterfaces) || [];
+	appState.detectedLan = appState.settings.detectedLan || networkSnapshot?.detectedLan || '';
+	appState.detectedWan = appState.settings.detectedWan || networkSnapshot?.detectedWan || '';
+	appState.proxyMode = normalizeProxyMode(appState.settings.proxyMode || 'tproxy');
+	applyServiceState(serviceState);
+	updateHeaderAndControlDom();
+}
+
+function releaseConfigRuntime() {
+	pageGeneration++;
+	view_miclash_logs.reset();
+	appState.configReady = false;
+	subscriptionUpdateBusy = false;
+	logsLoaded = false;
+	logsRefreshPromise = null;
+	if (visibilityChangeHandler) document.removeEventListener('visibilitychange', visibilityChangeHandler);
+	visibilityChangeHandler = null;
+	if (editor) { try { editor.destroy(); } catch (error) {} editor = null; }
+	if (configApi) configApi.destroy();
+	configApi = null;
+	controlPollTimer = view_miclash_ui_shell.stopInterval(controlPollTimer);
+	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
+	updatePollTimer = view_miclash_ui_shell.stopInterval(updatePollTimer);
 }
 
 function resizeConfigEditor() {
@@ -1512,7 +1808,7 @@ async function openRulesetsModal() {
 	let currentRuleset = rulesetNames[0] || '';
 	const rulesetCache = Object.assign({}, data.contentMap || {});
 
-	const body = E('div', { 'class': 'sbox-rulesets-modal-body' });
+		const body = E('div', { 'class': 'sbox-rulesets-modal-body sbox-modal-responsive' });
 	body.innerHTML = '' +
 		'<div class="sbox-rulesets-layout">' +
 			'<aside class="cbi-section sbox-rulesets-sidebar">' +
@@ -1610,7 +1906,7 @@ async function openRulesetsModal() {
 				await ensureRulesetEditor();
 				const content = rulesetCache[currentRuleset] != null
 					? rulesetCache[currentRuleset]
-					: await L.resolveDefault(fs.read(RULESET_PATH + currentRuleset), '');
+					: await L.resolveDefault(view_miclash_rulesets_model.readFile(currentRuleset), '');
 				rulesetCache[currentRuleset] = content;
 				rulesetMainEditor.setValue(String(content || ''), -1);
 				rulesetMainEditor.clearSelection();
@@ -1746,15 +2042,9 @@ async function openRulesetsModal() {
 			setOperationStatus('running', _('Saving IP-CIDR list...'));
 			const raw = String(rulesetWhitelistEditor.getValue() || '').replace(/\r\n/g, '\n');
 			const finalContent = raw.trim() ? raw.trimEnd() + '\n' : '';
-			const update = await saveRulesetWhitelist(finalContent);
-			if (update && update.code === 0) {
-				setOperationSuccess(_('IP-CIDR list saved and firewall rules updated.'));
-				notify('info', _('IP-CIDR list saved and firewall rules updated.'));
-			} else {
-				const errMsg = String(update?.stderr || update?.stdout || _('unknown error')).trim();
-				setOperationError(new Error(errMsg));
-				notify('warning', _('IP-CIDR list saved, but firewall update failed: %s').format(errMsg));
-			}
+			await saveRulesetWhitelist(finalContent);
+			setOperationSuccess(_('IP-CIDR list saved and firewall rules updated.'));
+			notify('info', _('IP-CIDR list saved and firewall rules updated.'));
 		}).catch((e) => {
 			setOperationError(e);
 			notify('error', _('Failed to save IP-CIDR list: %s').format(e.message));
@@ -1775,47 +2065,77 @@ function buildSettingsSummary() {
 
 	const s = appState.settings;
 	const lines = [];
+	lines.push([ _('Operating mode'), s.mode === 'explicit' ? _('Selected interfaces') : _('Exclusions') ]);
 
 	if (s.mode === 'explicit') {
-		lines.push(_('Mode: Explicit (proxy only selected interfaces)'));
-		if (s.autoDetectLan && appState.detectedLan) lines.push(_('Auto LAN: %s').format(appState.detectedLan));
+		if (s.autoDetectLan && appState.detectedLan) lines.push([ _('Interfaces'), appState.detectedLan ]);
 	} else {
-		lines.push(_('Mode: Exclude (proxy all except selected interfaces)'));
-		if (s.autoDetectWan && appState.detectedWan) lines.push(_('Auto WAN: %s').format(appState.detectedWan));
+		if (s.autoDetectWan && appState.detectedWan) lines.push([ _('WAN'), appState.detectedWan ]);
 	}
 
 	const manual = (s.mode === 'explicit' ? s.includedInterfaces : s.excludedInterfaces) || [];
 	if (manual.length) {
-		lines.push(_('Manual interfaces: %s').format(manual.join(', ')));
+		lines.push([ _('Interfaces'), manual.join(', ') ]);
 	}
 
-	lines.push(_('Proxy mode: %s').format(s.proxyMode || appState.proxyMode || 'tproxy'));
-	lines.push(_('Tun stack: %s').format(s.tunStack || 'system'));
+	lines.push([ _('Proxy Mode'), s.proxyMode || appState.proxyMode || 'tproxy' ]);
+	lines.push([ _('Tun stack'), s.tunStack || 'system' ]);
 
-	return lines.map((line) => '<div>' + safeText(line) + '</div>').join('');
+	return lines.map((line) =>
+		'<div class="sbox-diagnostics-row">' +
+			'<span class="sbox-diagnostics-label">' + safeText(line[0]) + '</span>' +
+			'<span class="sbox-diagnostics-value">' + safeText(line[1]) + '</span>' +
+		'</div>'
+	).join('');
+}
+
+function buildAutoUpdateIntervalOptionsHtml(current, fixed) {
+	const preset = AUTO_UPDATE_PRESET_INTERVAL_HOURS.includes(current);
+	const values = fixed ? [current] : preset ? AUTO_UPDATE_PRESET_INTERVAL_HOURS : [current];
+	return values.map((value) =>
+		'<label class="sbox-auto-update-choice">' +
+			'<input type="radio" name="sbox-auto-update-interval" value="' + safeText(value) + '"' + (value === current ? ' checked' : '') + ' />' +
+			'<span>' + safeText(_('%s h').format(value)) + '</span>' +
+		'</label>'
+	).join('');
 }
 
 function buildAutoUpdateIntervalChoicesHtml(settings) {
 	const current = normalizeAutoUpdateIntervalHours(settings && settings.autoUpdateIntervalHours || '4') || '4';
-	const preset = AUTO_UPDATE_PRESET_INTERVAL_HOURS.includes(current);
-	const values = preset ? AUTO_UPDATE_PRESET_INTERVAL_HOURS : [current];
+	const provider = settings?.autoUpdateIntervalSource === 'provider';
 
 	return '' +
+		'<span class="sbox-auto-update-every">' + safeText(_('Every:')) + '</span>' +
 		'<span id="sbox-auto-update-interval" class="sbox-auto-update-interval"' + (settings && settings.autoUpdateConfig !== false ? '' : ' hidden') + '>' +
-			values.map((value) =>
-				'<label class="sbox-auto-update-choice">' +
-					'<input type="radio" name="sbox-auto-update-interval" value="' + safeText(value) + '"' + (value === current ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('%s h').format(value)) + '</span>' +
-				'</label>'
-			).join('') +
-		'</span>';
+			buildAutoUpdateIntervalOptionsHtml(current, provider) +
+		'</span>' +
+		(provider ? '<span id="sbox-auto-update-provider" class="sbox-muted sbox-auto-update-provider">' +
+			safeText(_('Interval set by subscription')) + '</span>' : '');
+}
+
+function refreshAutoUpdateIntervalChoices(hours) {
+	const current = normalizeAutoUpdateIntervalHours(hours);
+	if (!current) return;
+	if (appState.settings) {
+		appState.settings.autoUpdateIntervalHours = current;
+		appState.settings.autoUpdateIntervalStored = true;
+		appState.settings.autoUpdateIntervalSource = 'provider';
+	}
+	const choices = pageRoot?.querySelector('#sbox-auto-update-interval');
+	if (choices) choices.innerHTML = buildAutoUpdateIntervalOptionsHtml(current, true);
+	const provider = pageRoot?.querySelector('#sbox-auto-update-provider');
+	if (!provider && choices?.parentNode) {
+		const note = E('span', { id: 'sbox-auto-update-provider',
+			'class': 'sbox-muted sbox-auto-update-provider' }, _('Interval set by subscription'));
+		choices.parentNode.appendChild(note);
+	}
 }
 
 function buildReleaseChannelSectionHtml(settings) {
 	const s = settings || {};
 
 	return '' +
-		'<section class="sbox-release-channel-section cbi-section sbox-settings-block">' +
+		'<article class="sbox-release-channel-section sbox-settings-card sbox-updates-card">' +
 			'<h4>' + safeText(_('Release channels')) + '</h4>' +
 			'<div class="sbox-release-channel-grid">' +
 				'<div class="sbox-release-channel-column">' +
@@ -1841,7 +2161,13 @@ function buildReleaseChannelSectionHtml(settings) {
 					'</label>' +
 				'</div>' +
 			'</div>' +
-		'</section>';
+			'<div class="sbox-major-update-policy">' +
+				'<label class="sbox-checkbox-row">' +
+					'<input type="checkbox" id="sbox-auto-major-miclash"' + (s.autoMajorMiclash !== false ? ' checked' : '') + ' />' +
+					'<span>' + safeText(_('Automatically install major MiClash updates at night')) + '</span>' +
+				'</label>' +
+			'</div>' +
+		'</article>';
 }
 
 function buildInterfaceListHtml() {
@@ -1898,7 +2224,7 @@ function buildInterfaceListHtml() {
 		return '<div class="sbox-muted">' + safeText(_('No interfaces detected.')) + '</div>';
 	}
 
-	return chunks.join('');
+	return '<div class="sbox-interface-groups">' + chunks.join('') + '</div>';
 }
 
 function buildSettingsPaneHtml() {
@@ -1912,9 +2238,9 @@ function buildSettingsPaneHtml() {
 		internetOnlyMiclash: false,
 		useTmpfsRules: true,
 		enableMemoryGuard: false,
-		autoHideNotifications: true,
 		autoUpdateConfig: true,
 		autoUpdateIntervalHours: '4',
+		autoMajorMiclash: true,
 		miclashReleaseChannel: 'release',
 		mihomoReleaseChannel: 'release',
 		enableHwid: false,
@@ -1926,111 +2252,107 @@ function buildSettingsPaneHtml() {
 	const showTunStack = currentProxyMode === 'tun' || currentProxyMode === 'mixed';
 
 	return '' +
-		'<div class="sbox-settings-overview">' +
-			'<div id="sbox-settings-status" class="cbi-section-descr sbox-settings-status">' +
-				buildSettingsSummary() +
-			'</div>' +
-			buildReleaseChannelSectionHtml(s) +
-		'</div>' +
-		'<div class="sbox-settings-grid">' +
-			'<section class="cbi-section sbox-settings-block">' +
-				'<h4>' + safeText(_('Traffic Scope')) + '</h4>' +
-				'<label class="sbox-radio-row">' +
-					'<input type="radio" name="sbox-interface-mode" value="exclude"' + (s.mode !== 'explicit' ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Exclude mode: proxy all interfaces except selected ones')) + '</span>' +
-				'</label>' +
-					'<label class="sbox-radio-row">' +
-						'<input type="radio" name="sbox-interface-mode" value="explicit"' + (s.mode === 'explicit' ? ' checked' : '') + ' />' +
-						'<span>' + safeText(_('Explicit mode: proxy only selected interfaces')) + '</span>' +
-					'</label>' +
-				'</section>' +
-
-				'<section class="cbi-section sbox-settings-block">' +
-					'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
-					'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' hidden') + '>' +
-					'<input type="checkbox" id="sbox-auto-lan"' + (s.autoDetectLan ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Auto detect LAN bridge')) + '</span>' +
-				'</label>' +
-				'<label class="sbox-checkbox-row" id="sbox-auto-wan-row"' + (s.mode !== 'explicit' ? '' : ' hidden') + '>' +
-					'<input type="checkbox" id="sbox-auto-wan"' + (s.autoDetectWan ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Auto detect WAN interface')) + '</span>' +
-				'</label>' +
-				'<div class="sbox-muted">' +
-					safeText(_('Detected LAN: %s').format(appState.detectedLan || '-')) + '<br/>' +
-					safeText(_('Detected WAN: %s').format(appState.detectedWan || '-')) +
+		'<div class="sbox-settings-page">' +
+			'<section class="sbox-settings-zone sbox-settings-zone-overview" aria-label="MiClash">' +
+				'<div class="sbox-overview-grid">' +
+					'<article id="sbox-settings-status" class="sbox-settings-card sbox-overview-card sbox-overview-routing">' +
+						'<h4>' + safeText(_('Routing')) + '</h4>' +
+						'<div class="sbox-settings-summary-current">' + buildSettingsSummary() + '</div>' +
+						'<div class="sbox-diagnostics-actions">' +
+							'<button type="button" class="cbi-button cbi-button-neutral" data-action="route-test">' + safeText(_('Route test')) + '</button>' +
+						'</div>' +
+					'</article>' +
+					'<div id="sbox-diagnostics-summary" class="sbox-diagnostics-summary"></div>' +
 				'</div>' +
 			'</section>' +
 
-			'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
-				'<h4>' + safeText(_('Interfaces')) + '</h4>' +
-				'<div class="sbox-muted sbox-settings-help">' +
-					(s.mode === 'explicit'
-						? safeText(_('Choose interfaces that should go through proxy.'))
-						: safeText(_('Choose interfaces that should bypass proxy.'))
-					) +
-				'</div>' +
-				buildInterfaceListHtml() +
-				'</section>' +
-
-				'<section class="cbi-section sbox-settings-block sbox-settings-block-wide">' +
-					'<h4>' + safeText(_('Additional')) + '</h4>' +
-					'<div id="sbox-tun-stack-row" class="sbox-settings-field"' + (showTunStack ? '' : ' hidden') + '>' +
-						'<label>' + safeText(_('Tun stack')) + '</label>' +
-						'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
-							'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
-							'<option value="gvisor"' + ((s.tunStack || 'system') === 'gvisor' ? ' selected' : '') + '>gvisor</option>' +
-							'<option value="mixed"' + ((s.tunStack || 'system') === 'mixed' ? ' selected' : '') + '>mixed</option>' +
-						'</select>' +
+			'<section class="sbox-settings-zone sbox-settings-zone-routing">' +
+				'<div class="sbox-settings-card sbox-routing-composite">' +
+					'<div class="sbox-routing-config-grid">' +
+						'<div class="sbox-settings-subgroup sbox-traffic-scope">' +
+							'<h4>' + safeText(_('Traffic Scope')) + '</h4>' +
+							'<label class="sbox-radio-row">' +
+								'<input type="radio" name="sbox-interface-mode" value="exclude"' + (s.mode !== 'explicit' ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Exclude mode: proxy all interfaces except selected ones')) + '</span>' +
+							'</label>' +
+							'<label class="sbox-radio-row">' +
+								'<input type="radio" name="sbox-interface-mode" value="explicit"' + (s.mode === 'explicit' ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Explicit mode: proxy only selected interfaces')) + '</span>' +
+							'</label>' +
+						'</div>' +
+						'<div class="sbox-settings-subgroup sbox-routing-detection">' +
+							'<h4>' + safeText(_('Auto Detection')) + '</h4>' +
+							'<label class="sbox-checkbox-row" id="sbox-auto-lan-row"' + (s.mode === 'explicit' ? '' : ' hidden') + '>' +
+								'<input type="checkbox" id="sbox-auto-lan"' + (s.autoDetectLan ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Auto detect LAN bridge')) + '</span>' +
+							'</label>' +
+							'<label class="sbox-checkbox-row" id="sbox-auto-wan-row"' + (s.mode !== 'explicit' ? '' : ' hidden') + '>' +
+								'<input type="checkbox" id="sbox-auto-wan"' + (s.autoDetectWan ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Auto detect WAN interface')) + '</span>' +
+							'</label>' +
+							'<div class="sbox-detected-facts sbox-muted">' +
+								'<span>' + safeText(_('Detected LAN: %s').format(appState.detectedLan || '-')) + '</span>' +
+								'<span>' + safeText(_('Detected WAN: %s').format(appState.detectedWan || '-')) + '</span>' +
+							'</div>' +
+						'</div>' +
 					'</div>' +
-					'<label class="sbox-checkbox-row">' +
-						'<input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' />' +
-						'<span>' + safeText(_('Block QUIC (UDP/443)')) + '</span>' +
-					'</label>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Client devices only through MiClash (Protection)')) + '</span>' +
-				'</label>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Store rules/providers on tmpfs')) + '</span>' +
-				'</label>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-memory-guard"' + (s.enableMemoryGuard ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Monitor abnormal Mihomo memory usage')) + '</span>' +
-				'</label>' +
-				'<div class="sbox-muted sbox-settings-help">' +
-					safeText(_('Learns normal Mihomo memory use and applies staged recovery only during sustained system memory pressure.')) +
-				'</div>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-auto-hide-notifications"' + (s.autoHideNotifications !== false ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Auto-hide notifications')) + '</span>' +
-				'</label>' +
-				'<label class="sbox-checkbox-row sbox-auto-update-row">' +
-					'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Auto-update config')) + '</span>' +
-					buildAutoUpdateIntervalChoicesHtml(s) +
-				'</label>' +
-				'<label class="sbox-checkbox-row">' +
-					'<input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' />' +
-					'<span>' + safeText(_('Inject HWID headers into proxy-providers')) + '</span>' +
-				'</label>' +
-				'<div class="sbox-form-grid">' +
-					'<div>' +
-						'<label>' + safeText(_('User-Agent')) + '</label>' +
-						'<input id="sbox-hwid-user-agent" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidUserAgent || 'MiClash') + '" />' +
-					'</div>' +
-					'<div>' +
-						'<label>' + safeText(_('Device OS')) + '</label>' +
-						'<input id="sbox-hwid-device-os" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidDeviceOS || 'OpenWrt') + '" />' +
+					'<div class="sbox-card-divider"></div>' +
+					'<div class="sbox-interface-section">' +
+						'<h4>' + safeText(_('Interfaces')) + '</h4>' +
+						'<div class="sbox-muted sbox-settings-help">' +
+							(s.mode === 'explicit' ? safeText(_('Choose interfaces that should go through proxy.')) : safeText(_('Choose interfaces that should bypass proxy.'))) +
+						'</div>' +
+						buildInterfaceListHtml() +
 					'</div>' +
 				'</div>' +
 			'</section>' +
-			'</div>' +
+
+			'<section class="sbox-settings-zone sbox-settings-zone-updates">' +
+				'<div class="sbox-settings-pair-grid">' +
+					buildReleaseChannelSectionHtml(s) +
+					'<article class="sbox-settings-card sbox-runtime-card">' +
+						'<h4>' + safeText(_('Additional')) + '</h4>' +
+						'<div id="sbox-tun-stack-row" class="sbox-settings-field"' + (showTunStack ? '' : ' hidden') + '>' +
+							'<label for="sbox-tun-stack">' + safeText(_('Tun stack')) + '</label>' +
+							'<select id="sbox-tun-stack" class="cbi-input-select sbox-select">' +
+								'<option value="system"' + ((s.tunStack || 'system') === 'system' ? ' selected' : '') + '>system</option>' +
+								'<option value="gvisor"' + ((s.tunStack || 'system') === 'gvisor' ? ' selected' : '') + '>gvisor</option>' +
+								'<option value="mixed"' + ((s.tunStack || 'system') === 'mixed' ? ' selected' : '') + '>mixed</option>' +
+							'</select>' +
+						'</div>' +
+						'<div class="sbox-runtime-switches">' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-block-quic"' + (s.blockQuic ? ' checked' : '') + ' /><span>' + safeText(_('Block QUIC (UDP/443)')) + '</span></label>' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-internet-only-miclash"' + (s.internetOnlyMiclash ? ' checked' : '') + ' /><span>' + safeText(_('Direct connection guard')) + '</span></label>' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-tmpfs"' + (s.useTmpfsRules ? ' checked' : '') + ' /><span>' + safeText(_('Store rules/providers on tmpfs')) + '</span></label>' +
+							'<label class="sbox-checkbox-row sbox-auto-update-row">' +
+								'<input type="checkbox" id="sbox-auto-update-config"' + (s.autoUpdateConfig !== false ? ' checked' : '') + ' />' +
+								'<span>' + safeText(_('Auto-update config')) + '</span>' +
+								buildAutoUpdateIntervalChoicesHtml(s) +
+							'</label>' +
+							'<label class="sbox-checkbox-row"><input type="checkbox" id="sbox-enable-hwid"' + (s.enableHwid ? ' checked' : '') + ' /><span>' + safeText(_('Inject HWID headers into proxy-providers')) + '</span></label>' +
+						'</div>' +
+						'<div class="sbox-form-grid sbox-hwid-fields"' + (s.enableHwid ? '' : ' hidden') + '>' +
+								'<div><label for="sbox-hwid-user-agent">' + safeText(_('User-Agent')) + '</label><input id="sbox-hwid-user-agent" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidUserAgent || 'MiClash') + '" /></div>' +
+								'<div><label for="sbox-hwid-device-os">' + safeText(_('Device OS')) + '</label><input id="sbox-hwid-device-os" class="cbi-input-text sbox-input" type="text" value="' + safeText(s.hwidDeviceOS || 'OpenWrt') + '" /></div>' +
+						'</div>' +
+					'</article>' +
+				'</div>' +
+			'</section>' +
+
+			'<section class="sbox-settings-zone sbox-settings-zone-integrations">' +
+				'<div id="sbox-management-panels" class="sbox-management-grid">' +
+					'<section id="sbox-management-settings" class="sbox-management-module sbox-management-settings"></section>' +
+				'</div>' +
+			'</section>' +
+
+			'<section class="sbox-settings-zone sbox-settings-zone-devices">' +
+				'<section id="sbox-management-devices" class="sbox-settings-card sbox-management-module sbox-management-wide"></section>' +
+			'</section>' +
 
 			'<div class="sbox-settings-save-wrap">' +
-				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply sbox-settings-save-btn">' + safeText(_('Save Settings')) + '</button>' +
+				'<button id="sbox-settings-save" type="button" class="cbi-button cbi-button-apply sbox-settings-save-btn">' + safeText(_('Apply Settings')) + '</button>' +
 			'</div>' +
-		'';
+		'</div>';
 }
 
 function buildConfigOptionsHtml() {
@@ -2045,32 +2367,40 @@ function buildPageHtml() {
 	const appActionState = resolveAppActionState();
 	const kernelActionState = resolveKernelActionState();
 	const dashboardButtonState = resolveDashboardButtonState();
-	const versionApp = safeText(appState.versions.app || _('unknown'));
-	const versionKernel = safeText(
+	const metadataReady = appState.systemMetadataReady === true;
+	const versionLoadingClass = metadataReady ? '' : ' class="sbox-version-loading"';
+	const versionLoadingState = metadataReady ? '' : ' aria-busy="true" aria-label="' + safeText(_('Loading…')) + '"';
+	const versionApp = metadataReady ? safeText(appState.versions.app || _('unknown')) : '';
+	const appTarget = appActionState.scheduled && appActionState.targetVersion
+		? ' data-target-version="' + safeText(appActionState.targetVersion) + '"' : '';
+	const versionKernel = metadataReady ? safeText(
 		appState.kernelStatus && appState.kernelStatus.installed
 			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
 			: _('Not installed')
-	);
+	) : '';
+	const guardHeader = resolveGuardHeaderState();
+	const guardLoadingState = guardHeader.loading
+		? ' aria-busy="true" aria-label="' + safeText(_('Loading…')) + '"' : '';
 
 	return '' +
 		'<div class="sbox-header">' +
 			'MiClash <span class="sbox-version-inline">' +
-				'<strong id="sbox-app-version">' + versionApp + '</strong>' +
-				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '">' + buildVersionActionIcon(appActionState) + '</button>' +
+				'<strong id="sbox-app-version" data-developer-toggle' + versionLoadingClass + versionLoadingState + '>' + versionApp + '</strong>' +
+				'<button id="sbox-app-action" type="button" class="cbi-button ' + appActionState.className + ' sbox-version-action-button" title="' + safeText(appActionState.title) + '" aria-label="' + safeText(appActionState.title) + '"' + appTarget + (metadataReady ? '' : ' hidden') + '>' + buildVersionActionIcon(appActionState) + '</button>' +
 			'</span>' +
 			'mihomo <span class="sbox-version-inline">' +
-				'<strong id="sbox-kernel-version">' + versionKernel + '</strong>' +
-				'<button id="sbox-kernel-action" type="button" class="cbi-button ' + kernelActionState.className + ' sbox-version-action-button" title="' + safeText(kernelActionState.title) + '" aria-label="' + safeText(kernelActionState.title) + '">' + buildVersionActionIcon(kernelActionState) + '</button>' +
+				'<strong id="sbox-kernel-version"' + versionLoadingClass + versionLoadingState + '>' + versionKernel + '</strong>' +
+				'<button id="sbox-kernel-action" type="button" class="cbi-button ' + kernelActionState.className + ' sbox-version-action-button" title="' + safeText(kernelActionState.title) + '" aria-label="' + safeText(kernelActionState.title) + '"' + (metadataReady ? '' : ' hidden') + '>' + buildVersionActionIcon(kernelActionState) + '</button>' +
 			'</span>' +
 			'<span class="sbox-proxy-mode-inline">' + safeText(_('Mode')) + '</span>' +
-			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select">' +
+			'<select id="sbox-mode-select" class="cbi-input-select sbox-mode-select" aria-label="' + safeText(_('Mode')) + '">' +
 				'<option value="tproxy"' + (appState.proxyMode === 'tproxy' ? ' selected' : '') + '>tproxy</option>' +
 				'<option value="tun"' + (appState.proxyMode === 'tun' ? ' selected' : '') + '>tun</option>' +
 				'<option value="mixed"' + (appState.proxyMode === 'mixed' ? ' selected' : '') + '>mixed</option>' +
 			'</select>' +
-			'<span id="sbox-guard" class="sbox-guard-state-label ' + (isInternetOnlyEnabled() ? 'sbox-guard-on' : 'sbox-guard-off') + '" title="' + safeText(_('Client devices only through MiClash (Protection)')) + '">' +
+			'<span id="sbox-guard" class="sbox-guard-state-label ' + guardHeader.className + '" title="' + safeText(_('Direct connection guard')) + '"' + guardLoadingState + '>' +
 				'<span class="sbox-guard-label">' + safeText(_('Guard')) + ': </span>' +
-				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(isInternetOnlyEnabled() ? _('ON') : _('OFF')) + '</span>' +
+				'<span id="sbox-guard-state" class="sbox-guard-state">' + safeText(guardHeader.label) + '</span>' +
 			'</span>' +
 			'<button id="sbox-dashboard" type="button" class="cbi-button ' + dashboardButtonState.className + ' sbox-header-button sbox-btn-dashboard"' +
 				(dashboardButtonState.disabled ? ' disabled' : '') +
@@ -2085,13 +2415,13 @@ function buildPageHtml() {
 				'<div id="sbox-pane-control">' +
 					'<div class="sbox-row">' +
 						'<span id="sbox-status" class="sbox-status ' + (appState.serviceRunning ? 'sbox-status-on' : 'sbox-status-off') + '">' +
-							'<span id="sbox-status-label">' + safeText(appState.serviceRunning ? _('Service running') : _('Service stopped')) + '</span>' +
+							'<span id="sbox-status-label">' + safeText(appState.serviceStateLoading ? _('Loading service state…') : (appState.serviceRunning ? _('Service running') : _('Service stopped'))) + '</span>' +
 						'</span>' +
 						'<button id="sbox-start" type="button" class="cbi-button cbi-button-positive sbox-service-button"' + (appState.serviceRunning ? ' hidden' : '') + '>' + safeText(_('Start')) + '</button>' +
 						'<button id="sbox-stop" type="button" class="cbi-button cbi-button-negative sbox-service-button"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Stop core')) + '</button>' +
 						'<button id="sbox-restart" type="button" class="cbi-button cbi-button-apply"' + (appState.serviceRunning ? '' : ' hidden') + '>' + safeText(_('Restart')) + '</button>' +
 					'</div>' +
-					'<div id="sbox-operation-status" class="sbox-operation-status" hidden></div>' +
+					'<div id="sbox-operation-status" class="sbox-operation-status" role="status" aria-live="polite" aria-atomic="true" hidden></div>' +
 				'</div>' +
 		'</div>' +
 
@@ -2100,33 +2430,64 @@ function buildPageHtml() {
 				'<button type="button" class="cbi-tab sbox-tab" data-cfg-tab="config">' + safeText(_('Config')) + '</button>' +
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="settings">' + safeText(_('Settings')) + '</button>' +
 				'<button type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="logs">' + safeText(_('Logs')) + '</button>' +
+				'<button id="sbox-developer-tab" type="button" class="cbi-tab-disabled sbox-tab" data-cfg-tab="developer" hidden>' + safeText(_('Developer')) + '</button>' +
 			'</div>' +
 
 				'<div id="sbox-pane-config">' +
 					'<div class="sbox-config-toolbar">' +
-						'<select id="sbox-config-select" class="cbi-input-select sbox-select">' + buildConfigOptionsHtml() + '</select>' +
-						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" />' +
+						'<select id="sbox-config-select" class="cbi-input-select sbox-select" aria-label="' + safeText(_('Config')) + '" disabled>' + buildConfigOptionsHtml() + '</select>' +
+						'<input id="sbox-subscription-url" class="cbi-input-text sbox-input" type="text" aria-label="' + safeText(_('Subscription URL')) + '" placeholder="https://..." value="' + safeText(appState.subscriptionUrl || '') + '" disabled />' +
 						'<div class="sbox-subscription-actions">' +
-							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-positive sbox-subscription-action">' + safeText(_('Save')) + '</button>' +
-							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action">' + safeText(_('Update')) + '</button>' +
-							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button sbox-icon-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '">' + buildInlineIcon('x', 'sbox-button-icon') + '</button>' +
+							'<button id="sbox-save-sub-url" type="button" class="cbi-button cbi-button-positive sbox-subscription-action" disabled>' + safeText(_('Save')) + '</button>' +
+							'<button id="sbox-update-sub" type="button" class="cbi-button cbi-button-apply sbox-subscription-action" disabled>' + safeText(_('Update')) + '</button>' +
+							'<button id="sbox-clear-sub-url" type="button" class="cbi-button cbi-button-negative sbox-url-clear-button sbox-icon-button" title="' + safeText(_('Clear subscription URL')) + '" aria-label="' + safeText(_('Clear subscription URL')) + '" disabled>' + buildInlineIcon('x', 'sbox-button-icon') + '</button>' +
 						'</div>' +
 					'</div>' +
-					'<div id="miclash-editor" class="sbox-editor"></div>' +
+					'<div id="miclash-editor" class="sbox-editor">' + view_miclash_ui_shell.loadingHtml({ kind: 'editor', lines: 8 }) + '</div>' +
 					'<div class="sbox-actions">' +
-						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply">' + safeText(_('Check')) + '</button>' +
-						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive">' + safeText(_('Save')) + '</button>' +
-						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative">' + safeText(_('Clear editor content')) + '</button>' +
-						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right"' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
+						'<button id="sbox-validate" type="button" class="cbi-button cbi-button-apply" disabled>' + safeText(_('Validate')) + '</button>' +
+						'<button id="sbox-save" type="button" class="cbi-button cbi-button-positive" disabled>' + safeText(_('Apply')) + '</button>' +
+						'<button id="sbox-clear-editor" type="button" class="cbi-button cbi-button-negative" disabled>' + safeText(_('Clear editor content')) + '</button>' +
+						'<button id="sbox-set-main-config" type="button" class="cbi-button cbi-button-apply sbox-action-right" disabled' + (appState.selectedConfigName === MAIN_CONFIG_NAME ? ' hidden' : '') + '>' + safeText(_('Set as Main')) + '</button>' +
 						'<span class="sbox-actions-spacer" aria-hidden="true"></span>' +
-						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral sbox-rulesets-action">' + safeText(_('Rulesets')) + '</button>' +
+						'<button id="sbox-open-rulesets" type="button" class="cbi-button cbi-button-neutral sbox-rulesets-action" disabled>' + safeText(_('Rulesets')) + '</button>' +
 					'</div>' +
 				'</div>' +
 
 			'<div id="sbox-pane-settings" hidden></div>' +
 
 			'<div id="sbox-pane-logs" hidden>' +
-				'<pre id="sbox-log-content" class="sbox-log-content"></pre>' +
+				'<div id="sbox-log-search" class="sbox-log-search" hidden>' +
+					'<input id="sbox-log-search-input" class="cbi-input-text sbox-input sbox-log-search-input" type="search" placeholder="' + safeText(_('Search logs')) + '" />' +
+					'<button id="sbox-log-search-next" type="button" class="cbi-button cbi-button-neutral sbox-log-search-button" aria-label="' + safeText(_('Next match')) + '">↓</button>' +
+					'<span id="sbox-log-search-count" class="sbox-log-search-count">0 / 0</span>' +
+					'<button id="sbox-log-search-previous" type="button" class="cbi-button cbi-button-neutral sbox-log-search-button" aria-label="' + safeText(_('Previous match')) + '">↑</button>' +
+				'</div>' +
+				'<pre id="sbox-log-content" class="sbox-log-content">' +
+					view_miclash_ui_shell.loadingHtml({ kind: 'editor', lines: 7 }) +
+				'</pre>' +
+			'</div>' +
+
+			'<div id="sbox-pane-developer" class="sbox-developer-pane" hidden>' +
+				'<div class="sbox-developer-intro">' +
+					'<h4>' + safeText(_('Developer tools')) + '</h4>' +
+					'<p>' + safeText(_('This hidden session stays open for 10 minutes. These emergency actions can interrupt access to the router.')) + '</p>' +
+				'</div>' +
+				'<div id="sbox-performance-panel"></div>' +
+				'<div class="sbox-developer-actions">' +
+					'<article class="sbox-settings-card sbox-developer-action">' +
+						'<div><h4>' + safeText(_('Restore OpenWrt network')) + '</h4><p>' + safeText(_('Stop Mihomo and remove MiClash DNS, firewall and routing ownership. Remove Guard first if it is enabled.')) + '</p></div>' +
+						'<button type="button" class="cbi-button cbi-button-negative" data-developer-action="restore-network">' + safeText(_('Restore network')) + '</button>' +
+					'</article>' +
+					'<article class="sbox-settings-card sbox-developer-action">' +
+						'<div><h4>' + safeText(_('Remove Guard')) + '</h4><p>' + safeText(_('Disable Guard and remove its active fail-closed rules.')) + '</p></div>' +
+						'<button type="button" class="cbi-button cbi-button-negative" data-developer-action="remove-guard">' + safeText(_('Remove Guard')) + '</button>' +
+					'</article>' +
+					'<article class="sbox-settings-card sbox-developer-action">' +
+						'<div><h4>' + safeText(_('Remove MiClash')) + '</h4><p>' + safeText(_('Remove MiClash through the OpenWrt package manager after its normal network cleanup.')) + '</p></div>' +
+						'<button type="button" class="cbi-button cbi-button-negative" data-developer-action="remove-miclash">' + safeText(_('Remove MiClash')) + '</button>' +
+					'</article>' +
+				'</div>' +
 			'</div>' +
 		'</div>';
 }
@@ -2149,24 +2510,25 @@ function updateHeaderAndControlDom() {
 	const serviceBusy = !!appState.serviceActionBusy || !!appState.serviceJobBusy || !!appState.updateJobBusy;
 
 	if (status && statusLabel) {
-		status.classList.toggle('sbox-status-on', appState.serviceRunning);
-		status.classList.toggle('sbox-status-off', !appState.serviceRunning);
-		statusLabel.textContent = appState.serviceRunning ? _('Service running') : _('Service stopped');
+		status.classList.toggle('sbox-status-on', !appState.serviceStateLoading && appState.serviceRunning);
+		status.classList.toggle('sbox-status-off', !appState.serviceStateLoading && !appState.serviceRunning);
+		statusLabel.textContent = appState.serviceStateLoading ? _('Loading service state…') :
+			(appState.serviceRunning ? _('Service running') : _('Service stopped'));
 	}
 
 	if (startBtn) {
 		if (!serviceBusy) startBtn.hidden = appState.serviceRunning;
-		startBtn.disabled = serviceBusy || appState.serviceRunning;
+		startBtn.disabled = serviceBusy || appState.serviceStateLoading || appState.serviceRunning;
 	}
 
 	if (stopBtn) {
 		if (!serviceBusy) stopBtn.hidden = !appState.serviceRunning;
-		stopBtn.disabled = serviceBusy || !appState.serviceRunning;
+		stopBtn.disabled = serviceBusy || appState.serviceStateLoading || !appState.serviceRunning;
 	}
 
 	if (restartBtn) {
 		if (!serviceBusy) restartBtn.hidden = !appState.serviceRunning;
-		restartBtn.disabled = serviceBusy || !appState.serviceRunning;
+		restartBtn.disabled = serviceBusy || appState.serviceStateLoading || !appState.serviceRunning;
 	}
 
 	if (operationStatus) {
@@ -2176,16 +2538,22 @@ function updateHeaderAndControlDom() {
 			operationStatus.innerHTML = '';
 			operationStatus.className = 'sbox-operation-status';
 			operationStatus.removeAttribute('title');
+			operationStatus.setAttribute('role', 'status');
+			operationStatus.setAttribute('aria-live', 'polite');
 		} else {
 			const type = /^(running|error|success)$/.test(String(state.type || '')) ? state.type : 'running';
 			operationStatus.hidden = false;
 			operationStatus.className = 'sbox-operation-status sbox-operation-status-' + type;
+			operationStatus.setAttribute('role', type === 'error' ? 'alert' : 'status');
+			operationStatus.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
 			operationStatus.innerHTML =
 				'<span class="sbox-operation-status-content">' +
 				'<span class="sbox-operation-status-message">' + safeText(state.message) + '</span>' +
-				'</span>' +
-				'</span>';
+				'</span>' + (state.dismissible ?
+				'<button type="button" class="cbi-button cbi-button-neutral sbox-operation-dismiss" aria-label="' + safeText(_('Dismiss')) + '">' + safeText(_('Dismiss')) + '</button>' : '');
 			operationStatus.title = state.message;
+			const dismiss = operationStatus.querySelector('.sbox-operation-dismiss');
+			if (dismiss) dismiss.addEventListener('click', clearOperationStatus, { once: true });
 		}
 	}
 
@@ -2199,21 +2567,37 @@ function updateHeaderAndControlDom() {
 		dashboardBtn.setAttribute('aria-label', dashboardState.title);
 	}
 
-	if (appVersion) appVersion.textContent = appState.versions.app || _('unknown');
+	if (appVersion) {
+		appVersion.classList.toggle('sbox-version-loading', !appState.systemMetadataReady);
+		appVersion.toggleAttribute('aria-busy', !appState.systemMetadataReady);
+		if (appState.systemMetadataReady) appVersion.removeAttribute('aria-label');
+		else appVersion.setAttribute('aria-label', _('Loading…'));
+		appVersion.textContent = appState.systemMetadataReady ? (appState.versions.app || _('unknown')) : '';
+	}
 	if (appAction && !appAction.classList.contains('sbox-version-action-busy')) {
+		appAction.hidden = !appState.systemMetadataReady;
 		const appActionState = resolveAppActionState();
 		appAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
 		appAction.classList.add(appActionState.className);
 		appAction.innerHTML = buildVersionActionIcon(appActionState);
 		appAction.title = appActionState.title;
 		appAction.setAttribute('aria-label', appActionState.title);
+		if (appActionState.scheduled && appActionState.targetVersion)
+			appAction.setAttribute('data-target-version', appActionState.targetVersion);
+		else
+			appAction.removeAttribute('data-target-version');
 	}
 	if (kernelVersion) {
-		kernelVersion.textContent = appState.kernelStatus && appState.kernelStatus.installed
+		kernelVersion.classList.toggle('sbox-version-loading', !appState.systemMetadataReady);
+		kernelVersion.toggleAttribute('aria-busy', !appState.systemMetadataReady);
+		if (appState.systemMetadataReady) kernelVersion.removeAttribute('aria-label');
+		else kernelVersion.setAttribute('aria-label', _('Loading…'));
+		kernelVersion.textContent = !appState.systemMetadataReady ? '' : appState.kernelStatus && appState.kernelStatus.installed
 			? (appState.kernelStatus.version || appState.versions.clash || _('Installed'))
 			: _('Not installed');
 	}
 	if (kernelAction && !kernelAction.classList.contains('sbox-version-action-busy')) {
+		kernelAction.hidden = !appState.systemMetadataReady;
 		const kernelActionState = resolveKernelActionState();
 		kernelAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
 		kernelAction.classList.add(kernelActionState.className);
@@ -2225,31 +2609,49 @@ function updateHeaderAndControlDom() {
 
 	const guardPill = pageRoot.querySelector('#sbox-guard');
 	const guardState = pageRoot.querySelector('#sbox-guard-state');
-	const guardEnabled = isInternetOnlyEnabled();
+	const guardHeader = resolveGuardHeaderState();
 	if (guardPill) {
 		guardPill.classList.remove('cbi-button', 'cbi-button-apply', 'cbi-button-neutral', 'cbi-button-positive', 'cbi-button-negative');
-		guardPill.classList.toggle('sbox-guard-on', guardEnabled);
-		guardPill.classList.toggle('sbox-guard-off', !guardEnabled);
-		guardPill.title = _('Client devices only through MiClash (Protection)');
+		guardPill.classList.remove('sbox-guard-on', 'sbox-guard-off', 'sbox-guard-error', 'sbox-guard-unknown', 'sbox-guard-loading');
+		guardPill.classList.add(guardHeader.className);
+		guardPill.title = _('Direct connection guard');
+		guardPill.toggleAttribute('aria-busy', guardHeader.loading === true);
+		if (guardHeader.loading) guardPill.setAttribute('aria-label', _('Loading…'));
+		else guardPill.removeAttribute('aria-label');
 	}
-	if (guardState) guardState.textContent = guardEnabled ? _('ON') : _('OFF');
+	if (guardState) guardState.textContent = guardHeader.label;
 }
 
 function isInternetOnlyEnabled() {
 	return !!(appState.settings && appState.settings.internetOnlyMiclash);
 }
 
+function resolveGuardHeaderState() {
+	const desired = isInternetOnlyEnabled();
+	const observed = String(appState.guardObservedState || 'unknown');
+	if (observed === 'loading') return { className: 'sbox-guard-loading', label: '', loading: true };
+	if (desired && observed === 'enabled') return { className: 'sbox-guard-on', label: _('ON') };
+	if (!desired && observed === 'disabled') return { className: 'sbox-guard-off', label: _('OFF') };
+	if (observed === 'failed') return { className: 'sbox-guard-error', label: _('Error') };
+	return { className: 'sbox-guard-unknown', label: _('Unknown') };
+}
+
 async function refreshHeaderAndControl() {
-	const [serviceState, versions, kernelStatus, proxyMode] = await Promise.all([
+	const [serviceState, system, proxyMode] = await Promise.all([
 		readMiClashServiceState(),
-		getVersions(),
-		getMihomoStatus(),
+		typedCall((api) => api.system_info()),
 		detectCurrentProxyMode()
 	]);
 
 	applyServiceState(serviceState);
-	appState.versions = versions;
-	appState.kernelStatus = kernelStatus;
+	appState.versions = {
+		app: normalizeAppVersion(system?.app_version || 'unknown'),
+		clash: system?.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : 'unknown'
+	};
+	appState.kernelStatus = {
+		installed: system?.mihomo?.installed === true,
+		version: system?.mihomo?.installed ? String(system.mihomo.version || '') : null
+	};
 	appState.proxyMode = proxyMode || 'tproxy';
 
 	updateHeaderAndControlDom();
@@ -2273,13 +2675,43 @@ async function refreshHeaderAndControlSafe() {
 	}
 }
 
+async function warmBackgroundPanels(generation, configHydration) {
+	if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+	const metric = view_miclash_performance.begin('background.warmup');
+	let succeeded = true;
+	try {
+		notificationOwner.replace();
+		await managementOwner.refresh(true);
+		if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+		const results = await Promise.allSettled([
+			Promise.resolve(diagnosticsOwner.refresh(true)),
+			refreshLogs()
+		]);
+		succeeded = results.every((result) => result.status === 'fulfilled');
+		if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+		await configHydration;
+		if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+		await refreshReleaseMeta({ force: false });
+	} catch (error) {
+		succeeded = false;
+	} finally {
+		view_miclash_performance.end(metric, succeeded);
+	}
+}
+
 function renderSettingsPane() {
 	if (!pageRoot) return;
 	const pane = pageRoot.querySelector('#sbox-pane-settings');
 	if (!pane) return;
-
-	pane.innerHTML = buildSettingsPaneHtml();
-	bindSettingsPaneEvents();
+	if (pane.getAttribute('data-settings-mounted') !== 'true') {
+		pane.innerHTML = buildSettingsPaneHtml();
+		bindSettingsPaneEvents();
+		const diagnosticsHost = pane.querySelector('#sbox-diagnostics-summary');
+		if (diagnosticsHost) diagnosticsOwner.mount(diagnosticsHost);
+		if (!managementOwner.ready?.()) managementOwner.replace();
+		managementOwner.mount(pane);
+		pane.setAttribute('data-settings-mounted', 'true');
+	}
 }
 
 async function collectSettingsFormState() {
@@ -2294,13 +2726,13 @@ async function collectSettingsFormState() {
 	const blockQuic = !!pane.querySelector('#sbox-block-quic')?.checked;
 	const internetOnlyMiclash = !!pane.querySelector('#sbox-internet-only-miclash')?.checked;
 	const useTmpfsRules = !!pane.querySelector('#sbox-tmpfs')?.checked;
-	const enableMemoryGuard = !!pane.querySelector('#sbox-memory-guard')?.checked;
-	const autoHideNotificationsEl = pane.querySelector('#sbox-auto-hide-notifications');
-	const autoHideNotifications = autoHideNotificationsEl ? !!autoHideNotificationsEl.checked : true;
 	const autoUpdateConfigEl = pane.querySelector('#sbox-auto-update-config');
 	const autoUpdateIntervalEl = pane.querySelector('input[name="sbox-auto-update-interval"]:checked');
 	const autoUpdateConfig = autoUpdateConfigEl ? !!autoUpdateConfigEl.checked : true;
 	const autoUpdateIntervalHours = normalizeAutoUpdateIntervalHours(autoUpdateIntervalEl?.value || '4') || '4';
+	const autoUpdateIntervalSource = appState.settings?.autoUpdateIntervalSource === 'provider' ? 'provider' : 'manual';
+	const autoMajorMiclashEl = pane.querySelector('#sbox-auto-major-miclash');
+	const autoMajorMiclash = autoMajorMiclashEl ? !!autoMajorMiclashEl.checked : true;
 	const enableHwid = !!pane.querySelector('#sbox-enable-hwid')?.checked;
 	const hwidUserAgent = String(pane.querySelector('#sbox-hwid-user-agent')?.value || 'MiClash').trim() || 'MiClash';
 	const hwidDeviceOS = String(pane.querySelector('#sbox-hwid-device-os')?.value || 'OpenWrt').trim() || 'OpenWrt';
@@ -2325,10 +2757,10 @@ async function collectSettingsFormState() {
 		blockQuic,
 		internetOnlyMiclash,
 		useTmpfsRules,
-		enableMemoryGuard,
-		autoHideNotifications,
 		autoUpdateConfig,
 		autoUpdateIntervalHours,
+		autoUpdateIntervalSource,
+		autoMajorMiclash,
 		selected,
 		enableHwid,
 		hwidUserAgent,
@@ -2338,9 +2770,119 @@ async function collectSettingsFormState() {
 	};
 }
 
+function updatesPatchFromForm(formState) {
+	return {
+		auto_subscription: formState.autoUpdateConfig !== false,
+		interval_hours: parseInt(formState.autoUpdateIntervalHours || '4', 10),
+		interval_source: formState.autoUpdateIntervalSource === 'provider' ? 'provider' : 'manual',
+		miclash_release_channel: normalizeReleaseChannel(formState.miclashReleaseChannel),
+		mihomo_release_channel: normalizeReleaseChannel(formState.mihomoReleaseChannel),
+		auto_major_miclash: formState.autoMajorMiclash !== false
+	};
+}
+
+async function saveAllSettings() {
+	const pane = pageRoot?.querySelector('#sbox-pane-settings');
+	const saveBtn = pane?.querySelector('#sbox-settings-save');
+	if (!pane || !saveBtn) throw new Error(_('Settings are not ready.'));
+
+	return withButtons(saveBtn, async () => {
+		const formState = await collectSettingsFormState();
+		if (!formState) return false;
+		const managementPatch = managementOwner.collectPatch();
+		const before = await configApi.settings_get();
+		const previousMiClashReleaseChannel = normalizeReleaseChannel(
+			before?.updates?.miclash_release_channel);
+		const previousMihomoReleaseChannel = normalizeReleaseChannel(
+			before?.updates?.mihomo_release_channel);
+		const runtimeChanged = operationalSettingsChanged(appState.settings, formState, {
+			detectedLan: appState.detectedLan,
+			detectedWan: appState.detectedWan
+		});
+		setOperationStatus('running', _('Saving settings...'));
+
+		await awaitTypedOperation(await configApi.settings_set({
+			...managementPatch,
+			updates: updatesPatchFromForm(formState)
+		}, 'luci'), _('Saving settings...'));
+
+		if (!!before?.guard?.enabled !== !!formState.internetOnlyMiclash) {
+			setOperationStatus('running', _('Applying protection setting...'));
+			await awaitTypedOperation(
+				await configApi.guard_transition(!!formState.internetOnlyMiclash, 'luci'),
+				_('Applying protection setting...')
+			);
+		}
+
+		if (runtimeChanged) {
+			setOperationStatus('running', _('Applying Mihomo settings...'));
+			const applied = await saveOperationalSettings(
+				formState.mode,
+				formState.proxyMode,
+				formState.tunStack,
+				formState.autoDetectLan,
+				formState.autoDetectWan,
+				formState.blockQuic,
+				formState.internetOnlyMiclash,
+				formState.useTmpfsRules,
+				formState.selected,
+				formState.enableHwid,
+				formState.hwidUserAgent,
+				formState.hwidDeviceOS,
+				formState.miclashReleaseChannel,
+				formState.mihomoReleaseChannel,
+				formState.autoUpdateConfig,
+				formState.autoUpdateIntervalHours,
+				formState.autoMajorMiclash,
+				{ silent: true, skipGuard: true }
+			);
+			if (!applied) throw new Error(_('Failed to apply Mihomo settings.'));
+		}
+
+		await managementOwner.applyPending();
+
+		appState.settings = await loadOperationalSettings();
+		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode);
+		appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
+		appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
+		appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
+		appState.serviceRunning = await getServiceStatus();
+		const releaseChannelChanged =
+			normalizeReleaseChannel(appState.settings.miclashReleaseChannel) !== previousMiClashReleaseChannel ||
+			normalizeReleaseChannel(appState.settings.mihomoReleaseChannel) !== previousMihomoReleaseChannel;
+
+		if (runtimeChanged) {
+			const freshConfig = await L.resolveDefault(
+				readConfigFileByName(appState.selectedConfigName), '');
+			appState.configContent = freshConfig;
+			if (editor) {
+				editor.setValue(String(freshConfig || ''), -1);
+				editor.clearSelection();
+			}
+		}
+
+		await refreshHeaderAndControl();
+		if (releaseChannelChanged) await refreshReleaseMeta({ force: true });
+		await managementOwner.markSaved();
+		await logUiAction('info', runtimeChanged ?
+			'Settings saved and Mihomo settings applied' : 'Settings saved without Mihomo restart');
+		setOperationSuccess(runtimeChanged ? _('Settings saved and applied.') : _('Settings saved.'));
+		notify('info', runtimeChanged ? _('Settings saved and applied.') : _('Settings saved.'));
+		renderSettingsPane();
+		updateHeaderAndControlDom();
+		return true;
+	}).catch((error) => {
+		setOperationError(error);
+		notify('error', _('Failed to save settings: %s').format(error.message));
+		throw error;
+	});
+}
+
 function bindSettingsPaneEvents() {
 	const pane = pageRoot.querySelector('#sbox-pane-settings');
 	if (!pane) return;
+	const routeTestButton = pane.querySelector('[data-action="route-test"]');
+	if (routeTestButton) routeTestButton.addEventListener('click', () => diagnosticsOwner.openRouteTest());
 
 	pane.querySelectorAll('input[name="sbox-interface-mode"]').forEach((radio) => {
 		radio.addEventListener('change', async function() {
@@ -2376,110 +2918,43 @@ function bindSettingsPaneEvents() {
 		});
 		syncAutoUpdateInterval();
 	}
+	pane.querySelectorAll('input[name="sbox-auto-update-interval"]').forEach((input) => {
+		input.addEventListener('change', () => {
+			if (appState.settings) appState.settings.autoUpdateIntervalSource = 'manual';
+			pane.querySelector('#sbox-auto-update-provider')?.remove();
+		});
+	});
+
+	const enableHwidEl = pane.querySelector('#sbox-enable-hwid');
+	const hwidFields = pane.querySelector('.sbox-hwid-fields');
+	if (enableHwidEl && hwidFields) {
+		const syncHwidFields = () => { hwidFields.hidden = !enableHwidEl.checked; };
+		enableHwidEl.addEventListener('change', syncHwidFields);
+		syncHwidFields();
+	}
 
 	const saveBtn = pane.querySelector('#sbox-settings-save');
-	if (saveBtn) {
-		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
-			const formState = await collectSettingsFormState();
-			if (!formState) return;
-			const previousMiClashReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.miclashReleaseChannel);
-			const previousMihomoReleaseChannel = normalizeReleaseChannel(appState.settings && appState.settings.mihomoReleaseChannel);
-			const wasRunning = await getServiceStatus();
-			setOperationStatus('running', _('Saving settings...'));
-
-			const ok = await saveOperationalSettings(
-				formState.mode,
-				formState.proxyMode,
-				formState.tunStack,
-				formState.autoDetectLan,
-				formState.autoDetectWan,
-				formState.blockQuic,
-				formState.internetOnlyMiclash,
-				formState.useTmpfsRules,
-				formState.enableMemoryGuard,
-				formState.selected,
-				formState.enableHwid,
-				formState.hwidUserAgent,
-				formState.hwidDeviceOS,
-				formState.autoHideNotifications,
-				formState.miclashReleaseChannel,
-				formState.mihomoReleaseChannel,
-				formState.autoUpdateConfig,
-				formState.autoUpdateIntervalHours,
-				{ silent: true }
-			);
-
-			if (!ok) return;
-			if (wasRunning) {
-				if (!(await validateMainConfigBeforeStart())) return;
-				try {
-					await withRestartButtonFeedback(async () => {
-						setOperationStatus('running', _('Restarting Clash service...'));
-						await restartOrReloadServiceOrThrow('restart', operationStageOptions(_('Restarting Clash service...')));
-					});
-					await logUiAction('info', 'Settings saved and Clash service restarted');
-					notify('info', _('Settings saved and Clash service restarted.'));
-					setOperationSuccess(_('Settings saved and Clash service restarted.'));
-				} catch (e) {
-					setOperationError(e);
-					await logUiAction('err', 'Settings saved, but Clash service restart failed: ' + e.message);
-					notify('error', _('Settings saved, but failed to restart Clash service: %s').format(e.message));
-				}
-			} else {
-				await refreshGuardRulesOrThrow();
-				setOperationSuccess(_('Settings saved.'));
-				notify('info', _('Settings saved.'));
-			}
-
-			appState.settings = await loadOperationalSettings();
-			appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode);
-			appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
-			appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
-			appState.proxyMode = appState.settings.proxyMode || await detectCurrentProxyMode();
-			appState.serviceRunning = await getServiceStatus();
-			const releaseChannelChanged =
-				normalizeReleaseChannel(appState.settings.miclashReleaseChannel) !== previousMiClashReleaseChannel ||
-				normalizeReleaseChannel(appState.settings.mihomoReleaseChannel) !== previousMihomoReleaseChannel;
-
-			const freshConfig = await L.resolveDefault(
-				fs.read(getConfigPathByName(appState.selectedConfigName)),
-				''
-			);
-			appState.configContent = freshConfig;
-			if (editor) {
-				editor.setValue(String(freshConfig || ''), -1);
-				editor.clearSelection();
-			}
-
-			await refreshHeaderAndControl();
-			if (releaseChannelChanged) {
-				await refreshReleaseMeta({ force: true });
-			}
-			renderSettingsPane();
-			updateHeaderAndControlDom();
-		}).catch((e) => {
-			setOperationError(e);
-			notify('error', _('Failed to save settings: %s').format(e.message));
-		}));
-	}
+	if (saveBtn) saveBtn.addEventListener('click', () => saveAllSettings().catch(() => {}));
 }
 
 async function refreshLogs() {
-	const raw = await loadClashLogs();
-	appState.logsRaw = raw;
-
-	const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
-
-	if (content) {
-		const nearBottom = (content.scrollHeight - content.scrollTop - content.clientHeight) < 48;
-		content.innerHTML = formatLogHtml(raw);
-		if (nearBottom) content.scrollTop = content.scrollHeight;
-	}
+	if (logsRefreshPromise) return logsRefreshPromise;
+	logsRefreshPromise = (async () => {
+		const raw = await loadClashLogs();
+		appState.logsRaw = raw;
+		logsLoaded = true;
+		const content = pageRoot && pageRoot.querySelector('#sbox-log-content');
+		if (content) {
+			const nearBottom = (content.scrollHeight - content.scrollTop - content.clientHeight) < 48;
+			renderLogs({ followBottom: nearBottom && !logSearch.query.trim() });
+		}
+	})().finally(() => { logsRefreshPromise = null; });
+	return logsRefreshPromise;
 }
 
 function startLogPolling() {
 	logPollTimer = view_miclash_ui_shell.startInterval(logPollTimer, () => {
-		if (appState.activeCfgTab === 'logs') refreshLogs().catch(() => {});
+		refreshLogs().catch(() => {});
 	}, LOG_POLL_MS);
 }
 
@@ -2489,7 +2964,7 @@ function stopLogPolling() {
 
 function startControlPolling() {
 	controlPollTimer = view_miclash_ui_shell.startInterval(controlPollTimer, async () => {
-		if (controlPollBusy) return;
+		if (document.hidden || controlPollBusy) return;
 		controlPollBusy = true;
 		try {
 			await refreshServiceState();
@@ -2513,6 +2988,12 @@ function startUpdatePolling() {
 }
 
 function bindControlAndHeaderEvents() {
+	const logSearchInput = pageRoot.querySelector('#sbox-log-search-input');
+	const logSearchNext = pageRoot.querySelector('#sbox-log-search-next');
+	const logSearchPrevious = pageRoot.querySelector('#sbox-log-search-previous');
+	if (logSearchInput) logSearchInput.addEventListener('input', () => setLogSearchQuery(logSearchInput.value));
+	if (logSearchNext) logSearchNext.addEventListener('click', () => moveLogSearchResult(1));
+	if (logSearchPrevious) logSearchPrevious.addEventListener('click', () => moveLogSearchResult(-1));
 	const kernelAction = pageRoot.querySelector('#sbox-kernel-action');
 	const appAction = pageRoot.querySelector('#sbox-app-action');
 	if (appAction) {
@@ -2668,10 +3149,10 @@ function bindControlAndHeaderEvents() {
 }
 
 async function switchConfigProfile(profileName) {
+	if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 	const selected = normalizeConfigProfileName(profileName);
-	const [content, url] = await Promise.all([
-		readConfigFileByName(selected),
-		readSubscriptionUrl(selected)
+	const [ content, url ] = await Promise.all([
+		readConfigFileByName(selected), readSubscriptionUrl(selected)
 	]);
 
 	appState.selectedConfigName = selected;
@@ -2698,25 +3179,7 @@ async function setSelectedConfigAsMain() {
 	if (selected === MAIN_CONFIG_NAME) return;
 	setOperationStatus('running', _('Setting selected config as Main...'));
 
-	const [mainContent, selectedContent, mainUrl, selectedUrl] = await Promise.all([
-		readConfigFileByName(MAIN_CONFIG_NAME),
-		readConfigFileByName(selected),
-		readSubscriptionUrl(MAIN_CONFIG_NAME),
-		readSubscriptionUrl(selected)
-	]);
-
-	if (!(await validateContentAsMainConfig(selectedContent))) return;
-	const wasRunning = await getServiceStatus();
-
-	await writeConfigFileByName(MAIN_CONFIG_NAME, selectedContent);
-	await writeConfigFileByName(selected, mainContent);
-	await saveSubscriptionUrl(selectedUrl, MAIN_CONFIG_NAME);
-	await saveSubscriptionUrl(mainUrl, selected);
-
-	if (wasRunning) {
-		setOperationStatus('running', _('Reloading Mihomo configuration...'));
-		await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
-	}
+	await swapConfigProfiles(selected);
 	appState.serviceRunning = await getServiceStatus();
 	await switchConfigProfile(MAIN_CONFIG_NAME);
 	await refreshHeaderAndControl();
@@ -2798,12 +3261,15 @@ function bindConfigEvents() {
 	if (updateUrlBtn) {
 		updateUrlBtn.addEventListener('click', () => withButtons(updateUrlBtn, async () => {
 			const url = String(subInput?.value || '').trim();
-			if (!url) throw new Error(_('Subscription URL is empty.'));
-			if (!isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
-
-			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
+			const selectedProfile = normalizeConfigProfileName(appState.selectedConfigName);
+			const savedSubscription = url ? null : await typedCall((api) => api.subscription_get(selectedProfile));
+			if (!url && !savedSubscription?.configured) throw new Error(_('Subscription URL is empty.'));
+			if (url && !isValidUrl(url)) throw new Error(_('Invalid subscription URL.'));
+			if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
+			subscriptionUpdateBusy = true;
+			const selectedConfig = selectedProfile;
 			setOperationStatus('running', _('Saving subscription URL...'));
-			await saveSubscriptionUrl(url, selectedConfig);
+			if (url) await saveSubscriptionUrl(url, selectedConfig);
 			appState.subscriptionUrl = url;
 			appState.serviceRunning = await getServiceStatus();
 			updateHeaderAndControlDom();
@@ -2812,20 +3278,11 @@ function bindConfigEvents() {
 			await logUiAction('info', 'Subscription update started for ' + getConfigLabel(selectedConfig));
 			setOperationStatus('running', _('Downloading subscription...'));
 
-			const currentSettings = appState.settings || await loadOperationalSettings();
-			const versions = await getVersions();
-			const appliedInfo = await applySubscriptionOnRouter(
-				url,
-				selectedConfig,
-				currentSettings,
-				versions.app,
-				normalizeProxyMode(appState.proxyMode || currentSettings.proxyMode || 'tproxy'),
-				currentSettings.tunStack || 'system'
-			);
+			const appliedInfo = await applySubscriptionOnRouter(selectedConfig);
 
 			const freshConfig = await readConfigFileByName(selectedConfig);
 			appState.configContent = String(freshConfig || '');
-			if (editor) {
+			if (editor && selectedConfig === appState.selectedConfigName) {
 				editor.setValue(appState.configContent, -1);
 				editor.clearSelection();
 			}
@@ -2833,12 +3290,9 @@ function bindConfigEvents() {
 			let serviceReloaded = false;
 			if (selectedConfig === MAIN_CONFIG_NAME) {
 				await applySubscriptionProfileUpdateInterval(appliedInfo.profileUpdateIntervalHours);
-				if (await getServiceStatus()) {
-					setOperationStatus('running', _('Reloading Mihomo configuration...'));
-					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
-					serviceReloaded = true;
-				}
+				refreshAutoUpdateIntervalChoices(appliedInfo.profileUpdateIntervalHours);
 				appState.serviceRunning = await getServiceStatus();
+				serviceReloaded = appState.serviceRunning;
 				updateHeaderAndControlDom();
 			}
 
@@ -2856,6 +3310,7 @@ function bindConfigEvents() {
 			logUiAction('err', 'Failed to apply subscription: ' + e.message);
 			notify('error', _('Failed to apply subscription: %s').format(e.message));
 		}).finally(async () => {
+			subscriptionUpdateBusy = false;
 			await view_miclash_subscription.cleanupTemp();
 		}));
 	}
@@ -2882,17 +3337,13 @@ function bindConfigEvents() {
 	if (validateBtn) {
 		validateBtn.addEventListener('click', () => withButtons(validateBtn, async () => {
 			if (!editor) return;
+			if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
+			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
 			setOperationStatus('running', _('Validating YAML...'));
-			const tested = await testConfigContent(
-				editor.getValue(),
-				false,
-				getConfigPathByName(appState.selectedConfigName)
+			await awaitTypedOperation(
+				await configApi.config_validate(selectedConfig, editor.getValue(), 'luci'),
+				_('Validating YAML...')
 			);
-			if (!tested.ok) {
-				setOperationError(new Error(tested.message || _('YAML validation failed.')));
-				notifyDetailedError(_('YAML validation failed.'), tested.message);
-				return;
-			}
 			setOperationSuccess(_('YAML validation passed.'));
 			notify('info', _('YAML validation passed.'));
 		}).catch((e) => {
@@ -2905,36 +3356,20 @@ function bindConfigEvents() {
 	if (saveBtn) {
 		saveBtn.addEventListener('click', () => withButtons(saveBtn, async () => {
 			if (!editor) return;
-			setOperationStatus('running', _('Saving configuration...'));
+			if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
+			setOperationStatus('running', _('Applying configuration...'));
 			const selectedConfig = normalizeConfigProfileName(appState.selectedConfigName);
-			const selectedPath = getConfigPathByName(selectedConfig);
-			const tested = await testConfigContent(editor.getValue(), true, selectedPath);
-			if (!tested.ok) {
-				setOperationError(new Error(tested.message || _('Configuration test failed - service not reloaded. Please fix the errors below:')));
-				notifyDetailedError(
-					_('Configuration test failed - service not reloaded. Please fix the errors below:'),
-					tested.message
-				);
-				return;
-			}
-			appState.configContent = editor.getValue();
-
-			if (selectedConfig === MAIN_CONFIG_NAME) {
-				const wasRunning = await getServiceStatus();
-				if (wasRunning) {
-					setOperationStatus('running', _('Reloading Mihomo configuration...'));
-					await restartOrReloadServiceOrThrow('reload', operationStageOptions(_('Reloading Mihomo configuration...')));
-				}
-				appState.serviceRunning = await getServiceStatus();
-				updateHeaderAndControlDom();
-				await logUiAction('info', wasRunning ? 'Configuration applied and Mihomo reloaded' : getConfigLabel(selectedConfig) + ' saved');
-				setOperationSuccess(wasRunning ? _('Configuration applied and Mihomo reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
-				notify('info', wasRunning ? _('Configuration applied and Mihomo reloaded.') : _('%s saved.').format(_(getConfigLabel(selectedConfig))));
-			} else {
-				await logUiAction('info', getConfigLabel(selectedConfig) + ' saved');
-				setOperationSuccess(_('%s saved.').format(_(getConfigLabel(selectedConfig))));
-				notify('info', _('%s saved.').format(_(getConfigLabel(selectedConfig))));
-			}
+			const content = editor.getValue();
+			await awaitTypedOperation(
+				await configApi.config_apply(selectedConfig, editor.getValue(), 'luci'),
+				_('Applying configuration...')
+			);
+			appState.configContent = content;
+			appState.serviceRunning = await getServiceStatus();
+			updateHeaderAndControlDom();
+			await logUiAction('info', 'Configuration applied: ' + selectedConfig);
+			setOperationSuccess(_('Configuration applied.'));
+			notify('info', _('Configuration applied.'));
 		}).catch((e) => {
 			setOperationError(e);
 			logUiAction('err', 'Failed to apply configuration: ' + e.message);
@@ -2980,6 +3415,134 @@ function bindConfigEvents() {
 
 }
 
+function clearDeveloperTimer() {
+	if (developerExpiryTimer != null) clearTimeout(developerExpiryTimer);
+	developerExpiryTimer = null;
+}
+
+function setDeveloperVisible(visible, activate) {
+	developerVisible = visible === true;
+	developerTapTimes = [];
+	clearDeveloperTimer();
+	const tab = pageRoot?.querySelector('#sbox-developer-tab');
+	const pane = pageRoot?.querySelector('#sbox-pane-developer');
+	const logSearchToolbar = pageRoot?.querySelector('#sbox-log-search');
+	if (tab) tab.hidden = !developerVisible;
+	if (logSearchToolbar) logSearchToolbar.hidden = !developerVisible;
+	if (!developerVisible && pane) pane.hidden = true;
+	if (developerVisible) {
+		if (pageRoot?.querySelector('#sbox-log-content')) renderLogs();
+		developerExpiryTimer = window.setTimeout(() => setDeveloperVisible(false, true),
+			DEVELOPER_SESSION_MS);
+		if (activate && typeof cfgTabSetter === 'function') cfgTabSetter('developer');
+		else if (appState.activeCfgTab === 'developer')
+			performanceOwner.mount(pageRoot?.querySelector('#sbox-performance-panel'));
+	} else if (activate && appState.activeCfgTab === 'developer' &&
+		typeof cfgTabSetter === 'function') cfgTabSetter('settings');
+	if (!developerVisible) {
+		clearLogSearch();
+		performanceOwner.destroy();
+	}
+}
+
+function registerDeveloperTap() {
+	const now = Date.now();
+	developerTapTimes = developerTapTimes.filter((timestamp) =>
+		now - timestamp <= DEVELOPER_TAP_WINDOW_MS);
+	developerTapTimes.push(now);
+	if (developerTapTimes.length === DEVELOPER_TAP_HINT_COUNT) {
+		notify('info', _('Developer mode: %d taps remaining.')
+			.format(DEVELOPER_TAP_COUNT - DEVELOPER_TAP_HINT_COUNT));
+		return;
+	}
+	if (developerTapTimes.length < DEVELOPER_TAP_COUNT) return;
+	setDeveloperVisible(!developerVisible, true);
+}
+
+function developerConfirmation(options) {
+	view_miclash_ui_shell.showModal({
+		title: options.title,
+		body: E('div', { 'class': 'sbox-modal-responsive' }, [
+			E('p', {}, options.message),
+			options.detail ? E('p', { 'class': 'sbox-muted' }, options.detail) : null
+		].filter(Boolean)),
+		buttons: [
+			{ label: _('Cancel'), className: 'cbi-button cbi-button-neutral' },
+			{
+				label: options.confirmLabel,
+				className: 'cbi-button cbi-button-negative',
+				onClick: async ({ closeModal }) => {
+					try {
+						await options.run();
+						closeModal();
+					} catch (error) {}
+				}
+			}
+		]
+	});
+}
+
+async function runDeveloperOperation(reply, progress) {
+	setOperationStatus('running', progress, { context: 'developer' });
+	const record = await awaitTypedOperation(reply, progress);
+	return record;
+}
+
+function bindDeveloperEvents() {
+	const appVersion = pageRoot?.querySelector('#sbox-app-version');
+	if (appVersion) appVersion.addEventListener('click', registerDeveloperTap);
+	const pane = pageRoot?.querySelector('#sbox-pane-developer');
+	if (!pane) return;
+	const restore = pane.querySelector('[data-developer-action="restore-network"]');
+	const removeGuard = pane.querySelector('[data-developer-action="remove-guard"]');
+	const removeMiClash = pane.querySelector('[data-developer-action="remove-miclash"]');
+
+	if (restore) restore.addEventListener('click', () => developerConfirmation({
+		title: _('Restore OpenWrt network'),
+		message: _('Stop Mihomo and remove all MiClash-owned DNS, firewall and routing state?'),
+		detail: _('If Guard is enabled, remove it first. No Internet connection is required.'),
+		confirmLabel: _('Restore network'),
+		run: async () => {
+			try {
+				await runDeveloperOperation(await configApi.recoverNetwork('luci'), _('Restoring OpenWrt network…'));
+				setOperationSuccess(_('OpenWrt network restored'));
+				notify('info', _('OpenWrt network restored'));
+				await refreshHeaderAndControlSafe();
+			} catch (error) { setOperationError(error); notify('error', error.message || error); throw error; }
+		}
+	}));
+
+	if (removeGuard) removeGuard.addEventListener('click', () => developerConfirmation({
+		title: _('Remove Guard'),
+		message: _('Disable Guard and remove all active fail-closed Guard rules?'),
+		detail: _('Devices may use a direct connection after this action.'),
+		confirmLabel: _('Remove Guard'),
+		run: async () => {
+			try {
+				await runDeveloperOperation(await configApi.guard_transition(false, 'luci'), _('Removing Guard…'));
+				await refreshCanonicalGuardState();
+				setOperationSuccess(_('Guard removed.'));
+				notify('info', _('Guard removed.'));
+			} catch (error) { setOperationError(error); notify('error', error.message || error); throw error; }
+		}
+	}));
+
+	if (removeMiClash) removeMiClash.addEventListener('click', () => developerConfirmation({
+		title: _('Remove MiClash'),
+		message: _('Remove MiClash from this router?'),
+		detail: _('The normal package removal protocol restores OpenWrt networking first. This page will become unavailable.'),
+		confirmLabel: _('Remove MiClash'),
+		run: async () => {
+			try {
+				const reply = await configApi.uninstallMiClash('luci');
+				if (reply?.accepted !== true) throw new Error(_('MiClash removal was not accepted.'));
+				setOperationSuccess(_('MiClash removal started.'));
+				notify('info', _('MiClash removal started.'));
+			} catch (error) { setOperationError(error); notify('error', error.message || error); throw error; }
+		}
+	}));
+}
+
 function bindTabEvents() {
 	view_miclash_ui_shell.bindTabGroup(pageRoot, {
 		tabAttr: 'ctrl-tab',
@@ -2992,28 +3555,43 @@ function bindTabEvents() {
 		}
 	});
 
-	view_miclash_ui_shell.bindTabGroup(pageRoot, {
+	let cfgTabsInitialized = false;
+	cfgTabSetter = view_miclash_ui_shell.bindTabGroup(pageRoot, {
 		tabAttr: 'cfg-tab',
 		initial: appState.activeCfgTab || 'config',
 		panes: {
 			config: '#sbox-pane-config',
 			settings: '#sbox-pane-settings',
-			logs: '#sbox-pane-logs'
+			logs: '#sbox-pane-logs',
+			developer: '#sbox-pane-developer'
 		},
 		onChange: (name) => {
-			appState.activeCfgTab = name;
-			if (name === 'settings') {
-				stopLogPolling();
-				renderSettingsPane();
-			} else if (name === 'logs') {
-				refreshLogs().catch(() => {});
-				startLogPolling();
-			} else {
-				stopLogPolling();
-				resizeConfigEditor();
+			if (cfgTabsInitialized && appState.activeCfgTab === name) return;
+			const metric = view_miclash_performance.begin('tab.' + name + '.open');
+			cfgTabsInitialized = true;
+			try {
+				appState.activeCfgTab = name;
+				managementOwner.setActive(name === 'settings');
+				diagnosticsOwner.setActive(name === 'settings');
+				if (name !== 'logs') stopLogPolling();
+				if (name === 'settings') {
+					renderSettingsPane();
+				} else if (name === 'logs') {
+					refreshLogs().catch(() => {});
+					startLogPolling();
+				} else {
+					resizeConfigEditor();
+				}
+				if (name === 'developer')
+					performanceOwner.mount(pageRoot?.querySelector('#sbox-performance-panel'));
+				else
+					performanceOwner.destroy();
+			} finally {
+				view_miclash_performance.end(metric, true);
 			}
 		}
 	});
+	bindDeveloperEvents();
 }
 
 return view.extend({
@@ -3022,76 +3600,132 @@ return view.extend({
 	handleReset: null,
 
 	load: function() {
-		return Promise.all([
-			L.resolveDefault(fs.read(CONFIG_PATH), ''),
-			readSubscriptionUrl(),
-			loadOperationalSettings(),
-			getNetworkInterfaces(),
-			getVersions(),
-			getMihomoStatus(),
-			L.resolveDefault(readMiClashServiceState(), null),
-			detectCurrentProxyMode()
-		]);
+		return [ {}, { interfaces: [], detectedLan: '', detectedWan: '' }, null, null ];
 	},
 
-	render: async function(data) {
-		await ensureConfigProfilesReady(data[0] || '');
+	render: function(data) {
+		sessionExpired = false;
+		clearDeveloperTimer();
+		developerVisible = false;
+		developerTapTimes = [];
+		cfgTabSetter = null;
+		if (appState.activeCfgTab === 'developer') appState.activeCfgTab = 'settings';
+		notificationOwner.destroy();
+		managementOwner.destroy();
+		performanceOwner.destroy();
+		releaseConfigRuntime();
+		const generation = ++pageGeneration;
 		appState.configProfiles = CONFIG_PROFILES.slice();
 		appState.selectedConfigName = MAIN_CONFIG_NAME;
-		appState.configContent = await readConfigFileByName(MAIN_CONFIG_NAME);
-		appState.subscriptionUrl = await readSubscriptionUrl(MAIN_CONFIG_NAME);
-		appState.settings = data[2] || await loadOperationalSettings();
-		appState.interfaces = data[3] || [];
-		appState.versions = data[4] || { app: 'unknown', clash: 'unknown' };
-		appState.kernelStatus = data[5] || { installed: false, version: null };
-		if (data[6]) {
-			applyServiceState(data[6]);
-		} else {
-			appState.serviceRunning = await getServiceStatus();
-		}
-		appState.proxyMode = data[7] || 'tproxy';
+		appState.configContent = '';
+		appState.subscriptionUrl = '';
+		appState.configReady = false;
+		appState.systemMetadataReady = false;
+		appState.serviceStateLoading = true;
+		appState.settings = data[0] || {};
+		const networkSnapshot = data[1] || { interfaces: [], detectedLan: '', detectedWan: '' };
+		appState.interfaces = Array.isArray(networkSnapshot.interfaces) ? networkSnapshot.interfaces : [];
+		const system = data[2] || {};
+		appState.versions = {
+			app: normalizeAppVersion(system.app_version || 'unknown'),
+			clash: system.mihomo?.installed ? String(system.mihomo.version || _('Installed')) : 'unknown'
+		};
+		appState.kernelStatus = {
+			installed: system.mihomo?.installed === true,
+			version: system.mihomo?.installed ? String(system.mihomo.version || '') : null
+		};
+		if (data[3]) applyServiceState(data[3]);
+		else appState.serviceRunning = false;
+		if (data[3]?.desired?.guard)
+			appState.settings.internetOnlyMiclash = data[3].desired.guard.enabled === true;
+		appState.proxyMode = appState.settings.proxyMode || 'tproxy';
 
-		appState.selectedInterfaces = await loadInterfacesByMode(appState.settings.mode || 'exclude');
-		appState.detectedLan = appState.settings.detectedLan || (await detectLanBridge()) || '';
-		appState.detectedWan = appState.settings.detectedWan || (await detectWanInterface()) || '';
+		appState.selectedInterfaces = (appState.settings.mode === 'explicit'
+			? appState.settings.includedInterfaces
+			: appState.settings.excludedInterfaces) || [];
+		appState.detectedLan = appState.settings.detectedLan || networkSnapshot.detectedLan || '';
+		appState.detectedWan = appState.settings.detectedWan || networkSnapshot.detectedWan || '';
 
 		pageRoot = E('div', { 'class': 'sbox-page' }, [
-			E('link', { 'rel': 'stylesheet', 'href': L.resource('view/miclash/style.css') }),
+			E('link', {
+			'rel': 'stylesheet',
+			'href': L.resource('view/miclash/style.css') + '?v=' +
+				encodeURIComponent(String(appState.versions?.app || 'unknown')) + '-ui4'
+			}),
 			E('div', { 'id': 'sbox-root' })
 		]);
 
 		pageRoot.querySelector('#sbox-root').innerHTML = buildPageHtml();
+		configApi = view_miclash_api.create();
 
-		try {
-			await initializeConfigEditor(appState.configContent);
-		} catch (e) {
-			notify('error', _('Failed to initialize editor: %s').format(e.message));
-		}
-
+		diagnosticsOwner.replace();
+		managementOwner.replace();
 		bindControlAndHeaderEvents();
 		bindConfigEvents();
 		bindTabEvents();
-		renderSettingsPane();
+		if (appState.activeCfgTab === 'settings') renderSettingsPane();
+		if (appState.activeCfgTab === 'logs') {
+			refreshLogs().catch(() => {});
+			startLogPolling();
+		}
 		updateHeaderAndControlDom();
-		refreshReleaseMeta({ force: true }).catch(() => {});
 
 		startControlPolling();
 		startUpdatePolling();
 		resumeMiClashServiceJobStatus().catch(() => {});
 		resumeMiClashUpdateJobStatus().catch(() => {});
-
-		document.addEventListener('visibilitychange', () => {
+		visibilityChangeHandler = () => {
 			if (document.hidden) {
 				stopLogPolling();
-			} else if (appState.activeCfgTab === 'logs') {
+		} else if (appState.activeCfgTab === 'logs' && logsLoaded) {
 				refreshLogs().catch(() => {});
 				startLogPolling();
 			}
 			if (!document.hidden) {
 				refreshReleaseMeta({ force: false }).catch(() => {});
 			}
+		};
+		document.addEventListener('visibilitychange', visibilityChangeHandler);
+		const pageHydrationMetric = view_miclash_performance.begin('page.hydration');
+		const configHydration = beginPageHydration(generation).then(
+			(value) => {
+				view_miclash_performance.end(pageHydrationMetric, true);
+				return value;
+			},
+			(error) => {
+				view_miclash_performance.end(pageHydrationMetric, false);
+				throw error;
+			}
+		);
+		hydrateSystemMetadata(generation).catch((error) => {
+			if (generation === pageGeneration) console.error('[MiClash] Failed to hydrate system metadata:', error);
+		});
+		const initialHydration = hydrateInitialState(generation).catch((error) => {
+			if (generation === pageGeneration) {
+				console.error('[MiClash] Failed to hydrate initial state:', error);
+				appState.guardObservedState = 'unknown';
+				updateHeaderAndControlDom();
+			}
+		});
+		initialHydration.finally(() => {
+			window.setTimeout(() => {
+				if (generation !== pageGeneration || !pageRoot || document.hidden) return;
+				warmBackgroundPanels(generation, configHydration).catch(() => {});
+			}, 0);
 		});
 
 		return pageRoot;
+	},
+
+	unload: function() {
+		clearDeveloperTimer();
+		developerVisible = false;
+		developerTapTimes = [];
+		cfgTabSetter = null;
+		diagnosticsOwner.destroy();
+		notificationOwner.destroy();
+		managementOwner.destroy();
+		performanceOwner.destroy();
+		releaseConfigRuntime();
 	}
 });

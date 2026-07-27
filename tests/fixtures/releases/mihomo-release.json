@@ -1,0 +1,23 @@
+{
+  "tag_name": "v1.2.3",
+  "draft": false,
+  "prerelease": false,
+  "assets": [
+    {
+      "name": "mihomo-linux-arm64-v1.2.3.gz",
+      "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.2.3/mihomo-linux-arm64-v1.2.3.gz"
+    },
+    {
+      "name": "mihomo-linux-arm64-v1.2.3.gz.sha256",
+      "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.2.3/mihomo-linux-arm64-v1.2.3.gz.sha256"
+    },
+    {
+      "name": "mihomo-linux-amd64-v1.2.3.gz",
+      "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.2.3/mihomo-linux-amd64-v1.2.3.gz"
+    },
+    {
+      "name": "mihomo-linux-amd64-v1.2.3.gz.sha256",
+      "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.2.3/mihomo-linux-amd64-v1.2.3.gz.sha256"
+    }
+  ]
+}

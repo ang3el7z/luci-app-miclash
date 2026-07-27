@@ -2,95 +2,218 @@
 Читать на: <a href="README.md">English</a> | <strong>Русский</strong> | <a href="README.zh-cn.md">中文</a>
 </p>
 
-<img width="881" height="889" alt="MiClash screenshot" src="https://github.com/user-attachments/assets/c53492ae-5318-4f34-802e-393306c109f3" />
+<img width="881" height="889" alt="Снимок экрана MiClash" src="https://github.com/user-attachments/assets/c53492ae-5318-4f34-802e-393306c109f3" />
 
 # MiClash
 
-LuCI-приложение для управления Mihomo/Clash на OpenWrt.
+MiClash — LuCI-приложение для управления Mihomo: подписки, маршрутизация, Guard, диагностика, обновления, уведомления и восстановление в одном интерфейсе.
 
-## Автоустановка
+**Требования:** OpenWrt 24.10+ с firewall4. OpenWrt 25.12+ использует APK, OpenWrt 24.10 — opkg.
 
-Рекомендуемый вариант (`wget`, работает даже если установленный `curl` сломан):
+## Установка
+
+Установщик определяет пакетный менеджер, проверяет 20 новейших стабильных релизов и выбирает первый с полностью опубликованными файлами и контрольными суммами. Если новый тег ещё собирается, будет установлена предыдущая готовая версия. Установщик проверяет `.sha256`, при необходимости чинит несовместимые `zlib`/`libcurl4`, а для установленного MiClash предлагает обновление, переустановку, удаление или выход. Обновление из LuCI **не откатывается** на старый релиз: оно ждёт файлы самой новой версии и повторяет проверку позже.
+
+Через `wget`:
 
 ```sh
 wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-Альтернативный вариант (`curl`):
+<details>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
+
+Через `gh-proxy.com`:
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
+```
+
+Через jsDelivr:
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
+```
+
+Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
+
+</details>
+
+<details>
+<summary><strong>🟡 Использовать curl</strong></summary>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-Автоустановщик проверяет, что `curl` действительно запускается. Если бинарь `curl` уже есть, но падает из-за отсутствующего или несовместимого `zlib`/`libcurl4`, скрипт сам восстановит эти пакеты перед загрузкой релизов MiClash.
+<blockquote>
+<details>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
 
-Если `luci-app-miclash` уже установлен, скрипт в интерактивном режиме предложит `update / reinstall / delete / skip`.
-При запуске через `wget ... | ash` или `curl ... | ash` без TTY удаление не выполняется автоматически: скрипт выберет безопасный `update` или `skip`.
-
-## OpenWrt 25.x
-
-```sh
-apk update
-apk add zlib libcurl4 curl kmod-nft-tproxy kmod-tun coreutils-base64
-curl --version >/dev/null 2>&1 || apk fix zlib libcurl4 curl
-curl --version >/dev/null 2>&1 || exit 1
-release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash-${release#v}.apk" -o /tmp/luci-app-miclash.apk
-apk add /tmp/luci-app-miclash.apk --allow-untrusted
-rm -f /tmp/luci-app-miclash.apk
-```
-
-## OpenWrt 23.05.x - 24.10.x
+Через `gh-proxy.com`:
 
 ```sh
-opkg update
-opkg install --force-reinstall zlib libcurl4 curl
-opkg install kmod-nft-tproxy kmod-tun coreutils-base64
-curl --version >/dev/null 2>&1 || exit 1
-release=$(curl -fsSL https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f4)
-curl -L "https://github.com/ang3el7z/luci-app-miclash/releases/download/${release}/luci-app-miclash_${release#v}_all.ipk" -o /tmp/luci-app-miclash.ipk
-opkg install /tmp/luci-app-miclash.ipk
-rm -f /tmp/luci-app-miclash.ipk
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash.sh | ash
 ```
 
-Для старых сборок OpenWrt с `firewall3` вместо `kmod-nft-tproxy` нужен `iptables-mod-tproxy`.
-
-## Mihomo
-
-После установки откройте LuCI -> Services -> MiClash -> Settings -> Kernel и установите ядро Mihomo из интерфейса.
-MiClash определит архитектуру, скачает подходящий архив, заменит `/opt/clash/bin/clash` и перезапустит службу, если она была запущена.
-
-Ручная установка тоже возможна:
+Через jsDelivr:
 
 ```sh
-mkdir -p /opt/clash/bin
-release=$(curl -s -L https://github.com/MetaCubeX/mihomo/releases/latest | grep "title>Release" | cut -d " " -f 4)
-curl -L "https://github.com/MetaCubeX/mihomo/releases/download/${release}/mihomo-linux-arm64-${release}.gz" -o /tmp/clash.gz
-gunzip -c /tmp/clash.gz > /opt/clash/bin/clash
-chmod 0755 /opt/clash/bin/clash
-rm -f /tmp/clash.gz
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash.sh | ash
 ```
 
-Для других архитектур выберите файл на странице релизов Mihomo: <https://github.com/MetaCubeX/mihomo/releases>.
+Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
+
+</details>
+</blockquote>
+
+</details>
+
+<details>
+<summary><strong>🔴 Переход с v0.9.x на v2.x</strong></summary>
+
+Для установленной v0.9.x один раз запустите отдельный переходный скрипт:
+
+```sh
+wget --no-proxy -qO- https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+<blockquote>
+<details>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
+
+Через `gh-proxy.com`:
+
+```sh
+wget --no-proxy -qO- https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Через jsDelivr:
+
+```sh
+wget --no-proxy -qO- https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
+
+</details>
+</blockquote>
+
+<blockquote>
+<details>
+<summary><strong>🟡 Использовать curl</strong></summary>
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+<blockquote>
+<details>
+<summary><strong>🔵 GitHub не открывается? Показать альтернативные команды</strong></summary>
+
+Через `gh-proxy.com`:
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/ang3el7z/luci-app-miclash/main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Через jsDelivr:
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ang3el7z/luci-app-miclash@main/install-miclash-upgrade-0-9-x-to-2.x.x.sh | ash
+```
+
+Это сторонние способы загрузки. После обновления jsDelivr некоторое время может отдавать закэшированную версию `main`.
+
+</details>
+</blockquote>
+
+</details>
+</blockquote>
+
+Скрипт проверит готовый стабильный релиз v2, временно сохранит профили конфигурации, URL подписок и совместимые настройки UI в `/root/miclash-v09-backup-*`, затем установит v2 и свежее ядро Mihomo. Кэши providers/runtime не переносятся и создаются v2 заново. Автоматического rollback и journal нет; временный backup останется только при ошибке установки.
+
+Во время короткой замены Guard не работает. Если прямой выход защищённого трафика недопустим, запускайте переход из локальной сети.
+
+</details>
+
+## Быстрый старт
+
+Откройте **LuCI → Службы → MiClash**.
+
+1. Терминальный установщик устанавливает Mihomo автоматически.
+2. Добавьте подписку или отредактируйте YAML-профиль.
+3. Проверьте YAML — это не изменяет рабочую маршрутизацию.
+4. Примените его, чтобы сделать конфигурацию активной.
+5. Выберите TPROXY, TUN или MIXED и нужные интерфейсы.
+6. Проверьте защищаемые устройства и только затем включите Guard.
+
+Невалидная конфигурация не применяется, а предыдущая активная конфигурация продолжает работать.
 
 ## Основные возможности
 
-- Нативная LuCI-страница MiClash без отдельного кастомного переключателя темы.
-- Управление службой Clash: start, stop, restart, reload.
-- Редактор YAML-конфига с проверкой перед применением.
-- Загрузка подписки в `/opt/clash/config.yaml`.
-- Локальные rulesets в `/opt/clash/lst`.
-- Настройки TPROXY/TUN/MIXED, интерфейсов, QUIC block, tmpfs для rules/providers.
-- Обновление MiClash и Mihomo через router-side скрипты, чтобы LuCI не держал долгие операции в UI.
+- **Конфигурации:** прямое редактирование YAML, валидация и атомарное применение.
+- **Подписки и обновления:** три URL, ручное и плановое обновление, безопасное обновление MiClash и ядра Mihomo.
+- **Маршрутизация:** TPROXY, TUN, MIXED, включения/исключения интерфейсов, авто LAN/WAN, QUIC и локальные rulesets.
+- **Диагностика:** состояние Mihomo, DNS, firewall, routing и Guard, очищенный diagnostic report и route test.
+- **Самовосстановление:** исправление drift и ступени `reload → restart ядра → restart службы`.
+- **Уведомления (notification):** ошибки, восстановление Интернета, обновления, Guard и Memory Guard в LuCI или Telegram.
+- **Политики устройств (device policies):** расписания и действия inherit/proxy/direct/block; Guard всегда имеет приоритет.
 
-## Удаление
+## Guard и восстановление
+
+`miclashd` — единый backend MiClash; LuCI и Telegram используют типизированный `ubus` API. Настройки UCI находятся в `/etc/config/miclash`, а профили, rulesets и ядро — в `/opt/clash`.
+
+- Guard работает по принципу fail-closed и защищает выбранный трафик до готовности Mihomo.
+- Сбой службы, ядра, обновления или ремонта не отключает защиту; снять latch можно только явным выключением Guard.
+- Конфигурация сначала проходит проверку, а частичные изменения DNS/firewall/routing откатываются.
+- Обновление Mihomo выполняется через staging с возможностью вернуть предыдущее ядро.
+- Memory Guard действует только при аномальном росте Mihomo и давлении памяти, проверяет результат каждой ступени и после общей неудачи включает длительный cooldown.
+
+Храните `/etc/config/miclash` доступным только root: файл может содержать URL подписок и Telegram token.
+
+## Управление через Telegram
+
+В **Настройки → Telegram** включите интеграцию, укажите token от **BotFather** и свой числовой user ID. Token хранится как секрет и не возвращается в LuCI; пустое поле не заменяет уже сохранённый token.
+
+Бот использует только исходящий HTTPS long polling, принимает разрешённые private chat, проверяет sender/chat ID, отклоняет группы, каналы, изменения и дубликаты. `/start` и `/menu` открывают локализованную панель управления в одном сообщении; в списке команд показывается только `/menu`, а все действия выполняются кнопками. Опасные действия требуют подтверждения. Результаты операций и автоматические уведомления сохраняются до подтверждённой доставки Telegram. Логи скачиваются как тот же ограниченный необработанный снимок, который показан в LuCI. Диагностика доступна в режимах Silent, Lite и Full.
+
+```text
+/start /menu
+```
+
+## Диагностика
+
+Для обычной диагностики откройте **MiClash → Настройки → Компоненты → Диагностика**:
+
+- **Silent** содержит только минимальные сведения о состоянии системы и подходит для публичных обращений.
+- **Lite** содержит очищенную диагностику, сводку конфигурации и недавние события. Используйте его для большинства обращений.
+- **Full** может содержать приватную конфигурацию и секреты. Передавайте его только доверенной поддержке.
+
+Если LuCI недоступен, выполните по SSH:
 
 ```sh
-# OpenWrt 25.x:
+/etc/init.d/miclashd status
+/etc/init.d/clash status
+ubus call miclash status '{}'
+ubus call miclash health '{}'
+logread | grep -E '(miclash|mihomo|clash)'
+```
+
+Для проверки выбранного пути используйте **Проверку маршрутизации** в карточке «Маршрутизация». При включённом Guard не удаляйте вручную его правила nftables/routing или защитную блокировку.
+
+## Удаление (removal)
+
+```sh
+# OpenWrt 25.12+:
 apk del luci-app-miclash
 
-# OpenWrt 23.05.x - 24.10.x:
+# OpenWrt 24.10:
 opkg remove luci-app-miclash
+```
 
+Удаление сначала останавливает службы и восстанавливает принадлежащие MiClash настройки DNS/firewall/routing. Каталог `/opt/clash` сохраняется; после копирования нужных файлов его можно необратимо удалить вручную:
+
+```sh
 rm -rf /opt/clash
 ```

@@ -1,17 +1,19 @@
 .sbox-page,
 .sbox-modal-wide,
-.sbox-rulesets-modal-body {
+.sbox-rulesets-modal-body,
+.sbox-modal-responsive,
+.sbox-modal-responsive-shell {
 	--sbox-bg: var(--background-color, Canvas);
 	--sbox-panel: var(--background-color-high, var(--background-color, Canvas));
 	--sbox-text: var(--text-color-high, var(--text-color, CanvasText));
 	--sbox-muted: var(--text-color-medium, var(--text-color-low, GrayText));
 	--sbox-panel-soft: var(--background-color-low, var(--sbox-panel));
 	--sbox-border: var(--border-color-medium, var(--border-color-low, var(--sbox-muted)));
-	--sbox-accent: var(--primary-color, var(--link-color, #0969da));
-	--sbox-success: var(--success-color, var(--positive-color, #00ac59));
-	--sbox-danger: var(--error-color, #d15653);
-	--sbox-warn: var(--warning-color, #d6aa46);
-	--sbox-info: var(--info-color, #4fb5d8);
+	--sbox-accent: var(--primary-color-high);
+	--sbox-success: var(--success-color-high);
+	--sbox-danger: var(--error-color-high);
+	--sbox-warn: var(--warn-color-high);
+	--sbox-info: var(--primary-color-high);
 	--sbox-log-info: var(--sbox-info);
 	--sbox-code-key: var(--sbox-danger);
 	--sbox-code-string: var(--sbox-success);
@@ -23,7 +25,9 @@
 @supports (background: color-mix(in srgb, CanvasText 10%, transparent)) {
 	.sbox-page,
 	.sbox-modal-wide,
-	.sbox-rulesets-modal-body {
+	.sbox-rulesets-modal-body,
+	.sbox-modal-responsive,
+	.sbox-modal-responsive-shell {
 		--sbox-panel-soft: var(--background-color-low, color-mix(in srgb, var(--sbox-panel) 94%, var(--sbox-text) 6%));
 		--sbox-border: var(--border-color-medium, var(--border-color-low, color-mix(in srgb, var(--sbox-text) 22%, transparent)));
 		--sbox-code-key: color-mix(in srgb, var(--sbox-text) 82%, var(--sbox-danger));
@@ -71,6 +75,27 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
+}
+.sbox-version-inline [data-developer-toggle] {
+	cursor: pointer;
+}
+.sbox-version-loading {
+	position: relative;
+	display: inline-block;
+	width: 44px;
+	height: 12px;
+	overflow: hidden;
+	border-radius: 999px;
+	background: var(--sbox-border);
+	opacity: .68;
+	color: transparent !important;
+}
+.sbox-version-loading::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--sbox-text) 18%, transparent) 50%, transparent 80%);
+	animation: sbox-shimmer 1.35s ease-in-out infinite;
 }
 .sbox-version-action-button {
 	display: inline-flex;
@@ -274,13 +299,11 @@
 }
 .sbox-status-on::before {
 	animation: sbox-status-pulse 2.4s ease-in-out infinite;
-	box-shadow: 0 0 0 0 rgba(0, 172, 89, 0.28);
 	box-shadow: 0 0 0 0 color-mix(in srgb, var(--sbox-success) 32%, transparent);
 }
 @keyframes sbox-status-pulse {
 	0%, 100% {
 		opacity: 0.82;
-		box-shadow: 0 0 0 0 rgba(0, 172, 89, 0.24);
 		box-shadow: 0 0 0 0 color-mix(in srgb, var(--sbox-success) 28%, transparent);
 	}
 	50% {
@@ -338,6 +361,42 @@
 	background: color-mix(in srgb, var(--sbox-danger) 12%, transparent);
 	border-color: color-mix(in srgb, var(--sbox-danger) 38%, transparent);
 }
+.sbox-guard-error {
+	color: var(--sbox-danger);
+	background: var(--sbox-panel-soft);
+	border-color: var(--sbox-danger);
+	background: color-mix(in srgb, var(--sbox-danger) 12%, transparent);
+	border-color: color-mix(in srgb, var(--sbox-danger) 38%, transparent);
+}
+.sbox-guard-unknown {
+	color: var(--sbox-warn);
+	background: var(--sbox-panel-soft);
+	border-color: var(--sbox-warn);
+	background: color-mix(in srgb, var(--sbox-warn) 10%, transparent);
+	border-color: color-mix(in srgb, var(--sbox-warn) 38%, transparent);
+}
+.sbox-guard-loading {
+	color: var(--sbox-muted);
+	background: var(--sbox-panel-soft);
+	border-color: var(--sbox-border);
+}
+.sbox-guard-loading .sbox-guard-state {
+	position: relative;
+	display: inline-block;
+	width: 32px;
+	height: 8px;
+	overflow: hidden;
+	border-radius: 999px;
+	background: var(--sbox-border);
+	color: transparent;
+}
+.sbox-guard-loading .sbox-guard-state::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--sbox-text) 18%, transparent) 50%, transparent 80%);
+	animation: sbox-shimmer 1.35s ease-in-out infinite;
+}
 .sbox-guard-state {
 	font-weight: 800;
 }
@@ -382,6 +441,13 @@
 	box-sizing: border-box;
 	overflow: hidden;
 	background: var(--sbox-log-bg);
+}
+.sbox-editor > .sbox-loading-editor,
+.sbox-log-content > .sbox-loading-editor {
+	width: 100%;
+	height: 100%;
+	min-height: 100%;
+	border-radius: inherit;
 }
 .sbox-native-editor {
 	display: block;
@@ -438,6 +504,42 @@
 	line-height: 1.18;
 	white-space: pre;
 }
+.sbox-log-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 8px;
+}
+.sbox-log-search-input {
+	min-width: 0;
+	flex: 1 1 220px;
+}
+.sbox-log-search-button {
+	min-width: 30px;
+	padding: 0 8px;
+}
+.sbox-log-search-button:disabled {
+	color: var(--sbox-muted);
+	border-color: var(--sbox-border);
+	background: var(--sbox-panel-soft);
+}
+.sbox-log-search-count {
+	min-width: 48px;
+	color: var(--sbox-muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	text-align: center;
+}
+.sbox-log-search-match {
+	padding: 0 1px;
+	border-radius: 2px;
+	background: color-mix(in srgb, var(--sbox-accent) 22%, transparent);
+	color: inherit;
+}
+.sbox-log-search-match-active {
+	background: color-mix(in srgb, var(--sbox-accent) 42%, transparent);
+	outline: 1px solid color-mix(in srgb, var(--sbox-accent) 72%, transparent);
+}
 .sbox-log-muted { color: var(--sbox-muted); }
 .sbox-log-line {
 	display: grid;
@@ -470,65 +572,229 @@
 	margin-left: 4px;
 }
 .sbox-log-level-info .sbox-log-level { color: var(--sbox-log-info); }
-.sbox-log-level-warn .sbox-log-level { color: var(--sbox-warn); }
-.sbox-log-level-error .sbox-log-level { color: var(--sbox-danger); }
+.sbox-log-level-warn .sbox-log-level { color: var(--sbox-code-number); }
+.sbox-log-level-error .sbox-log-level { color: var(--sbox-code-key); }
+.sbox-log-level-crit .sbox-log-level,
+.sbox-log-level-critical .sbox-log-level,
+.sbox-log-level-fatal .sbox-log-level,
+.sbox-log-level-panic .sbox-log-level,
+.sbox-log-level-alert .sbox-log-level,
+.sbox-log-level-emerg .sbox-log-level {
+	color: var(--sbox-code-key);
+}
+.sbox-modal-responsive [hidden],
+.sbox-modal-responsive-shell [hidden] {
+	display: none !important;
+}
 .sbox-log-level-debug .sbox-log-level,
 .sbox-log-level-trace .sbox-log-level,
 .sbox-log-level-muted .sbox-log-level {
 	color: var(--sbox-muted);
 }
-.sbox-log-daemon-clash-rules .sbox-log-daemon {
-	color: var(--sbox-code-string);
-}
-.sbox-log-daemon-clash-hotplug .sbox-log-daemon {
-	color: var(--sbox-code-number);
-}
 .sbox-log-daemon-miclash .sbox-log-daemon {
 	color: var(--sbox-success);
 }
-.sbox-settings-grid {
+.sbox-settings-page {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(220px, 1fr));
-	gap: 10px;
+	gap: 18px;
+	min-width: 0;
+	padding-bottom: 2px;
 }
+.sbox-settings-zone {
+	display: grid;
+	gap: 10px;
+	min-width: 0;
+}
+.sbox-settings-card,
 .sbox-settings-block {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	box-sizing: border-box;
+	margin: 0;
+	padding: 13px;
 	background: var(--sbox-panel-soft);
 	border: 1px solid var(--sbox-border);
 	border-radius: 8px;
-	padding: 10px;
+}
+.sbox-settings-card h4,
+.sbox-settings-block h4 {
+	margin: 0 0 9px;
+	color: var(--sbox-text);
+	font-size: 13px;
+	font-weight: 800;
+}
+.sbox-settings-card h5 {
+	margin: 0 0 7px;
+	font-size: 12px;
+}
+.sbox-developer-pane {
+	display: grid;
+	gap: 12px;
+}
+.sbox-developer-pane[hidden] {
+	display: none !important;
+}
+.sbox-developer-intro {
+	padding: 12px 13px;
+	border: 1px solid color-mix(in srgb, var(--sbox-danger) 38%, var(--sbox-border));
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--sbox-danger) 7%, var(--sbox-panel-soft));
+}
+.sbox-developer-intro h4,
+.sbox-developer-intro p,
+.sbox-developer-action h4,
+.sbox-developer-action p {
 	margin: 0;
 }
-.sbox-settings-block h4 {
-	margin: 0 0 8px;
-	font-size: 13px;
-	color: var(--sbox-text);
+.sbox-developer-intro h4,
+.sbox-developer-action h4 {
+	margin-bottom: 5px;
 }
-.sbox-settings-block-wide {
-	grid-column: 1 / -1;
+.sbox-developer-intro p,
+.sbox-developer-action p {
+	color: var(--sbox-muted);
+}
+.sbox-developer-actions {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+}
+.sbox-performance-heading,
+.sbox-performance-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 9px;
+}
+.sbox-performance-heading {
+	margin: 4px 0 0;
+}
+.sbox-performance-heading h4,
+.sbox-performance-card h4 {
+	margin: 0;
+}
+.sbox-performance-grid {
+	display: grid;
+	gap: 12px;
+}
+.sbox-performance-table-wrap {
+	max-width: 100%;
+	overflow-x: auto;
+}
+.sbox-performance-table {
+	min-width: 42rem;
+}
+.sbox-performance-table td:not(:first-child),
+.sbox-performance-table th:not(:first-child) {
+	text-align: right;
+}
+.sbox-developer-action {
+	justify-content: space-between;
+	gap: 16px;
+}
+.sbox-developer-action .cbi-button {
+	align-self: flex-start;
+}
+@media (max-width: 900px) {
+	.sbox-developer-actions { grid-template-columns: 1fr; }
+	.sbox-performance-heading {
+		align-items: flex-start;
+		flex-direction: column;
+	}
+}
+.sbox-card-divider {
+	height: 1px;
+	margin: 11px 0;
+	background: var(--sbox-border);
+}
+.sbox-overview-grid {
+	display: grid;
+	grid-template-columns: repeat(12, minmax(0, 1fr));
+	gap: 12px;
+	align-items: stretch;
+}
+.sbox-diagnostics-summary,
+.sbox-diagnostics-card-grid {
+	display: contents;
+}
+.sbox-overview-card {
+	grid-column: span 4;
+	background: var(--sbox-panel-soft);
+}
+@supports (background: color-mix(in srgb, CanvasText 10%, transparent)) {
+	.sbox-overview-card {
+		background: color-mix(in srgb, var(--sbox-panel-soft) 94%, var(--sbox-text) 6%);
+	}
+}
+.sbox-settings-summary-current {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+	font-size: 12px;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+}
+.sbox-routing-composite {
+	padding: 0;
+	overflow: hidden;
+}
+.sbox-routing-config-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	min-width: 0;
+}
+.sbox-settings-subgroup {
+	min-width: 0;
+	margin: 0;
+	padding: 13px;
+	border: 0;
+}
+.sbox-settings-subgroup h4,
+.sbox-routing-detection h4 {
+	margin: 0 0 9px;
+	padding: 0;
+	color: var(--sbox-text);
+	font-size: 13px;
+	font-weight: 800;
+}
+.sbox-routing-detection {
+	border-left: 1px solid var(--sbox-border);
+}
+.sbox-detected-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px 14px;
+	margin-top: 10px;
+	font-size: 11px;
+}
+.sbox-interface-section {
+	padding: 13px;
 }
 .sbox-settings-help {
-	margin-bottom: 8px;
-}
-.sbox-settings-field {
 	margin-bottom: 10px;
 }
-.sbox-settings-overview {
+.sbox-settings-field {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
+	grid-template-columns: minmax(100px, auto) minmax(150px, 1fr);
 	gap: 10px;
+	align-items: center;
+	margin-bottom: 10px;
+}
+.sbox-settings-pair-grid,
+.sbox-management-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
 	align-items: stretch;
-	margin: 0 0 10px;
 }
 .sbox-release-channel-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 10px;
+	gap: 14px;
 }
 .sbox-release-channel-section {
 	margin: 0;
-}
-.sbox-release-channel-section .sbox-release-channel-grid {
-	gap: 12px;
 }
 .sbox-release-channel-column {
 	min-width: 0;
@@ -544,11 +810,26 @@
 	display: flex;
 	align-items: flex-start;
 	gap: 8px;
-	margin: 6px 0;
+	min-width: 0;
+	margin: 7px 0;
 	font-size: 12px;
+	line-height: 1.35;
+}
+.sbox-major-update-policy {
+	margin-top: 10px;
+	padding-top: 9px;
+}
+.sbox-major-update-policy .sbox-checkbox-row {
+	margin-top: 0;
+	margin-bottom: 0;
+}
+.sbox-radio-row span,
+.sbox-checkbox-row span {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 .sbox-auto-update-row {
-	align-items: center;
+	align-items: flex-start;
 	flex-wrap: wrap;
 }
 .sbox-auto-update-interval {
@@ -561,6 +842,18 @@
 }
 .sbox-auto-update-interval[hidden] {
 	display: none !important;
+}
+.sbox-auto-update-every,
+.sbox-auto-update-provider {
+	font-size: 12px;
+	line-height: 1.3;
+}
+.sbox-auto-update-every {
+	margin-left: 4px;
+}
+.sbox-auto-update-provider {
+	flex-basis: 100%;
+	margin-left: 24px;
 }
 .sbox-auto-update-choice {
 	display: inline-flex;
@@ -575,10 +868,10 @@
 	margin: 0;
 }
 .sbox-form-grid {
-	margin-top: 8px;
+	margin-top: 10px;
 	display: grid;
 	grid-template-columns: repeat(2, minmax(180px, 1fr));
-	gap: 8px;
+	gap: 10px;
 }
 .sbox-form-grid label {
 	display: block;
@@ -586,17 +879,27 @@
 	font-size: 12px;
 	color: var(--sbox-muted);
 }
+.sbox-interface-groups {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: 10px;
+}
 .sbox-interface-group {
-	margin-bottom: 8px;
+	min-width: 0;
+	padding: 9px;
+	background: var(--sbox-panel);
+	border: 1px solid var(--sbox-border);
+	border-radius: 7px;
 }
 .sbox-interface-group-title {
-	font-size: 11px;
+	margin-bottom: 6px;
 	color: var(--sbox-muted);
-	margin-bottom: 4px;
+	font-size: 11px;
+	font-weight: 700;
 }
 .sbox-interface-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
 	gap: 6px;
 }
 .sbox-interface-item {
@@ -604,24 +907,613 @@
 	align-items: center;
 	gap: 8px;
 	font-size: 12px;
+	min-width: 0;
 	border: 1px solid var(--sbox-border);
 	border-radius: 6px;
 	padding: 5px 8px;
 }
-.sbox-settings-status {
-	margin-top: 10px;
+.sbox-interface-item span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.sbox-runtime-switches {
+	display: grid;
+	gap: 7px;
+}
+.sbox-runtime-switches .sbox-checkbox-row {
+	margin: 0;
+}
+.sbox-hwid-fields {
+	margin-top: 8px;
+}
+
+.sbox-management-grid {
+	margin-top: 0;
+}
+
+.sbox-management-module,
+.sbox-management-card {
+	min-width: 0;
+}
+
+.sbox-management-settings {
+	display: contents;
+}
+
+.sbox-management-card {
+	grid-column: span 1;
+}
+
+.sbox-management-wide {
+	grid-column: 1 / -1;
+}
+
+.sbox-protection-integration-card {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
 	padding: 0;
-	font-size: 12px;
-	line-height: 1.5;
+	overflow: hidden;
+}
+.sbox-integration-pane {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	padding: 13px;
+}
+.sbox-integration-pane + .sbox-integration-pane {
+	border-left: 1px solid var(--sbox-border);
+}
+.sbox-integration-pane h4 {
+	margin: 0 0 8px;
+}
+.sbox-integration-pane > .sbox-checkbox-row:first-of-type {
+	margin-top: 2px;
+}
+.sbox-integration-pane .sbox-management-field input,
+.sbox-integration-pane .sbox-management-field select {
+	box-sizing: border-box;
+	width: 100%;
+	max-width: none;
+}
+
+.sbox-secret-input {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 6px;
+	align-items: stretch;
+}
+.sbox-secret-input input {
+	min-width: 0;
+}
+.sbox-secret-reveal {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 36px;
+	padding: 0 9px;
+}
+.sbox-secret-reveal svg {
+	display: block;
+	width: 18px;
+	height: 18px;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2;
+}
+.sbox-telegram-fields {
+	display: grid;
+	gap: 12px;
+}
+
+.sbox-management-facts {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: .45rem .8rem;
+	margin: .75rem 0;
+	padding: 9px 10px;
+	background: var(--sbox-panel);
+	border-radius: 7px;
+	font-size: 11px;
+}
+.sbox-management-facts > * {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.sbox-management-expert {
+	margin-top: .75rem;
+	padding-top: .35rem;
+}
+
+.sbox-management-expert summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.sbox-management-form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: .65rem;
+}
+
+.sbox-management-field,
+.sbox-management-form-grid label {
+	display: flex;
+	flex-direction: column;
+	gap: .25rem;
+}
+
+.sbox-management-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: .5rem;
+	margin-top: auto;
+	padding-top: .75rem;
+}
+
+.sbox-management-switches,
+.sbox-device-days {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+	gap: .25rem .65rem;
+}
+.sbox-notification-tabs {
+	margin-top: 2px;
+}
+.sbox-notification-pane[hidden] {
+	display: none !important;
+}
+.sbox-notification-pane h5 {
+	margin: 12px 0 5px;
+}
+.sbox-notification-event-grid {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.sbox-device-scope-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.sbox-device-scope-copy {
+	display: grid;
+	min-width: 0;
+	gap: 3px;
+}
+.sbox-device-scope-copy p {
+	min-width: 0;
+	margin: 0;
+}
+.sbox-device-count {
+	flex: 0 0 auto;
+	padding: 2px 8px;
+	color: var(--sbox-muted);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	border: 1px solid var(--sbox-border);
+	border-radius: 999px;
+}
+
+.sbox-management-table-wrap {
+	max-height: min(54vh, 520px);
+	max-width: 100%;
+	overflow: auto;
+	border: 1px solid var(--sbox-border);
+	border-radius: 7px;
+	overscroll-behavior: contain;
+}
+.sbox-management-table-wrap:focus-visible {
+	outline: 2px solid var(--sbox-accent);
+	outline-offset: 2px;
+}
+.sbox-device-table {
+	width: 100%;
+	min-width: 720px;
+	margin: 0;
+	border-collapse: separate;
+	border-spacing: 0;
+	font-size: 11.5px;
+}
+.sbox-device-table thead {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background: var(--sbox-panel);
+}
+.sbox-device-table th,
+.sbox-device-table td {
+	padding: 6px 8px;
+	vertical-align: top;
+	line-height: 1.3;
+}
+.sbox-device-table tbody tr:not(:last-child) td {
+	border-bottom: 1px solid var(--sbox-border);
+}
+.sbox-device-table th:nth-child(1),
+.sbox-device-table td:nth-child(1) {
+	min-width: 135px;
+	max-width: 210px;
+	overflow-wrap: anywhere;
+}
+.sbox-device-table th:nth-child(2),
+.sbox-device-table td:nth-child(2),
+.sbox-device-table th:nth-child(4),
+.sbox-device-table td:nth-child(4),
+.sbox-device-table th:nth-child(5),
+.sbox-device-table td:nth-child(5) {
+	white-space: nowrap;
+}
+.sbox-device-table th:nth-child(3),
+.sbox-device-table td:nth-child(3) {
+	min-width: 210px;
+	overflow-wrap: anywhere;
+}
+.sbox-device-table th:last-child,
+.sbox-device-table td:last-child {
+	white-space: nowrap;
+}
+.sbox-device-empty td {
+	padding: 28px 12px;
+	text-align: center;
+}
+.sbox-device-online,
+.sbox-device-offline {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 700;
+}
+.sbox-device-online::before,
+.sbox-device-offline::before {
+	content: "";
+	width: 6px;
+	height: 6px;
+	flex: 0 0 6px;
+	border-radius: 50%;
+	background: currentColor;
+}
+.sbox-device-online {
+	color: var(--sbox-success);
+}
+.sbox-device-offline {
+	color: var(--sbox-muted);
+}
+.sbox-device-policy-value {
+	display: inline-flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.sbox-device-effective {
+	color: var(--sbox-muted);
+	font-size: 10.5px;
+	font-weight: 500;
+}
+.sbox-device-identity-warning {
+	padding: 8px 10px;
+	color: var(--sbox-warn);
+	background: color-mix(in srgb, var(--sbox-warn) 8%, transparent);
+	border: 1px solid color-mix(in srgb, var(--sbox-warn) 34%, var(--sbox-border));
+	border-radius: 7px;
+}
+
+.sbox-management-warning {
+	border-left: .25rem solid var(--sbox-warn);
+	padding: .55rem .75rem;
+	background: color-mix(in srgb, var(--sbox-warn) 8%, transparent);
+}
+
+.sbox-settings-page button:focus-visible,
+.sbox-settings-page input:focus-visible,
+.sbox-settings-page select:focus-visible,
+.sbox-management-expert summary:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+}
+
+@media (max-width: 1050px) {
+	.sbox-overview-routing,
+	.sbox-overview-health {
+		grid-column: span 6;
+	}
+	.sbox-overview-protection {
+		grid-column: 1 / -1;
+	}
+	.sbox-overview-protection .sbox-diagnostics-facts {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 5px 16px;
+	}
+}
+@media (max-width: 760px) {
+	.sbox-settings-page {
+		gap: 15px;
+	}
+	.sbox-overview-card {
+		grid-column: 1 / -1;
+	}
+	.sbox-overview-protection .sbox-diagnostics-facts {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+	.sbox-routing-config-grid,
+	.sbox-settings-pair-grid,
+	.sbox-management-grid,
+	.sbox-notification-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.sbox-routing-detection {
+		border-top: 1px solid var(--sbox-border);
+		border-left: 0;
+	}
+	.sbox-release-channel-grid,
+	.sbox-form-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.sbox-management-facts,
+	.sbox-management-form-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.sbox-management-card,
+	.sbox-management-wide {
+		grid-column: 1 / -1;
+	}
+	.sbox-protection-integration-card {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.sbox-integration-pane + .sbox-integration-pane {
+		border-top: 1px solid var(--sbox-border);
+		border-left: 0;
+	}
+}
+@media (max-width: 560px) {
+	.sbox-settings-card,
+	.sbox-settings-block,
+	.sbox-settings-subgroup,
+	.sbox-interface-section {
+		padding: 10px;
+	}
+	.sbox-overview-protection .sbox-diagnostics-facts,
+	.sbox-notification-events .sbox-management-switches,
+	.sbox-management-facts {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.sbox-settings-field {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 5px;
+	}
+	.sbox-interface-groups {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.sbox-protection-integration-card {
+		padding: 0;
+	}
+	.sbox-integration-pane {
+		padding: 10px;
+	}
+}
+.sbox-settings-summary-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	align-items: start;
+}
+.sbox-settings-summary-current,
+.sbox-diagnostics-summary {
+	min-width: 0;
+}
+.sbox-settings-summary-current {
+	display: grid;
+	gap: 4px;
+}
+.sbox-diagnostics-content {
+	display: grid;
+	gap: 8px;
+}
+.sbox-diagnostics-components,
+.sbox-diagnostics-facts {
+	display: grid;
+	gap: 3px;
+}
+.sbox-diagnostics-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	min-width: 0;
+}
+.sbox-diagnostics-row-nowrap,
+.sbox-diagnostics-row-nowrap .sbox-diagnostics-label,
+.sbox-diagnostics-row-nowrap .sbox-diagnostics-value {
+	white-space: nowrap;
+}
+.sbox-diagnostics-label {
+	color: var(--sbox-muted);
+}
+.sbox-diagnostics-value {
+	min-width: 0;
+	color: var(--sbox-text);
+	font-weight: 600;
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+.sbox-diagnostics-state {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	color: var(--sbox-text);
+	font-weight: 600;
+	text-align: right;
+	white-space: nowrap;
+}
+.sbox-diagnostics-state-icon {
+	font-size: 10px;
+	color: var(--sbox-muted);
+}
+.sbox-diagnostics-state-ok .sbox-diagnostics-state-icon { color: var(--sbox-success); }
+.sbox-diagnostics-state-warning .sbox-diagnostics-state-icon { color: var(--sbox-warn); }
+.sbox-diagnostics-state-error .sbox-diagnostics-state-icon { color: var(--sbox-danger); }
+.sbox-diagnostics-state-unknown .sbox-diagnostics-state-icon { color: var(--sbox-muted); }
+.sbox-diagnostics-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	margin-top: auto;
+	padding-top: 3px;
+}
+.sbox-overview-components .sbox-diagnostics-actions {
+	padding-top: 12px;
+}
+.sbox-diagnostics-link {
+	color: var(--sbox-accent);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+.sbox-diagnostics-modal {
+	max-width: min(860px, 92vw);
+	max-height: 72vh;
+	overflow: auto;
+	color: var(--sbox-text);
+}
+.sbox-modal-responsive,
+.sbox-modal-responsive-shell {
+	box-sizing: border-box;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+.sbox-modal-responsive-shell {
+	width: min(760px, 92vw);
+}
+.sbox-modal-responsive input,
+.sbox-modal-responsive select,
+.sbox-modal-responsive textarea,
+.sbox-modal-responsive-shell input,
+.sbox-modal-responsive-shell select,
+.sbox-modal-responsive-shell textarea {
+	box-sizing: border-box;
+	max-width: 100%;
+}
+.sbox-device-policy-editor {
+	display: grid;
+	gap: 8px;
+	width: min(560px, 86vw);
+}
+.sbox-device-policy-editor > p,
+.sbox-device-policy-editor > label {
+	margin-top: 0;
+	margin-bottom: 0;
+}
+.sbox-device-policy-editor > select {
+	width: 100%;
+}
+.sbox-device-schedule-fields {
+	display: grid;
+	gap: 8px;
+	padding: 9px 10px;
+	background: var(--sbox-panel-soft);
+	border: 1px solid var(--sbox-border);
+	border-radius: 7px;
+}
+.sbox-device-schedule-fields .sbox-management-form-grid {
+	margin-top: 0;
+}
+.sbox-diagnostics-modal h4 {
+	margin: 10px 0 6px;
+}
+.sbox-diagnostic-mode-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+}
+.sbox-diagnostic-mode-card {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px;
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+	background: var(--sbox-panel-soft);
+}
+.sbox-diagnostic-mode-card h4,
+.sbox-diagnostic-mode-card p {
+	margin: 0;
+}
+.sbox-diagnostic-mode-card .cbi-button {
+	margin-top: auto;
+}
+.sbox-report-confirmation {
+	max-width: min(560px, 92vw);
+}
+@media (max-width: 640px) {
+	.sbox-diagnostic-mode-grid {
+		grid-template-columns: 1fr;
+	}
+}
+.sbox-diagnostics-evidence,
+.sbox-route-steps {
+	margin: 6px 0 12px;
+	padding-left: 22px;
+}
+.sbox-diagnostics-evidence li,
+.sbox-route-steps li {
+	margin: 5px 0;
+	overflow-wrap: anywhere;
+}
+.sbox-route-form {
+	display: grid;
+	grid-template-columns: minmax(130px, auto) minmax(220px, 1fr);
+	gap: 8px 10px;
+	align-items: center;
+}
+.sbox-route-form .sbox-actions {
+	grid-column: 1 / -1;
+}
+.sbox-route-result {
+	margin-top: 12px;
+}
+.sbox-route-decision {
+	font-weight: 800;
+}
+.sbox-diagnostics-error {
+	color: var(--sbox-danger);
+	font-weight: 700;
 }
 .sbox-settings-save-wrap {
-	margin-top: 12px;
+	position: sticky;
+	bottom: 8px;
+	z-index: 6;
+	display: flex;
+	justify-content: flex-end;
+	justify-self: stretch;
+	width: 100%;
+	box-sizing: border-box;
+	margin-top: -2px;
+	padding: 4px;
+	background: var(--sbox-panel);
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+	box-shadow: 0 8px 24px color-mix(in srgb, var(--sbox-text) 16%, transparent);
 }
 .sbox-settings-save-btn {
 	width: 100%;
-	min-height: 42px;
-	padding-top: 10px;
-	padding-bottom: 10px;
+	min-height: 38px;
+	padding-top: 5px;
+	padding-bottom: 5px;
+	font-size: 12px;
+}
+@media (max-width: 560px) {
+	.sbox-settings-save-wrap {
+		bottom: 4px;
+		justify-self: stretch;
+		width: 100%;
+	}
+	.sbox-settings-save-btn {
+		width: 100%;
+	}
+	.sbox-modal-responsive-shell,
+	.sbox-device-policy-editor {
+		width: 100%;
+	}
 }
 @keyframes sbox-spin { to { transform: rotate(360deg); } }
 .sbox-spinner {
@@ -633,6 +1525,61 @@
 	border-radius: 50%;
 	animation: sbox-spin 0.65s linear infinite;
 	vertical-align: -0.1em;
+}
+.sbox-sr-only {
+	position: absolute !important;
+	width: 1px !important;
+	height: 1px !important;
+	padding: 0 !important;
+	margin: -1px !important;
+	overflow: hidden !important;
+	clip: rect(0, 0, 0, 0) !important;
+	white-space: nowrap !important;
+	border: 0 !important;
+}
+@keyframes sbox-shimmer {
+	from { transform: translateX(-115%); }
+	to { transform: translateX(115%); }
+}
+.sbox-loading-surface {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 10px;
+	min-height: 112px;
+	box-sizing: border-box;
+	overflow: hidden;
+	padding: 13px;
+	background: var(--sbox-panel-soft);
+	border-radius: 7px;
+}
+.sbox-loading-compact { min-height: 68px; }
+.sbox-loading-editor { min-height: 420px; justify-content: flex-start; padding-top: 18px; }
+.sbox-loading-table { min-height: 220px; justify-content: flex-start; padding-top: 18px; }
+.sbox-loading-line {
+	display: block;
+	width: 86%;
+	height: 10px;
+	background: var(--sbox-border);
+	border-radius: 999px;
+	opacity: .58;
+}
+.sbox-loading-line-2 { width: 64%; }
+.sbox-loading-line-3 { width: 92%; }
+.sbox-loading-line-4 { width: 48%; }
+.sbox-loading-surface::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(100deg, transparent 25%, color-mix(in srgb, var(--sbox-text) 11%, transparent) 48%, transparent 72%);
+	animation: sbox-shimmer 1.35s ease-in-out infinite;
+	pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	.sbox-loading-surface::after,
+	.sbox-version-loading::after,
+	.sbox-guard-loading .sbox-guard-state::after { animation: none; }
 }
 .sbox-modal-wide {
 	width: min(96vw, 1180px);
@@ -769,10 +1716,14 @@
 @media (max-width: 980px) {
 	.sbox-config-toolbar,
 	.sbox-settings-overview,
-	.sbox-settings-grid,
 	.sbox-form-grid,
-	.sbox-rulesets-layout {
+	.sbox-rulesets-layout,
+	.sbox-settings-summary-grid,
+	.sbox-route-form {
 		grid-template-columns: 1fr;
+	}
+	.sbox-route-form .sbox-actions {
+		grid-column: auto;
 	}
 	.sbox-subscription-actions {
 		justify-content: flex-start;

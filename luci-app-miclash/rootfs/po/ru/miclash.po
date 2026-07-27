@@ -71,8 +71,6 @@ msgstr "Конфигурация Clash"
 msgid "Your current Clash config. When applied, the changes will be saved and the service will be restarted."
 msgstr "Ваша текущая конфигурация Clash. При применении изменения будут сохранены, а служба перезапущена."
 
-msgid "Save & Apply Configuration"
-msgstr "Сохранить и применить"
 
 msgid "Unable to start and enable service: %s"
 msgstr "Не удалось запустить и включить службу: %s"
@@ -198,8 +196,6 @@ msgstr "ТЕХНИЧЕСКИЙ"
 msgid "IP-CIDR List (fake-ip whitelist mode)"
 msgstr "Список IP-CIDR (режим fake-ip whitelist)"
 
-msgid "This list is used by the firewall (nftables/iptables) to mark traffic to specified IPs and subnets for proxying in fake-ip whitelist mode. Enter one IPv4 address or CIDR per line (e.g. 8.8.8.8 or 1.2.3.0/24). Lines starting with # are treated as comments. Saving applies changes immediately without restarting Mihomo."
-msgstr "Этот список используется файрволом (nftables/iptables) для маркировки трафика к указанным IP и подсетям для проксирования в режиме fake-ip whitelist. Вводите по одному IPv4-адресу или CIDR на строку (например, 8.8.8.8 или 1.2.3.0/24). Строки, начинающиеся с #, считаются комментариями. Сохранение применяет изменения немедленно без перезапуска Mihomo."
 
 msgid "IP-CIDR whitelist saved and firewall rules updated."
 msgstr "Белый список IP-CIDR сохранён, правила файрвола обновлены."
@@ -371,6 +367,9 @@ msgstr "Скачать обновление"
 msgid "Reinstall Kernel"
 msgstr "Переустановить ядро"
 
+msgid "Reinstall Mihomo"
+msgstr "Переустановить Mihomo"
+
 msgid "Downloading..."
 msgstr "Загрузка..."
 
@@ -382,9 +381,6 @@ msgstr "Обновить статус"
 
 msgid "Restart Service"
 msgstr "Перезапустить службу"
-
-msgid "Save Settings"
-msgstr "Сохранить настройки"
 
 msgid "Clear All Interfaces"
 msgstr "Очистить выбор"
@@ -443,8 +439,6 @@ msgstr "Загрузка ядра mihomo..."
 msgid "Updating mihomo kernel on router..."
 msgstr "Обновление ядра mihomo на роутере..."
 
-msgid "Mihomo kernel downloaded and installed successfully!"
-msgstr "Ядро Mihomo успешно загружено и установлено!"
 
 msgid "Failed to download mihomo kernel: %s"
 msgstr "Не удалось загрузить ядро mihomo: %s"
@@ -464,8 +458,6 @@ msgstr "Последний релиз является предваритель�
 msgid "Download failed"
 msgstr "Загрузка не удалась"
 
-msgid "Extraction failed"
-msgstr "Распаковка не удалась"
 
 msgid "Failed to read /sys/class/net:"
 msgstr "Не удалось прочитать /sys/class/net:"
@@ -550,46 +542,30 @@ msgstr "Автоматически добавляет HWID-заголовки к
 msgid "User-Agent"
 msgstr "User-Agent"
 
-msgid "Application identifier sent in HTTP headers"
-msgstr "Идентификатор приложения в HTTP-заголовках"
 
 msgid "Device OS"
 msgstr "ОС устройства"
 
-msgid "Operating system name sent in headers"
-msgstr "Имя операционной системы в заголовках"
 
-msgid "Auto-generated values:"
-msgstr "Автоматически генерируемые значения:"
 
 msgid "Adding HWID headers to configuration..."
 msgstr "Добавление HWID-заголовков в конфигурацию..."
 
 ### MiClash UI strings ###
 
-msgid "Control Center"
-msgstr "Центр управления"
 
-msgid "Checking service..."
-msgstr "Проверка службы..."
 
 msgid "Configuration applied and service reloaded."
 msgstr "Конфигурация применена, служба перезагружена."
 
-msgid "Configuration saved."
-msgstr "Конфигурация сохранена."
 
 msgid "Download failed: %s"
 msgstr "Ошибка загрузки: %s"
 
-msgid "Download Subscription"
-msgstr "Скачать подписку"
 
 msgid "Downloaded file is empty."
 msgstr "Загруженный файл пуст."
 
-msgid "Editor with safe YAML validation: invalid changes are automatically rolled back."
-msgstr "Редактор с безопасной проверкой YAML: некорректные изменения автоматически откатываются."
 
 msgid "Failed to apply configuration: %s"
 msgstr "Не удалось применить конфигурацию: %s"
@@ -600,47 +576,23 @@ msgstr "Не удалось применить подписку: %s"
 msgid "Failed to initialize editor: %s"
 msgstr "Не удалось инициализировать редактор: %s"
 
-msgid "Failed to save configuration: %s"
-msgstr "Не удалось сохранить конфигурацию: %s"
 
-msgid "Failed to save URL: %s"
-msgstr "Не удалось сохранить URL: %s"
 
 msgid "Invalid subscription URL."
 msgstr "Некорректный URL подписки."
 
-msgid "Loading versions..."
-msgstr "Загрузка версий..."
 
-msgid "MiClash Control Center"
-msgstr "Центр управления MiClash"
 
-msgid "MiClash Log"
-msgstr "Журнал MiClash"
 
-msgid "MiClash: %s  |  Mihomo: %s  |  OpenWrt: %s"
-msgstr "MiClash: %s  |  Mihomo: %s  |  OpenWrt: %s"
 
-msgid "Open the remaining MiClash sections."
-msgstr "Откройте остальные разделы MiClash."
 
-msgid "Quick Navigation"
-msgstr "Быстрая навигация"
 
-msgid "Real-time Clash service logs."
-msgstr "Логи службы Clash в реальном времени."
 
 msgid "Restart"
 msgstr "Перезапустить"
 
-msgid "Save & Apply"
-msgstr "Сохранить и применить"
 
-msgid "Save URL"
-msgstr "Сохранить URL"
 
-msgid "Save your subscription URL and download config directly to /opt/clash/config.yaml with automatic YAML validation."
-msgstr "Сохраните URL подписки и загрузите конфиг напрямую в /opt/clash/config.yaml с автоматической проверкой YAML."
 
 msgid "Service running"
 msgstr "Служба запущена"
@@ -657,8 +609,6 @@ msgstr "Остановить"
 msgid "Stop core"
 msgstr "Остановить"
 
-msgid "Subscription downloaded, validated and applied."
-msgstr "Подписка загружена, проверена и применена."
 
 msgid "Subscription URL"
 msgstr "URL подписки"
@@ -669,14 +619,10 @@ msgstr "URL подписки пуст."
 msgid "Subscription URL saved."
 msgstr "URL подписки сохранен."
 
-msgid "Unable to toggle service: %s"
-msgstr "Не удалось переключить состояние службы: %s"
 
 msgid "Validate YAML"
 msgstr "Проверить YAML"
 
-msgid "YAML Configuration"
-msgstr "YAML-конфигурация"
 
 msgid "YAML validation failed: %s"
 msgstr "Проверка YAML не пройдена: %s"
@@ -698,14 +644,21 @@ msgstr "Панель"
 msgid "Mode"
 msgstr "Режим"
 
+msgid "Operating mode"
+msgstr "Режим работы"
+
+msgid "Exclusions"
+msgstr "Исключения"
+
+msgid "Selected interfaces"
+msgstr "Выбранные интерфейсы"
+
 msgid "Config"
 msgstr "Конфиг"
 
 msgid "Logs"
 msgstr "Логи"
 
-msgid "Main Config"
-msgstr "Основной конфиг"
 
 msgid "Traffic Scope"
 msgstr "Область трафика"
@@ -764,8 +717,6 @@ msgstr "Хранить rules/providers в tmpfs"
 msgid "Inject HWID headers into proxy-providers"
 msgstr "Добавлять HWID-заголовки в proxy-providers"
 
-msgid "Clear Interface Selection"
-msgstr "Очистить выбор интерфейсов"
 
 msgid "Mode: Exclude (proxy all except selected interfaces)"
 msgstr "Режим: исключения (проксировать всё, кроме выбранных интерфейсов)"
@@ -779,11 +730,7 @@ msgstr "Режим прокси: %s"
 msgid "Tun stack: %s"
 msgstr "Стек TUN: %s"
 
-msgid "Refresh"
-msgstr "Обновить"
 
-msgid "Kernel"
-msgstr "Ядро"
 
 msgid "Status: %s"
 msgstr "Статус: %s"
@@ -812,6 +759,12 @@ msgstr "Установить MiClash"
 msgid "Update MiClash"
 msgstr "Обновить MiClash"
 
+msgid "Update MiClash to %s"
+msgstr "Обновить MiClash до %s"
+
+msgid "Update Mihomo to %s"
+msgstr "Обновить Mihomo до %s"
+
 msgid "Reinstall MiClash"
 msgstr "Переустановить MiClash"
 
@@ -827,22 +780,18 @@ msgstr "Настройки сохранены, но перезапустить �
 msgid "Failed to refresh protection rules."
 msgstr "Не удалось обновить правила защиты."
 
-msgid "Kernel installed and service restarted."
-msgstr "Ядро установлено, служба перезапущена."
 
-msgid "Kernel installed, but failed to restart service: %s"
-msgstr "Ядро установлено, но перезапустить службу не удалось: %s"
 
 ### Multi-config profiles (config.js) ###
 
-msgid "Main Config #1"
-msgstr "Основной конфиг #1"
+msgid "Config #1"
+msgstr "Конфиг #1"
 
-msgid "Backup Config #2"
-msgstr "Резервный конфиг #2"
+msgid "Config #2"
+msgstr "Конфиг #2"
 
-msgid "Backup Config #3"
-msgstr "Резервный конфиг #3"
+msgid "Config #3"
+msgstr "Конфиг #3"
 
 msgid "Set as Main"
 msgstr "Сделать главным"
@@ -912,8 +861,6 @@ msgstr "Не удалось загрузить информацию о ядре:
 msgid "Failed to open rulesets: %s"
 msgstr "Не удалось открыть списки правил: %s"
 
-msgid "Failed to refresh logs: %s"
-msgstr "Не удалось обновить журналы: %s"
 
 msgid "Failed to save IP-CIDR list: %s"
 msgstr "Не удалось сохранить список IP-CIDR: %s"
@@ -951,14 +898,10 @@ msgstr "Интерфейсы вручную: %s"
 msgid "Mihomo kernel downloaded and installed."
 msgstr "Ядро Mihomo загружено и установлено."
 
-msgid "Downloading MiClash package..."
-msgstr "Загрузка пакета MiClash..."
 
 msgid "Updating MiClash package on router..."
 msgstr "Обновление пакета MiClash на роутере..."
 
-msgid "MiClash package downloaded and installed."
-msgstr "Пакет MiClash загружен и установлен."
 
 msgid "MiClash package installed. Reloading interface..."
 msgstr "Пакет MiClash установлен. Перезагрузка интерфейса..."
@@ -978,11 +921,7 @@ msgstr "Не найден поддерживаемый пакетный мене
 msgid "Failed to update package index."
 msgstr "Не удалось обновить индекс пакетов."
 
-msgid "Failed to install MiClash dependencies."
-msgstr "Не удалось установить зависимости MiClash."
 
-msgid "Failed to install MiClash package."
-msgstr "Не удалось установить пакет MiClash."
 
 msgid "Command failed"
 msgstr "Команда завершилась ошибкой"
@@ -1008,8 +947,8 @@ msgstr "Списков правил пока нет."
 msgid "One IPv4/CIDR per line. Save applies firewall update without restarting Mihomo."
 msgstr "По одному IPv4/CIDR в строке. Сохранение обновляет файрвол без перезапуска Mihomo."
 
-msgid "Proxy mode switched to %s. Service restarted."
-msgstr "Режим прокси переключён на %s. Служба перезапущена."
+msgid "Proxy mode switched to %s."
+msgstr "Режим прокси переключён на %s."
 
 msgid "Remnawave blocked /mihomo path (HTTP 403). Disable \"Disable Subscription Access by Path\" in Remnawave response-rules settings."
 msgstr "Remnawave заблокировал путь /mihomo (HTTP 403). Отключите \"Disable Subscription Access by Path\" в настройках response-rules Remnawave."
@@ -1056,8 +995,6 @@ msgstr "Не удалось прочитать загруженный файл"
 msgid "Unavailable"
 msgstr "Недоступно"
 
-msgid "Updated: %s"
-msgstr "Обновлено: %s"
 
 msgid "Virtual"
 msgstr "Виртуальные"
@@ -1071,8 +1008,6 @@ msgstr "Проверка YAML завершилась ошибкой."
 msgid "Client devices only through MiClash (beta)"
 msgstr "Устройства только через MiClash (beta)"
 
-msgid "Blocks direct external traffic from clients. If MiClash is stopped or fails, the internet is blocked while local network access remains available."
-msgstr "Блокирует прямой внешний трафик от клиентов. Если MiClash остановлен или упал, интернет блокируется, а доступ к локальной сети остаётся доступным."
 
 msgid "Guard"
 msgstr "Защита"
@@ -1086,8 +1021,6 @@ msgstr "ВЫКЛ"
 msgid "Auto-hide notifications"
 msgstr "Автоматически скрывать уведомления"
 
-msgid "Release channel"
-msgstr "Канал релизов"
 
 msgid "Release channels"
 msgstr "Каналы релизов"
@@ -1098,11 +1031,7 @@ msgstr "Последний"
 msgid "Pre-release"
 msgstr "Предрелиз"
 
-msgid "Release only"
-msgstr "Только релизы"
 
-msgid "Release + pre-release"
-msgstr "Релизы + pre-release"
 
 msgid "Support the author"
 msgstr "Поддержать автора"
@@ -1386,8 +1315,8 @@ msgstr "Очистить URL подписки"
 msgid "Clearing subscription URL..."
 msgstr "Очистка URL подписки..."
 
-msgid "Client devices only through MiClash (Protection)"
-msgstr "Устройства только через MiClash (Защита)"
+msgid "Direct connection guard"
+msgstr "Защита прямого соединения"
 
 msgid "Failed to clear subscription URL: %s"
 msgstr "Не удалось очистить URL подписки: %s"
@@ -1403,6 +1332,12 @@ msgstr "Обновить"
 
 msgid "Auto-update config"
 msgstr "Автообновление конфига"
+
+msgid "Every:"
+msgstr "каждые:"
+
+msgid "Interval set by subscription"
+msgstr "Интервал задан подпиской"
 
 msgid "hours"
 msgstr "часы"
@@ -1438,3 +1373,1110 @@ msgstr "Определяет нормальное потребление пам�
 
 msgid "Failed to synchronize memory guard service."
 msgstr "Не удалось синхронизировать службу контроля памяти."
+
+msgid "Ready"
+msgstr "Готово"
+
+msgid "Degraded"
+msgstr "Ограниченная готовность"
+
+msgid "Failed"
+msgstr "Ошибка"
+
+msgid "Unknown"
+msgstr "Неизвестно"
+
+msgid "None"
+msgstr "Нет"
+
+msgid "Configured"
+msgstr "Настроено"
+
+msgid "Not configured"
+msgstr "Не настроено"
+
+msgid "Disabled"
+msgstr "Отключено"
+
+msgid "Enabled and configured"
+msgstr "Включено и настроено"
+
+msgid "Enabled, not configured"
+msgstr "Включено, но не настроено"
+
+msgid "Component status"
+msgstr "Состояние компонентов"
+
+msgid "Components"
+msgstr "Компоненты"
+
+msgid "Mihomo"
+msgstr "Mihomo"
+
+msgid "DNS"
+msgstr "DNS"
+
+msgid "Firewall"
+msgstr "Межсетевой экран"
+
+msgid "Routing"
+msgstr "Маршрутизация"
+
+msgid "RSS"
+msgstr "RSS"
+
+msgid "Baseline"
+msgstr "Базовый уровень"
+
+msgid "Pressure"
+msgstr "Давление памяти"
+
+msgid "Inactive"
+msgstr "Неактивно"
+
+msgid "Stopped"
+msgstr "Остановлен"
+
+msgid "Cooldown"
+msgstr "Период ожидания"
+
+msgid "Last repair"
+msgstr "Последнее исправление"
+
+msgid "Subscription activation"
+msgstr "Активация подписки"
+
+msgid "Telegram"
+msgstr "Telegram"
+
+msgid "Diagnostic actions"
+msgstr "Действия диагностики"
+
+msgid "Details"
+msgstr "Подробнее"
+
+msgid "Download diagnostic report"
+msgstr "Скачать диагностический отчёт"
+
+msgid "Route test"
+msgstr "Проверка маршрутизации"
+
+msgid "Unknown error"
+msgstr "Неизвестная ошибка"
+
+msgid "Component evidence"
+msgstr "Данные компонентов"
+
+msgid "Last self-heal"
+msgstr "Последнее автовосстановление"
+
+msgid "MiClash diagnostics"
+msgstr "Диагностика MiClash"
+
+msgid "Invalid diagnostic report response"
+msgstr "Некорректный ответ при создании диагностического отчёта"
+
+msgid "Expected route: %s"
+msgstr "Ожидаемый маршрут: %s"
+
+msgid "Optional device"
+msgstr "Устройство (необязательно)"
+
+msgid "Optional interface"
+msgstr "Интерфейс (необязательно)"
+
+msgid "Run route test"
+msgstr "Проверить маршрут"
+
+msgid "Domain or IP address"
+msgstr "Домен или IP-адрес"
+
+msgid "Device (optional)"
+msgstr "Устройство (необязательно)"
+
+msgid "Interface (optional)"
+msgstr "Интерфейс (необязательно)"
+
+msgid "Enter a valid domain or IP address"
+msgstr "Введите корректный домен или IP-адрес"
+
+msgid "Device or interface is invalid"
+msgstr "Некорректное устройство или имя интерфейса"
+
+msgid "Enabled"
+msgstr "Включено"
+
+msgid "Draft"
+msgstr "Черновик"
+
+msgid "Validate"
+msgstr "Проверить"
+
+msgid "Apply"
+msgstr "Применить"
+
+msgid "History"
+msgstr "История"
+
+msgid "Configuration history"
+msgstr "История конфигурации"
+
+msgid "Close configuration history"
+msgstr "Закрыть историю конфигурации"
+
+msgid "Configuration revisions"
+msgstr "Версии конфигурации"
+
+msgid "Open in editor"
+msgstr "Открыть в редакторе"
+
+msgid "Restore"
+msgstr "Восстановить"
+
+msgid "Manual"
+msgstr "Вручную"
+
+msgid "Subscription"
+msgstr "Подписка"
+
+msgid "Before restore"
+msgstr "До восстановления"
+
+msgid "External change"
+msgstr "Внешнее изменение"
+
+msgid "Revision"
+msgstr "Версия"
+
+msgid "Source"
+msgstr "Источник"
+
+msgid "Created"
+msgstr "Создано"
+
+msgid "Validation"
+msgstr "Проверка"
+
+msgid "Activation"
+msgstr "Активация"
+
+msgid "Loading diff…"
+msgstr "Загрузка различий…"
+
+msgid "No differences from the newest revision."
+msgstr "Отличий от новейшей версии нет."
+
+msgid "Loading history…"
+msgstr "Загрузка истории…"
+
+msgid "No configuration revisions yet."
+msgstr "Версий конфигурации пока нет."
+
+msgid "Unsaved local Draft found"
+msgstr "Найден несохранённый локальный черновик"
+
+msgid "A browser crash copy differs from the router Draft. Choose which content to open; neither copy will be deleted."
+msgstr "Аварийная копия браузера отличается от черновика на роутере. Выберите, какой вариант открыть; ни одна копия не будет удалена."
+
+msgid "Open local copy"
+msgstr "Открыть локальную копию"
+
+msgid "Keep router Draft"
+msgstr "Оставить черновик роутера"
+
+msgid "Applying configuration..."
+msgstr "Применение конфигурации..."
+
+msgid "Configuration applied."
+msgstr "Конфигурация применена."
+
+msgid "Failed to open history: %s"
+msgstr "Не удалось открыть историю: %s"
+
+msgid "An operation is already running."
+msgstr "Операция уже выполняется."
+
+msgid "A browser crash copy differs from the router Draft. Choose the local copy to keep it, or keep the router Draft and discard the local crash copy."
+msgstr "Аварийная копия браузера отличается от черновика на роутере. Выберите локальную копию, чтобы сохранить её, либо оставьте черновик роутера и удалите локальную аварийную копию."
+
+msgid "Active configuration changed; Draft preserved."
+msgstr "Активная конфигурация изменилась; черновик сохранён."
+
+msgid "Saving Draft"
+msgstr "Сохранение черновика"
+
+msgid "Validating Draft"
+msgstr "Проверка черновика"
+
+msgid "Applying Draft"
+msgstr "Применение черновика"
+
+msgid "Automatic"
+msgstr "Автоматически"
+
+msgid "LuCI"
+msgstr "LuCI"
+
+msgid "System"
+msgstr "Система"
+
+msgid "Corrupt revision"
+msgstr "Повреждённая версия"
+
+msgid "Unknown source"
+msgstr "Неизвестный источник"
+
+msgid "Operation cancelled"
+msgstr "Операция отменена"
+
+msgid "Selected revision is the newest retained revision."
+msgstr "Выбранная версия является новейшей сохранённой версией."
+
+msgid "Compared with newest retained revision:"
+msgstr "Сравнение с новейшей сохранённой версией:"
+
+msgid "No differences between the selected retained revisions."
+msgstr "Между выбранными сохранёнными версиями нет различий."
+
+msgid "This revision is corrupt and cannot be opened or restored."
+msgstr "Эта версия повреждена, её нельзя открыть или восстановить."
+msgid "%s is outside the safe range."
+msgstr "%s находится вне безопасного диапазона."
+
+msgid "%s must be an integer."
+msgstr "%s должно быть целым числом."
+
+msgid "Actions"
+msgstr "Действия"
+
+msgid "Adaptive defaults are recommended. Unsafe values are rejected."
+msgstr "Рекомендуются адаптивные значения по умолчанию. Небезопасные значения отклоняются."
+
+msgid "Allowed Telegram user ID"
+msgstr "Разрешённый ID пользователя Telegram"
+
+msgid "Allowed Telegram user IDs"
+msgstr "Разрешённые ID пользователей Telegram"
+
+msgid "Telegram polling timeout (seconds)"
+msgstr "Тайм-аут опроса Telegram (секунды)"
+
+msgid "Telegram polling timeout"
+msgstr "Тайм-аут опроса Telegram"
+
+msgid "List IDs separated by commas."
+msgstr "Перечислите ID через запятую."
+
+msgid "Backup and restore"
+msgstr "Резервное копирование и восстановление"
+
+msgid "Backup archive changed while reading."
+msgstr "Архив резервной копии изменился во время чтения."
+
+msgid "Backup archive size is outside the safe limit."
+msgstr "Размер архива резервной копии превышает безопасный предел."
+
+msgid "Backup completed but returned no safe backup ID."
+msgstr "Резервное копирование завершено, но безопасный ID не получен."
+
+msgid "Backup inspection"
+msgstr "Проверка резервной копии"
+
+msgid "Backups are validated and previewed before restore."
+msgstr "Перед восстановлением резервные копии проверяются и показываются для просмотра."
+
+msgid "BotFather token"
+msgstr "Токен BotFather"
+
+msgid "Channels"
+msgstr "Каналы"
+
+msgid "Choose a backup archive first."
+msgstr "Сначала выберите архив резервной копии."
+
+msgid "Configured; leave blank to keep"
+msgstr "Настроено; оставьте пустым, чтобы сохранить"
+
+msgid "Contents"
+msgstr "Содержимое"
+
+msgid "Create and download"
+msgstr "Создать и скачать"
+
+msgid "Creating backup…"
+msgstr "Создание резервной копии…"
+
+msgid "Current IP"
+msgstr "Текущий IP"
+
+msgid "Deleting device policy…"
+msgstr "Удаление политики устройства…"
+
+msgid "Device policies"
+msgstr "Политики устройств"
+
+msgid "Device policy"
+msgstr "Политика устройства"
+
+msgid "Download"
+msgstr "Скачать"
+
+msgid "Edit"
+msgstr "Изменить"
+
+msgid "Enable Telegram control"
+msgstr "Включить управление через Telegram"
+
+msgid "Enabling Telegram requires a BotFather token and exact user ID."
+msgstr "Для включения Telegram нужны токен BotFather и точный ID пользователя."
+
+msgid "Enabling Telegram requires a BotFather token and exact user IDs."
+msgstr "Для включения Telegram нужны токен BotFather и точные ID пользователей."
+
+msgid "End"
+msgstr "Окончание"
+
+msgid "Enter a valid MAC address such as AA:BB:CC:DD:EE:FF."
+msgstr "Введите корректный MAC-адрес, например AA:BB:CC:DD:EE:FF."
+
+msgid "Enter an exact numeric Telegram user ID."
+msgstr "Введите точный числовой ID пользователя Telegram."
+
+msgid "Enter exact numeric Telegram user IDs separated by commas."
+msgstr "Введите точные числовые ID пользователей Telegram через запятую."
+
+msgid "Sending Telegram test message…"
+msgstr "Отправка тестового сообщения Telegram…"
+
+msgid "Telegram test message sent."
+msgstr "Тестовое сообщение Telegram отправлено."
+
+msgid "Enter a valid BotFather token."
+msgstr "Введите корректный токен BotFather."
+
+msgid "Enter valid schedule days, times, and IANA timezone."
+msgstr "Укажите корректные дни, время и часовой пояс IANA."
+
+msgid "Events"
+msgstr "События"
+
+msgid "Expert settings"
+msgstr "Экспертные настройки"
+
+msgid "Priority: Block → Direct → Inherit"
+msgstr "Приоритет: Блок → Напрямую → Наследование"
+
+msgid "Direct devices use the router shared DNS. If Mihomo fails unexpectedly, access by domain name may be temporarily unavailable."
+msgstr "Устройства с политикой «Напрямую» используют общий DNS роутера. При аварийном сбое Mihomo доступ по доменным именам может быть временно недоступен."
+
+msgid "Hostname"
+msgstr "Имя хоста"
+
+msgid "Include secrets"
+msgstr "Включить секреты"
+
+msgid "Inspect"
+msgstr "Проверить"
+
+msgid "Inspect import"
+msgstr "Проверить импорт"
+
+msgid "Invalid backup ID."
+msgstr "Некорректный ID резервной копии."
+
+msgid "Invalid backup import response."
+msgstr "Некорректный ответ импорта резервной копии."
+
+msgid "Invalid backup inspection response."
+msgstr "Некорректный ответ проверки резервной копии."
+
+msgid "Invalid backup payload."
+msgstr "Некорректные данные резервной копии."
+
+msgid "Invalid backup/import ID."
+msgstr "Некорректный ID резервной копии или импорта."
+
+msgid "Invalid device policy."
+msgstr "Некорректная политика устройства."
+
+msgid "Invalid notification channel."
+msgstr "Некорректный канал уведомлений."
+
+msgid "Invalid operation response."
+msgstr "Некорректный ответ операции."
+
+msgid "Last action"
+msgstr "Последнее действие"
+
+msgid "Last seen"
+msgstr "Последняя активность"
+
+msgid "MAC"
+msgstr "MAC"
+
+msgid "Memory expert settings are internally inconsistent."
+msgstr "Экспертные настройки памяти противоречат друг другу."
+
+msgid "Memory monitoring"
+msgstr "Мониторинг памяти"
+
+msgid "No backups yet."
+msgstr "Резервных копий пока нет."
+
+msgid "No devices discovered."
+msgstr "Устройства не обнаружены."
+
+msgid "Notifications"
+msgstr "Уведомления"
+
+msgid "Only this exact user ID is accepted in a private chat."
+msgstr "В личном чате принимается только этот точный ID пользователя."
+
+msgid "Operation failed."
+msgstr "Операция завершилась ошибкой."
+
+msgid "Policy"
+msgstr "Политика"
+
+msgid "Poller is running"
+msgstr "Опрос Telegram запущен"
+
+msgid "Poller is stopped"
+msgstr "Опрос Telegram остановлен"
+
+msgid "Reset baseline"
+msgstr "Сбросить базовый уровень"
+
+msgid "Resetting memory baseline…"
+msgstr "Сброс базового уровня памяти…"
+
+msgid "Restore inspected backup"
+msgstr "Восстановить проверенную копию"
+
+msgid "Restore plan"
+msgstr "План восстановления"
+
+msgid "Restoring backup…"
+msgstr "Восстановление резервной копии…"
+
+msgid "Review this exact manifest before restore. Restore uses only the opaque inspection ID."
+msgstr "Проверьте этот манифест перед восстановлением. Используется только непрозрачный ID проверки."
+
+msgid "Save management settings"
+msgstr "Сохранить настройки управления"
+
+msgid "Saving device policy…"
+msgstr "Сохранение политики устройства…"
+
+msgid "Saving management settings…"
+msgstr "Сохранение настроек управления…"
+
+msgid "Schedule days"
+msgstr "Дни расписания"
+
+msgid "secret"
+msgstr "секрет"
+
+msgid "Send test"
+msgstr "Отправить тест"
+
+msgid "Set policy"
+msgstr "Задать политику"
+
+msgid "Size"
+msgstr "Размер"
+
+msgid "Telegram test message was not sent."
+msgstr "Тестовое сообщение Telegram не отправлено."
+
+msgid "The masked token cannot be saved as a replacement."
+msgstr "Маскированный токен нельзя сохранить как замену."
+
+msgid "Timezone"
+msgstr "Часовой пояс"
+
+msgid "Unknown device"
+msgstr "Неизвестное устройство"
+
+msgid "Use schedule"
+msgstr "Использовать расписание"
+
+msgid "Warning: a backup with secrets contains subscription credentials and private configuration. Store it safely."
+msgstr "Предупреждение: копия с секретами содержит данные подписки и приватную конфигурацию. Храните её безопасно."
+msgid "Enable scheduled backups"
+msgstr "Включить резервные копии по расписанию"
+
+msgid "Retention"
+msgstr "Количество хранимых копий"
+
+msgid "Retention must be between 1 and 100."
+msgstr "Количество хранимых копий должно быть от 1 до 100."
+
+msgid "Save backup settings"
+msgstr "Сохранить настройки резервных копий"
+
+msgid "Saving backup settings…"
+msgstr "Сохранение настроек резервных копий…"
+msgid "Anomaly growth (KiB)"
+msgstr "Рост аномалии (КиБ)"
+
+msgid "Anomaly threshold (%)"
+msgstr "Порог аномалии (%)"
+
+msgid "Baseline samples"
+msgstr "Замеры базового уровня"
+
+msgid "Component failure"
+msgstr "Сбой компонента"
+
+msgid "Direct fallback"
+msgstr "Переход на прямое соединение"
+
+msgid "Fail-closed protection"
+msgstr "Защита fail-closed"
+
+msgid "Failure cooldown (ms)"
+msgstr "Пауза после ошибки (мс)"
+
+msgid "Guard outage"
+msgstr "Сбой защиты"
+
+msgid "Internet restored"
+msgstr "Доступ в Интернет восстановлен"
+
+msgid "Maximum reserve (KiB)"
+msgstr "Максимальный резерв (КиБ)"
+
+msgid "Memory action"
+msgstr "Действие с памятью"
+
+msgid "Memory outcome"
+msgstr "Результат восстановления памяти"
+
+msgid "Memory reserve (%)"
+msgstr "Резерв памяти (%)"
+
+msgid "Minimum drop (KiB)"
+msgstr "Минимальное снижение (КиБ)"
+
+msgid "Minimum reserve (KiB)"
+msgstr "Минимальный резерв (КиБ)"
+
+msgid "Normal rearm delay (ms)"
+msgstr "Задержка повторного включения (мс)"
+
+msgid "Recovery"
+msgstr "Восстановление"
+
+msgid "Required drop (%)"
+msgstr "Требуемое снижение (%)"
+
+msgid "Sample interval (ms)"
+msgstr "Интервал замеров (мс)"
+
+msgid "Subscription result"
+msgstr "Результат обновления подписки"
+
+msgid "Success cooldown (ms)"
+msgstr "Пауза после успеха (мс)"
+
+msgid "Sustained samples"
+msgstr "Подтверждающие замеры"
+
+msgid "Update result"
+msgstr "Результат обновления"
+
+msgid "Warm-up time (ms)"
+msgstr "Время прогрева (мс)"
+
+msgid "Expires"
+msgstr "Истекает"
+
+msgid "Inspected"
+msgstr "Проверено"
+
+msgid "Inspection ID"
+msgstr "ID проверки"
+
+msgid "Invalid timezone response."
+msgstr "Получен некорректный список часовых поясов."
+
+msgid "Notification test message was not sent."
+msgstr "Тестовое уведомление не было отправлено."
+
+msgid "public"
+msgstr "открытый"
+
+msgid "Source ID"
+msgstr "ID источника"
+
+msgid "Backup interval (hours)"
+msgstr "Интервал резервного копирования (часы)"
+
+msgid "Backup interval must be between 1 and 168 hours."
+msgstr "Интервал резервного копирования должен быть от 1 до 168 часов."
+
+msgid "Backup manifest"
+msgstr "Состав резервной копии"
+
+msgid "Backup result"
+msgstr "Результат резервного копирования"
+
+msgid "Choose a valid UTC schedule time."
+msgstr "Укажите корректное время расписания UTC."
+
+msgid "Schedule anchor (UTC)"
+msgstr "Опорное время расписания (UTC)"
+
+msgid "Applying protection setting..."
+msgstr "Применение настройки защиты..."
+
+msgid "Guard transition failed."
+msgstr "Не удалось изменить состояние защиты."
+
+msgid "The provider update interval will be learned during the next protected subscription update. The selected interval is used until then."
+msgstr "Интервал обновления провайдера будет получен при следующем защищённом обновлении подписки. До этого используется выбранный интервал."
+
+msgid "Sections"
+msgstr "Разделы"
+
+msgid "Inherit"
+msgstr "Наследовать"
+
+msgid "Proxy"
+msgstr "Прокси"
+
+msgid "Direct"
+msgstr "Напрямую"
+
+msgid "Block"
+msgstr "Блокировать"
+
+msgid "Monday"
+msgstr "Понедельник"
+
+msgid "Tuesday"
+msgstr "Вторник"
+
+msgid "Wednesday"
+msgstr "Среда"
+
+msgid "Thursday"
+msgstr "Четверг"
+
+msgid "Friday"
+msgstr "Пятница"
+
+msgid "Saturday"
+msgstr "Суббота"
+
+msgid "Sunday"
+msgstr "Воскресенье"
+
+msgid "Automatically install major MiClash updates at night"
+msgstr "Автоматически устанавливать мажорные обновления MiClash ночью"
+
+msgid "Major update %s is scheduled for the night. Click to update now."
+msgstr "Мажорное обновление %s запланировано на ночь. Нажмите, чтобы обновить сейчас."
+
+msgid "Management settings are not ready."
+msgstr "Дополнительные настройки ещё не готовы."
+
+msgid "Settings panel is not available."
+msgstr "Панель настроек недоступна."
+
+msgid "Settings are not ready."
+msgstr "Настройки ещё не готовы."
+
+msgid "Applying Mihomo settings..."
+msgstr "Применение настроек Mihomo..."
+
+msgid "Failed to apply Mihomo settings."
+msgstr "Не удалось применить настройки Mihomo."
+
+msgid "Settings saved and applied."
+msgstr "Настройки сохранены и применены."
+
+msgid "Action"
+msgstr "Действие"
+
+msgid "Change policy"
+msgstr "Изменить политику"
+
+msgid "Device"
+msgstr "Устройство"
+
+msgid "IP"
+msgstr "IP"
+
+msgid "Offline"
+msgstr "Не в сети"
+
+msgid "Online"
+msgstr "В сети"
+
+msgid "State"
+msgstr "Состояние"
+msgid "Automatically close LuCI notifications"
+msgstr "Автоматически закрывать уведомления LuCI"
+
+msgid "Delivery channels"
+msgstr "Куда отправлять"
+
+msgid "Hide token"
+msgstr "Скрыть токен"
+
+msgid "Loading…"
+msgstr "Загрузка…"
+
+msgid "Notification events"
+msgstr "О каких событиях уведомлять"
+
+msgid "Settings panel is still loading."
+msgstr "Настройки ещё загружаются."
+
+msgid "Show token"
+msgstr "Показать токен"
+
+msgid "Telegram token is not configured."
+msgstr "Токен Telegram не настроен."
+
+msgid "Last automatic recovery"
+msgstr "Последнее автоматическое восстановление"
+
+msgid "Not required"
+msgstr "Не требовалось"
+
+msgid "Waiting for Mihomo"
+msgstr "Ожидание Mihomo"
+
+msgid "Warming up"
+msgstr "Прогрев"
+
+msgid "Learning baseline"
+msgstr "Определение базового уровня"
+
+msgid "Monitoring"
+msgstr "Мониторинг"
+
+msgid "Mihomo memory (RSS)"
+msgstr "Память Mihomo (RSS)"
+
+msgid "Status"
+msgstr "Состояние"
+
+msgid "Recovery queued"
+msgstr "Восстановление запланировано"
+
+msgid "Recovery in progress"
+msgstr "Выполняется восстановление"
+
+msgid "Recovery postponed"
+msgstr "Восстановление отложено"
+
+msgid "Waiting to resume monitoring"
+msgstr "Ожидание возобновления контроля"
+
+msgid "Cooldown until %s"
+msgstr "Пауза до %s"
+
+msgid "Paused after failed recovery"
+msgstr "Пауза после неудачного восстановления"
+
+msgid "Paused after failed recovery until %s"
+msgstr "Пауза после неудачного восстановления до %s"
+
+msgid "Not learned yet"
+msgstr "Ещё не определён"
+
+msgid "Reload"
+msgstr "Мягкая перезагрузка"
+
+msgid "Restart core"
+msgstr "Перезапуск ядра Mihomo"
+
+msgid "Restart service"
+msgstr "Полный перезапуск службы"
+
+msgid "Success"
+msgstr "Успешно"
+
+msgid "Monitoring resumed"
+msgstr "Контроль возобновлён"
+
+msgid "Service was busy"
+msgstr "Служба была занята"
+
+msgid "Interrupted"
+msgstr "Прервано"
+
+msgid "Invalid diagnostics response"
+msgstr "Некорректный ответ диагностики"
+
+msgid "Now: %s"
+msgstr "Сейчас: %s"
+
+msgid "Saving…"
+msgstr "Сохранение…"
+
+msgid "This device uses a private MAC address. The policy remains linked to this address and may stop applying if it changes."
+msgstr "Это устройство использует частный MAC-адрес. Политика привязана к этому адресу и может перестать применяться, если он изменится."
+
+msgid "No MiClash or Mihomo records match the current log level yet. Current level: %s"
+msgstr "Пока нет записей MiClash или Mihomo для текущего уровня журнала. Текущий уровень: %s"
+
+msgid "Online devices are shown only for interfaces in the current traffic scope. Saved policies remain visible while devices are offline."
+msgstr "Онлайн-устройства отображаются только для интерфейсов из текущей области трафика. Сохранённые политики остаются видимыми, когда устройства не в сети."
+
+msgid "Clock unavailable"
+msgstr "Время не определено"
+
+msgid "Config auto-update"
+msgstr "Автообновление конфига"
+
+msgid "Configuration error"
+msgstr "Ошибка настроек"
+
+msgid "MiClash auto-update"
+msgstr "Автообновление MiClash"
+
+msgid "Scheduled"
+msgstr "Запланировано"
+
+msgid "Updating"
+msgstr "Обновление"
+
+msgid "Provider synchronization"
+msgstr "Синхронизация providers"
+
+msgid "Synchronized"
+msgstr "Синхронизировано"
+
+msgid "Waiting for providers"
+msgstr "Ожидание providers"
+
+msgid "Error"
+msgstr "Ошибка"
+
+msgid "Waiting"
+msgstr "Ожидание"
+
+msgid "OpenWrt"
+msgstr "OpenWrt"
+
+msgid "Apply Settings"
+msgstr "Применить настройки"
+
+msgid "Save required"
+msgstr "Необходимо сохранить"
+
+msgid "Reset"
+msgstr "Сбросить"
+
+msgid "Device policies are busy."
+msgstr "Выполняется применение политик устройств."
+
+msgid "Device policies are not ready."
+msgstr "Политики устройств ещё не готовы."
+
+msgid "Resetting device policy…"
+msgstr "Сброс политики устройства…"
+
+msgid "Invalid operation response"
+msgstr "Некорректный ответ операции"
+
+msgid "Restore OpenWrt network"
+msgstr "Восстановить сеть OpenWrt"
+
+msgid "OpenWrt network restored"
+msgstr "Сеть OpenWrt восстановлена"
+
+msgid "Developer"
+msgstr "Разработчик"
+
+msgid "Developer tools"
+msgstr "Инструменты разработчика"
+
+msgid "This hidden session stays open for 10 minutes. These emergency actions can interrupt access to the router."
+msgstr "Эта скрытая сессия доступна 10 минут. Аварийные действия могут прервать доступ к роутеру."
+
+msgid "Stop Mihomo and remove MiClash DNS, firewall and routing ownership. Remove Guard first if it is enabled."
+msgstr "Остановить Mihomo и удалить управление DNS, межсетевым экраном и маршрутизацией MiClash. Если Защита включена, сначала удалите её."
+
+msgid "Restore network"
+msgstr "Восстановить сеть"
+
+msgid "Remove Guard"
+msgstr "Удалить Защиту"
+
+msgid "Disable Guard and remove its active fail-closed rules."
+msgstr "Отключить Защиту и удалить её активные fail-closed правила."
+
+msgid "Remove MiClash"
+msgstr "Удалить MiClash"
+
+msgid "Remove MiClash through the OpenWrt package manager after its normal network cleanup."
+msgstr "Удалить MiClash через пакетный менеджер OpenWrt после штатной очистки сети."
+
+msgid "Stop Mihomo and remove all MiClash-owned DNS, firewall and routing state?"
+msgstr "Остановить Mihomo и удалить всё состояние DNS, межсетевого экрана и маршрутизации, принадлежащее MiClash?"
+
+msgid "If Guard is enabled, remove it first. No Internet connection is required."
+msgstr "Если Защита включена, сначала удалите её. Подключение к Интернету не требуется."
+
+msgid "Restoring OpenWrt network…"
+msgstr "Восстановление сети OpenWrt…"
+
+msgid "Disable Guard and remove all active fail-closed Guard rules?"
+msgstr "Отключить Защиту и удалить все её активные fail-closed правила?"
+
+msgid "Devices may use a direct connection after this action."
+msgstr "После этого действия устройства смогут использовать прямое соединение."
+
+msgid "Removing Guard…"
+msgstr "Удаление Защиты…"
+
+msgid "Guard removed."
+msgstr "Защита удалена."
+
+msgid "Remove MiClash from this router?"
+msgstr "Удалить MiClash с этого роутера?"
+
+msgid "The normal package removal protocol restores OpenWrt networking first. This page will become unavailable."
+msgstr "Штатный протокол удаления пакета сначала восстановит сеть OpenWrt. Эта страница станет недоступна."
+
+msgid "MiClash removal was not accepted."
+msgstr "Запуск удаления MiClash не подтверждён."
+
+msgid "MiClash removal started."
+msgstr "Удаление MiClash запущено."
+msgid "MiClash events"
+msgstr "События MiClash"
+
+msgid "Choose how much information to include in the diagnostic report."
+msgstr "Выберите объём данных для включения в диагностический отчёт."
+
+msgid "Collecting configuration"
+msgstr "Сбор конфигурации"
+
+msgid "Collecting logs"
+msgstr "Сбор журналов"
+
+msgid "Collecting network state"
+msgstr "Сбор состояния сети"
+
+msgid "Collecting operations"
+msgstr "Сбор операций"
+
+msgid "Collecting provider state"
+msgstr "Сбор состояния провайдеров"
+
+msgid "Collecting system state"
+msgstr "Сбор состояния системы"
+
+msgid "Confirm Full diagnostic report"
+msgstr "Подтвердить полный диагностический отчёт"
+
+msgid "Creating report"
+msgstr "Создание отчёта"
+
+msgid "Download Full"
+msgstr "Скачать полный"
+
+msgid "Download Lite"
+msgstr "Скачать Lite"
+
+msgid "Download Silent"
+msgstr "Скачать Silent"
+
+msgid "Finalizing report"
+msgstr "Завершение отчёта"
+
+msgid "Full"
+msgstr "Полный"
+
+msgid "Full reports may include secrets such as subscription credentials and private configuration."
+msgstr "Полные отчёты могут содержать секреты, включая учётные данные подписки и приватную конфигурацию."
+
+msgid "I understand, download Full"
+msgstr "Я понимаю, скачать полный"
+
+msgid "Includes private configuration and secrets. Use only with trusted support."
+msgstr "Включает приватную конфигурацию и секреты. Используйте только с доверенной поддержкой."
+
+msgid "Lite"
+msgstr "Lite"
+
+msgid "Lite is recommended for most support requests."
+msgstr "Lite рекомендуется для большинства обращений в поддержку."
+
+msgid "Minimal system health only. Best for public issue reports."
+msgstr "Только минимальное состояние системы. Лучше всего для публичных сообщений об ошибках."
+
+msgid "Preparing report"
+msgstr "Подготовка отчёта"
+
+msgid "Redacted diagnostics, configuration summary, and recent events."
+msgstr "Диагностика с редактированием данных, сводка конфигурации и недавние события."
+
+msgid "Silent"
+msgstr "Silent"
+
+msgid "Store this report safely and share it only with trusted support."
+msgstr "Храните этот отчёт безопасно и передавайте его только доверенной поддержке."
+
+msgid "Validating report"
+msgstr "Проверка отчёта"
+msgid "Diagnostics"
+msgstr "Диагностика"
+
+msgid "Loading service state…"
+msgstr "Загрузка состояния службы…"
+
+msgid "Performance"
+msgstr "Производительность"
+
+msgid "Local browser measurements only. RPC arguments and payloads are never recorded."
+msgstr "Только локальные измерения браузера. Аргументы и данные RPC никогда не записываются."
+
+msgid "Refresh"
+msgstr "Обновить"
+
+msgid "No measurements yet."
+msgstr "Измерений пока нет."
+
+msgid "Metric"
+msgstr "Метрика"
+
+msgid "Calls"
+msgstr "Вызовы"
+
+msgid "Errors"
+msgstr "Ошибки"
+
+msgid "Average, ms"
+msgstr "Среднее, мс"
+
+msgid "Maximum, ms"
+msgstr "Максимум, мс"
+
+msgid "Total, ms"
+msgstr "Всего, мс"
+
+msgid "RPC methods"
+msgstr "Методы RPC"
+
+msgid "Page and action timings"
+msgstr "Время страниц и действий"
+
+msgid "Search logs"
+msgstr "Поиск в логах"
+
+msgid "Next match"
+msgstr "Следующее совпадение"
+
+msgid "Previous match"
+msgstr "Предыдущее совпадение"
+
+msgid "Developer mode: %d taps remaining."
+msgstr "Режим разработчика: осталось нажатий — %d."

@@ -1,0 +1,4118 @@
+{
+  "generation": "111111111111",
+  "previous_generation": "000000000000",
+  "model": {
+    "schema_version": 1,
+    "normalized": [
+      {
+        "command": "ipset",
+        "args": [
+          "create",
+          "miclash_local4",
+          "hash:net",
+          "family",
+          "inet",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "flush",
+          "miclash_local4"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "0.0.0.0/8",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "10.0.0.0/8",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "100.64.0.0/10",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "127.0.0.0/8",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "169.254.0.0/16",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "172.16.0.0/12",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "192.0.2.0/24",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "192.88.99.0/24",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "192.168.0.0/16",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "198.51.100.0/24",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "203.0.113.0/24",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "224.0.0.0/4",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "240.0.0.0/4",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local4",
+          "255.255.255.255/32",
+          "-exist"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MICLASH_PREROUTING"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MICLASH_PROXY"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MICLASH_OUTPUT"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "PREROUTING",
+          "-j",
+          "MICLASH_PREROUTING"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "OUTPUT",
+          "-j",
+          "MICLASH_OUTPUT"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PREROUTING",
+          "-i",
+          "br-lan",
+          "-j",
+          "MICLASH_PROXY"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PROXY",
+          "-m",
+          "set",
+          "--match-set",
+          "miclash_local4",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PROXY",
+          "-p",
+          "tcp",
+          "-j",
+          "TPROXY",
+          "--on-ip",
+          "127.0.0.1",
+          "--on-port",
+          "7894",
+          "--tproxy-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PROXY",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0002",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "mark",
+          "--mark",
+          "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "set",
+          "--match-set",
+          "miclash_local4",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-d",
+          "9.9.9.9",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "tcp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "create",
+          "miclash_local6",
+          "hash:net",
+          "family",
+          "inet6",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "flush",
+          "miclash_local6"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local6",
+          "::/128",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local6",
+          "::1/128",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local6",
+          "fc00::/7",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local6",
+          "fe80::/10",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "miclash_local6",
+          "ff00::/8",
+          "-exist"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-I",
+          "INPUT",
+          "1",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-I",
+          "FORWARD",
+          "1",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-I",
+          "FORWARD",
+          "1",
+          "-o",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MICLASH_PREROUTING"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MICLASH_PROXY"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MICLASH_OUTPUT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "PREROUTING",
+          "-j",
+          "MICLASH_PREROUTING"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "OUTPUT",
+          "-j",
+          "MICLASH_OUTPUT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PREROUTING",
+          "-i",
+          "br-lan",
+          "-j",
+          "MICLASH_PROXY"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PROXY",
+          "-m",
+          "set",
+          "--match-set",
+          "miclash_local6",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PROXY",
+          "-p",
+          "tcp",
+          "-j",
+          "TPROXY",
+          "--on-ip",
+          "::1",
+          "--on-port",
+          "7894",
+          "--tproxy-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_PROXY",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0002",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "mark",
+          "--mark",
+          "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "set",
+          "--match-set",
+          "miclash_local6",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-d",
+          "2620:fe::9",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "tcp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MICLASH_OUTPUT",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-I",
+          "INPUT",
+          "1",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-I",
+          "FORWARD",
+          "1",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-I",
+          "FORWARD",
+          "1",
+          "-o",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      }
+    ]
+  },
+  "stages": {
+    "anchors": [
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_AN_PR"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "PREROUTING",
+          "-j",
+          "MCL_AN_PR"
+        ],
+        "on_failure": [
+          "-t",
+          "mangle",
+          "-A",
+          "PREROUTING",
+          "-j",
+          "MCL_AN_PR"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_AN_OU"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "OUTPUT",
+          "-j",
+          "MCL_AN_OU"
+        ],
+        "on_failure": [
+          "-t",
+          "mangle",
+          "-A",
+          "OUTPUT",
+          "-j",
+          "MCL_AN_OU"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-N",
+          "MCL_AN_TI"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "INPUT",
+          "-j",
+          "MCL_AN_TI"
+        ],
+        "on_failure": [
+          "-t",
+          "filter",
+          "-A",
+          "INPUT",
+          "-j",
+          "MCL_AN_TI"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-N",
+          "MCL_AN_TF"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "FORWARD",
+          "-j",
+          "MCL_AN_TF"
+        ],
+        "on_failure": [
+          "-t",
+          "filter",
+          "-A",
+          "FORWARD",
+          "-j",
+          "MCL_AN_TF"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_AN_PR"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "PREROUTING",
+          "-j",
+          "MCL_AN_PR"
+        ],
+        "on_failure": [
+          "-t",
+          "mangle",
+          "-A",
+          "PREROUTING",
+          "-j",
+          "MCL_AN_PR"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_AN_OU"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "OUTPUT",
+          "-j",
+          "MCL_AN_OU"
+        ],
+        "on_failure": [
+          "-t",
+          "mangle",
+          "-A",
+          "OUTPUT",
+          "-j",
+          "MCL_AN_OU"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-N",
+          "MCL_AN_TI"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "INPUT",
+          "-j",
+          "MCL_AN_TI"
+        ],
+        "on_failure": [
+          "-t",
+          "filter",
+          "-A",
+          "INPUT",
+          "-j",
+          "MCL_AN_TI"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-N",
+          "MCL_AN_TF"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "FORWARD",
+          "-j",
+          "MCL_AN_TF"
+        ],
+        "on_failure": [
+          "-t",
+          "filter",
+          "-A",
+          "FORWARD",
+          "-j",
+          "MCL_AN_TF"
+        ]
+      }
+    ],
+    "prepare": [
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_PR_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_PX_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_OU_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-N",
+          "MCL_TI_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-N",
+          "MCL_TF_111111111111"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "create",
+          "MCL_L4_111111111111",
+          "hash:net",
+          "family",
+          "inet",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "create",
+          "MCL_F4_111111111111",
+          "hash:net",
+          "family",
+          "inet",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "0.0.0.0/8",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "10.0.0.0/8",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "100.64.0.0/10",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "127.0.0.0/8",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "169.254.0.0/16",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "172.16.0.0/12",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "192.0.2.0/24",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "192.88.99.0/24",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "192.168.0.0/16",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "198.51.100.0/24",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "203.0.113.0/24",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "224.0.0.0/4",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "240.0.0.0/4",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L4_111111111111",
+          "255.255.255.255/32",
+          "-exist"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
+          "-j",
+          "MCL_PX_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PX_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L4_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PX_111111111111",
+          "-p",
+          "tcp",
+          "-j",
+          "TPROXY",
+          "--on-ip",
+          "127.0.0.1",
+          "--on-port",
+          "7894",
+          "--tproxy-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PX_111111111111",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0002",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L4_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-d",
+          "9.9.9.9",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "tcp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_TI_111111111111",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_TF_111111111111",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_TF_111111111111",
+          "-o",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_PR_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_PX_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-N",
+          "MCL_OU_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-N",
+          "MCL_TI_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-N",
+          "MCL_TF_111111111111"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "create",
+          "MCL_L6_111111111111",
+          "hash:net",
+          "family",
+          "inet6",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "create",
+          "MCL_F6_111111111111",
+          "hash:net",
+          "family",
+          "inet6",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L6_111111111111",
+          "::/128",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L6_111111111111",
+          "::1/128",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L6_111111111111",
+          "fc00::/7",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L6_111111111111",
+          "fe80::/10",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "add",
+          "MCL_L6_111111111111",
+          "ff00::/8",
+          "-exist"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
+          "-j",
+          "MCL_PX_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PX_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L6_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PX_111111111111",
+          "-p",
+          "tcp",
+          "-j",
+          "TPROXY",
+          "--on-ip",
+          "::1",
+          "--on-port",
+          "7894",
+          "--tproxy-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_PX_111111111111",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0002",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L6_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-d",
+          "2620:fe::9",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "tcp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_TI_111111111111",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_TF_111111111111",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_TF_111111111111",
+          "-o",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      }
+    ],
+    "verify_prepared": [
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PR_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PX_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_OU_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TI_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TF_111111111111"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "list",
+          "MCL_L4_111111111111"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "list",
+          "MCL_F4_111111111111"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "0.0.0.0/8"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "10.0.0.0/8"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "100.64.0.0/10"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "127.0.0.0/8"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "169.254.0.0/16"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "172.16.0.0/12"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "192.0.2.0/24"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "192.88.99.0/24"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "192.168.0.0/16"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "198.51.100.0/24"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "203.0.113.0/24"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "224.0.0.0/4"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "240.0.0.0/4"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L4_111111111111",
+          "255.255.255.255/32"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
+          "-j",
+          "MCL_PX_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PX_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L4_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PX_111111111111",
+          "-p",
+          "tcp",
+          "-j",
+          "TPROXY",
+          "--on-ip",
+          "127.0.0.1",
+          "--on-port",
+          "7894",
+          "--tproxy-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PX_111111111111",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0002",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L4_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-d",
+          "9.9.9.9",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "tcp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_TI_111111111111",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_TF_111111111111",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_TF_111111111111",
+          "-o",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PR_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PX_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_OU_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TI_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TF_111111111111"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "list",
+          "MCL_L6_111111111111"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "list",
+          "MCL_F6_111111111111"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L6_111111111111",
+          "::/128"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L6_111111111111",
+          "::1/128"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L6_111111111111",
+          "fc00::/7"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L6_111111111111",
+          "fe80::/10"
+        ]
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "test",
+          "MCL_L6_111111111111",
+          "ff00::/8"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PR_111111111111",
+          "-i",
+          "br-lan",
+          "-j",
+          "MCL_PX_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PX_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L6_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PX_111111111111",
+          "-p",
+          "tcp",
+          "-j",
+          "TPROXY",
+          "--on-ip",
+          "::1",
+          "--on-port",
+          "7894",
+          "--tproxy-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_PX_111111111111",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0002",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0xff00/0xff00",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "set",
+          "--match-set",
+          "MCL_L6_111111111111",
+          "dst",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-d",
+          "2620:fe::9",
+          "-j",
+          "RETURN"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "tcp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x1"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_OU_111111111111",
+          "-m",
+          "mark",
+          "--mark",
+          "0x0",
+          "-p",
+          "udp",
+          "-j",
+          "MARK",
+          "--set-mark",
+          "0x3"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_TI_111111111111",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_TF_111111111111",
+          "-i",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_TF_111111111111",
+          "-o",
+          "clash-tun",
+          "-j",
+          "ACCEPT"
+        ]
+      }
+    ],
+    "switch": [
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_AN_PR",
+          "-j",
+          "MCL_PR_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-R",
+          "MCL_AN_PR",
+          "1",
+          "-j",
+          "MCL_PR_111111111111"
+        ],
+        "on_failure": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_AN_PR",
+          "-j",
+          "MCL_PR_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_AN_OU",
+          "-j",
+          "MCL_OU_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-R",
+          "MCL_AN_OU",
+          "1",
+          "-j",
+          "MCL_OU_111111111111"
+        ],
+        "on_failure": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_AN_OU",
+          "-j",
+          "MCL_OU_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_AN_TI",
+          "-j",
+          "MCL_TI_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-R",
+          "MCL_AN_TI",
+          "1",
+          "-j",
+          "MCL_TI_111111111111"
+        ],
+        "on_failure": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_AN_TI",
+          "-j",
+          "MCL_TI_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_AN_TF",
+          "-j",
+          "MCL_TF_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-R",
+          "MCL_AN_TF",
+          "1",
+          "-j",
+          "MCL_TF_111111111111"
+        ],
+        "on_failure": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_AN_TF",
+          "-j",
+          "MCL_TF_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_AN_PR",
+          "-j",
+          "MCL_PR_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-R",
+          "MCL_AN_PR",
+          "1",
+          "-j",
+          "MCL_PR_111111111111"
+        ],
+        "on_failure": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_AN_PR",
+          "-j",
+          "MCL_PR_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_AN_OU",
+          "-j",
+          "MCL_OU_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-R",
+          "MCL_AN_OU",
+          "1",
+          "-j",
+          "MCL_OU_111111111111"
+        ],
+        "on_failure": [
+          "-t",
+          "mangle",
+          "-A",
+          "MCL_AN_OU",
+          "-j",
+          "MCL_OU_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_AN_TI",
+          "-j",
+          "MCL_TI_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-R",
+          "MCL_AN_TI",
+          "1",
+          "-j",
+          "MCL_TI_111111111111"
+        ],
+        "on_failure": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_AN_TI",
+          "-j",
+          "MCL_TI_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_AN_TF",
+          "-j",
+          "MCL_TF_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-R",
+          "MCL_AN_TF",
+          "1",
+          "-j",
+          "MCL_TF_111111111111"
+        ],
+        "on_failure": [
+          "-t",
+          "filter",
+          "-A",
+          "MCL_AN_TF",
+          "-j",
+          "MCL_TF_111111111111"
+        ]
+      }
+    ],
+    "verify_active": [
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_AN_PR",
+          "-j",
+          "MCL_PR_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_AN_OU",
+          "-j",
+          "MCL_OU_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_AN_TI",
+          "-j",
+          "MCL_TI_111111111111"
+        ]
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_AN_TF",
+          "-j",
+          "MCL_TF_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_AN_PR",
+          "-j",
+          "MCL_PR_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-C",
+          "MCL_AN_OU",
+          "-j",
+          "MCL_OU_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_AN_TI",
+          "-j",
+          "MCL_TI_111111111111"
+        ]
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-C",
+          "MCL_AN_TF",
+          "-j",
+          "MCL_TF_111111111111"
+        ]
+      }
+    ],
+    "retire": [
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PR_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-F",
+          "MCL_PR_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PR_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-X",
+          "MCL_PR_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PX_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-F",
+          "MCL_PX_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PX_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-X",
+          "MCL_PX_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_OU_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-F",
+          "MCL_OU_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_OU_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-X",
+          "MCL_OU_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TI_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-F",
+          "MCL_TI_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TI_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-X",
+          "MCL_TI_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TF_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-F",
+          "MCL_TF_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "iptables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TF_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-X",
+          "MCL_TF_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "list",
+          "MCL_L4_000000000000"
+        ],
+        "on_success": [
+          "destroy",
+          "MCL_L4_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "list",
+          "MCL_F4_000000000000"
+        ],
+        "on_success": [
+          "destroy",
+          "MCL_F4_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PR_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-F",
+          "MCL_PR_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PR_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-X",
+          "MCL_PR_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PX_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-F",
+          "MCL_PX_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_PX_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-X",
+          "MCL_PX_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_OU_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-F",
+          "MCL_OU_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "mangle",
+          "-L",
+          "MCL_OU_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "mangle",
+          "-X",
+          "MCL_OU_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TI_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-F",
+          "MCL_TI_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TI_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-X",
+          "MCL_TI_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TF_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-F",
+          "MCL_TF_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ip6tables",
+        "args": [
+          "-t",
+          "filter",
+          "-L",
+          "MCL_TF_000000000000"
+        ],
+        "on_success": [
+          "-t",
+          "filter",
+          "-X",
+          "MCL_TF_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "list",
+          "MCL_L6_000000000000"
+        ],
+        "on_success": [
+          "destroy",
+          "MCL_L6_000000000000"
+        ],
+        "tolerate_failure": true
+      },
+      {
+        "command": "ipset",
+        "args": [
+          "list",
+          "MCL_F6_000000000000"
+        ],
+        "on_success": [
+          "destroy",
+          "MCL_F6_000000000000"
+        ],
+        "tolerate_failure": true
+      }
+    ]
+  },
+  "rollback": [
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_PR_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-F",
+        "MCL_PR_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_PR_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-X",
+        "MCL_PR_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_PX_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-F",
+        "MCL_PX_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_PX_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-X",
+        "MCL_PX_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_OU_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-F",
+        "MCL_OU_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_OU_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-X",
+        "MCL_OU_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-L",
+        "MCL_TI_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "filter",
+        "-F",
+        "MCL_TI_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-L",
+        "MCL_TI_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "filter",
+        "-X",
+        "MCL_TI_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-L",
+        "MCL_TF_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "filter",
+        "-F",
+        "MCL_TF_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-L",
+        "MCL_TF_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "filter",
+        "-X",
+        "MCL_TF_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "list",
+        "MCL_L4_111111111111"
+      ],
+      "on_success": [
+        "destroy",
+        "MCL_L4_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "list",
+        "MCL_F4_111111111111"
+      ],
+      "on_success": [
+        "destroy",
+        "MCL_F4_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_PR_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-F",
+        "MCL_PR_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_PR_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-X",
+        "MCL_PR_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_PX_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-F",
+        "MCL_PX_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_PX_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-X",
+        "MCL_PX_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_OU_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-F",
+        "MCL_OU_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-L",
+        "MCL_OU_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "mangle",
+        "-X",
+        "MCL_OU_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-L",
+        "MCL_TI_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "filter",
+        "-F",
+        "MCL_TI_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-L",
+        "MCL_TI_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "filter",
+        "-X",
+        "MCL_TI_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-L",
+        "MCL_TF_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "filter",
+        "-F",
+        "MCL_TF_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-L",
+        "MCL_TF_111111111111"
+      ],
+      "on_success": [
+        "-t",
+        "filter",
+        "-X",
+        "MCL_TF_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "list",
+        "MCL_L6_111111111111"
+      ],
+      "on_success": [
+        "destroy",
+        "MCL_L6_111111111111"
+      ],
+      "tolerate_failure": true
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "list",
+        "MCL_F6_111111111111"
+      ],
+      "on_success": [
+        "destroy",
+        "MCL_F6_111111111111"
+      ],
+      "tolerate_failure": true
+    }
+  ],
+  "inventory": [
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-N",
+        "MCL_PR_111111111111"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-N",
+        "MCL_PX_111111111111"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-N",
+        "MCL_OU_111111111111"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-N",
+        "MCL_TI_111111111111"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-N",
+        "MCL_TF_111111111111"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "create",
+        "MCL_L4_111111111111",
+        "hash:net",
+        "family",
+        "inet",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "create",
+        "MCL_F4_111111111111",
+        "hash:net",
+        "family",
+        "inet",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "0.0.0.0/8",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "10.0.0.0/8",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "100.64.0.0/10",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "127.0.0.0/8",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "169.254.0.0/16",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "172.16.0.0/12",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "192.0.2.0/24",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "192.88.99.0/24",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "192.168.0.0/16",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "198.51.100.0/24",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "203.0.113.0/24",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "224.0.0.0/4",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "240.0.0.0/4",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L4_111111111111",
+        "255.255.255.255/32",
+        "-exist"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PR_111111111111",
+        "-i",
+        "br-lan",
+        "-j",
+        "MCL_PX_111111111111"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PX_111111111111",
+        "-m",
+        "set",
+        "--match-set",
+        "MCL_L4_111111111111",
+        "dst",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PX_111111111111",
+        "-p",
+        "tcp",
+        "-j",
+        "TPROXY",
+        "--on-ip",
+        "127.0.0.1",
+        "--on-port",
+        "7894",
+        "--tproxy-mark",
+        "0x1"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PX_111111111111",
+        "-p",
+        "udp",
+        "-j",
+        "MARK",
+        "--set-mark",
+        "0x3"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "mark",
+        "--mark",
+        "0x0002",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "mark",
+        "--mark",
+        "0xff00/0xff00",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "set",
+        "--match-set",
+        "MCL_L4_111111111111",
+        "dst",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-d",
+        "9.9.9.9",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "mark",
+        "--mark",
+        "0x0",
+        "-p",
+        "tcp",
+        "-j",
+        "MARK",
+        "--set-mark",
+        "0x1"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "mark",
+        "--mark",
+        "0x0",
+        "-p",
+        "udp",
+        "-j",
+        "MARK",
+        "--set-mark",
+        "0x3"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-A",
+        "MCL_TI_111111111111",
+        "-i",
+        "clash-tun",
+        "-j",
+        "ACCEPT"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-A",
+        "MCL_TF_111111111111",
+        "-i",
+        "clash-tun",
+        "-j",
+        "ACCEPT"
+      ]
+    },
+    {
+      "command": "iptables",
+      "args": [
+        "-t",
+        "filter",
+        "-A",
+        "MCL_TF_111111111111",
+        "-o",
+        "clash-tun",
+        "-j",
+        "ACCEPT"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-N",
+        "MCL_PR_111111111111"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-N",
+        "MCL_PX_111111111111"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-N",
+        "MCL_OU_111111111111"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-N",
+        "MCL_TI_111111111111"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-N",
+        "MCL_TF_111111111111"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "create",
+        "MCL_L6_111111111111",
+        "hash:net",
+        "family",
+        "inet6",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "create",
+        "MCL_F6_111111111111",
+        "hash:net",
+        "family",
+        "inet6",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L6_111111111111",
+        "::/128",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L6_111111111111",
+        "::1/128",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L6_111111111111",
+        "fc00::/7",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L6_111111111111",
+        "fe80::/10",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ipset",
+      "args": [
+        "add",
+        "MCL_L6_111111111111",
+        "ff00::/8",
+        "-exist"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PR_111111111111",
+        "-i",
+        "br-lan",
+        "-j",
+        "MCL_PX_111111111111"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PX_111111111111",
+        "-m",
+        "set",
+        "--match-set",
+        "MCL_L6_111111111111",
+        "dst",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PX_111111111111",
+        "-p",
+        "tcp",
+        "-j",
+        "TPROXY",
+        "--on-ip",
+        "::1",
+        "--on-port",
+        "7894",
+        "--tproxy-mark",
+        "0x1"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_PX_111111111111",
+        "-p",
+        "udp",
+        "-j",
+        "MARK",
+        "--set-mark",
+        "0x3"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "mark",
+        "--mark",
+        "0x0002",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "mark",
+        "--mark",
+        "0xff00/0xff00",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "set",
+        "--match-set",
+        "MCL_L6_111111111111",
+        "dst",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-d",
+        "2620:fe::9",
+        "-j",
+        "RETURN"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "mark",
+        "--mark",
+        "0x0",
+        "-p",
+        "tcp",
+        "-j",
+        "MARK",
+        "--set-mark",
+        "0x1"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "mangle",
+        "-A",
+        "MCL_OU_111111111111",
+        "-m",
+        "mark",
+        "--mark",
+        "0x0",
+        "-p",
+        "udp",
+        "-j",
+        "MARK",
+        "--set-mark",
+        "0x3"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-A",
+        "MCL_TI_111111111111",
+        "-i",
+        "clash-tun",
+        "-j",
+        "ACCEPT"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-A",
+        "MCL_TF_111111111111",
+        "-i",
+        "clash-tun",
+        "-j",
+        "ACCEPT"
+      ]
+    },
+    {
+      "command": "ip6tables",
+      "args": [
+        "-t",
+        "filter",
+        "-A",
+        "MCL_TF_111111111111",
+        "-o",
+        "clash-tun",
+        "-j",
+        "ACCEPT"
+      ]
+    }
+  ],
+  "desired": {
+    "proxy_mode": "mixed",
+    "interface_mode": "explicit",
+    "lan": [
+      "br-lan"
+    ],
+    "wan": [
+      "eth1"
+    ],
+    "guard": true,
+    "quic": false,
+    "server_ips": [
+      "9.9.9.9",
+      "2620:fe::9"
+    ],
+    "fakeip_cidrs": [],
+    "device_policies": [],
+    "ip_families": [
+      "ipv4",
+      "ipv6"
+    ],
+    "generation": "111111111111",
+    "previous_generation": "000000000000",
+    "previous_ip_families": [
+      "ipv4",
+      "ipv6"
+    ]
+  }
+}

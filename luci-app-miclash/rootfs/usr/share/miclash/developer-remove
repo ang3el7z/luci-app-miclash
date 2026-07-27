@@ -1,0 +1,38 @@
+#!/bin/sh
+
+set -u
+
+PACKAGE=luci-app-miclash
+LOG=/tmp/miclash-self-remove.log
+
+remove_package() {
+	sleep 2
+	if command -v apk >/dev/null 2>&1; then
+		exec apk del "$PACKAGE"
+	fi
+	if command -v opkg >/dev/null 2>&1; then
+		exec opkg remove "$PACKAGE"
+	fi
+	echo 'MiClash removal failed: supported package manager not found' >&2
+	return 1
+}
+
+schedule_removal() {
+	umask 077
+	staged="$(mktemp /tmp/miclash-self-remove.XXXXXX)" || return 1
+	cp "$0" "$staged" || { rm -f "$staged"; return 1; }
+	chown 0:0 "$staged" 2>/dev/null || { rm -f "$staged"; return 1; }
+	chmod 0700 "$staged" || { rm -f "$staged"; return 1; }
+	(
+		"$staged" run >>"$LOG" 2>&1
+		result=$?
+		rm -f "$staged"
+		exit "$result"
+	) </dev/null >/dev/null 2>&1 &
+}
+
+case "${1:-}" in
+	schedule) schedule_removal ;;
+	run) remove_package ;;
+	*) echo 'usage: developer-remove {schedule|run}' >&2; exit 2 ;;
+esac

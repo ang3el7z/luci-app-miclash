@@ -1,9 +1,12 @@
 'use strict';
-'require fs';
-'require view.miclash.utils';
+'require view.miclash.api';
 
 const RULESET_PATH = '/opt/clash/lst/';
 const FAKEIP_WHITELIST_FILENAME = 'fakeip-whitelist-ipcidr.txt';
+
+function configContent(reply) {
+	return typeof reply === 'string' ? reply : String(reply?.content || '');
+}
 
 function normalizeName(rawName) {
 	const clean = String(rawName || '').trim().replace(/\.txt$/i, '');
@@ -17,15 +20,16 @@ function isEditableFile(fileName) {
 
 async function detectFakeIpWhitelistMode(configPath) {
 	try {
-		const configContent = await L.resolveDefault(fs.read(configPath), '');
-		if (!configContent) return false;
+		const profile = String(configPath || '').split('/').pop() || 'config.yaml';
+		const activeConfig = configContent(await withApi((api) => api.config_read(profile)));
+		if (!activeConfig) return false;
 
 		let inDns = false;
 		let dnsEnabled = false;
 		let fakeIpMode = false;
 		let filterMode = 'blacklist';
 
-		String(configContent).split('\n').forEach((line) => {
+		String(activeConfig).split('\n').forEach((line) => {
 			const trimmed = line.trim();
 
 			if (/^dns:\s*$/.test(trimmed)) {
@@ -54,64 +58,88 @@ async function detectFakeIpWhitelistMode(configPath) {
 }
 
 async function readData(configPath) {
-	try {
-		await fs.exec('/bin/mkdir', ['-p', RULESET_PATH]);
-	} catch (e) {}
-
-	const files = await L.resolveDefault(fs.list(RULESET_PATH), []);
-	const rulesetNames = (files || [])
-		.filter((item) => item && isEditableFile(item.name || ''))
-		.map((item) => item.name)
-		.sort((a, b) => a.localeCompare(b));
-
-	const contentMap = {};
-	for (let i = 0; i < rulesetNames.length; i++) {
-		const name = rulesetNames[i];
-		contentMap[name] = await L.resolveDefault(fs.read(RULESET_PATH + name), '');
-	}
-
-	const whitelistMode = await detectFakeIpWhitelistMode(configPath);
-	let whitelistContent = '';
-
-	if (whitelistMode) {
-		const filePath = RULESET_PATH + FAKEIP_WHITELIST_FILENAME;
-		const existing = await L.resolveDefault(fs.read(filePath), null);
-		if (existing == null) {
-			await view_miclash_utils.writeFile(filePath, '');
-		} else {
-			whitelistContent = existing;
+	return withApi(async (api) => {
+		const listing = await api.ruleset_list();
+		const rulesetNames = (Array.isArray(listing?.names) ? listing.names : [])
+			.filter(isEditableFile).sort((a, b) => a.localeCompare(b));
+		const contentMap = {};
+		if (rulesetNames.length) {
+			const first = rulesetNames[0];
+			contentMap[first] = String((await api.ruleset_read(first)).content || '');
 		}
-	}
-
-	return {
-		rulesetNames: rulesetNames,
-		contentMap: contentMap,
-		whitelistMode: whitelistMode,
-		whitelistContent: whitelistContent
-	};
+		const profile = String(configPath || '').split('/').pop() || 'config.yaml';
+		const activeConfig = configContent(await api.config_read(profile));
+		const whitelistMode = parseFakeIpWhitelistMode(activeConfig);
+		let whitelistContent = '';
+		if (whitelistMode) {
+			try { whitelistContent = String((await api.ruleset_read(FAKEIP_WHITELIST_FILENAME)).content || ''); }
+			catch (_) { whitelistContent = ''; }
+		}
+		return { rulesetNames, contentMap, whitelistMode, whitelistContent };
+	});
 }
 
-async function createFile(fileName) {
-	await view_miclash_utils.writeFile(RULESET_PATH + fileName, '');
+function parseFakeIpWhitelistMode(configContent) {
+	let inDns = false, dnsEnabled = false, fakeIpMode = false, filterMode = 'blacklist';
+	String(configContent || '').split('\n').forEach((line) => {
+		const trimmed = line.trim();
+		if (/^dns:\s*$/.test(trimmed)) { inDns = true; return; }
+		if (inDns && trimmed && !/^\s/.test(line)) inDns = false;
+		if (!inDns) return;
+		if (/^enable:\s*true/i.test(trimmed)) dnsEnabled = true;
+		if (/^enhanced-mode:\s*fake-ip/i.test(trimmed)) fakeIpMode = true;
+		const match = trimmed.match(/^fake-ip-filter-mode:\s*(\S+)/i);
+		if (match) filterMode = String(match[1] || '').toLowerCase().replace(/['"]/g, '');
+	});
+	return dnsEnabled && fakeIpMode && filterMode === 'whitelist';
 }
+
+async function withApi(callback) {
+	const api = view_miclash_api.create();
+	try { return await callback(api); }
+	finally { api.destroy(); }
+}
+
+function waitOperation(api, reply) {
+	return new Promise((resolve, reject) => {
+		let cancel = null;
+		cancel = api.watchOperation(reply?.operation_id, (record, error) => {
+			if (error) { if (cancel) cancel(); reject(error); }
+			else if (record?.state === 'success') { if (cancel) cancel(); resolve(record); }
+			else if (record?.state === 'failure' || record?.state === 'interrupted') {
+				if (cancel) cancel();
+				const failure = new Error(record?.error?.message || 'Ruleset operation failed');
+				failure.code = record?.error?.code || 'HEALTH_FAILED'; reject(failure);
+			}
+		});
+	});
+}
+
+async function readFile(fileName) {
+	return withApi(async (api) => String((await api.ruleset_read(fileName)).content || ''));
+}
+
+async function createFile(fileName) { return saveFile(fileName, ''); }
 
 async function saveFile(fileName, content) {
-	await view_miclash_utils.writeFile(RULESET_PATH + fileName, String(content || ''));
+	return withApi(async (api) => waitOperation(api,
+		await api.ruleset_write(fileName, String(content || ''), 'luci')));
 }
 
 async function deleteFile(fileName) {
-	await fs.remove(RULESET_PATH + fileName);
+	return withApi(async (api) => waitOperation(api, await api.ruleset_delete(fileName, 'luci')));
 }
 
 async function saveWhitelist(content) {
-	await view_miclash_utils.writeFile(RULESET_PATH + FAKEIP_WHITELIST_FILENAME, String(content || ''));
-	return fs.exec('/opt/clash/bin/clash-rules', ['update-ip-whitelist']);
+	return withApi(async (api) => waitOperation(api,
+		await api.ruleset_apply_whitelist(String(content || ''), 'luci')));
 }
 
 return L.Class.extend({
 	RULESET_PATH: RULESET_PATH,
 	FAKEIP_WHITELIST_FILENAME: FAKEIP_WHITELIST_FILENAME,
 	normalizeName: normalizeName,
+	readFile: readFile,
 	readData: readData,
 	createFile: createFile,
 	saveFile: saveFile,

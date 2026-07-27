@@ -1,39 +1,50 @@
 #!/bin/sh
 # ================================================================
 #  MiClash Auto-Installer for OpenWrt
-#  Supported: 21.x / 23.05.x / 24.10.x / 25.12.x
+#  Supported: OpenWrt 24.10 and newer, including modern SNAPSHOT builds
 #  Installs:
 #  - MiClash package from GitHub Releases
 #  - required dependencies
 #  - latest Mihomo core matching the router architecture
 # ================================================================
 
-MICLASH_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/latest"
+MICLASH_RELEASES_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases?per_page=20"
 MICLASH_TAG_API="https://api.github.com/repos/ang3el7z/luci-app-miclash/releases/tags"
 MIHOMO_BASE="https://github.com/MetaCubeX/mihomo/releases"
 MIHOMO_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 CLASH_BIN="/opt/clash/bin/clash"
+CLASH_INIT="/etc/init.d/clash"
 MICLASH_APK_URL=""
 MICLASH_IPK_URL=""
+MICLASH_APK_SHA256_URL=""
+MICLASH_IPK_SHA256_URL=""
 MICLASH_VER=""
 MICLASH_TAG_NAME=""
 MICLASH_TARGET_TAG=""
+MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v2"
+MICLASH_TEST_FIXTURE_DIR=""
+MICLASH_CATALOG_FILE=""
+MICLASH_FETCHED_FILE=""
 MICLASH_INSTALLED_VER=""
 MICLASH_RELEASE_NORM=""
 MICLASH_INSTALLED_NORM=""
 INSTALL_ACTION=""
 PKG_UPDATED=0
 STATUS_FILE=""
+STATUS_TARGET_VERSION=""
 CURRENT_TOKEN="${CURRENT_TOKEN:-}"
 CURL_CONNECT_TIMEOUT=15
 CURL_MAX_TIME=300
+MAX_BACKEND_RELOAD_WAIT=30
+CLASH_RESTORE_WAIT_SECONDS=15
 PKG_FILE=""
 TEMP_FILES=""
-PACKAGE_MARKERS_ACTIVE=0
+TEMP_DIRS=""
+WORK_DIR=""
+OWNED_MARKERS=""
 NO_AUTOSTART_CLASH_MARKER="/tmp/miclash-package-no-autostart-clash"
 NO_AUTOSTART_AUTOUPDATE_MARKER="/tmp/miclash-package-no-autostart-autoupdate"
 HARD_REINSTALL_MARKER="/tmp/miclash-hard-reinstall"
-
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
     R=$(printf '\033[0;31m') G=$(printf '\033[0;32m') Y=$(printf '\033[1;33m')
     C=$(printf '\033[0;36m') B=$(printf '\033[1m') N=$(printf '\033[0m')
@@ -55,28 +66,181 @@ write_status() {
     [ -n "$STATUS_FILE" ] || return 0
     state="$1"
     phase="$2"
-    shift 2 || true
-    message="$(status_text "$*")"
+    case "$state:$phase" in
+        running:queued|running:dependencies|running:download|running:install|success:done|failed:error) ;;
+        *) return 1 ;;
+    esac
+    validate_status_authority || return 1
+    updated_at="$(date +%s 2>/dev/null || true)"
+    case "$updated_at" in ''|*[!0-9]*) return 1 ;; esac
+    tmp="$STATUS_FILE.tmp.$$"
+    [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 1
+    (
+        umask 077
+        set -C
+        exec 3> "$tmp"
+        printf 'protocol=miclash-update-status-v1\n' >&3
+        printf 'token=%s\n' "$CURRENT_TOKEN" >&3
+        printf 'state=%s\n' "$state" >&3
+        printf 'phase=%s\n' "$phase" >&3
+        printf 'target_version=%s\n' "$STATUS_TARGET_VERSION" >&3
+        printf 'service_was_running=%s\n' "$STATUS_SERVICE_WAS_RUNNING" >&3
+        printf 'postcheck=pending\n' >&3
+        printf 'updated_at=%s\n' "$updated_at" >&3
+        exec 3>&-
+        chmod 0600 "$tmp"
+    ) || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    mv "$tmp" "$STATUS_FILE" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] &&
+        owned_file_0600 "$STATUS_FILE"
+}
+
+validate_status_authority() {
+    [ -n "$STATUS_FILE" ] && [ -n "$CURRENT_TOKEN" ] &&
+    [ -n "$STATUS_TARGET_VERSION" ] || return 1
+    case "$STATUS_FILE" in /tmp/miclash/updates/handoff-*.status) ;; *) return 1 ;; esac
     status_dir="${STATUS_FILE%/*}"
-    [ "$status_dir" = "$STATUS_FILE" ] || mkdir -p "$status_dir" 2>/dev/null || true
-    {
-        printf 'state=%s\n' "$state"
-        printf 'phase=%s\n' "$phase"
-        printf 'token=%s\n' "${CURRENT_TOKEN:-}"
-        printf 'message=%s\n' "$message"
-        printf 'updated_at=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } > "$STATUS_FILE.tmp.$$" 2>/dev/null && mv "$STATUS_FILE.tmp.$$" "$STATUS_FILE" 2>/dev/null || true
+    [ "$status_dir" = /tmp/miclash/updates ] || return 1
+    [ ! -L "$status_dir" ] && [ -d "$status_dir" ] || return 1
+    owned_directory_0700 "$status_dir" || return 1
+    [ "$(readlink -f "$status_dir" 2>/dev/null)" = "$status_dir" ] || return 1
+    status_name="${STATUS_FILE##*/}"
+    operation="${status_name#handoff-}"
+    operation="${operation%.status}"
+    printf '%s\n' "$operation" | grep -Eq '^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$' || return 1
+    printf '%s\n' "$CURRENT_TOKEN" | grep -Eq '^[0-9a-f]{32}$' || return 1
+    printf '%s\n' "$STATUS_TARGET_VERSION" |
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
+    case "$STATUS_SERVICE_WAS_RUNNING" in 0|1) ;; *) return 1 ;; esac
+    if [ -e "$STATUS_FILE" ] || [ -L "$STATUS_FILE" ]; then
+        [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] || return 1
+        owned_file_0600 "$STATUS_FILE" || return 1
+        [ "$(readlink -f "$STATUS_FILE" 2>/dev/null)" = "$STATUS_FILE" ] || return 1
+    fi
+}
+
+path_metadata() {
+    if command -v stat >/dev/null 2>&1; then
+        stat -c '%F:%u:%a:%h' "$1" 2>/dev/null && return 0
+    fi
+    LC_ALL=C ls -ldn "$1" 2>/dev/null |
+        awk 'NR == 1 { print $1 ":" $3 ":" $2 }'
+}
+
+owned_directory_0700() {
+    metadata="$(path_metadata "$1")" || return 1
+    case "$metadata" in
+        directory:0:700:*|drwx------:0:*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+owned_file_0600() {
+    metadata="$(path_metadata "$1")" || return 1
+    case "$metadata" in
+        regular*:0:600:1|-rw-------:0:1) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_work_dir() {
+    [ -n "$WORK_DIR" ] || return 1
+    case "$WORK_DIR" in
+        /tmp/miclash/updates) ;;
+        /tmp/miclash-install.*)
+            printf '%s\n' "${WORK_DIR#/tmp/miclash-install.}" |
+                grep -Eq '^[A-Za-z0-9]{6,32}$' || return 1
+            ;;
+        *) return 1 ;;
+    esac
+    [ ! -L "$WORK_DIR" ] && [ -d "$WORK_DIR" ] || return 1
+    owned_directory_0700 "$WORK_DIR" || return 1
+    [ "$(readlink -f "$WORK_DIR" 2>/dev/null)" = "$WORK_DIR" ] || return 1
+}
+
+prepare_work_dir() {
+    if [ -n "$STATUS_FILE" ]; then
+        WORK_DIR="${STATUS_FILE%/*}"
+    else
+        umask 077
+        WORK_DIR=$(mktemp -d /tmp/miclash-install.XXXXXX) || die "Failed to create installer workspace"
+        chmod 0700 "$WORK_DIR" || die "Failed to secure installer workspace"
+        TEMP_DIRS="$TEMP_DIRS $WORK_DIR"
+    fi
+    validate_work_dir || die "invalid installer workspace authority"
+}
+
+marker_owned() {
+    marker="$1"
+    [ ! -L "$marker" ] && [ -f "$marker" ] || return 1
+    owned_file_0600 "$marker" || return 1
+    [ "$(readlink -f "$marker" 2>/dev/null)" = "$marker" ] || return 1
+}
+
+create_marker() {
+    marker="$1"
+    [ ! -e "$marker" ] && [ ! -L "$marker" ] || return 1
+    (umask 077; set -C; : > "$marker") 2>/dev/null || return 1
+    if ! marker_owned "$marker"; then
+        return 1
+    fi
+    OWNED_MARKERS="$OWNED_MARKERS $marker"
+}
+
+app_update_marker_active() {
+    marker="$1"
+    marker_owned "$marker" || return 1
+    [ "$(wc -l < "$marker" 2>/dev/null | tr -d '[:space:]')" = 1 ] || return 1
+    status_file="$(cat "$marker" 2>/dev/null)" || return 1
+    case "$status_file" in
+        /tmp/miclash/updates/handoff-*.status) ;;
+        *) return 1 ;;
+    esac
+    [ ! -L "$status_file" ] && [ -f "$status_file" ] || return 1
+    owned_file_0600 "$status_file" || return 1
+    [ "$(readlink -f "$status_file" 2>/dev/null)" = "$status_file" ] || return 1
+    operation_id="${status_file##*/handoff-}"
+    operation_id="${operation_id%.status}"
+    printf '%s\n' "$operation_id" |
+        grep -Eq '^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$' || return 1
+    operation_journal="/tmp/miclash/operations/$operation_id.json"
+    [ ! -L "$operation_journal" ] && [ -f "$operation_journal" ] || return 1
+    owned_file_0600 "$operation_journal" || return 1
+    [ "$(readlink -f "$operation_journal" 2>/dev/null)" = "$operation_journal" ] ||
+        return 1
+    grep -Eq '"state"[[:space:]]*:[[:space:]]*"(queued|running)"' \
+        "$operation_journal"
+}
+
+create_app_update_marker() {
+    marker="$NO_AUTOSTART_AUTOUPDATE_MARKER"
+    validate_status_authority || return 1
+    if [ -e "$marker" ] || [ -L "$marker" ]; then
+        app_update_marker_active "$marker" && return 1
+        marker_owned "$marker" || return 1
+        rm -f "$marker" || return 1
+    fi
+    (umask 077; set -C; printf '%s\n' "$STATUS_FILE" > "$marker") 2>/dev/null || return 1
+    if ! marker_owned "$marker" ||
+       [ "$(wc -l < "$marker" 2>/dev/null | tr -d '[:space:]')" != 1 ] ||
+       [ "$(cat "$marker" 2>/dev/null)" != "$STATUS_FILE" ]; then
+        rm -f "$marker" 2>/dev/null || true
+        return 1
+    fi
+    OWNED_MARKERS="$OWNED_MARKERS $marker"
 }
 
 cleanup() {
     for file in $TEMP_FILES; do
         [ -n "$file" ] && rm -f "$file" 2>/dev/null || true
     done
-    if [ "$PACKAGE_MARKERS_ACTIVE" = "1" ]; then
-        rm -f "$NO_AUTOSTART_CLASH_MARKER" \
-            "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
-            "$HARD_REINSTALL_MARKER" 2>/dev/null || true
-    fi
+    for marker in $OWNED_MARKERS; do
+        marker_owned "$marker" && rm -f "$marker" 2>/dev/null || true
+    done
+    for directory in $TEMP_DIRS; do
+        WORK_DIR="$directory"
+        validate_work_dir && rm -rf "$directory" 2>/dev/null || true
+    done
 }
 
 trap cleanup EXIT INT TERM
@@ -85,36 +249,159 @@ normalize_version() {
     printf '%s' "$1" | sed 's/^v//; s/-r[0-9][0-9]*$//'
 }
 
+installed_miclash_version() {
+    case "$1" in
+        apk)
+            apk list -I 2>/dev/null | awk '
+                $1 ~ /^luci-app-miclash-[0-9]/ {
+                    sub(/^luci-app-miclash-/, "", $1)
+                    print $1
+                    exit
+                }'
+            ;;
+        opkg)
+            opkg list-installed luci-app-miclash 2>/dev/null |
+                awk 'NR == 1 { print $3 }'
+            ;;
+        *) return 64 ;;
+    esac
+}
+
+verify_installed_miclash_version() {
+    installed_after="$(installed_miclash_version "$PKG_MGR")"
+    installed_after_norm="$(normalize_version "$installed_after")"
+    [ "$installed_after_norm" = "$MICLASH_RELEASE_NORM" ] ||
+        die "MiClash package version mismatch after install: expected ${MICLASH_RELEASE_NORM}, got ${installed_after_norm:-missing}"
+}
+
+rc_to_stable_transition() {
+    installed_norm="$(normalize_version "$1")"
+    target_norm="$(normalize_version "$2")"
+    printf '%s\n' "$target_norm" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || return 1
+    case "$installed_norm" in
+        "$target_norm"_rc*)
+            rc_number="${installed_norm#"$target_norm"_rc}"
+            case "$rc_number" in ''|*[!0-9]*) return 1 ;; esac
+            return 0
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+install_miclash_package() {
+    case "$PKG_MGR" in
+        apk)
+            if [ "$INSTALL_ACTION" = "reinstall" ]; then
+                apk add "$PKG_FILE" --allow-untrusted --force-overwrite \
+                    || die "Failed to reinstall MiClash .apk"
+            else
+                apk add "$PKG_FILE" --allow-untrusted \
+                    || die "Failed to install MiClash .apk"
+            fi
+            ;;
+        opkg)
+            if [ "$INSTALL_ACTION" = "reinstall" ]; then
+                if rc_to_stable_transition "$MICLASH_INSTALLED_VER" \
+                    "$MICLASH_RELEASE_NORM"; then
+                    opkg install --force-reinstall --force-downgrade "$PKG_FILE" \
+                        || die "Failed to reinstall MiClash .ipk"
+                else
+                    opkg install --force-reinstall "$PKG_FILE" \
+                        || die "Failed to reinstall MiClash .ipk"
+                fi
+            elif rc_to_stable_transition "$MICLASH_INSTALLED_VER" \
+                "$MICLASH_RELEASE_NORM"; then
+                opkg install --force-downgrade "$PKG_FILE" \
+                    || die "Failed to install MiClash .ipk"
+            else
+                opkg install "$PKG_FILE" \
+                    || die "Failed to install MiClash .ipk"
+            fi
+            ;;
+        *) die "Unsupported package manager: $PKG_MGR" ;;
+    esac
+    verify_installed_miclash_version
+}
+
+version_major() {
+    normalized="$(normalize_version "$1")"
+    printf '%s\n' "$normalized" |
+        grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
+    printf '%s' "${normalized%%.*}"
+}
+
+cross_major_update() {
+    installed="$1"
+    target="$2"
+    [ -n "$installed" ] || return 1
+    installed_major="$(version_major "$installed")" || return 1
+    target_major="$(version_major "$target")" || return 1
+    [ "$installed_major" != "$target_major" ]
+}
+
+reject_unauthorized_cross_major() {
+    if cross_major_update "$MICLASH_INSTALLED_VER" "$MICLASH_VER"; then
+        die "Direct cross-major MiClash updates are refused; use the dedicated transition installer"
+    fi
+}
+
+supported_openwrt_release() {
+    release="$1"
+
+    [ "$release" = "SNAPSHOT" ] && return 0
+    printf '%s\n' "$release" | grep -Eq '^[0-9]+(\.[0-9]+)*(-rc[0-9]+)?$' || return 1
+    release_major="${release%%.*}"
+    release_minor=''
+    case "$release" in
+        *.*)
+            release_minor="${release#*.}"
+            release_minor="${release_minor%%.*}"
+            release_minor="${release_minor%%-*}"
+            ;;
+    esac
+    [ "$release_major" -gt 24 ] 2>/dev/null && return 0
+    [ "$release_major" -eq 24 ] 2>/dev/null &&
+        [ -n "$release_minor" ] &&
+        [ "$release_minor" -ge 10 ] 2>/dev/null
+}
+
+validate_openwrt_support() {
+    release="$1"
+
+    supported_openwrt_release "$release" \
+        || die "OpenWrt $release не поддерживается. Требуется OpenWrt 24.10 или новее"
+
+    command -v fw4 >/dev/null 2>&1 \
+        || die "Не найден firewall4 (fw4). Требуется OpenWrt 24.10 или новее"
+    case "$PKG_MGR" in
+        apk|opkg) ;;
+        *) die "Не найден поддерживаемый менеджер пакетов OpenWrt (apk или opkg)" ;;
+    esac
+}
+
 detect_openwrt() {
     [ -f /etc/openwrt_release ] || die "Не найден /etc/openwrt_release"
     . /etc/openwrt_release
 
     OW_RELEASE="${DISTRIB_RELEASE:-unknown}"
-    OW_MAJOR=$(echo "$OW_RELEASE" | cut -d. -f1)
     ARCH_PKG="${DISTRIB_ARCH:-}"
 
     info "OpenWrt: ${B}${OW_RELEASE}${N}"
     info "DISTRIB_ARCH: ${B}${ARCH_PKG}${N}"
 
-    # Detect the package manager by the actual installed binary. This is more
-    # reliable than DISTRIB_RELEASE because modern SNAPSHOT builds can report
-    # "SNAPSHOT" while already using apk.
+    # Detect the package manager from the installed binary. Modern SNAPSHOT
+    # builds may use either manager, so the release label must not decide it.
     if command -v apk >/dev/null 2>&1; then
         PKG_MGR="apk"
     elif command -v opkg >/dev/null 2>&1; then
         PKG_MGR="opkg"
-    elif [ "${OW_MAJOR:-0}" -ge 25 ] 2>/dev/null; then
-        PKG_MGR="apk"
     else
-        PKG_MGR="opkg"
+        die "Не найден поддерживаемый менеджер пакетов OpenWrt (apk или opkg)"
     fi
+    validate_openwrt_support "$OW_RELEASE"
     info "Package manager: ${B}${PKG_MGR}${N}"
 
-    if [ "${OW_MAJOR:-0}" -le 21 ] 2>/dev/null; then
-        TPROXY_PKG="iptables-mod-tproxy"
-    else
-        TPROXY_PKG="kmod-nft-tproxy"
-    fi
+    TPROXY_PKG="kmod-nft-tproxy"
 
     info "Transparent proxy pkg: ${B}${TPROXY_PKG}${N}"
 }
@@ -151,29 +438,102 @@ ensure_curl() {
     PKG_UPDATED=1
 }
 
-download_artifact() {
-    url="$1"
-    target="$2"
-    label="$3"
-    error_file="/tmp/miclash-download-error-$$"
+github_proxy_url() {
+    case "$1" in
+        https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*)
+            printf 'https://gh-proxy.com/%s\n' "$1"
+            ;;
+        *) return 1 ;;
+    esac
+}
 
-    write_status running download "Downloading $label"
-    rm -f "$target" "$error_file"
+retryable_curl_code() {
+    case "$1" in
+        5|6|7|28|35|52|55|56) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+download_artifact_attempts() {
+    attempt_url="$1"
+    target="$2"
+    error_file="$3"
+    curl_code=1
     for family in "" "" "-4"; do
         if curl $family -L -fsS \
             --connect-timeout "$CURL_CONNECT_TIMEOUT" \
             --max-time "$CURL_MAX_TIME" \
-            "$url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
-            rm -f "$error_file"
+            "$attempt_url" -o "$target" 2>"$error_file" && [ -s "$target" ]; then
             return 0
+        else
+            curl_code=$?
         fi
         rm -f "$target"
         sleep 1
     done
+    return "$curl_code"
+}
+
+download_artifact() {
+    url="$1"
+    target="$2"
+    label="$3"
+    validate_work_dir || die "installer workspace authority changed"
+    error_file="$WORK_DIR/download-error-$$"
+
+    write_status running download "Downloading $label"
+    rm -f "$target" "$error_file"
+    if download_artifact_attempts "$url" "$target" "$error_file"; then
+        rm -f "$error_file"
+        return 0
+    else
+        curl_code=$?
+    fi
+
+    proxy_url=''
+    if retryable_curl_code "$curl_code" && proxy_url="$(github_proxy_url "$url")"; then
+        warn "Direct GitHub download failed; trying gh-proxy.com"
+        if download_artifact_attempts "$proxy_url" "$target" "$error_file"; then
+            rm -f "$error_file"
+            return 0
+        fi
+    fi
 
     detail=$(tail -n 3 "$error_file" 2>/dev/null | tr '\r\n' '  ')
     rm -f "$error_file"
     die "Failed to download $label: ${detail:-download returned an empty file}"
+}
+
+verify_download_checksum() {
+    artifact="$1"
+    checksum_url="$2"
+    artifact_name="$3"
+    checksum_file="$WORK_DIR/$artifact_name.sha256"
+    TEMP_FILES="$TEMP_FILES $checksum_file"
+    download_artifact "$checksum_url" "$checksum_file" "$artifact_name checksum"
+    checksum_line=$(cat "$checksum_file" 2>/dev/null) || die "Failed to read $artifact_name checksum"
+    expected=$(printf '%s\n' "$checksum_line" | sed -n \
+        "s/^\([0-9A-Fa-f]\{64\}\)[[:space:]][[:space:]]*\\*\?$artifact_name\$/\1/p")
+    [ -n "$expected" ] && [ "$(printf '%s\n' "$checksum_line" | wc -l | tr -d ' ')" = 1 ] \
+        || die "Invalid published checksum for $artifact_name"
+    actual=$(sha256sum "$artifact" 2>/dev/null | awk '{print $1}') \
+        || die "Failed to hash $artifact_name"
+    [ "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" = \
+      "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ] \
+        || die "Checksum mismatch for $artifact_name"
+}
+
+verify_download_digest() {
+    artifact="$1"
+    digest="$2"
+    artifact_name="$3"
+    expected=$(printf '%s' "$digest" | sed -n 's/^sha256:\([0-9A-Fa-f]\{64\}\)$/\1/p')
+    [ -n "$expected" ] || die "Invalid published digest for $artifact_name"
+    actual=$(sha256sum "$artifact" 2>/dev/null | awk '{print $1}') \
+        || die "Failed to hash $artifact_name"
+    [ "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" = \
+      "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ] \
+        || die "Checksum mismatch for $artifact_name"
 }
 
 pkg_update() {
@@ -196,10 +556,10 @@ install_deps() {
     log "Installing dependencies..."
     write_status running dependencies "Installing dependencies"
     if [ "$PKG_MGR" = "apk" ]; then
-        apk add zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
+        apk add zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 coreutils-stat \
             || die "Dependency installation failed"
     else
-        opkg install zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
+        opkg install zlib libcurl4 curl "$TPROXY_PKG" kmod-tun coreutils-base64 coreutils-stat \
             || die "Dependency installation failed"
     fi
 }
@@ -259,61 +619,195 @@ detect_arch() {
     info "Mihomo arch: ${B}${MIHOMO_ARCH}${N}"
 }
 
-fetch_miclash_release() {
-    log "Fetching latest MiClash release..."
+reset_miclash_candidate() {
+    MICLASH_TAG_NAME=""
+    MICLASH_VER=""
+    MICLASH_APK_URL=""
+    MICLASH_IPK_URL=""
+    MICLASH_APK_SHA256_URL=""
+    MICLASH_IPK_SHA256_URL=""
+}
 
-    if [ -n "$MICLASH_TARGET_TAG" ]; then
-        MICLASH_RELEASE_API="${MICLASH_TAG_API}/${MICLASH_TARGET_TAG}"
+json_string_values() {
+    json_file="$1"
+    json_key="$2"
+    grep -o "\"$json_key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$json_file" 2>/dev/null |
+        sed 's/^[^:]*:[[:space:]]*"\([^"]*\)"$/\1/'
+}
+
+json_boolean_values() {
+    json_file="$1"
+    json_key="$2"
+    grep -o "\"$json_key\"[[:space:]]*:[[:space:]]*\(true\|false\)" "$json_file" 2>/dev/null |
+        sed 's/^[^:]*:[[:space:]]*//'
+}
+
+exact_value_count() {
+    expected_value="$1"
+    shift
+    count="$($@ | grep -Fxc "$expected_value" 2>/dev/null || true)"
+    case "$count" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$count"
+}
+
+validate_miclash_release_file() {
+    release_file="$1"
+    requested_manager="$2"
+    expected_tag="$3"
+    reset_miclash_candidate
+
+    [ -f "$release_file" ] && [ -s "$release_file" ] || return 1
+    case "$requested_manager" in apk|opkg) ;; *) return 1 ;; esac
+    printf '%s\n' "$expected_tag" |
+        grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' || return 1
+
+    tag_count="$(exact_value_count "$expected_tag" json_string_values "$release_file" tag_name)" || return 1
+    [ "$tag_count" = 1 ] || return 1
+    draft_count="$(exact_value_count false json_boolean_values "$release_file" draft)" || return 1
+    [ "$draft_count" = 1 ] || return 1
+
+    clean_tag="${expected_tag#v}"
+    if printf '%s\n' "$clean_tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        prerelease_expected=false
     else
-        MICLASH_RELEASE_API="$MICLASH_API"
+        prerelease_expected=true
+    fi
+    prerelease_count="$(exact_value_count "$prerelease_expected" \
+        json_boolean_values "$release_file" prerelease)" || return 1
+    [ "$prerelease_count" = 1 ] || return 1
+
+    if [ "$requested_manager" = apk ]; then
+        package_name="luci-app-miclash-${clean_tag}.apk"
+    else
+        package_name="luci-app-miclash_${clean_tag}_all.ipk"
+    fi
+    checksum_name="${package_name}.sha256"
+    installer_checksum_name="install-miclash.sh.sha256"
+    manifest_name="miclash-release-manifest.json"
+    release_prefix="https://github.com/ang3el7z/luci-app-miclash/releases/download/${expected_tag}/"
+    pending=0
+
+    for asset_name in "$package_name" "$checksum_name" \
+        "$installer_checksum_name" "$manifest_name"; do
+        asset_url="${release_prefix}${asset_name}"
+        name_count="$(exact_value_count "$asset_name" \
+            json_string_values "$release_file" name)" || return 1
+        url_count="$(exact_value_count "$asset_url" \
+            json_string_values "$release_file" browser_download_url)" || return 1
+        if [ "$name_count" -gt 1 ] || [ "$url_count" -gt 1 ]; then
+            return 1
+        elif [ "$name_count" = 0 ] && [ "$url_count" = 0 ]; then
+            pending=1
+        elif [ "$name_count" != 1 ] || [ "$url_count" != 1 ]; then
+            return 1
+        fi
+    done
+
+    [ "$pending" = 0 ] || return 2
+    MICLASH_TAG_NAME="$expected_tag"
+    MICLASH_VER="$clean_tag"
+    if [ "$requested_manager" = apk ]; then
+        MICLASH_APK_URL="${release_prefix}${package_name}"
+        MICLASH_APK_SHA256_URL="${release_prefix}${checksum_name}"
+    else
+        MICLASH_IPK_URL="${release_prefix}${package_name}"
+        MICLASH_IPK_SHA256_URL="${release_prefix}${checksum_name}"
+    fi
+    return 0
+}
+
+fixture_release_file() {
+    fixture_dir="$1"
+    fixture_tag="$2"
+    case "$fixture_tag" in
+        v3.0.0) fixture_name=terminal-release-incomplete.json ;;
+        v2.0.0) fixture_name=terminal-release-ready-opkg.json ;;
+        v1.9.0) fixture_name=terminal-release-ready-apk.json ;;
+        *) fixture_name="terminal-release-${fixture_tag#v}.json" ;;
+    esac
+    printf '%s/%s' "$fixture_dir" "$fixture_name"
+}
+
+fetch_miclash_catalog() {
+    if [ -n "$MICLASH_TEST_FIXTURE_DIR" ]; then
+        MICLASH_CATALOG_FILE="$MICLASH_TEST_FIXTURE_DIR/terminal-releases.json"
+        [ -f "$MICLASH_CATALOG_FILE" ] || return 1
+        return 0
+    fi
+    MICLASH_CATALOG_FILE="$WORK_DIR/miclash-releases.json"
+    TEMP_FILES="$TEMP_FILES $MICLASH_CATALOG_FILE"
+    download_artifact "$MICLASH_RELEASES_API" "$MICLASH_CATALOG_FILE" \
+        "MiClash release catalog"
+}
+
+fetch_miclash_exact_release() {
+    exact_tag="$1"
+    if [ -n "$MICLASH_TEST_FIXTURE_DIR" ]; then
+        MICLASH_FETCHED_FILE="$(fixture_release_file "$MICLASH_TEST_FIXTURE_DIR" "$exact_tag")"
+        [ -f "$MICLASH_FETCHED_FILE" ] || return 1
+        return 0
+    fi
+    MICLASH_FETCHED_FILE="$WORK_DIR/miclash-release-${exact_tag#v}.json"
+    TEMP_FILES="$TEMP_FILES $MICLASH_FETCHED_FILE"
+    download_artifact "${MICLASH_TAG_API}/${exact_tag}" "$MICLASH_FETCHED_FILE" \
+        "MiClash $exact_tag release metadata"
+}
+
+stable_catalog_tags_newest_first() {
+    json_string_values "$MICLASH_CATALOG_FILE" tag_name |
+        grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+        awk '!seen[$0]++'
+}
+
+select_terminal_release() {
+    if [ -n "$MICLASH_TARGET_TAG" ]; then
+        printf '%s\n' "$MICLASH_TARGET_TAG" |
+            grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(([.-][0-9A-Za-z][0-9A-Za-z.-]*)|(_rc[0-9]+))?$' \
+            || die "Invalid requested MiClash tag"
+        fetch_miclash_exact_release "$MICLASH_TARGET_TAG" ||
+            die "Requested MiClash release was not found: $MICLASH_TARGET_TAG"
+        if ! validate_miclash_release_file "$MICLASH_FETCHED_FILE" \
+            "$PKG_MGR" "$MICLASH_TARGET_TAG"; then
+            die "Requested MiClash release is not ready: $MICLASH_TARGET_TAG"
+        fi
+        return 0
     fi
 
-    release_file="/tmp/miclash-release-$$.json"
-    TEMP_FILES="$TEMP_FILES $release_file"
-    download_artifact "$MICLASH_RELEASE_API" "$release_file" "MiClash release metadata"
-    RELEASE_JSON=$(cat "$release_file" 2>/dev/null) || die "Failed to read MiClash release data"
-    [ -n "$RELEASE_JSON" ] || die "MiClash release API returned empty response"
+    fetch_miclash_catalog || die "Failed to fetch MiClash release catalog"
+    first_tag=""
+    inspected=0
+    for tag in $(stable_catalog_tags_newest_first); do
+        [ "$inspected" -lt 20 ] || break
+        inspected=$((inspected + 1))
+        [ -n "$first_tag" ] || first_tag="$tag"
+        fetch_miclash_exact_release "$tag" || die "Invalid MiClash release catalog entry: $tag"
+        if validate_miclash_release_file "$MICLASH_FETCHED_FILE" "$PKG_MGR" "$tag"; then
+            if [ "$tag" != "$first_tag" ] && [ -z "$MICLASH_TEST_FIXTURE_DIR" ]; then
+                warn "Newest release $first_tag is incomplete; installing ready release $tag"
+            fi
+            return 0
+        else
+            validation_result=$?
+            [ "$validation_result" = 2 ] || die "Invalid MiClash release metadata: $tag"
+        fi
+    done
+    die "No ready stable MiClash release found in the newest 20 releases"
+}
 
-    MICLASH_TAG_NAME=$(printf '%s' "$RELEASE_JSON" \
-        | grep '"tag_name"' | head -1 \
-        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    [ -n "$MICLASH_TAG_NAME" ] || die "Failed to parse MiClash version"
-    MICLASH_VER=$(normalize_version "$MICLASH_TAG_NAME")
-    [ -n "$MICLASH_VER" ] || die "Failed to normalize MiClash version"
-
-    MICLASH_APK_URL=$(printf '%s' "$RELEASE_JSON" \
-        | grep '"browser_download_url"' \
-        | grep 'luci-app-miclash-.*\.apk"' | head -1 \
-        | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-
-    MICLASH_IPK_URL=$(printf '%s' "$RELEASE_JSON" \
-        | grep '"browser_download_url"' \
-        | grep 'luci-app-miclash_.*\.ipk"' | head -1 \
-        | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-
-    info "Latest MiClash: ${B}${MICLASH_TAG_NAME}${N}"
+fetch_miclash_release() {
+    log "Selecting a ready MiClash release..."
+    select_terminal_release
     MICLASH_RELEASE_NORM=$(normalize_version "$MICLASH_VER")
-
-    if [ "$PKG_MGR" = "apk" ]; then
-        [ -n "$MICLASH_APK_URL" ] || die "No MiClash .apk asset found in latest release"
+    info "Selected MiClash: ${B}${MICLASH_TAG_NAME}${N}"
+    if [ "$PKG_MGR" = apk ]; then
         info "Package asset: ${B}${MICLASH_APK_URL##*/}${N}"
     else
-        [ -n "$MICLASH_IPK_URL" ] || die "No MiClash .ipk asset found in latest release"
         info "Package asset: ${B}${MICLASH_IPK_URL##*/}${N}"
     fi
 }
 
 detect_installed_miclash() {
-    MICLASH_INSTALLED_VER=""
-
-    if [ "$PKG_MGR" = "apk" ]; then
-        if apk info -e luci-app-miclash >/dev/null 2>&1; then
-            MICLASH_INSTALLED_VER=$(apk info -v luci-app-miclash 2>/dev/null \
-                | sed -n '1s/^luci-app-miclash-//p')
-        fi
-    else
-        MICLASH_INSTALLED_VER=$(opkg list-installed luci-app-miclash 2>/dev/null | awk 'NR==1 {print $3}')
-    fi
+    MICLASH_INSTALLED_VER=$(installed_miclash_version "$PKG_MGR")
 
     MICLASH_INSTALLED_NORM=$(normalize_version "$MICLASH_INSTALLED_VER")
 
@@ -398,6 +892,134 @@ remove_miclash() {
     fi
 }
 
+repair_installed_prerm_upgrade_classification() {
+    path="$1"
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    [ ! -L "$path" ] && [ -f "$path" ] || return 1
+    [ "$(stat -c '%u:%a:%h' "$path" 2>/dev/null)" = '0:755:1' ] || return 1
+    [ "$(readlink -f "$path" 2>/dev/null)" = "$path" ] || return 1
+    size="$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')" || return 1
+    case "$size" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$size" -le 8192 ] || return 1
+    grep -Fq '/usr/share/miclash/package-remove' "$path" || return 0
+    if grep -Fq 'case "${2:-${1:-}}" in' "$path" || {
+        grep -Fq 'PACKAGE_ACTION="${2:-${1:-}}"' "$path" &&
+            grep -Fq 'case "$PACKAGE_ACTION" in' "$path"
+    }; then
+        ! grep -Fq 'case "$1" in' "$path"
+        return
+    fi
+    [ "$(grep -Fc 'case "$1" in' "$path")" = 1 ] || return 1
+
+    tmp="$path.upgrade-compat.$$"
+    [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 1
+    (
+        umask 077
+        set -C
+        : > "$tmp"
+    ) || return 1
+    if ! sed 's/case "$1" in/case "${2:-${1:-}}" in/' "$path" > "$tmp" ||
+       ! chmod 0755 "$tmp" ||
+       ! grep -Fq 'case "${2:-${1:-}}" in' "$tmp" ||
+       grep -Fq 'case "$1" in' "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -f "$tmp" "$path" || {
+        rm -f "$tmp"
+        return 1
+    }
+    [ ! -L "$path" ] && [ -f "$path" ] &&
+        [ "$(stat -c '%u:%a:%h' "$path" 2>/dev/null)" = '0:755:1' ]
+}
+
+repair_installed_miclashd_self_update_stop() {
+    path="$1"
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    [ ! -L "$path" ] && [ -f "$path" ] || return 1
+    [ "$(stat -c '%u:%a:%h' "$path" 2>/dev/null)" = '0:755:1' ] || return 1
+    [ "$(readlink -f "$path" 2>/dev/null)" = "$path" ] || return 1
+    size="$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')" || return 1
+    case "$size" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$size" -le 8192 ] || return 1
+    if grep -Fq 'app_update_handoff_active()' "$path"; then
+        [ "$(grep -Fc 'app_update_handoff_active()' "$path")" = 1 ] &&
+            grep -Fq 'APP_UPDATE_MARKER="/tmp/miclash-package-no-autostart-autoupdate"' "$path" &&
+            grep -Fq 'case "${action:-}" in' "$path" &&
+            grep -Fq 'start|stop)' "$path" &&
+            grep -Fq 'operation_journal="/tmp/miclash/operations/$operation_id.json"' "$path" &&
+            grep -Fq 'jsonfilter -e' "$path" &&
+            grep -Fq '@.miclashd.instances.instance1.running' "$path" &&
+            sh -n "$path"
+        return
+    fi
+    [ "$(grep -Fc 'USE_PROCD=1' "$path")" = 1 ] || return 1
+    grep -Fq 'start_service() {' "$path" || return 1
+
+    tmp="$path.self-update-stop.$$"
+    [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 1
+    (
+        umask 077
+        set -C
+        : > "$tmp"
+    ) || return 1
+    if ! awk '
+        {
+            print
+            if ($0 == "USE_PROCD=1") {
+                print "APP_UPDATE_MARKER=\"/tmp/miclash-package-no-autostart-autoupdate\""
+                print ""
+                print "app_update_handoff_active() {"
+                print "\t[ ! -L \"$APP_UPDATE_MARKER\" ] && [ -f \"$APP_UPDATE_MARKER\" ] || return 1"
+                print "\t[ \"$(stat -c \"%u:%a:%h\" \"$APP_UPDATE_MARKER\" 2>/dev/null)\" = \"0:600:1\" ] || return 1"
+                print "\t[ \"$(readlink -f \"$APP_UPDATE_MARKER\" 2>/dev/null)\" = \"$APP_UPDATE_MARKER\" ] || return 1"
+                print "\t[ \"$(wc -l < \"$APP_UPDATE_MARKER\" 2>/dev/null | tr -d \"[:space:]\")\" = 1 ] || return 1"
+                print "\tstatus_file=\"$(cat \"$APP_UPDATE_MARKER\" 2>/dev/null)\" || return 1"
+                print "\tcase \"$status_file\" in"
+                print "\t\t/tmp/miclash/updates/handoff-*.status) ;;"
+                print "\t\t*) return 1 ;;"
+                print "\tesac"
+                print "\t[ ! -L \"$status_file\" ] && [ -f \"$status_file\" ] || return 1"
+                print "\t[ \"$(stat -c \"%u:%a:%h\" \"$status_file\" 2>/dev/null)\" = \"0:600:1\" ] || return 1"
+                print "\t[ \"$(readlink -f \"$status_file\" 2>/dev/null)\" = \"$status_file\" ] || return 1"
+                print "\toperation_id=\"${status_file##*/handoff-}\""
+                print "\toperation_id=\"${operation_id%.status}\""
+                print "\tprintf \"%s\\n\" \"$operation_id\" |"
+                print "\t\tgrep -Eq \"^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$\" || return 1"
+                print "\toperation_journal=\"/tmp/miclash/operations/$operation_id.json\""
+                print "\t[ ! -L \"$operation_journal\" ] && [ -f \"$operation_journal\" ] || return 1"
+                print "\t[ \"$(stat -c \"%u:%a:%h\" \"$operation_journal\" 2>/dev/null)\" = \"0:600:1\" ] || return 1"
+                print "\t[ \"$(readlink -f \"$operation_journal\" 2>/dev/null)\" = \"$operation_journal\" ] || return 1"
+                print "\tgrep -Eq \"\\\"state\\\"[[:space:]]*:[[:space:]]*\\\"(queued|running)\\\"\" \\"
+                print "\t\t\"$operation_journal\" || return 1"
+                print "\t[ \"$(ubus call service list \"{\\\"name\\\":\\\"miclashd\\\"}\" 2>/dev/null |"
+                print "\t\tjsonfilter -e \"@.miclashd.instances.instance1.running\" 2>/dev/null)\" = true ]"
+                print "}"
+                print ""
+                print "case \"${action:-}\" in"
+                print "\tstart|stop)"
+                print "\t\tapp_update_handoff_active && USE_PROCD="
+                print "\t\t;;"
+                print "esac"
+            }
+        }
+    ' "$path" > "$tmp" ||
+       ! chmod 0755 "$tmp" ||
+       ! sh -n "$tmp" ||
+       [ "$(grep -Fc 'app_update_handoff_active()' "$tmp")" != 1 ] ||
+       ! grep -Fq 'start|stop)' "$tmp" ||
+       ! grep -Fq 'operation_journal="/tmp/miclash/operations/$operation_id.json"' "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -f "$tmp" "$path" || {
+        rm -f "$tmp"
+        return 1
+    }
+    [ ! -L "$path" ] && [ -f "$path" ] &&
+        [ "$(stat -c '%u:%a:%h' "$path" 2>/dev/null)" = '0:755:1' ]
+}
+
 install_miclash() {
     case "$INSTALL_ACTION" in
         update)    log "Updating MiClash to v${MICLASH_VER}..." ;;
@@ -405,37 +1027,42 @@ install_miclash() {
         *)         log "Installing MiClash v${MICLASH_VER}..." ;;
     esac
 
-    PACKAGE_MARKERS_ACTIVE=1
-    touch "$NO_AUTOSTART_CLASH_MARKER" "$NO_AUTOSTART_AUTOUPDATE_MARKER" \
+    if [ "$PKG_MGR" = "opkg" ]; then
+        repair_installed_prerm_upgrade_classification \
+            /usr/lib/opkg/info/luci-app-miclash.prerm-pkg \
+            || die "Failed to prepare the installed package upgrade hook"
+    fi
+    if [ -n "$STATUS_FILE" ]; then
+        repair_installed_miclashd_self_update_stop /etc/init.d/miclashd \
+            || die "Failed to prepare the installed backend upgrade hook"
+    fi
+    create_marker "$NO_AUTOSTART_CLASH_MARKER" \
         || die "Failed to prepare package service state"
+    if [ -n "$STATUS_FILE" ]; then
+        create_app_update_marker \
+            || die "Failed to prepare app update service state"
+    fi
     if [ "$INSTALL_ACTION" = "reinstall" ]; then
-        touch "$HARD_REINSTALL_MARKER" || die "Failed to prepare hard reinstall"
+        create_marker "$HARD_REINSTALL_MARKER" || die "Failed to prepare hard reinstall"
     fi
 
     if [ "$PKG_MGR" = "apk" ]; then
-        PKG_FILE="/tmp/luci-app-miclash.apk"
+        PKG_FILE="$WORK_DIR/${MICLASH_APK_URL##*/}"
         TEMP_FILES="$TEMP_FILES $PKG_FILE"
         write_status running download "Downloading MiClash package"
         download_artifact "$MICLASH_APK_URL" "$PKG_FILE" "MiClash .apk"
+        verify_download_checksum "$PKG_FILE" "$MICLASH_APK_SHA256_URL" "${MICLASH_APK_URL##*/}"
         write_status running install "Installing MiClash package"
-        if [ "$INSTALL_ACTION" = "reinstall" ]; then
-            apk add "$PKG_FILE" --allow-untrusted --force-overwrite \
-                || die "Failed to reinstall MiClash .apk"
-        else
-            apk add "$PKG_FILE" --allow-untrusted || die "Failed to install MiClash .apk"
-        fi
+        install_miclash_package
         rm -f "$PKG_FILE"
     else
-        PKG_FILE="/tmp/luci-app-miclash.ipk"
+        PKG_FILE="$WORK_DIR/${MICLASH_IPK_URL##*/}"
         TEMP_FILES="$TEMP_FILES $PKG_FILE"
         write_status running download "Downloading MiClash package"
         download_artifact "$MICLASH_IPK_URL" "$PKG_FILE" "MiClash .ipk"
+        verify_download_checksum "$PKG_FILE" "$MICLASH_IPK_SHA256_URL" "${MICLASH_IPK_URL##*/}"
         write_status running install "Installing MiClash package"
-        if [ "$INSTALL_ACTION" = "reinstall" ]; then
-            opkg install --force-reinstall "$PKG_FILE" || die "Failed to reinstall MiClash .ipk"
-        else
-            opkg install "$PKG_FILE" || die "Failed to install MiClash .ipk"
-        fi
+        install_miclash_package
         rm -f "$PKG_FILE"
     fi
 
@@ -444,8 +1071,87 @@ install_miclash() {
     fi
 }
 
+run_clean_install_mode() {
+    MICLASH_TARGET_TAG=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --target-tag)
+                [ "$#" -gt 1 ] || die "missing value for --target-tag"
+                MICLASH_TARGET_TAG="$2"
+                shift 2
+                ;;
+            *) die "unknown clean-install argument: $1" ;;
+        esac
+    done
+    printf '%s\n' "$MICLASH_TARGET_TAG" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' ||
+        die "clean v0.9 upgrade requires a stable v2 target"
+    detect_openwrt
+    detect_arch
+    detect_installed_miclash
+    [ -z "$MICLASH_INSTALLED_VER" ] || die "clean-install requires the old package to be removed first"
+    prepare_work_dir
+    ensure_curl
+    fetch_miclash_release
+    INSTALL_ACTION="install"
+    pkg_update
+    install_deps
+    install_miclash
+    install_mihomo
+    echo "MiClash package and fresh Mihomo core installed; services remain stopped"
+}
+
+operation_terminal_for_status() {
+    terminal_status_file="$1"
+    case "$terminal_status_file" in
+        /tmp/miclash/updates/handoff-*.status) ;;
+        *) return 1 ;;
+    esac
+    operation_id="${terminal_status_file##*/handoff-}"
+    operation_id="${operation_id%.status}"
+    printf '%s\n' "$operation_id" |
+        grep -Eq '^[0-9]{13}-[0-9]{8}-[0-9a-f]{16}$' || return 1
+
+    operation_journal="/tmp/miclash/operations/$operation_id.json"
+    [ ! -L "$operation_journal" ] && [ -f "$operation_journal" ] || return 1
+    [ "$(stat -c '%u:%a:%h' "$operation_journal" 2>/dev/null)" = '0:600:1' ] ||
+        return 1
+    operation_size="$(wc -c < "$operation_journal" 2>/dev/null |
+        tr -d '[:space:]')" || return 1
+    case "$operation_size" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$operation_size" -le 65536 ] || return 1
+    grep -Eq '"state"[[:space:]]*:[[:space:]]*"(success|failure|interrupted)"' \
+        "$operation_journal"
+}
+
+schedule_backend_reload() {
+    [ -x /etc/init.d/miclashd ] || return 0
+    (
+        waited=0
+        while [ -n "$STATUS_FILE" ] && [ -e "$STATUS_FILE" ] &&
+            [ "$waited" -lt "$MAX_BACKEND_RELOAD_WAIT" ]; do
+            /bin/busybox sleep 1
+            waited=$((waited + 1))
+        done
+        # Handoff consumption precedes the final operation journal write.
+        # Wait for that durable terminal state so the replacement daemon does
+        # not misclassify a successful self-update as interrupted.
+        waited=0
+        while [ -n "$STATUS_FILE" ] &&
+            ! operation_terminal_for_status "$STATUS_FILE" &&
+            [ "$waited" -lt "$MAX_BACKEND_RELOAD_WAIT" ]; do
+            /bin/busybox sleep 1
+            waited=$((waited + 1))
+        done
+        # Give the terminal operation reply a short delivery window before
+        # replacing the daemon process.
+        /bin/busybox sleep 5
+        /etc/init.d/miclashd restart
+    ) >/dev/null 2>&1 &
+}
+
 run_app_mode() {
     INSTALL_ACTION="update"
+    STATUS_SERVICE_WAS_RUNNING=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -469,6 +1175,11 @@ run_app_mode() {
                 CURRENT_TOKEN="$(status_text "$2")"
                 shift 2
                 ;;
+            --service-was-running)
+                [ $# -gt 1 ] || die "missing value for --service-was-running"
+                STATUS_SERVICE_WAS_RUNNING="$2"
+                shift 2
+                ;;
             *)
                 die "unknown app argument: $1"
                 ;;
@@ -476,46 +1187,180 @@ run_app_mode() {
     done
 
     [ -n "$MICLASH_TARGET_TAG" ] || die "missing --target-tag"
+    STATUS_TARGET_VERSION="$MICLASH_TARGET_TAG"
     case "$INSTALL_ACTION" in
         install|update|reinstall) ;;
         *) die "unsupported app mode: $INSTALL_ACTION" ;;
     esac
 
-    write_status running queued "Starting MiClash package update"
+    validate_status_authority || die "invalid update status authority"
+    prepare_work_dir
+    write_status running queued "Starting MiClash package update" || die "failed to write update status"
     detect_openwrt
     ensure_curl
     fetch_miclash_release
     detect_installed_miclash
+    reject_unauthorized_cross_major
     pkg_update
     install_deps
     install_miclash
-    write_status success done "MiClash package installed; services remain stopped"
-    echo "MiClash package installed; services remain stopped"
+    write_status success done "MiClash package installed; backend reload scheduled" || {
+        printf '%s\n' "MiClash package installed, but final status handoff failed" >&2
+        exit 1
+    }
+    schedule_backend_reload || warn "Failed to schedule MiClash backend reload"
+    echo "MiClash package installed; backend reload scheduled"
+}
+
+run_status_protocol_test() {
+    MICLASH_TARGET_TAG=""
+    STATUS_FILE=""
+    CURRENT_TOKEN=""
+    STATUS_SERVICE_WAS_RUNNING=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --target-tag) [ $# -gt 1 ] || return 64; MICLASH_TARGET_TAG="$2"; shift 2 ;;
+            --status-file) [ $# -gt 1 ] || return 64; STATUS_FILE="$2"; shift 2 ;;
+            --token) [ $# -gt 1 ] || return 64; CURRENT_TOKEN="$2"; shift 2 ;;
+            --service-was-running)
+                [ $# -gt 1 ] || return 64
+                STATUS_SERVICE_WAS_RUNNING="$2"
+                shift 2
+                ;;
+            *) return 64 ;;
+        esac
+    done
+    STATUS_TARGET_VERSION="$MICLASH_TARGET_TAG"
+    validate_status_authority || return 65
+    prepare_work_dir
+    write_status success done || return 70
+}
+
+run_installer_security_test() {
+    STATUS_FILE=""
+    prepare_work_dir
+    validate_work_dir || return 65
+    test_marker="/tmp/miclash-package-no-autostart-clash"
+    [ ! -e "$test_marker" ] && [ ! -L "$test_marker" ] || return 66
+    ln -s /etc/passwd "$test_marker" || return 67
+    if create_marker "$test_marker"; then return 68; fi
+    [ -L "$test_marker" ] || return 69
+    rm -f "$test_marker" || return 70
+    create_marker "$test_marker" || return 71
+    marker_owned "$test_marker" || return 72
+
+    operation="0000000000001-00000001-0123456789abcdef"
+    status_root="/tmp/miclash/updates"
+    operation_root="/tmp/miclash/operations"
+    STATUS_FILE="$status_root/handoff-$operation.status"
+    STATUS_TARGET_VERSION="v9.9.9"
+    STATUS_SERVICE_WAS_RUNNING=1
+    CURRENT_TOKEN="0123456789abcdef0123456789abcdef"
+    mkdir -p "$status_root" "$operation_root" || return 73
+    chmod 0700 /tmp/miclash "$status_root" "$operation_root" || return 74
+    write_status running queued "security test" || return 75
+    : > "$NO_AUTOSTART_AUTOUPDATE_MARKER" || return 76
+    chmod 0600 "$NO_AUTOSTART_AUTOUPDATE_MARKER" || return 77
+    create_app_update_marker || return 78
+    [ "$(cat "$NO_AUTOSTART_AUTOUPDATE_MARKER" 2>/dev/null)" = "$STATUS_FILE" ] ||
+        return 79
+    printf '%s\n' '{"state":"running"}' > "$operation_root/$operation.json" ||
+        return 80
+    chmod 0600 "$operation_root/$operation.json" || return 81
+    if create_app_update_marker; then return 82; fi
+    [ "$(cat "$NO_AUTOSTART_AUTOUPDATE_MARKER" 2>/dev/null)" = "$STATUS_FILE" ] ||
+        return 83
+    rm -f "$NO_AUTOSTART_AUTOUPDATE_MARKER" "$STATUS_FILE" \
+        "$operation_root/$operation.json" || return 84
+    return 0
+}
+
+run_ready_release_selection_test() {
+    PKG_MGR=""
+    MICLASH_TEST_FIXTURE_DIR=""
+    MICLASH_TARGET_TAG=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --manager)
+                [ $# -gt 1 ] || return 64
+                PKG_MGR="$2"
+                shift 2
+                ;;
+            --fixture-dir)
+                [ $# -gt 1 ] || return 64
+                MICLASH_TEST_FIXTURE_DIR="$2"
+                shift 2
+                ;;
+            --target-tag)
+                [ $# -gt 1 ] || return 64
+                MICLASH_TARGET_TAG="$2"
+                shift 2
+                ;;
+            *) return 64 ;;
+        esac
+    done
+    case "$PKG_MGR" in apk|opkg) ;; *) return 64 ;; esac
+    [ -n "$MICLASH_TEST_FIXTURE_DIR" ] &&
+        [ -d "$MICLASH_TEST_FIXTURE_DIR" ] || return 65
+    select_terminal_release
+    printf '%s\n' "$MICLASH_TAG_NAME"
+}
+
+resolve_mihomo_release() {
+    release_file="$1"
+    architecture="$2"
+    ucode_bin="${UCODE_BIN:-ucode}"
+    ucode_modules="${UCODE_MODULES:-/usr/lib/ucode/*.so}"
+    command -v "$ucode_bin" >/dev/null 2>&1 || return 127
+    "$ucode_bin" -L "$ucode_modules" -e '
+let release;
+try { release = json(require("fs").readfile(ARGV[0])); } catch (error) { exit(1); }
+let tag = release?.tag_name;
+if (type(tag) != "string" || !match(tag, /^v[0-9][0-9A-Za-z.-]*$/) ||
+    type(release.assets) != "array") exit(1);
+let name = "mihomo-linux-" + ARGV[1] + "-" + tag + ".gz";
+let expected = "https://github.com/MetaCubeX/mihomo/releases/download/" + tag + "/" + name;
+let binary = null, digest = null;
+for (let asset in release.assets) {
+	if (asset?.name == name) {
+		if (binary != null || asset.browser_download_url != expected) exit(1);
+		binary = asset.browser_download_url;
+		if (asset.digest != null) {
+			if (type(asset.digest) != "string" ||
+			    match(asset.digest, /^sha256:[0-9A-Fa-f]{64}$/) == null) exit(1);
+			digest = asset.digest;
+		}
+	}
+}
+if (binary == null || digest == null) exit(1);
+print(tag, "\n", binary, "\n", digest, "\n");
+' "$release_file" "$architecture"
 }
 
 install_mihomo() {
     log "Fetching latest Mihomo release..."
-    mihomo_release_file="/tmp/mihomo-release-$$.json"
-    TEMP_FILES="$TEMP_FILES $mihomo_release_file /tmp/clash.gz"
+    mihomo_release_file="$WORK_DIR/mihomo-release.json"
+    mihomo_archive="$WORK_DIR/clash.gz"
+    TEMP_FILES="$TEMP_FILES $mihomo_release_file $mihomo_archive"
     download_artifact "$MIHOMO_API" "$mihomo_release_file" "Mihomo release metadata"
     MIHOMO_JSON=$(cat "$mihomo_release_file" 2>/dev/null) || die "Failed to read Mihomo release data"
     [ -n "$MIHOMO_JSON" ] || die "Mihomo release API returned empty response"
 
-    MIHOMO_VER=$(printf '%s' "$MIHOMO_JSON" \
-        | grep '"tag_name"' | head -1 \
-        | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-    [ -n "$MIHOMO_VER" ] || die "Failed to parse Mihomo version"
-
-    MIHOMO_URL="${MIHOMO_BASE}/download/${MIHOMO_VER}/mihomo-linux-${MIHOMO_ARCH}-${MIHOMO_VER}.gz"
+    mihomo_metadata=$(resolve_mihomo_release "$mihomo_release_file" "$MIHOMO_ARCH") \
+        || die "Failed to resolve a verified Mihomo release asset"
+    MIHOMO_VER=$(printf '%s\n' "$mihomo_metadata" | sed -n '1p')
+    MIHOMO_URL=$(printf '%s\n' "$mihomo_metadata" | sed -n '2p')
+    MIHOMO_DIGEST=$(printf '%s\n' "$mihomo_metadata" | sed -n '3p')
     info "Latest Mihomo: ${B}${MIHOMO_VER}${N}"
     info "Kernel URL: ${MIHOMO_URL}"
 
-    download_artifact "$MIHOMO_URL" /tmp/clash.gz "Mihomo kernel"
+    download_artifact "$MIHOMO_URL" "$mihomo_archive" "Mihomo kernel"
+    verify_download_digest "$mihomo_archive" "$MIHOMO_DIGEST" "${MIHOMO_URL##*/}"
 
     mkdir -p "$(dirname "$CLASH_BIN")"
-    gunzip -c /tmp/clash.gz > "$CLASH_BIN" || die "Failed to unpack Mihomo kernel"
+    gunzip -c "$mihomo_archive" > "$CLASH_BIN" || die "Failed to unpack Mihomo kernel"
     chmod +x "$CLASH_BIN" || die "Failed to chmod Mihomo kernel"
-    rm -f /tmp/clash.gz
+    rm -f "$mihomo_archive"
     rm -f /opt/clash/bin/meta-backup 2>/dev/null
 
     VERSION_OUT=$("$CLASH_BIN" -v 2>/dev/null || true)
@@ -526,16 +1371,74 @@ install_mihomo() {
     fi
 }
 
+clash_is_running() {
+    [ -x "$CLASH_INIT" ] || return 1
+    "$CLASH_INIT" running >/dev/null 2>&1 || pidof clash >/dev/null 2>&1
+}
+
+marker_tracked() {
+    tracked_marker="$1"
+    for owned_marker in $OWNED_MARKERS; do
+        [ "$owned_marker" = "$tracked_marker" ] && return 0
+    done
+    return 1
+}
+
+clear_clash_no_autostart_marker() {
+    [ -e "$NO_AUTOSTART_CLASH_MARKER" ] || [ -L "$NO_AUTOSTART_CLASH_MARKER" ] || return 0
+    marker_tracked "$NO_AUTOSTART_CLASH_MARKER" \
+        || die "Refusing clash no-autostart marker from another transaction"
+    marker_owned "$NO_AUTOSTART_CLASH_MARKER" \
+        || die "Refusing untrusted clash no-autostart marker"
+    rm -f "$NO_AUTOSTART_CLASH_MARKER" \
+        || die "Failed to clear clash no-autostart marker"
+}
+
+restore_clash_intent() {
+    [ -x "$CLASH_INIT" ] || die "clash service is unavailable after installation"
+
+    if [ "$CLASH_WAS_ENABLED" = "1" ] || [ "$CLASH_WAS_RUNNING" = "1" ]; then
+        log "Restoring clash service enable state..."
+        "$CLASH_INIT" enable || die "Failed to enable clash service"
+        "$CLASH_INIT" enabled >/dev/null 2>&1 \
+            || die "clash service enable state was not restored"
+    else
+        "$CLASH_INIT" disable || die "Failed to disable clash service"
+        if "$CLASH_INIT" enabled >/dev/null 2>&1; then
+            die "clash service disable state was not restored"
+        fi
+    fi
+
+    if [ "$CLASH_WAS_RUNNING" != "1" ]; then
+        if clash_is_running; then
+            "$CLASH_INIT" stop || die "Failed to preserve stopped clash state"
+        fi
+        clash_is_running && die "clash service unexpectedly remained running"
+        return 0
+    fi
+
+    log "Restarting clash service after Mihomo installation..."
+    "$CLASH_INIT" start || die "Failed to restart clash service"
+    waited=0
+    while ! clash_is_running && [ "$waited" -lt "$CLASH_RESTORE_WAIT_SECONDS" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    clash_is_running || die "clash service did not become running after installation"
+}
+
 main() {
     sep
     printf "  %sMiClash Auto-Installer%s\n" "$B" "$N"
     sep
 
     detect_openwrt
+    prepare_work_dir
     ensure_curl
     detect_arch
     fetch_miclash_release
     detect_installed_miclash
+    reject_unauthorized_cross_major
     choose_install_action
     sep
 
@@ -553,9 +1456,14 @@ main() {
     sep
 
     CLASH_WAS_ENABLED=0
-    if [ -x /etc/init.d/clash ] && /etc/init.d/clash enabled 2>/dev/null; then
+    if [ -x "$CLASH_INIT" ] && "$CLASH_INIT" enabled 2>/dev/null; then
         CLASH_WAS_ENABLED=1
         info "clash service was enabled before update"
+    fi
+    CLASH_WAS_RUNNING=0
+    if clash_is_running; then
+        CLASH_WAS_RUNNING=1
+        info "clash service was running before update"
     fi
 
     if [ "$INSTALL_ACTION" = "skip" ]; then
@@ -564,18 +1472,17 @@ main() {
         install_miclash
     fi
 
-    if [ "$CLASH_WAS_ENABLED" = "1" ] && [ -x /etc/init.d/clash ]; then
-        log "Restoring clash service enable state..."
-        /etc/init.d/clash enable || warn "Failed to re-enable clash service"
-    fi
     sep
 
-    if [ -x /etc/init.d/clash ] && pidof clash >/dev/null 2>&1; then
+    if clash_is_running; then
         warn "Stopping running clash service before Mihomo install..."
-        /etc/init.d/clash stop || warn "Failed to stop clash before Mihomo update"
+        "$CLASH_INIT" stop || die "Failed to stop clash before Mihomo update"
+        clash_is_running && die "clash service remained running before Mihomo update"
     fi
 
     install_mihomo
+    clear_clash_no_autostart_marker
+    restore_clash_intent
     sep
 
     log "Installation complete"
@@ -590,9 +1497,21 @@ main() {
     sep
 }
 
-if [ "${1:-}" = "app" ]; then
+if [ "${1:-}" = "status-protocol-test" ]; then
+    shift
+    run_status_protocol_test "$@"
+elif [ "${1:-}" = "installer-security-test" ]; then
+    shift
+    run_installer_security_test "$@"
+elif [ "${1:-}" = "ready-release-selection-test" ]; then
+    shift
+    run_ready_release_selection_test "$@"
+elif [ "${1:-}" = "app" ]; then
     shift
     run_app_mode "$@"
+elif [ "${1:-}" = "clean-install" ]; then
+    shift
+    run_clean_install_mode "$@"
 else
     main "$@"
 fi
