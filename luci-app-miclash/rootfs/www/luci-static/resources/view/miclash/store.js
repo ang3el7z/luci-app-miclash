@@ -145,20 +145,17 @@ async function swapConfigProfiles(name) {
 	if (profile === MAIN_CONFIG_NAME) return true;
 	return withApi(async (api) => waitOperation(api, await api.config_swap(profile, 'luci')));
 }
-async function writeTextFile(path, content) {
-	return writeConfigFileByName(String(path || '').split('/').pop(), content);
-}
-async function ensureConfigProfilesReady(seedMainContent) {
+async function listConfigProfiles() {
 	return withApi(async (api) => {
 		const listed = await api.config_list();
-		const names = new Set((listed?.profiles || []).map((item) => typeof item === 'string' ? item : item?.profile));
-		for (const profile of CONFIG_PROFILES) {
-			if (names.has(profile.name)) continue;
-			const seed = String(seedMainContent || '').trimEnd() + '\n';
-			await waitOperation(api, await api.config_apply(profile.name, seed, 'luci'));
-		}
-		return true;
+		const names = new Set((Array.isArray(listed?.profiles) ? listed.profiles : [])
+			.map((item) => typeof item === 'string' ? item : item?.profile));
+		return CONFIG_PROFILES.filter((item) =>
+			item.name === MAIN_CONFIG_NAME || names.has(item.name));
 	});
+}
+async function writeTextFile(path, content) {
+	return writeConfigFileByName(String(path || '').split('/').pop(), content);
 }
 async function readSubscriptionUrl(configName) {
 	const profile = normalizeConfigProfileName(configName || MAIN_CONFIG_NAME);
@@ -175,7 +172,8 @@ return L.Class.extend({
 	normalizeConfigProfileName, getConfigLabel, getConfigPathByName,
 	setFileMode, pathExists, readLargeTextFile, writeTextFile,
 	parseSettingsToMap, mapToSettingsContent, readSettingsMap, writeSettingsMap,
-	readConfigFileByName, writeConfigFileByName, swapConfigProfiles, ensureConfigProfilesReady,
+	readConfigFileByName, writeConfigFileByName, swapConfigProfiles,
+	listConfigProfiles,
 	readSubscriptionUrl, saveSubscriptionUrl, getSubscriptionKeyForConfig,
 	selectActiveOperation
 });

@@ -1441,6 +1441,41 @@
 .sbox-diagnostic-mode-card .cbi-button {
 	margin-top: auto;
 }
+.sbox-report-progress {
+	position: relative;
+	min-height: 38px;
+	margin-top: 12px;
+	overflow: hidden;
+	border: 1px solid var(--sbox-border);
+	border-radius: 8px;
+	background: var(--sbox-panel-soft);
+	color: var(--sbox-text);
+	isolation: isolate;
+}
+.sbox-report-progress[hidden] {
+	display: none;
+}
+.sbox-report-progress-fill {
+	position: absolute;
+	inset: 0 auto 0 0;
+	z-index: 0;
+	width: 0;
+	background: var(--sbox-accent);
+	opacity: .28;
+	transition: width .28s ease;
+}
+.sbox-report-progress-label {
+	position: relative;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 38px;
+	padding: 0 10px;
+	text-align: center;
+	font-weight: 700;
+	overflow-wrap: anywhere;
+}
 .sbox-report-confirmation {
 	max-width: min(560px, 92vw);
 }

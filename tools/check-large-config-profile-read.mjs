@@ -21,7 +21,7 @@ function blockBetween(startNeedle, endNeedle, source = store) {
 }
 
 const readConfigBlock = blockBetween('async function readConfigFileByName', 'async function writeConfigFileByName');
-const ensureProfilesBlock = blockBetween('async function ensureConfigProfilesReady', 'async function readSubscriptionUrl');
+const profileInventoryBlock = blockBetween('async function listConfigProfiles', 'async function readSubscriptionUrl');
 
 check(store.includes('async function readLargeTextFile(') &&
 	store.includes('api.config_read(profile)') && !store.includes("'require fs'"),
@@ -33,10 +33,11 @@ check(readConfigBlock.includes('api.config_read(') && !readConfigBlock.includes(
 check(store.includes('async function pathExists(') && store.includes('api.config_list()'),
 	'Store must check profile existence through the typed config inventory.');
 
-check(!ensureProfilesBlock.includes('fs.') && ensureProfilesBlock.includes('api.config_list()') &&
-	!ensureProfilesBlock.includes('api.config_read(') &&
-	ensureProfilesBlock.includes('names.has(profile.name)'),
-	'ensureConfigProfilesReady must trust typed inventory and seed only missing files without rereading content.');
+check(!store.includes('ensureConfigProfilesReady'),
+	'Package-owned secondary profiles must not be synthesized by browser hydration.');
+check(profileInventoryBlock.includes('api.config_list()') &&
+	profileInventoryBlock.includes('CONFIG_PROFILES.filter('),
+	'Profile selector inventory must trust typed config_list without direct filesystem access.');
 
 check(!acl.includes('"file"') && acl.includes('"config_read"') && acl.includes('"config_apply"'),
 	'ACL must grant typed config methods without filesystem or shell authority.');

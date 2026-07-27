@@ -796,8 +796,11 @@ msgstr "Конфиг #3"
 msgid "Set as Main"
 msgstr "Сделать главным"
 
-msgid "Selected config will be swapped with Main config, saved, and Clash will restart. Continue?"
-msgstr "Выбранный конфиг будет обменян с основным, сохранён, и Clash будет перезапущен. Продолжить?"
+msgid "Save or download this config before setting it as Main."
+msgstr "Сначала сохраните или скачайте этот конфиг, чтобы сделать его главным."
+
+msgid "Selected config will be swapped with Main config and saved. If Clash is running, it will reload; if stopped, it will remain stopped. Continue?"
+msgstr "Выбранный конфиг будет обменян с основным и сохранён. Если Clash запущен, он перезагрузит конфиг; если остановлен — останется остановленным. Продолжить?"
 
 msgid "Failed to load config profile: %s"
 msgstr "Не удалось загрузить профиль конфига: %s"

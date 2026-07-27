@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-miclash
-PKG_VERSION:=2.5.1
+PKG_VERSION:=2.5.4
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ang3el7z
 
@@ -76,6 +76,8 @@ endef
 
 define Package/$(PKG_NAME)/conffiles
 /opt/clash/config.yaml
+/opt/clash/config2.yaml
+/opt/clash/config3.yaml
 /etc/config/miclash
 endef
 
@@ -94,6 +96,10 @@ define Package/$(PKG_NAME)/install
 
 	$(INSTALL_DIR) $(1)/opt/clash
 	$(INSTALL_DATA) ./rootfs/opt/clash/config.yaml $(1)/opt/clash/
+	$(INSTALL_DATA) ./rootfs/opt/clash/config2.yaml $(1)/opt/clash/
+	$(INSTALL_DATA) ./rootfs/opt/clash/config3.yaml $(1)/opt/clash/
+	chmod 0600 $(1)/opt/clash/config.yaml $(1)/opt/clash/config2.yaml \
+		$(1)/opt/clash/config3.yaml
 
 	$(INSTALL_DIR) $(1)/opt/clash/ui
 	$(CP) ./rootfs/opt/clash/ui/* $(1)/opt/clash/ui/
@@ -223,8 +229,15 @@ write_upgrade_state() {
 	[ "$$(stat -c '%u:%a:%h' "$$MICLASH_UPGRADE_STATE" 2>/dev/null)" = '0:600:1' ] || return 1
 }
 mkdir -p "$$ROOT/opt/clash" 2>/dev/null || true
-[ -f "$$ROOT/opt/clash/config.yaml" ] && cp -p "$$ROOT/opt/clash/config.yaml" \
-	"$$ROOT/opt/clash/.config.yaml.upgrade.bak"
+if [ -f "$$ROOT/opt/clash/config.yaml" ]; then
+	cp -p "$$ROOT/opt/clash/config.yaml" "$$ROOT/opt/clash/.config.yaml.upgrade.bak" || exit 1
+fi
+if [ -f "$$ROOT/opt/clash/config2.yaml" ]; then
+	cp -p "$$ROOT/opt/clash/config2.yaml" "$$ROOT/opt/clash/.config2.yaml.upgrade.bak" || exit 1
+fi
+if [ -f "$$ROOT/opt/clash/config3.yaml" ]; then
+	cp -p "$$ROOT/opt/clash/config3.yaml" "$$ROOT/opt/clash/.config3.yaml.upgrade.bak" || exit 1
+fi
 write_upgrade_state || exit 1
 exit 0
 endef
@@ -246,10 +259,16 @@ recover_upgrade_state() {
 	return 0
 }
 if [ -f "$$ROOT/opt/clash/.config.yaml.upgrade.bak" ]; then
-	/bin/mv "$$ROOT/opt/clash/.config.yaml.upgrade.bak" "$$ROOT/opt/clash/config.yaml"
+	/bin/mv "$$ROOT/opt/clash/.config.yaml.upgrade.bak" "$$ROOT/opt/clash/config.yaml" || exit 1
 	FIRST_INSTALL=0
 else
 	FIRST_INSTALL=1
+fi
+if [ -f "$$ROOT/opt/clash/.config2.yaml.upgrade.bak" ]; then
+	/bin/mv "$$ROOT/opt/clash/.config2.yaml.upgrade.bak" "$$ROOT/opt/clash/config2.yaml" || exit 1
+fi
+if [ -f "$$ROOT/opt/clash/.config3.yaml.upgrade.bak" ]; then
+	/bin/mv "$$ROOT/opt/clash/.config3.yaml.upgrade.bak" "$$ROOT/opt/clash/config3.yaml" || exit 1
 fi
 [ ! -f "$$ROOT/etc/config/miclash" ] || chmod 0600 "$$ROOT/etc/config/miclash" || exit 1
 # Remove state owned exclusively by the retired Draft/History and Backup features.
@@ -344,7 +363,8 @@ define Package/$(PKG_NAME)/postrm
 	rm -rf /tmp/clash
 	rm -rf /www/luci-static/resources/view/miclash
 	rm -f /usr/lib/lua/luci/i18n/miclash.*.lmo
-	rm -f /opt/clash/.config.yaml.upgrade.bak
+	rm -f /opt/clash/.config.yaml.upgrade.bak /opt/clash/.config2.yaml.upgrade.bak \
+		/opt/clash/.config3.yaml.upgrade.bak
 	rm -f /etc/init.d/clash
 	rm -f /etc/apk/protected_paths.d/miclash.list
 	if [ "$$PACKAGE_UPGRADE" != 1 ]; then

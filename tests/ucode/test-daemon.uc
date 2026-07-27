@@ -9,6 +9,27 @@ assert_equal(daemon.parse_openwrt_version("DISTRIB_RELEASE='SNAPSHOT'\n",
 assert_equal(daemon.parse_openwrt_version('',
 	'PRETTY_NAME="OpenWrt 26.01.1 development"\n'), '26.01.1');
 
+let profile_urls = { core: {
+	subscription_url: 'https://legacy.example/main',
+	subscription_url_config_yaml: 'https://profiles.example/one',
+	subscription_url_config2_yaml: 'https://profiles.example/two',
+	subscription_url_config3_yaml: 'https://profiles.example/three'
+} };
+let config2_patch = daemon.swapped_subscription_patch(profile_urls, 'config2.yaml');
+assert_equal(sprintf('%J', config2_patch), sprintf('%J', {
+	subscription_url: 'https://profiles.example/two',
+	subscription_url_config_yaml: 'https://profiles.example/two',
+	subscription_url_config2_yaml: 'https://profiles.example/one'
+}));
+let config3_patch = daemon.swapped_subscription_patch(profile_urls, 'config3.yaml');
+assert_equal(sprintf('%J', config3_patch), sprintf('%J', {
+	subscription_url: 'https://profiles.example/three',
+	subscription_url_config_yaml: 'https://profiles.example/three',
+	subscription_url_config3_yaml: 'https://profiles.example/one'
+}));
+assert_throws(() => daemon.swapped_subscription_patch(profile_urls, 'config.yaml'),
+	'INVALID_ARGUMENT');
+
 let manager_probe_calls = 0;
 assert_equal(platform.detect_package_manager({
 	fs: { stat: (path) => path == '/bin/opkg' ? { type: 'file', mode: 0o755 } : null },

@@ -36,6 +36,22 @@ function clone(value) {
 	catch (error) { errors.fail('INVALID_ARGUMENT'); }
 };
 
+export function swapped_subscription_patch(before, profile) {
+	if (type(before?.core) != 'object' ||
+	    (profile != 'config2.yaml' && profile != 'config3.yaml'))
+		errors.fail('INVALID_ARGUMENT');
+	let selected_key = profile == 'config2.yaml'
+		? 'subscription_url_config2_yaml' : 'subscription_url_config3_yaml';
+	let main = before.core.subscription_url_config_yaml;
+	if (!length(main ?? '')) main = before.core.subscription_url;
+	let selected = before.core[selected_key];
+	return {
+		subscription_url: selected,
+		subscription_url_config_yaml: selected,
+		[selected_key]: main
+	};
+};
+
 function same(left, right) {
 	try { return sprintf('%J', left) == sprintf('%J', right); }
 	catch (error) { errors.fail('INVALID_ARGUMENT'); }
@@ -1021,15 +1037,9 @@ export function compose(runtime, overrides) {
 		app.config_swap = (profile, source) => configuration.swap(profile, source, {
 			prepare: () => clone(reconcile_settings.get()),
 			commit: (before) => {
-				let selected_key = profile == 'config2.yaml'
-					? 'subscription_url_config2_yaml' : 'subscription_url_config3_yaml';
-				let main = before.core.subscription_url_config_yaml;
-				if (!length(main ?? '')) main = before.core.subscription_url;
-				let selected = before.core[selected_key];
-				reconcile_settings.set({ core: {
-					subscription_url: selected, subscription_url_config_yaml: selected,
-					[selected_key]: main
-				} });
+				reconcile_settings.set({
+					core: swapped_subscription_patch(before, profile)
+				});
 				return true;
 			},
 			rollback: (before) => {

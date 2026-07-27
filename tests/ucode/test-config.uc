@@ -48,6 +48,16 @@ for (let profile in [ 'config0.yaml', 'config4.yaml', '../config.yaml' ])
 let env = environment();
 assert_equal(join(',', env.cfg.list_profiles()), 'config.yaml,config2.yaml,config3.yaml');
 assert_equal(env.cfg.read_active('config.yaml'), 'original-active\n');
+
+// Profile discovery reports only regular package/config files that actually exist.
+let discovered_slots = environment(null, (fs) => {
+	fs.unlink('/opt/clash/config2.yaml');
+	fs.writefile('/opt/clash/config3.yaml', 'keep-third\n');
+});
+assert_equal(discovered_slots.fs.lstat('/opt/clash/config2.yaml'), null);
+assert_equal(discovered_slots.fs.readfile('/opt/clash/config3.yaml'), 'keep-third\n');
+assert_equal(join(',', discovered_slots.cfg.list_profiles()), 'config.yaml,config3.yaml');
+
 let reads_before_stream = length(env.fs.calls.readfile);
 let active_stream = env.cfg.open_active('config.yaml');
 assert_equal(active_stream.size, length('original-active\n'));
@@ -147,6 +157,20 @@ assert_equal(finish(swapping, swapped).state, 'success');
 assert_equal(swapping.fs.readfile('/opt/clash/config.yaml'), 'second-active\n');
 assert_equal(swapping.fs.readfile('/opt/clash/config2.yaml'), 'original-active\n');
 assert_equal(length(swap_calls), 1);
+
+let stopped_swap_recovery_calls = 0;
+let stopped_swap = environment({
+	observe: () => ({ state: 'stopped', running: false }),
+	recover: () => { stopped_swap_recovery_calls++; return { ok: true }; },
+	reload: () => true,
+	health: () => true
+});
+let stopped_swapped = stopped_swap.cfg.swap('config3.yaml', 'luci');
+assert_equal(finish(stopped_swap, stopped_swapped).state, 'success');
+assert_equal(stopped_swap.fs.readfile('/opt/clash/config.yaml'), 'third-active\n');
+assert_equal(stopped_swap.fs.readfile('/opt/clash/config3.yaml'), 'original-active\n');
+assert_equal(stopped_swap_recovery_calls, 0,
+	'setting a stopped secondary profile as Main must not start Mihomo');
 
 let external = environment();
 external.fs.writefile('/opt/clash/config.yaml', fixture('valid.yaml'));
