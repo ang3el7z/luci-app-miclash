@@ -75,6 +75,16 @@ assert.match(css, /\.sbox-diagnostic-mode-grid\s*\{[^}]*grid-template-columns:\s
 	'privacy cards must form a three-column desktop layout');
 assert.match(css, /@media \(max-width: 640px\)[\s\S]*?\.sbox-diagnostic-mode-grid\s*\{[^}]*grid-template-columns:\s*1fr/s,
 	'privacy cards must stack on narrow viewports');
+assert.match(panelSource, /data-report-progress/,
+	'report modal must render a dedicated shared progress bar');
+assert.match(panelSource, /data-report-error[^]*role': 'alert'/,
+	'report modal must render an inline accessible error region');
+assert.match(panelSource, /role': 'progressbar'[\s\S]*aria-valuemin[\s\S]*aria-valuemax/,
+	'report progress must expose bounded ARIA progress semantics');
+assert.match(css, /\.sbox-report-progress-fill\s*\{[^}]*transition:\s*width/s,
+	'report progress fill must animate between backend percentages');
+assert.match(css, /\.sbox-report-progress-fill\s*\{[^}]*var\(--sbox-accent\)/s,
+	'report progress fill must use the active MiClash theme accent');
 
 class MiniNode {
 	constructor(tag, attrs = {}) {
@@ -625,13 +635,19 @@ assert.match(reportModal.body.textContent, /Lite is recommended/,
 const silentButton = reportModal.body.querySelector('[data-report-mode="silent"]');
 const liteButton = reportModal.body.querySelector('[data-report-mode="lite"]');
 const fullButton = reportModal.body.querySelector('[data-report-mode="full"]');
+const reportProgress = reportModal.body.querySelector('[data-report-progress]');
+const reportProgressFill = reportProgress?.querySelector('[data-report-progress-fill]');
 assert.match(silentButton.className, /cbi-button-positive/);
 assert.match(liteButton.className, /cbi-button-action/);
 assert.match(fullButton.className, /cbi-button-negative/);
+assert.ok(reportProgress, 'privacy chooser must include one shared report progress bar');
+assert.equal(reportProgress.hidden, true, 'report progress must start hidden');
 fullButton.click();
 const fullConfirmation = modalCalls.at(-1);
 assert.equal(fullConfirmation.title, 'Confirm Full diagnostic report');
 assert.match(fullConfirmation.body.textContent, /may include secrets/);
+assert.ok(fullConfirmation.body.querySelector('[data-report-progress]'),
+	'Full confirmation must include its own report progress bar');
 assert.equal(calls.some((call) => call[0] === 'createDiagnosticReport'), false,
 	'opening Full confirmation must not create a report');
 liteButton.click();
@@ -640,8 +656,13 @@ assert.equal(liteButton.disabled, true, 'selected report action must lock during
 assert.equal(silentButton.disabled, true, 'sibling report actions must lock during report creation');
 assert.equal(fullButton.disabled, true, 'sibling report actions must lock during report creation');
 assert.equal(liteButton.getAttribute('aria-busy'), 'true');
-assert.ok(liteButton.querySelector('.sbox-spinner'), 'report button must show the shared spinner');
-assert.match(liteButton.textContent, /Creating/);
+assert.equal(liteButton.textContent, 'Download Lite',
+	'report button must retain its concise label while progress runs');
+assert.equal(liteButton.querySelector('.sbox-spinner'), null,
+	'report progress must not expand the selected button');
+assert.equal(reportProgress.hidden, false);
+assert.equal(reportProgress.getAttribute('aria-valuenow'), '0');
+assert.match(reportProgress.textContent, /Creating\.\.\. · 0%/);
 releaseReport(); reportGate = null;
 await new Promise((resolve) => setImmediate(resolve));
 assert.deepEqual(calls.find((call) => call[0] === 'createDiagnosticReport')?.slice(1),
@@ -652,8 +673,11 @@ assert.equal(calls.some((call) => call[0] === 'downloadChunks'), false,
 	'report download must wait for successful operation completion');
 assert.equal(liteButton.disabled, true, 'report button must remain locked while collection runs');
 reportWatcher({ state: 'running', stage: 'configuration', progress: 30 });
-assert.match(liteButton.textContent, /Collecting configuration \(30%\)/,
-	'report action must render the translated operation stage and progress');
+assert.equal(liteButton.textContent, 'Download Lite');
+assert.equal(reportProgress.getAttribute('aria-valuenow'), '30');
+assert.match(reportProgressFill.getAttribute('style'), /width:\s*30%/);
+assert.match(reportProgress.textContent, /Collecting configuration · 30%/,
+	'report progress bar must render the translated operation stage and progress');
 reportWatcher({ state: 'success', stage: 'complete', progress: 100 });
 await new Promise((resolve) => setImmediate(resolve));
 await new Promise((resolve) => setImmediate(resolve));
@@ -661,6 +685,7 @@ assert.equal(liteButton.disabled, false, 'report button must unlock after downlo
 assert.equal(silentButton.disabled, false, 'sibling buttons must unlock after download');
 assert.equal(liteButton.getAttribute('aria-busy'), null);
 assert.equal(liteButton.textContent, 'Download Lite');
+assert.equal(reportProgress.hidden, true, 'report progress must reset after download');
 assert.deepEqual(calls.find((call) => call[0] === 'downloadChunks')?.slice(1),
 	['report', 'rpt_' + 'a'.repeat(32), {}]);
 assert.equal(createdUrls.length, 1);
@@ -677,7 +702,6 @@ await new Promise((resolve) => setImmediate(resolve));
 await new Promise((resolve) => setImmediate(resolve));
 assert.match(clickedDownloads.at(-1).download, /^miclash-diagnostic-full-\d{8}-\d{6}\.json$/);
 
-const failedReportButton = E('button', {}, 'Download diagnostic report');
 let failedWatchCancelled = 0;
 const failedReportPanel = moduleApi.create({ api: { ...api,
 	async createDiagnosticReport() {
@@ -695,10 +719,20 @@ const failedReportPanel = moduleApi.create({ api: { ...api,
 	async downloadChunks() { throw new Error('download must not start'); },
 	destroy() {}
 }, document: documentMock, window: windowMock, pollInterval: 30000 });
-await assert.rejects(failedReportPanel.generateReport('lite', false, failedReportButton), /report failed/);
+const failedReportModal = failedReportPanel.openReportModal();
+const failedReportButton = failedReportModal.querySelector('[data-report-mode="lite"]');
+const failedReportProgress = failedReportModal.querySelector('[data-report-progress]');
+const failedReportError = failedReportModal.querySelector('[data-report-error]');
+failedReportButton.click();
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setImmediate(resolve));
 assert.equal(failedReportButton.disabled, false, 'failed report must restore the button');
 assert.equal(failedReportButton.getAttribute('aria-busy'), null);
-assert.equal(failedReportButton.textContent, 'Download diagnostic report');
+assert.equal(failedReportButton.textContent, 'Download Lite');
+assert.equal(failedReportProgress.hidden, true, 'failed report must reset progress');
+assert.equal(failedReportError.hidden, false, 'failed report must reveal the modal alert');
+assert.match(failedReportError.textContent, /INTERNAL: report failed/,
+	'failed report must keep the typed backend error visible in the modal');
 assert.equal(failedWatchCancelled, 1, 'failed reports must stop their operation watcher');
 failedReportPanel.destroy();
 

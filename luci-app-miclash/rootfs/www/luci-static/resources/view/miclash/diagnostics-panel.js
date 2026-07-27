@@ -515,6 +515,97 @@ function create(options) {
 			sibling.disabled = disabled;
 	}
 
+	function reportProgressNode() {
+		return E('div', {
+			'class': 'sbox-report-progress',
+			'data-report-progress': '',
+			'role': 'progressbar',
+			'aria-valuemin': '0',
+			'aria-valuemax': '100',
+			'aria-valuenow': '0',
+			'aria-live': 'polite',
+			'aria-atomic': 'true',
+			'hidden': true
+		}, [
+			E('span', {
+				'class': 'sbox-report-progress-fill',
+				'data-report-progress-fill': '',
+				'aria-hidden': 'true',
+				'style': 'width: 0%'
+			}),
+			E('span', { 'class': 'sbox-report-progress-label',
+				'data-report-progress-label': '' })
+		]);
+	}
+
+	function reportErrorNode() {
+		return E('p', {
+			'class': 'sbox-diagnostics-error',
+			'data-report-error': '',
+			'role': 'alert',
+			'hidden': true
+		});
+	}
+
+	function reportProgressFor(button) {
+		for (let node = button; node; node = node.parentNode) {
+			const progress = node.querySelector?.('[data-report-progress]');
+			if (progress) return progress;
+		}
+		return null;
+	}
+
+	function reportErrorFor(button) {
+		for (let node = button; node; node = node.parentNode) {
+			const error = node.querySelector?.('[data-report-error]');
+			if (error) return error;
+		}
+		return null;
+	}
+
+	function clearReportError(button) {
+		const error = reportErrorFor(button);
+		if (!error) return;
+		error.hidden = true;
+		error.textContent = '';
+	}
+
+	function showReportModalError(button, failure) {
+		const error = reportErrorFor(button);
+		if (!error) return;
+		const code = failure?.code ? String(failure.code) + ': ' : '';
+		error.textContent = code + String(failure?.message || _('Unknown error'));
+		error.hidden = false;
+	}
+
+	function setReportProgress(button, stage, value) {
+		const progress = reportProgressFor(button);
+		if (!progress) return;
+		const amount = Number(value);
+		const percent = Number.isFinite(amount)
+			? Math.max(0, Math.min(100, Math.round(amount))) : 0;
+		const label = String(stage || _('Creating...'));
+		progress.hidden = false;
+		progress.setAttribute('aria-valuenow', String(percent));
+		progress.setAttribute('aria-valuetext', label + ' · ' + percent + '%');
+		const fill = progress.querySelector('[data-report-progress-fill]');
+		const textNode = progress.querySelector('[data-report-progress-label]');
+		if (fill) fill.setAttribute('style', 'width: ' + percent + '%');
+		if (textNode) textNode.textContent = label + ' · ' + percent + '%';
+	}
+
+	function resetReportProgress(button) {
+		const progress = reportProgressFor(button);
+		if (!progress) return;
+		progress.hidden = true;
+		progress.setAttribute('aria-valuenow', '0');
+		progress.removeAttribute('aria-valuetext');
+		const fill = progress.querySelector('[data-report-progress-fill]');
+		const textNode = progress.querySelector('[data-report-progress-label]');
+		if (fill) fill.setAttribute('style', 'width: 0%');
+		if (textNode) textNode.textContent = '';
+	}
+
 	function openFullReportModal() {
 		const confirm = E('button', { 'type': 'button',
 			'class': 'cbi-button cbi-button-negative', 'data-action': 'confirm-full-report' }, _('I understand, download Full'));
@@ -522,6 +613,8 @@ function create(options) {
 		const body = E('div', { 'class': 'sbox-diagnostics-modal sbox-modal-responsive sbox-report-confirmation' }, [
 			E('p', {}, _('Full reports may include secrets such as subscription credentials and private configuration.')),
 			E('p', { 'class': 'sbox-muted' }, _('Store this report safely and share it only with trusted support.')),
+			reportProgressNode(),
+			reportErrorNode(),
 			E('div', { 'class': 'sbox-actions' }, [ closeButton(), confirm ])
 		]);
 		ui.showModal(_('Confirm Full diagnostic report'), body);
@@ -550,6 +643,8 @@ function create(options) {
 			E('p', {}, _('Choose how much information to include in the diagnostic report.')),
 			E('p', { 'class': 'sbox-muted' }, _('Lite is recommended for most support requests.')),
 			E('div', { 'class': 'sbox-diagnostic-mode-grid' }, cards),
+			reportProgressNode(),
+			reportErrorNode(),
 			E('div', { 'class': 'sbox-actions' }, [ closeButton() ])
 		]);
 		ui.showModal(_('Diagnostics'), body);
@@ -566,8 +661,8 @@ function create(options) {
 			setReportButtonsDisabled(button, true);
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
-			button.replaceChildren(E('span', { 'class': 'sbox-spinner', 'aria-hidden': 'true' }),
-				' ' + _('Creating...'));
+			clearReportError(button);
+			setReportProgress(button, _('Creating...'), 0);
 		}
 		try {
 			const created = await api.createDiagnosticReport(mode, acknowledge_secrets, 'luci');
@@ -583,12 +678,10 @@ function create(options) {
 			}
 			await waitForOperation(operationId, (record) => {
 				if (!button || destroyed) return;
-				const progress = Number(record?.progress);
-				const suffix = Number.isFinite(progress) ? ' (' + Math.round(progress) + '%)' : '';
-				button.replaceChildren(E('span', { 'class': 'sbox-spinner', 'aria-hidden': 'true' }),
-					' ' + reportStageLabel(record?.stage) + suffix);
+				setReportProgress(button, reportStageLabel(record?.stage), record?.progress);
 			});
 			if (destroyed) return;
+			if (button) setReportProgress(button, _('Downloading...'), 100);
 			const payload = await api.downloadChunks('report', reportId, {});
 			if (destroyed) return;
 			const blob = new Blob([ payload ], { type: 'application/json;charset=utf-8' });
@@ -605,12 +698,16 @@ function create(options) {
 				win.URL.revokeObjectURL(url);
 				objectUrls.delete(url);
 			}
+		} catch (error) {
+			if (button && !destroyed) showReportModalError(button, error);
+			throw error;
 		} finally {
 			if (button) {
 				setReportButtonsDisabled(button, false);
 				button.disabled = originalDisabled;
 				button.removeAttribute('aria-busy');
 				button.replaceChildren(originalLabel || MODES[mode].label);
+				resetReportProgress(button);
 			}
 		}
 	}

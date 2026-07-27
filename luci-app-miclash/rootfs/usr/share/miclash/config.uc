@@ -106,6 +106,13 @@ export function create(runtime, operations) {
 	function active_path(profile) {
 		return '/opt/clash/' + schema.profile_name(profile);
 	};
+	function safe_active_file(profile) {
+		let path = active_path(profile);
+		let stat = runtime.fs.lstat(path);
+		return stat?.type == 'file' && stat.nlink == 1 &&
+			runtime.fs.realpath(path) == path ? stat : null;
+	};
+
 	function tracking_path(profile) {
 		return '/opt/clash/.miclash-active-' + schema.profile_name(profile) + '.json';
 	};
@@ -336,7 +343,13 @@ export function create(runtime, operations) {
 	};
 
 	let api = {};
-	api.list_profiles = () => [ ...PROFILES ];
+	api.list_profiles = () => {
+		let available = [];
+		for (let profile in PROFILES)
+			if (safe_active_file(profile) != null)
+				push(available, profile);
+		return available;
+	};
 	api.read_active = read_active;
 	api.open_active = open_active;
 	api.validate_in_operation = (ctx, profile, content) => {

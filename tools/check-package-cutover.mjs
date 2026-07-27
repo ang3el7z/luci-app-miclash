@@ -23,6 +23,8 @@ const api = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/api.uc'), '
 const nft = fs.readFileSync(path.join(pkg, 'rootfs/usr/share/miclash/firewall/nft.uc'), 'utf8');
 const installer = fs.readFileSync(path.join(root, 'install-miclash.sh'), 'utf8');
 const miclashdInit = fs.readFileSync(path.join(pkg, 'rootfs/etc/init.d/miclashd'), 'utf8');
+const apkProtectedPaths = fs.readFileSync(path.join(pkg,
+	'rootfs/etc/apk/protected_paths.d/miclash.list'), 'utf8');
 
 function requireMatch(value, expression, message) {
 	if (!expression.test(value)) throw new Error(message);
@@ -96,6 +98,32 @@ for (const legacy of [
 
 requireMatch(makefile, /\/etc\/config\/miclash/, 'canonical UCI config must be a conffile');
 requireMatch(makefile, /chmod 0600 .*\/etc\/config\/miclash/, 'canonical config must be secret-safe');
+for (const profile of [ 'config.yaml', 'config2.yaml', 'config3.yaml' ]) {
+	const escaped = profile.replaceAll('.', '\\.');
+	requireMatch(makefile, new RegExp(`/opt/clash/${escaped}`),
+		`${profile} must be an opkg conffile`);
+	requireMatch(apkProtectedPaths, new RegExp(`^\\+opt/clash/${escaped}$`, 'm'),
+		`${profile} must be protected by apk`);
+}
+for (const profile of [ 'config2.yaml', 'config3.yaml' ]) {
+	const source = path.join(pkg, 'rootfs/opt/clash', profile);
+	if (!fs.existsSync(source))
+		throw new Error(`${profile} must exist as a package source file`);
+	if (fs.readFileSync(source, 'utf8').trim() !== '')
+		throw new Error(`${profile} package source must be an empty independent slot`);
+	requireMatch(makefile,
+		new RegExp(`\\$\\(INSTALL_DATA\\) \\./rootfs/opt/clash/${profile.replaceAll('.', '\\.')} `),
+		`${profile} package source must be installed`);
+}
+for (const profile of [ 'config.yaml', 'config2.yaml', 'config3.yaml' ]) {
+	const escaped = profile.replaceAll('.', '\\.');
+	requireMatch(makefile,
+		new RegExp(`cp -p[^\\n]*${escaped}[^\\n]*\\\\?\\n?[^\\n]*\\.${escaped}\\.upgrade\\.bak`),
+		`${profile} must be backed up before a package replacement`);
+	requireMatch(makefile,
+		new RegExp(`mv[^\\n]*\\.${escaped}\\.upgrade\\.bak[^\\n]*${escaped}`),
+		`${profile} must be restored after a package replacement`);
+}
 forbid(makefile, /migrate\.uc|legacy-firewall-cleanup\.uc|guard_latch_set|guard_verify_protected/,
 	'v0.9 transition lifecycle is still invoked by the package');
 forbid(makefile, /clash-rules|miclash-autoupdate|miclash-memory-guard|40-clash|99-clash-tun/,

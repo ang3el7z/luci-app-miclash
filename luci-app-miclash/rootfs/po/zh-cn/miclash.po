@@ -984,8 +984,8 @@ msgstr "保存 IP-CIDR 列表"
 msgid "Save URL / Update Config"
 msgstr "保存 URL / 更新配置"
 
-msgid "Selected config will be swapped with Main config, saved, and Clash will restart. Continue?"
-msgstr "所选配置将与主配置交换、保存，并重启 Clash。继续吗？"
+msgid "Selected config will be swapped with Main config and saved. If Clash is running, it will reload; if stopped, it will remain stopped. Continue?"
+msgstr "所选配置将与主配置交换并保存。若 Clash 正在运行则重新加载；若已停止则保持停止。继续吗？"
 
 msgid "Service did not enter running state within %ss after: %s"
 msgstr "服务未在 %s 秒内进入运行状态，执行动作：%s"
@@ -1004,6 +1004,9 @@ msgstr "服务已停止"
 
 msgid "Set as Main"
 msgstr "设为主配置"
+
+msgid "Save or download this config before setting it as Main."
+msgstr "请先保存或下载此配置，再将其设为主配置。"
 
 msgid "Settings saved and Clash service restarted."
 msgstr "设置已保存，Clash 服务已重启。"

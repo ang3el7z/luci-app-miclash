@@ -410,7 +410,7 @@ const getConfigPathByName = view_miclash_store.getConfigPathByName;
 const readConfigFileByName = view_miclash_store.readConfigFileByName;
 const writeConfigFileByName = view_miclash_store.writeConfigFileByName;
 const swapConfigProfiles = view_miclash_store.swapConfigProfiles;
-const ensureConfigProfilesReady = view_miclash_store.ensureConfigProfilesReady;
+const listConfigProfiles = view_miclash_store.listConfigProfiles;
 const readSubscriptionUrl = view_miclash_store.readSubscriptionUrl;
 const saveSubscriptionUrl = view_miclash_store.saveSubscriptionUrl;
 const readSettingsMap = view_miclash_store.readSettingsMap;
@@ -1696,15 +1696,14 @@ function setConfigWorkspaceReady(ready) {
 }
 
 async function hydrateConfigWorkspace(generation) {
-	const content = await readConfigFileByName(MAIN_CONFIG_NAME);
-	if (generation !== pageGeneration || !pageRoot) return;
-	await ensureConfigProfilesReady(content || '');
+	const [ content, subscriptionUrl, profiles ] = await Promise.all([
+		readConfigFileByName(MAIN_CONFIG_NAME),
+		readSubscriptionUrl(MAIN_CONFIG_NAME),
+		listConfigProfiles()
+	]);
 	if (generation !== pageGeneration || !pageRoot) return;
 
-	const subscriptionUrl = await readSubscriptionUrl(MAIN_CONFIG_NAME);
-	if (generation !== pageGeneration || !pageRoot) return;
-
-	appState.configProfiles = CONFIG_PROFILES.slice();
+	appState.configProfiles = profiles;
 	appState.selectedConfigName = MAIN_CONFIG_NAME;
 	appState.configContent = String(content || '');
 	appState.subscriptionUrl = String(subscriptionUrl || '');
@@ -1716,6 +1715,7 @@ async function hydrateConfigWorkspace(generation) {
 	await initializeConfigEditor(appState.configContent);
 	if (generation !== pageGeneration || !pageRoot) return;
 	setConfigWorkspaceReady(true);
+	updateSetMainAvailability(appState.configContent, MAIN_CONFIG_NAME);
 }
 
 function beginPageHydration(generation) {
@@ -3148,6 +3148,20 @@ function bindControlAndHeaderEvents() {
 	}
 }
 
+function updateSetMainAvailability(content, profileName) {
+	if (!pageRoot) return;
+	const button = pageRoot.querySelector('#sbox-set-main-config');
+	if (!button) return;
+	const selected = normalizeConfigProfileName(profileName);
+	const empty = !String(content || '').trim();
+	button.hidden = selected === MAIN_CONFIG_NAME;
+	button.disabled = selected === MAIN_CONFIG_NAME || empty || appState.configReady !== true;
+	if (selected !== MAIN_CONFIG_NAME && empty)
+		button.title = _('Save or download this config before setting it as Main.');
+	else
+		button.removeAttribute('title');
+}
+
 async function switchConfigProfile(profileName) {
 	if (subscriptionUpdateBusy) throw new Error(_('An operation is already running.'));
 	const selected = normalizeConfigProfileName(profileName);
@@ -3170,7 +3184,7 @@ async function switchConfigProfile(profileName) {
 		const setMainBtn = pageRoot.querySelector('#sbox-set-main-config');
 		if (selectEl) selectEl.value = selected;
 		if (urlEl) urlEl.value = appState.subscriptionUrl;
-		if (setMainBtn) setMainBtn.hidden = selected === MAIN_CONFIG_NAME;
+		if (setMainBtn) updateSetMainAvailability(appState.configContent, selected);
 	}
 }
 
@@ -3214,7 +3228,7 @@ function bindConfigEvents() {
 
 			showModal({
 				title: _('Set as Main'),
-				body: _('Selected config will be swapped with Main config, saved, and Clash will restart. Continue?'),
+				body: _('Selected config will be swapped with Main config and saved. If Clash is running, it will reload; if stopped, it will remain stopped. Continue?'),
 				buttons: [
 					{
 						label: _('Set as Main'),
@@ -3282,6 +3296,7 @@ function bindConfigEvents() {
 
 			const freshConfig = await readConfigFileByName(selectedConfig);
 			appState.configContent = String(freshConfig || '');
+			updateSetMainAvailability(appState.configContent, selectedConfig);
 			if (editor && selectedConfig === appState.selectedConfigName) {
 				editor.setValue(appState.configContent, -1);
 				editor.clearSelection();
@@ -3365,6 +3380,7 @@ function bindConfigEvents() {
 				_('Applying configuration...')
 			);
 			appState.configContent = content;
+			updateSetMainAvailability(appState.configContent, selectedConfig);
 			appState.serviceRunning = await getServiceStatus();
 			updateHeaderAndControlDom();
 			await logUiAction('info', 'Configuration applied: ' + selectedConfig);

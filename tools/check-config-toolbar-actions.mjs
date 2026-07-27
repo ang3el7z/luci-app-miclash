@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 const configPath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/config.js';
+const storePath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/store.js';
 const stylePath = 'luci-app-miclash/rootfs/www/luci-static/resources/view/miclash/style.css';
 const localePaths = [
 	'luci-app-miclash/rootfs/po/ru/miclash.po',
@@ -8,6 +9,7 @@ const localePaths = [
 ];
 
 const config = readFileSync(configPath, 'utf8');
+const store = readFileSync(storePath, 'utf8');
 const style = readFileSync(stylePath, 'utf8');
 const locales = localePaths.map((path) => [path, readFileSync(path, 'utf8')]);
 
@@ -43,6 +45,11 @@ const actionBlock = blockBetween('<div class="sbox-actions">', '<div id="sbox-pa
 const saveUrlHandler = handlerBlock("const saveUrlBtn = pageRoot.querySelector('#sbox-save-sub-url');");
 const updateUrlHandler = handlerBlock("const updateUrlBtn = pageRoot.querySelector('#sbox-update-sub');");
 const clearUrlHandler = handlerBlock("const clearUrlBtn = pageRoot.querySelector('#sbox-clear-sub-url');");
+const profileSwitch = blockBetween('async function switchConfigProfile(', '\nasync function setSelectedConfigAsMain');
+const mainAvailability = blockBetween('function updateSetMainAvailability(', '\nasync function switchConfigProfile');
+const serviceJob = blockBetween('async function startMiClashServiceJob(', '\nasync function pollMiClashUpdateJob');
+const configHydration = blockBetween('async function hydrateConfigWorkspace(', '\nfunction beginPageHydration');
+const profileInventory = blockBetween('async function listConfigProfiles(', '\nasync function readSubscriptionUrl', store);
 const subscriptionButtonStyle = [
 	cssBlock('.sbox-subscription-action'),
 	cssBlock('.sbox-url-clear-button')
@@ -87,6 +94,27 @@ check(clearUrlHandler.includes("setOperationStatus('running', _('Clearing subscr
 	'Clear URL handler must show matching operation status.');
 check(clearUrlHandler.includes("await saveSubscriptionUrl('', selectedConfig);"),
 	'Clear URL handler must persist an empty subscription URL.');
+check(!store.includes('ensureConfigProfilesReady') && !config.includes('ensureConfigProfilesReady'),
+	'Profile hydration must not copy Config #1 into empty secondary slots.');
+check(profileInventory.includes('api.config_list()') &&
+	profileInventory.includes('CONFIG_PROFILES.filter('),
+	'Profile inventory must map the typed backend list onto known package profiles.');
+check(configHydration.includes('listConfigProfiles()') &&
+	configHydration.includes('appState.configProfiles = profiles'),
+	'Profile hydration must render only profiles reported by the backend inventory.');
+check(profileSwitch.includes('readConfigFileByName(selected)') &&
+	profileSwitch.includes('readSubscriptionUrl(selected)'),
+	'Profile switching must load the selected profile and its own subscription URL.');
+check(profileSwitch.includes('updateSetMainAvailability(appState.configContent, selected)'),
+	'Profile switching must refresh Set as Main availability from persisted profile bytes.');
+check(mainAvailability.includes('button.hidden = selected === MAIN_CONFIG_NAME') &&
+	mainAvailability.includes("String(content || '').trim()") &&
+	mainAvailability.includes('button.disabled ='),
+	'Set as Main must remain visible but disabled for an empty secondary profile.');
+check(serviceJob.includes("method('config.yaml', 'luci')"),
+	'Top service controls must always target Config #1.');
+check(config.includes('If Clash is running, it will reload; if stopped, it will remain stopped.'),
+	'Set as Main confirmation must describe the real conditional service behavior.');
 
 check(config.includes("_('Validate')") && !config.includes("_('Validate YAML')"),
 	'Draft action must use the approved concise Validate label.');
@@ -115,6 +143,7 @@ check(config.includes('sbox-rulesets-action') && style.includes('.sbox-rulesets-
 	'Clearing subscription URL...',
 	'Subscription URL saved.',
 	'Subscription URL cleared.',
+	'Save or download this config before setting it as Main.',
 	'Direct connection guard'
 ].forEach((msgid) => {
 	for (const [path, po] of locales) {
