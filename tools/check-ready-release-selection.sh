@@ -41,6 +41,129 @@ require_function() {
     printf '%s\n' "$body"
 }
 
+test_exact_package_transition() (
+    eval "$(require_function "$installer" normalize_version)"
+    eval "$(require_function "$installer" installed_miclash_version)"
+    eval "$(require_function "$installer" rc_to_stable_transition)"
+    eval "$(require_function "$installer" verify_installed_miclash_version)"
+    eval "$(require_function "$installer" install_miclash_package)"
+
+    PKG_MGR=opkg
+    PKG_FILE=/tmp/luci-app-miclash_2.5.2_all.ipk
+    INSTALL_ACTION=update
+    MICLASH_INSTALLED_VER=2.5.2_rc5-r1
+    MICLASH_RELEASE_NORM=2.5.2
+    installed_version=2.5.2_rc5-r1
+    install_arguments=''
+    die() { return 1; }
+    opkg() {
+        case "$1" in
+            install)
+                install_arguments="$*"
+                installed_version=2.5.2-r1
+                ;;
+            list-installed)
+                printf 'luci-app-miclash - %s\n' "$installed_version"
+                ;;
+            *) return 1 ;;
+        esac
+    }
+
+    install_miclash_package
+    case " $install_arguments " in
+        *' --force-downgrade '*) ;;
+        *) echo 'opkg RC-to-stable transition did not allow the selected downgrade' >&2; exit 1 ;;
+    esac
+
+    INSTALL_ACTION=reinstall
+    MICLASH_INSTALLED_VER=2.5.2_rc5-r1
+    installed_version=2.5.2_rc5-r1
+    install_arguments=''
+    install_miclash_package
+    case " $install_arguments " in
+        *' --force-reinstall '*) ;;
+        *) echo 'opkg RC-to-stable reinstall did not force reinstall' >&2; exit 1 ;;
+    esac
+    case " $install_arguments " in
+        *' --force-downgrade '*) ;;
+        *) echo 'opkg RC-to-stable reinstall did not authorize the selected downgrade' >&2; exit 1 ;;
+    esac
+
+    INSTALL_ACTION=update
+    installed_version=2.5.2_rc5-r1
+    opkg() {
+        case "$1" in
+            install) install_arguments="$*" ;;
+            list-installed) printf 'luci-app-miclash - %s\n' "$installed_version" ;;
+            *) return 1 ;;
+        esac
+    }
+    if install_miclash_package >/dev/null 2>&1; then
+        echo 'installer accepted a successful package-manager no-op' >&2
+        exit 1
+    fi
+
+    MICLASH_INSTALLED_VER=2.6.0-r1
+    installed_version=2.6.0-r1
+    install_arguments=''
+    opkg() {
+        case "$1" in
+            install)
+                install_arguments="$*"
+                installed_version=2.5.2-r1
+                ;;
+            list-installed) printf 'luci-app-miclash - %s\n' "$installed_version" ;;
+            *) return 1 ;;
+        esac
+    }
+    install_miclash_package
+    case " $install_arguments " in
+        *' --force-downgrade '*)
+            echo 'ordinary stable downgrade was authorized implicitly' >&2
+            exit 1
+            ;;
+    esac
+
+    PKG_MGR=apk
+    PKG_FILE=/tmp/luci-app-miclash-2.5.2.apk
+    MICLASH_INSTALLED_VER=2.5.1-r1
+    installed_version=2.5.2_rc5-r1
+    install_arguments=''
+    apk() {
+        case "$1" in
+            add)
+                install_arguments="$*"
+                installed_version=2.5.2-r1
+                ;;
+            list)
+                [ "$2" = -I ] || return 1
+                printf 'luci-app-miclash-%s noarch {/build/luci-app-miclash} () [installed]\n' \
+                    "$installed_version"
+                ;;
+            *) return 1 ;;
+        esac
+    }
+    install_miclash_package
+    case " $install_arguments " in
+        *" $PKG_FILE "*) ;;
+        *) echo 'apk transition did not constrain installation to the selected package' >&2; exit 1 ;;
+    esac
+    case " $install_arguments " in
+        *' --force-overwrite '*)
+            echo 'ordinary apk update enabled conflict overwrites' >&2
+            exit 1
+            ;;
+    esac
+
+    INSTALL_ACTION=reinstall
+    install_arguments=''
+    install_miclash_package
+    case " $install_arguments " in
+        *' --force-overwrite '*) ;;
+        *) echo 'explicit apk reinstall did not enable conflict overwrites' >&2; exit 1 ;;
+    esac
+)
+
 test_installer_download_fallback() (
     eval "$(require_function "$installer" github_proxy_url)"
     eval "$(require_function "$installer" retryable_curl_code)"
@@ -144,6 +267,7 @@ test_transition_download_fallback() (
 
 test_installer_download_fallback
 test_transition_download_fallback
+test_exact_package_transition
 
 run_installer() {
     if command -v ash >/dev/null 2>&1; then
@@ -183,5 +307,9 @@ if run_installer ready-release-selection-test --manager opkg \
     --fixture-dir "$fixtures/forged" --target-tag v5.0.0 >/dev/null 2>&1; then
     exit 1
 fi
+
+selected="$(run_installer ready-release-selection-test \
+    --manager apk --fixture-dir "$fixtures" --target-tag v2.5.2_rc1)"
+[ "$selected" = v2.5.2_rc1 ]
 
 echo 'ready release selection tests passed'

@@ -30,6 +30,9 @@ export function create(dependencies) {
 	    type(dependencies?.operations?.list) != 'function' ||
 	    type(dependencies?.service?.start) != 'function' ||
 	    type(dependencies?.service?.stop) != 'function' ||
+	    type(dependencies?.service?.enable) != 'function' ||
+	    type(dependencies?.service?.disable) != 'function' ||
+	    type(dependencies?.service?.enabled) != 'function' ||
 	    type(dependencies?.service?.reload) != 'function' ||
 	    type(dependencies?.service?.restart_service) != 'function' ||
 	    type(dependencies?.service?.recover_network) != 'function' ||
@@ -74,8 +77,33 @@ export function create(dependencies) {
 		return dependencies.operations.submit('service.' + action, source,
 			{ profile }, (ctx) => {
 				ctx.stage('service_' + action, 20, '');
-				if (action == 'start')
-					dependencies.service.start(profile);
+				if (action == 'start') {
+					let dispatched = false, failure = null;
+					try {
+						dispatched = true;
+						dependencies.service.start(profile);
+						ctx.stage('service_' + action + '_dispatched', 45, '');
+						ctx.stage('service_' + action + '_readiness', 70, '');
+						let ready = dependencies.service.wait_ready(
+							dependencies.clock.now() + SERVICE_READY_TIMEOUT_MS, profile, {});
+						if (ready?.ok !== true)
+							errors.fail('HEALTH_FAILED');
+						dependencies.service.enable();
+						if (dependencies.service.enabled() !== true)
+							errors.fail('HEALTH_FAILED');
+					}
+					catch (error) { failure = errors.normalize(error).code; }
+					if (failure != null) {
+						let rollback_failed = false;
+						if (dispatched)
+							try { dependencies.service.stop(profile); }
+							catch (error) { rollback_failed = true; }
+						if (dispatched)
+							try { dependencies.service.disable(); }
+							catch (error) { rollback_failed = true; }
+						errors.fail(rollback_failed ? 'HEALTH_FAILED' : failure);
+					}
+				}
 				else if (action == 'stop')
 					dependencies.service.stop(profile);
 				else if (action == 'reload') {
@@ -86,14 +114,21 @@ export function create(dependencies) {
 				else
 					dependencies.service.restart_service(profile);
 
-				ctx.stage('service_' + action + '_dispatched', 45, '');
-				ctx.stage('service_' + action + '_readiness', 70, '');
-				let ready = dependencies.service.wait_ready(
-					dependencies.clock.now() + (action == 'stop'
-						? SERVICE_STOP_TIMEOUT_MS : SERVICE_READY_TIMEOUT_MS), profile,
-					action == 'stop' ? { stopped: true } : {});
-				if (ready?.ok !== true)
-					errors.fail('HEALTH_FAILED');
+				if (action != 'start') {
+					ctx.stage('service_' + action + '_dispatched', 45, '');
+					ctx.stage('service_' + action + '_readiness', 70, '');
+					let ready = dependencies.service.wait_ready(
+						dependencies.clock.now() + (action == 'stop'
+							? SERVICE_STOP_TIMEOUT_MS : SERVICE_READY_TIMEOUT_MS), profile,
+						action == 'stop' ? { stopped: true } : {});
+					if (ready?.ok !== true)
+						errors.fail('HEALTH_FAILED');
+					if (action == 'stop') {
+						dependencies.service.disable();
+						if (dependencies.service.enabled() !== false)
+							errors.fail('HEALTH_FAILED');
+					}
+				}
 				ctx.stage('ready', 100, '');
 			});
 	};
