@@ -18,6 +18,27 @@ export function create(dependencies) {
 		fail('INVALID_ARGUMENT');
 	let previous = null;
 
+	function read_connections() {
+		let connections;
+		try {
+			connections = dependencies.request('/connections');
+		}
+		catch (error) { return null; }
+		if (connections?.ok !== true || type(connections.data) != 'object' ||
+			type(connections.data.connections) != 'array')
+			return null;
+		let upload_total = nonnegative(connections.data.uploadTotal);
+		let download_total = nonnegative(connections.data.downloadTotal);
+		let memory_bytes = nonnegative(connections.data.memory);
+		let observed_at;
+		try { observed_at = nonnegative(dependencies.now()); }
+		catch (error) { observed_at = null; }
+		if (upload_total == null || download_total == null || memory_bytes == null || observed_at == null)
+			return null;
+		return { upload_total, download_total, memory_bytes, observed_at,
+			connections: length(connections.data.connections) };
+	};
+
 	function status() {
 		let service;
 		try { service = dependencies.service_state(); }
@@ -30,53 +51,36 @@ export function create(dependencies) {
 			return unavailable(false);
 		}
 
-		let connections;
-		try {
-			connections = dependencies.request('/connections');
-		}
-		catch (error) {
-			previous = null;
-			return unavailable(true);
-		}
-		if (connections?.ok !== true || type(connections.data) != 'object' ||
-			type(connections.data.connections) != 'array') {
-			previous = null;
-			return unavailable(true);
-		}
-
-		let upload_total = nonnegative(connections.data.uploadTotal);
-		let download_total = nonnegative(connections.data.downloadTotal);
-		let memory_bytes = nonnegative(connections.data.memory);
-		let observed_at;
-		try { observed_at = nonnegative(dependencies.now()); }
-		catch (error) { observed_at = null; }
-		if (upload_total == null || download_total == null || memory_bytes == null || observed_at == null) {
+		let current = null;
+		for (let attempt = 0; attempt < 2 && current == null; attempt++)
+			current = read_connections();
+		if (current == null) {
 			previous = null;
 			return unavailable(true);
 		}
 
 		let upload_rate = 0, download_rate = 0;
-		if (previous != null && observed_at > previous.observed_at &&
-			upload_total >= previous.upload_total && download_total >= previous.download_total) {
-			let elapsed = observed_at - previous.observed_at;
-			upload_rate = nonnegative((upload_total - previous.upload_total) * 1000 / elapsed);
-			download_rate = nonnegative((download_total - previous.download_total) * 1000 / elapsed);
+		if (previous != null && current.observed_at > previous.observed_at &&
+			current.upload_total >= previous.upload_total && current.download_total >= previous.download_total) {
+			let elapsed = current.observed_at - previous.observed_at;
+			upload_rate = nonnegative((current.upload_total - previous.upload_total) * 1000 / elapsed);
+			download_rate = nonnegative((current.download_total - previous.download_total) * 1000 / elapsed);
 			if (upload_rate == null || download_rate == null) {
 				upload_rate = 0;
 				download_rate = 0;
 			}
 		}
-		previous = { observed_at, upload_total, download_total };
+		previous = current;
 
 		return {
 			running: true,
 			available: true,
 			upload_rate,
 			download_rate,
-			upload_total,
-			download_total,
-			connections: length(connections.data.connections),
-			memory_bytes
+			upload_total: current.upload_total,
+			download_total: current.download_total,
+			connections: current.connections,
+			memory_bytes: current.memory_bytes
 		};
 	};
 

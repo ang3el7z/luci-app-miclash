@@ -1,7 +1,7 @@
 import { assert_equal, assert_true } from 'testlib';
 import * as runtime_metrics from 'miclash.runtime-metrics';
 
-let running = false, now = 1000, calls = [];
+let running = false, now = 1000, calls = [], queued_replies = [];
 let replies = {
 	'/connections': { ok: true, data: {
 		uploadTotal: 10485760, downloadTotal: 55155098,
@@ -14,6 +14,7 @@ let metrics = runtime_metrics.create({
 	now: () => now,
 	request: (path) => {
 		push(calls, path);
+		if (path == '/connections' && length(queued_replies)) return shift(queued_replies);
 		if (path == '/connections') return replies['/connections'];
 		return { ok: false, data: null };
 	}
@@ -45,12 +46,24 @@ snapshot = metrics.status();
 assert_equal(snapshot.upload_rate, 7680);
 assert_equal(snapshot.download_rate, 16794);
 
-replies['/connections'] = { ok: true, data: { memory: -1, connections: [] } };
-let malformed = metrics.status();
-assert_equal(malformed.running, true);
-assert_equal(malformed.available, false);
+let calls_before_retry = length(calls);
+queued_replies = [
+	{ ok: false, data: null },
+	{ ok: true, data: {
+		uploadTotal: 10501120, downloadTotal: 55188686,
+		memory: 55889100, connections: [ {}, {}, {} ]
+	} }
+];
+let recovered = metrics.status();
+assert_equal(recovered.running, true);
+assert_equal(recovered.available, true,
+	'a transient Mihomo connections failure must be retried before hiding live metrics');
+assert_equal(length(calls), calls_before_retry + 2);
 
-replies['/connections'] = { ok: false, data: null };
+queued_replies = [
+	{ ok: true, data: { memory: -1, connections: [] } },
+	{ ok: false, data: null }
+];
 let unavailable = metrics.status();
 assert_equal(unavailable.running, true);
 assert_equal(unavailable.available, false);
