@@ -56,6 +56,32 @@ export function create(runtime, target) {
 		for (let index = 0; index < depth; index++) output += '  ';
 		return output;
 	};
+	function write_value(value, depth) {
+		let kind = type(value);
+		if (kind != 'array' && kind != 'object') {
+			write(sprintf('%J', value));
+			return;
+		}
+		let count = 0;
+		write(kind == 'array' ? '[' : '{');
+		if (kind == 'array') {
+			for (let item in value) {
+				if (count++) write(',');
+				write('\n' + indentation(depth + 1));
+				write_value(item, depth + 1);
+			}
+		}
+		else {
+			for (let name, item in value) {
+				if (count++) write(',');
+				write('\n' + indentation(depth + 1));
+				write(sprintf('%J', name) + ': ');
+				write_value(item, depth + 1);
+			}
+		}
+		if (count) write('\n' + indentation(depth));
+		write(kind == 'array' ? ']' : '}');
+	};
 	function separator(container) {
 		if (container.count++) write(',');
 		write('\n' + indentation(length(stack)));
@@ -98,7 +124,7 @@ export function create(runtime, target) {
 			object_member(name); write('{'); push(stack, { kind: 'object', count: 0 });
 		},
 		field: (name, value) => {
-			object_member(name); write(sprintf('%J', value));
+			object_member(name); write_value(value, length(stack));
 		},
 		begin_array_field: (name) => {
 			object_member(name); write('['); push(stack, { kind: 'array', count: 0 });
@@ -108,7 +134,7 @@ export function create(runtime, target) {
 		},
 		string_chunk,
 		end_string: () => close('string', '"'),
-		item: (value) => { array_value(); write(sprintf('%J', value)); },
+		item: (value) => { array_value(); write_value(value, length(stack)); },
 		end_array: () => close('array', ']'),
 		end_object: () => close('object', '}'),
 		finish: () => {

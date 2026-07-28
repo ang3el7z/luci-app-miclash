@@ -446,7 +446,6 @@ jobs:
             --artifacts-dir artifacts \
             --output-dir release_files \
             --installer install-miclash.sh \
-            --transition-installer install-miclash-upgrade-0-9-x-to-2.x.x.sh \
             --tag "$TAG_NAME" \
             --source-tag-sha "$SOURCE_TAG_SHA" \
             --synced-build-sha "$SYNCED_BUILD_SHA"
