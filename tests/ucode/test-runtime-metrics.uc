@@ -1,11 +1,8 @@
 import { assert_equal, assert_true } from 'testlib';
 import * as runtime_metrics from 'miclash.runtime-metrics';
 
-let running = false, calls = [];
+let running = false, now = 1000, calls = [];
 let replies = {
-	'/traffic': { ok: true, data: {
-		up: 7680, down: 16794
-	} },
 	'/connections': { ok: true, data: {
 		uploadTotal: 10485760, downloadTotal: 55155098,
 		memory: 55889100, connections: [ {}, {}, {} ]
@@ -14,9 +11,11 @@ let replies = {
 
 let metrics = runtime_metrics.create({
 	service_state: () => ({ running }),
+	now: () => now,
 	request: (path) => {
 		push(calls, path);
-		return replies[path];
+		if (path == '/connections') return replies['/connections'];
+		return { ok: false, data: null };
 	}
 });
 
@@ -29,13 +28,22 @@ running = true;
 let snapshot = metrics.status();
 assert_equal(snapshot.running, true);
 assert_equal(snapshot.available, true);
-assert_equal(snapshot.upload_rate, 7680);
-assert_equal(snapshot.download_rate, 16794);
+assert_equal(snapshot.upload_rate, 0);
+assert_equal(snapshot.download_rate, 0);
 assert_equal(snapshot.upload_total, 10485760);
 assert_equal(snapshot.download_total, 55155098);
 assert_equal(snapshot.connections, 3);
 assert_equal(snapshot.memory_bytes, 55889100);
-assert_equal(join(',', calls), '/traffic,/connections');
+assert_equal(join(',', calls), '/connections');
+
+now = 3000;
+replies['/connections'] = { ok: true, data: {
+	uploadTotal: 10501120, downloadTotal: 55188686,
+	memory: 55889100, connections: [ {}, {}, {} ]
+} };
+snapshot = metrics.status();
+assert_equal(snapshot.upload_rate, 7680);
+assert_equal(snapshot.download_rate, 16794);
 
 replies['/connections'] = { ok: true, data: { memory: -1, connections: [] } };
 let malformed = metrics.status();

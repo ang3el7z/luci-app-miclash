@@ -1022,6 +1022,7 @@ export function compose(runtime, overrides) {
 		};
 		let runtime_metrics_domain = modules.runtime_metrics.create({
 			service_state: () => state_model.current()?.observed?.service,
+			now: () => runtime.clock.now(),
 			request: (path) => modules.mihomo_api.request(runtime, 'GET', path, null, 'config.yaml')
 		});
 		app.runtime_metrics = () => runtime_metrics_domain.status();
