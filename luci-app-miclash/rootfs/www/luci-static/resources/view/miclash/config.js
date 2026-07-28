@@ -12,6 +12,7 @@
 'require view.miclash.subscription';
 'require view.miclash.editor';
 'require view.miclash.api';
+'require view.miclash.runtime-metrics-panel';
 'require view.miclash.diagnostics-panel';
 'require view.miclash.settings-panels';
 'require view.miclash.devices-panel';
@@ -62,6 +63,9 @@ let developerTapTimes = [];
 let developerExpiryTimer = null;
 let releaseRefreshPromise = null;
 const performanceOwner = view_miclash_performance_panel.create();
+const runtimeMetricsOwner = view_miclash_runtime_metrics_panel.createOwner({
+	createClient: () => view_miclash_api.create()
+});
 const diagnosticsOwner = view_miclash_diagnostics_panel.createOwner({
 	createClient: () => view_miclash_api.create(),
 	createPanel: (options) => view_miclash_diagnostics_panel.create(options)
@@ -348,6 +352,7 @@ function suspendForSessionExpiry() {
 	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
 	updatePollTimer = view_miclash_ui_shell.stopInterval(updatePollTimer);
 	diagnosticsOwner.destroy();
+	runtimeMetricsOwner.destroy();
 	notificationOwner.destroy();
 	managementOwner.destroy();
 	if (configApi) configApi.destroy();
@@ -358,6 +363,7 @@ function suspendForBackendRestart() {
 	logPollTimer = view_miclash_ui_shell.stopInterval(logPollTimer);
 	updatePollTimer = view_miclash_ui_shell.stopInterval(updatePollTimer);
 	diagnosticsOwner.destroy();
+	runtimeMetricsOwner.destroy();
 	notificationOwner.destroy();
 	managementOwner.destroy();
 }
@@ -2447,6 +2453,8 @@ function buildPageHtml() {
 			'>' + safeText(_('Dashboard')) + '</button>' +
 		'</div>' +
 
+		'<section id="sbox-runtime-metrics" class="cbi-section sbox-runtime-metrics-section" aria-label="' + safeText(_('Live traffic')) + '" hidden></section>' +
+
 		'<div class="cbi-section">' +
 			'<div class="cbi-tabmenu sbox-tabs">' +
 				'<button type="button" class="cbi-tab sbox-tab" data-ctrl-tab="control">' + safeText(_('Control')) + '</button>' +
@@ -2534,6 +2542,7 @@ function buildPageHtml() {
 
 function updateHeaderAndControlDom() {
 	if (!pageRoot) return;
+	runtimeMetricsOwner.setActive(appState.serviceRunning);
 
 	const status = pageRoot.querySelector('#sbox-status');
 	const statusLabel = pageRoot.querySelector('#sbox-status-label');
@@ -3670,6 +3679,7 @@ return view.extend({
 		notificationOwner.destroy();
 		managementOwner.destroy();
 		performanceOwner.destroy();
+		runtimeMetricsOwner.destroy();
 		releaseConfigRuntime();
 		const generation = ++pageGeneration;
 		appState.configProfiles = CONFIG_PROFILES.slice();
@@ -3716,7 +3726,9 @@ return view.extend({
 		configApi = view_miclash_api.create();
 
 		diagnosticsOwner.replace();
+		runtimeMetricsOwner.replace();
 		managementOwner.replace();
+		runtimeMetricsOwner.mount(pageRoot.querySelector('#sbox-runtime-metrics'));
 		bindControlAndHeaderEvents();
 		bindConfigEvents();
 		bindTabEvents();
@@ -3780,6 +3792,7 @@ return view.extend({
 		developerTapTimes = [];
 		cfgTabSetter = null;
 		diagnosticsOwner.destroy();
+		runtimeMetricsOwner.destroy();
 		notificationOwner.destroy();
 		managementOwner.destroy();
 		performanceOwner.destroy();

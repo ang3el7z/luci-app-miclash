@@ -1,0 +1,220 @@
+'use strict';
+'require baseclass';
+
+const POLL_MS = 2000;
+const MAX_SAMPLES = 60;
+
+function number(value) {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function formatBytes(value, suffix) {
+	const amount = number(value);
+	const units = [ 'B', 'KiB', 'MiB', 'GiB', 'TiB' ];
+	let unit = 0;
+	let scaled = amount;
+	while (scaled >= 1024 && unit < units.length - 1) {
+		scaled /= 1024;
+		unit++;
+	}
+	const precision = scaled >= 100 || unit === 0 ? 0 : (scaled >= 10 ? 1 : 2);
+	return scaled.toFixed(precision).replace(/\.0+$/, '') + ' ' + units[unit] + (suffix || '');
+}
+
+function formatCount(value) {
+	return String(Math.round(number(value)));
+}
+
+function pushSample(samples, value) {
+	samples.push(number(value));
+	if (samples.length > MAX_SAMPLES) samples.splice(0, samples.length - MAX_SAMPLES);
+}
+
+function sparkline(values) {
+	const points = values.length ? values : [ 0 ];
+	const maximum = Math.max(1, ...points);
+	const width = 240;
+	const height = 48;
+	const step = points.length > 1 ? width / (points.length - 1) : width;
+	const path = points.map((value, index) => {
+		const x = Math.round(index * step * 100) / 100;
+		const y = Math.round((height - (number(value) / maximum) * (height - 5)) * 100) / 100;
+		return x + ',' + y;
+	}).join(' ');
+	return E('svg', {
+		'class': 'sbox-runtime-metric-sparkline', 'viewBox': '0 0 ' + width + ' ' + height,
+		'preserveAspectRatio': 'none', 'aria-hidden': 'true', 'focusable': 'false'
+	}, [ E('polyline', { 'class': 'sbox-runtime-metric-line', 'points': path }) ]);
+}
+
+function metricCard(id, label, value, footer, samples) {
+	return E('article', { 'id': id, 'class': 'sbox-settings-card sbox-runtime-metric-card' }, [
+		E('div', { 'class': 'sbox-runtime-metric-label' }, label),
+		E('div', { 'class': 'sbox-runtime-metric-value' }, value),
+		sparkline(samples),
+		E('div', { 'class': 'sbox-runtime-metric-footer' }, footer)
+	]);
+}
+
+function create(options) {
+	options = options || {};
+	const api = options.api;
+	const doc = options.document || document;
+	const win = options.window || window;
+	if (!api || typeof api.runtimeMetrics !== 'function')
+		throw new Error('Typed runtime metrics API is required');
+
+	let host = null;
+	let active = false;
+	let destroyed = false;
+	let pollTimer = null;
+	let refreshPromise = null;
+	let snapshot = null;
+	const samples = { upload: [], download: [], connections: [] };
+
+	function clearPoll() {
+		if (pollTimer != null) win.clearTimeout(pollTimer);
+		pollTimer = null;
+	}
+
+	function reset() {
+		snapshot = null;
+		samples.upload = [];
+		samples.download = [];
+		samples.connections = [];
+	}
+
+	function paint() {
+		if (!host) return;
+		host.hidden = !active;
+		if (!active) {
+			host.replaceChildren();
+			return;
+		}
+		const available = snapshot?.available === true;
+		const unavailable = _('Unavailable');
+		const uploadRate = available ? formatBytes(snapshot.upload_rate, '/s') : unavailable;
+		const downloadRate = available ? formatBytes(snapshot.download_rate, '/s') : unavailable;
+		const connectionCount = available ? formatCount(snapshot.connections) : unavailable;
+		host.replaceChildren(E('div', { 'class': 'sbox-runtime-metrics-grid', 'role': 'status',
+			'aria-live': 'polite', 'aria-atomic': 'true' }, [
+			metricCard('sbox-runtime-metric-upload', _('Uploaded'), uploadRate,
+				available ? _('Total: %s').format(formatBytes(snapshot.upload_total)) : unavailable, samples.upload),
+			metricCard('sbox-runtime-metric-download', _('Downloaded'), downloadRate,
+				available ? _('Total: %s').format(formatBytes(snapshot.download_total)) : unavailable, samples.download),
+			metricCard('sbox-runtime-metric-connections', _('Connections'), connectionCount,
+				available ? _('Memory: %s').format(formatBytes(snapshot.memory_bytes)) : unavailable, samples.connections)
+		]));
+	}
+
+	function schedule() {
+		clearPoll();
+		if (destroyed || !active || doc.hidden) return;
+		pollTimer = win.setTimeout(() => {
+			pollTimer = null;
+			refresh();
+		}, POLL_MS);
+	}
+
+	function ingest(next) {
+		if (!next || next.running !== true) {
+			active = false;
+			reset();
+			paint();
+			return;
+		}
+		snapshot = next.available === true ? next : { running: true, available: false };
+		if (snapshot.available) {
+			pushSample(samples.upload, snapshot.upload_rate);
+			pushSample(samples.download, snapshot.download_rate);
+			pushSample(samples.connections, snapshot.connections);
+		}
+		paint();
+	}
+
+	function refresh() {
+		if (destroyed || !active || doc.hidden || refreshPromise) return refreshPromise;
+		refreshPromise = Promise.resolve(api.runtimeMetrics()).then((next) => {
+			if (!destroyed && active) ingest(next);
+		}).catch(() => {
+			if (!destroyed && active) {
+				snapshot = { running: true, available: false };
+				paint();
+			}
+		}).finally(() => {
+			refreshPromise = null;
+			schedule();
+		});
+		return refreshPromise;
+	}
+
+	function visibilityChanged() {
+		if (doc.hidden) clearPoll();
+		else if (active) refresh();
+	}
+
+	function mount(node) {
+		host = node;
+		paint();
+		if (active && !doc.hidden) refresh();
+		return host;
+	}
+
+	function setActive(value) {
+		const wasActive = active;
+		active = value === true;
+		if (!active) {
+			clearPoll();
+			reset();
+			paint();
+			return false;
+		}
+		if (!wasActive) {
+			paint();
+			if (!doc.hidden) refresh();
+		}
+		return true;
+	}
+
+	function destroy() {
+		if (destroyed) return;
+		destroyed = true;
+		clearPoll();
+		doc.removeEventListener('visibilitychange', visibilityChanged);
+		if (typeof api.destroy === 'function') api.destroy();
+		host = null;
+	}
+
+	doc.addEventListener('visibilitychange', visibilityChanged);
+	return { mount, setActive, refresh, destroy };
+}
+
+function createOwner(options) {
+	if (!options || typeof options.createClient !== 'function')
+		throw new Error('Runtime metrics owner factory is required');
+	let panel = null;
+	return {
+		replace() {
+			if (panel) panel.destroy();
+			panel = create({ api: options.createClient() });
+			return panel;
+		},
+		mount(node) {
+			if (panel && node) panel.mount(node);
+			return panel;
+		},
+		setActive(value) {
+			return panel ? panel.setActive(value) : false;
+		},
+		destroy() {
+			if (!panel) return false;
+			const owned = panel;
+			panel = null;
+			owned.destroy();
+			return true;
+		}
+	};
+}
+
+return baseclass.extend({ create, createOwner });

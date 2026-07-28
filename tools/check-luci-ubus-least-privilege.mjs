@@ -14,7 +14,7 @@ const expectedNames = 'status,overview,health,operation_get,operation_list,' +
 	'operational_settings_apply,config_swap,config_external_adopt,settings_get,settings_set,' +
 	'guard_transition,' +
 	'subscription_get,subscription_set,subscription_update,update_release,update_miclash,' +
-	'update_mihomo,update_rollback_mihomo,memory_status,memory_reset_baseline,memory_settings,' +
+	'update_mihomo,update_rollback_mihomo,memory_status,memory_reset_baseline,memory_settings,runtime_metrics,' +
 	'diagnostics_summary,diagnostics_create_report,diagnostics_route_test,' +
 	'telegram_status,telegram_settings,telegram_test,telegram_ingest,' +
 	'devices_list,devices_timezones,devices_policy_list,devices_policy_set,devices_policy_delete,' +
@@ -24,7 +24,7 @@ const expectedNames = 'status,overview,health,operation_get,operation_list,' +
 	'transfer_abort';
 const expectedRead = new Set([
 	'status', 'overview', 'health', 'operation_get', 'operation_list', 'config_list', 'settings_get',
-	'subscription_get', 'update_release', 'memory_status', 'memory_settings',
+	'subscription_get', 'update_release', 'memory_status', 'memory_settings', 'runtime_metrics',
 	'diagnostics_summary', 'telegram_status', 'telegram_settings',
 	'devices_list', 'devices_timezones', 'devices_policy_list', 'notifications_settings',
 	'notifications_list', 'logs_read', 'system_info', 'network_interfaces', 'ruleset_list',

@@ -510,7 +510,8 @@ export function method_table(app, transfers) {
 		'network_recover', 'developer_uninstall',
 		'config_list', 'config_read',
 		'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
-		'settings_get', 'settings_set', 'guard_transition', 'set_draining', 'telegram_ingest'
+		'settings_get', 'settings_set', 'guard_transition', 'set_draining', 'telegram_ingest',
+		'runtime_metrics'
 	]) if (type(app?.[name]) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 
@@ -713,6 +714,10 @@ export function method_table(app, transfers) {
 		memory_settings: method(empty, (arguments) => {
 			exact(arguments, {});
 			return domain_read('memory_settings', {});
+		}),
+		runtime_metrics: method(empty, (arguments) => {
+			exact(arguments, {});
+			return domain_read('runtime_metrics', {});
 		}),
 		diagnostics_summary: method(empty, (arguments) => {
 			exact(arguments, {});

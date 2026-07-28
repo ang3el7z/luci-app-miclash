@@ -42,6 +42,7 @@ let app = {
 	},
 	update_rollback_mihomo: () => operation('updates.rollback'),
 	memory_status: () => ({ phase: 'monitoring' }), memory_settings: () => ({ enabled: true }),
+	runtime_metrics: () => ({ running: true, available: true, connections: 3 }),
 	memory_reset_baseline: () => operation('memory.reset'), diagnostics_summary: () => ({ ok: true }),
 	diagnostics_create_report: () => ({
 		operation_id: '0000000001000-00000001-0123456789abcdef',
@@ -92,6 +93,7 @@ for (let removed in [ 'config_read_draft', 'config_save_draft', 'history_list',
 
 assert_equal(methods.status.call({ args: {} }).state, 'ready');
 assert_equal(methods.overview.call({ args: {} }).state, 'current');
+assert_equal(methods.runtime_metrics.call({ args: {} }).connections, 3);
 assert_equal(methods.config_read.call({ args: { profile: 'config.yaml' } }).content, 'mode: rule\n');
 assert_true(type(methods.config_apply.call({ args: {
 	profile: 'config.yaml', content: 'mode: rule\n', source: 'luci'

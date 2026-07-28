@@ -2426,6 +2426,24 @@ msgstr "诊断"
 msgid "Loading service state…"
 msgstr "正在加载服务状态…"
 
+msgid "Live traffic"
+msgstr "实时流量"
+
+msgid "Uploaded"
+msgstr "上传"
+
+msgid "Downloaded"
+msgstr "下载"
+
+msgid "Connections"
+msgstr "连接"
+
+msgid "Total: %s"
+msgstr "总计：%s"
+
+msgid "Memory: %s"
+msgstr "内存：%s"
+
 msgid "Performance"
 msgstr "性能"
 

@@ -21,6 +21,7 @@ import * as scheduler from 'miclash.scheduler';
 import * as updates from 'miclash.updates';
 import * as http from 'miclash.http';
 import * as mihomo_api from 'miclash.mihomo-api';
+import * as runtime_metrics from 'miclash.runtime-metrics';
 import * as diagnostics from 'miclash.diagnostics';
 import * as route_test from 'miclash.route-test';
 import * as routing from 'miclash.routing';
@@ -450,7 +451,7 @@ export function compose(runtime, overrides) {
 		operations, settings, storage, service, config, state, application,
 		api, memory, devices, notify, notification_settings, telegram, mutation_lock,
 		reconcile_adapter, network, interface_scope, subscription, scheduler, updates, http, diagnostics, route_test, routing,
-		mihomo_api, app_update_scheduler, device_vendor_update, provider_data, provider_sync,
+		mihomo_api, runtime_metrics, app_update_scheduler, device_vendor_update, provider_data, provider_sync,
 		diagnostics_evidence,
 		...(overrides ?? {})
 	};
@@ -1019,6 +1020,11 @@ export function compose(runtime, overrides) {
 				}
 			};
 		};
+		let runtime_metrics_domain = modules.runtime_metrics.create({
+			service_state: () => state_model.current()?.observed?.service,
+			request: (path) => modules.mihomo_api.request(runtime, 'GET', path, null, 'config.yaml')
+		});
+		app.runtime_metrics = () => runtime_metrics_domain.status();
 		let domain_settings = { get: reconcile_settings.get, set: reconcile_settings.set,
 			validate: settings_domain.validate };
 		let subscription_domain = modules.subscription.create({

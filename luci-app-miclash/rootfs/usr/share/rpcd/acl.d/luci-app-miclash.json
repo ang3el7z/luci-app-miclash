@@ -6,7 +6,7 @@
         "miclash": [
           "status", "overview", "health", "operation_get", "operation_list",
           "config_list", "settings_get", "subscription_get",
-          "update_release", "memory_status", "memory_settings",
+          "update_release", "memory_status", "memory_settings", "runtime_metrics",
           "diagnostics_summary", "telegram_status", "telegram_settings",
           "devices_list", "devices_timezones", "devices_policy_list",
           "notifications_settings", "notifications_list", "logs_read", "system_info",

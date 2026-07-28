@@ -1,0 +1,50 @@
+import { assert_equal, assert_true } from 'testlib';
+import * as runtime_metrics from 'miclash.runtime-metrics';
+
+let running = false, calls = [];
+let replies = {
+	'/traffic': { ok: true, data: {
+		up: 7680, down: 16794, upTotal: 10485760, downTotal: 55155098
+	} },
+	'/connections': { ok: true, data: {
+		memory: 55889100, connections: [ {}, {}, {} ]
+	} }
+};
+
+let metrics = runtime_metrics.create({
+	service_state: () => ({ running }),
+	request: (path) => {
+		push(calls, path);
+		return replies[path];
+	}
+});
+
+let stopped = metrics.status();
+assert_equal(stopped.running, false);
+assert_equal(stopped.available, false);
+assert_equal(length(calls), 0);
+
+running = true;
+let snapshot = metrics.status();
+assert_equal(snapshot.running, true);
+assert_equal(snapshot.available, true);
+assert_equal(snapshot.upload_rate, 7680);
+assert_equal(snapshot.download_rate, 16794);
+assert_equal(snapshot.upload_total, 10485760);
+assert_equal(snapshot.download_total, 55155098);
+assert_equal(snapshot.connections, 3);
+assert_equal(snapshot.memory_bytes, 55889100);
+assert_equal(join(',', calls), '/traffic,/connections');
+
+replies['/connections'] = { ok: true, data: { memory: -1, connections: [] } };
+let malformed = metrics.status();
+assert_equal(malformed.running, true);
+assert_equal(malformed.available, false);
+
+replies['/connections'] = { ok: false, data: null };
+let unavailable = metrics.status();
+assert_equal(unavailable.running, true);
+assert_equal(unavailable.available, false);
+
+assert_true(runtime_metrics.create != null);
+print('runtime metrics tests passed\n');

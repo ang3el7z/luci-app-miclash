@@ -8,6 +8,8 @@ const HTTPS_HELPER = '/usr/libexec/miclash/mihomo-https.uc';
 const METHODS = { GET: true, PUT: true, POST: true };
 const PATHS = {
 	'/version': { GET: true },
+	'/traffic': { GET: true },
+	'/connections': { GET: true },
 	'/rules': { GET: true },
 	'/configs': { GET: true },
 	'/configs?force=true': { PUT: true },

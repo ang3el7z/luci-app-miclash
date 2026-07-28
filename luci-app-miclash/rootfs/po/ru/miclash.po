@@ -2454,6 +2454,24 @@ msgstr "Диагностика"
 msgid "Loading service state…"
 msgstr "Загрузка состояния службы…"
 
+msgid "Live traffic"
+msgstr "Трафик в реальном времени"
+
+msgid "Uploaded"
+msgstr "Отправлено"
+
+msgid "Downloaded"
+msgstr "Загружено"
+
+msgid "Connections"
+msgstr "Подключения"
+
+msgid "Total: %s"
+msgstr "Всего: %s"
+
+msgid "Memory: %s"
+msgstr "Память: %s"
+
 msgid "Performance"
 msgstr "Производительность"
 
