@@ -4,11 +4,16 @@ set -eu
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 helper="$repo_root/luci-app-miclash/rootfs/usr/share/miclash/package-upgrade-recover"
+cache_bust_helper="$repo_root/luci-app-miclash/rootfs/usr/share/miclash/luci-cache-bust"
 initd="$repo_root/luci-app-miclash/rootfs/etc/init.d/miclashd"
 busybox="${BUSYBOX_BIN:-$(command -v busybox 2>/dev/null || true)}"
 
 [ -f "$helper" ] || {
 	echo 'package upgrade recovery helper missing' >&2
+	exit 1
+}
+[ -f "$cache_bust_helper" ] || {
+	echo 'LuCI cache-bust helper missing' >&2
 	exit 1
 }
 [ -f "$initd" ] || {
@@ -31,11 +36,13 @@ mkdir -p "$fixture/bin" "$fixture/dev" "$fixture/etc/init.d" "$fixture/etc/micla
 : > "$fixture/dev/null"
 chmod 0666 "$fixture/dev/null"
 cp "$busybox" "$fixture/bin/busybox"
-for applet in sh stat sed grep rm rmdir sleep mkdir chmod chown ln cat cmp cp mv wc readlink tr; do
+for applet in sh stat sed grep rm rmdir sleep mkdir chmod chown ln cat cmp cp mv wc readlink touch tr; do
 	ln "$fixture/bin/busybox" "$fixture/bin/$applet"
 done
 cp "$helper" "$fixture/usr/share/miclash/package-upgrade-recover"
 chmod 0700 "$fixture/usr/share/miclash/package-upgrade-recover"
+cp "$cache_bust_helper" "$fixture/usr/share/miclash/luci-cache-bust"
+chmod 0700 "$fixture/usr/share/miclash/luci-cache-bust"
 cp "$initd" "$fixture/etc/init.d/miclashd-init"
 chmod 0700 "$fixture/etc/init.d/miclashd-init"
 sed -n '/^define Package\/\$(PKG_NAME)\/preinst$/,/^endef$/p' \
