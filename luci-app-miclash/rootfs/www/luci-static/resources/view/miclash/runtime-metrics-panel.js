@@ -3,6 +3,7 @@
 
 const POLL_MS = 2000;
 const MAX_SAMPLES = 60;
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
 function number(value) {
 	const parsed = Number(value);
@@ -31,6 +32,23 @@ function pushSample(samples, value) {
 	if (samples.length > MAX_SAMPLES) samples.splice(0, samples.length - MAX_SAMPLES);
 }
 
+function svgElement(doc, tag, attrs, children) {
+	if (!doc || typeof doc.createElementNS !== 'function') return E(tag, attrs, children);
+	const node = doc.createElementNS(SVG_NAMESPACE, tag);
+	Object.keys(attrs || {}).forEach((name) => node.setAttribute(name, attrs[name]));
+	function append(child) {
+		if (child == null) return;
+		if (Array.isArray(child)) {
+			child.forEach(append);
+			return;
+		}
+		node.appendChild(typeof child === 'string' || typeof child === 'number'
+			? doc.createTextNode(String(child)) : child);
+	}
+	append(children);
+	return node;
+}
+
 function chartPath(points) {
 	if (points.length < 2)
 		return 'M ' + points[0].x + ' ' + points[0].y + ' L 206 ' + points[0].y;
@@ -50,7 +68,7 @@ function chartPath(points) {
 	return path;
 }
 
-function sparkline(values, id, formatScale) {
+function sparkline(doc, values, id, formatScale) {
 	const points = values.length ? values : [ 0 ];
 	const maximum = Math.max(1, ...points);
 	const width = 206;
@@ -63,29 +81,31 @@ function sparkline(values, id, formatScale) {
 	const line = chartPath(coordinates);
 	const area = line + ' L ' + width + ' ' + height + ' L 0 ' + height + ' Z';
 	const gradientId = id + '-gradient';
-	return E('svg', {
+	return svgElement(doc, 'svg', {
 		'class': 'sbox-runtime-metric-sparkline', 'viewBox': '0 0 240 52',
 		'preserveAspectRatio': 'none', 'aria-hidden': 'true', 'focusable': 'false'
 	}, [
-		E('defs', {}, E('linearGradient', { 'id': gradientId, 'x1': '0', 'y1': '0', 'x2': '0', 'y2': '1' }, [
-			E('stop', { 'class': 'sbox-runtime-metric-area-start', 'offset': '0%' }),
-			E('stop', { 'class': 'sbox-runtime-metric-area-end', 'offset': '100%' })
+		svgElement(doc, 'defs', {}, svgElement(doc, 'linearGradient', {
+			'id': gradientId, 'x1': '0', 'y1': '0', 'x2': '0', 'y2': '1'
+		}, [
+			svgElement(doc, 'stop', { 'class': 'sbox-runtime-metric-area-start', 'offset': '0%' }),
+			svgElement(doc, 'stop', { 'class': 'sbox-runtime-metric-area-end', 'offset': '100%' })
 		])),
-		E('path', { 'class': 'sbox-runtime-metric-area', 'd': area, 'fill': 'url(#' + gradientId + ')' }),
-		E('path', { 'class': 'sbox-runtime-metric-line', 'd': line }),
-		E('g', { 'class': 'sbox-runtime-metric-scale' }, [
-			E('text', { 'x': '239', 'y': '12', 'text-anchor': 'end' }, formatScale(maximum)),
-			E('text', { 'x': '239', 'y': '36', 'text-anchor': 'end' }, formatScale(maximum / 2))
+		svgElement(doc, 'path', { 'class': 'sbox-runtime-metric-area', 'd': area, 'fill': 'url(#' + gradientId + ')' }),
+		svgElement(doc, 'path', { 'class': 'sbox-runtime-metric-line', 'd': line }),
+		svgElement(doc, 'g', { 'class': 'sbox-runtime-metric-scale' }, [
+			svgElement(doc, 'text', { 'x': '239', 'y': '12', 'text-anchor': 'end' }, formatScale(maximum)),
+			svgElement(doc, 'text', { 'x': '239', 'y': '36', 'text-anchor': 'end' }, formatScale(maximum / 2))
 		])
 	]);
 }
 
-function metricCard(id, label, value, footer, samples, variant, formatScale) {
+function metricCard(doc, id, label, value, footer, samples, variant, formatScale) {
 	return E('article', { 'id': id, 'class': 'sbox-settings-card sbox-runtime-metric-card ' +
 		'sbox-runtime-metric-card--' + variant }, [
 		E('div', { 'class': 'sbox-runtime-metric-label' }, label),
 		E('div', { 'class': 'sbox-runtime-metric-value' }, value),
-		sparkline(samples, id, formatScale),
+		sparkline(doc, samples, id, formatScale),
 		E('div', { 'class': 'sbox-runtime-metric-footer' }, footer)
 	]);
 }
@@ -132,13 +152,13 @@ function create(options) {
 		const connectionCount = available ? formatCount(snapshot.connections) : unavailable;
 		host.replaceChildren(E('div', { 'class': 'sbox-runtime-metrics-grid', 'role': 'status',
 			'aria-live': 'polite', 'aria-atomic': 'true' }, [
-			metricCard('sbox-runtime-metric-upload', _('Uploaded'), uploadRate,
+			metricCard(doc, 'sbox-runtime-metric-upload', _('Uploaded'), uploadRate,
 				available ? _('Total: %s').format(formatBytes(snapshot.upload_total)) : unavailable, samples.upload,
 				'upload', (value) => formatBytes(value, '/s')),
-			metricCard('sbox-runtime-metric-download', _('Downloaded'), downloadRate,
+			metricCard(doc, 'sbox-runtime-metric-download', _('Downloaded'), downloadRate,
 				available ? _('Total: %s').format(formatBytes(snapshot.download_total)) : unavailable, samples.download,
 				'download', (value) => formatBytes(value, '/s')),
-			metricCard('sbox-runtime-metric-connections', _('Connections'), connectionCount,
+			metricCard(doc, 'sbox-runtime-metric-connections', _('Connections'), connectionCount,
 				available ? _('Memory: %s').format(formatBytes(snapshot.memory_bytes)) : unavailable, samples.connections,
 				'connections', formatCount)
 		]));
@@ -160,12 +180,15 @@ function create(options) {
 			paint();
 			return;
 		}
-		snapshot = next.available === true ? next : { running: true, available: false };
-		if (snapshot.available) {
-			pushSample(samples.upload, snapshot.upload_rate);
-			pushSample(samples.download, snapshot.download_rate);
-			pushSample(samples.connections, snapshot.connections);
+		if (next.available !== true) {
+			if (snapshot?.available !== true) snapshot = { running: true, available: false };
+			paint();
+			return;
 		}
+		snapshot = next;
+		pushSample(samples.upload, snapshot.upload_rate);
+		pushSample(samples.download, snapshot.download_rate);
+		pushSample(samples.connections, snapshot.connections);
 		paint();
 	}
 
@@ -175,7 +198,7 @@ function create(options) {
 			if (!destroyed && active) ingest(next);
 		}).catch(() => {
 			if (!destroyed && active) {
-				snapshot = { running: true, available: false };
+				if (snapshot?.available !== true) snapshot = { running: true, available: false };
 				paint();
 			}
 		}).finally(() => {

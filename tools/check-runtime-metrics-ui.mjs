@@ -59,6 +59,7 @@ class MiniNode {
 	}
 	appendChild(child) { this.children.push(child); return child; }
 	replaceChildren(...children) { this.children = children; this.text = ''; }
+	setAttribute(name, value) { this.attrs[name] = String(value); }
 	set textContent(value) { this.text = String(value); this.children = []; }
 	get textContent() {
 		return this.text + this.children.map((child) => typeof child === 'string' ? child : child.textContent).join('');
@@ -88,6 +89,12 @@ const E = (tag, attrs, children) => {
 const documentListeners = new Map();
 const documentMock = {
 	hidden: false,
+	createElementNS(namespace, tag) {
+		const node = new MiniNode(tag);
+		node.namespaceURI = namespace;
+		return node;
+	},
+	createTextNode(value) { return String(value); },
 	addEventListener(type, listener) { documentListeners.set(type, listener); },
 	removeEventListener(type) { documentListeners.delete(type); }
 };
@@ -113,6 +120,7 @@ const runtimePanel = moduleApi.create({
 	api: {
 		async runtimeMetrics() {
 			metricCalls++;
+			if (metricCalls === 3) return { running: true, available: false };
 			return { running: true, available: true, upload_rate: 7680, download_rate: 16384,
 				upload_total: 10485760, download_total: 52428800, connections: 95, memory_bytes: 55889100 };
 		},
@@ -134,6 +142,8 @@ assert.equal(host.querySelectorAll('.sbox-runtime-metric-area').length, 3,
 	'live metric cards must render a filled trend area');
 assert.equal(host.querySelectorAll('.sbox-runtime-metric-scale').length, 3,
 	'live metric cards must render a right-side trend scale');
+assert.equal(host.querySelectorAll('.sbox-runtime-metric-sparkline')[0].namespaceURI,
+	'http://www.w3.org/2000/svg', 'trend graphics must use the SVG namespace');
 assert.match(host.querySelectorAll('.sbox-runtime-metric-area')[0].attrs.d,
 	/^M 0 5 L 206 5 L 206 48 L 0 48 Z$/,
 	'the first live sample must draw at its current level instead of the baseline');
@@ -143,6 +153,12 @@ await runtimePanel.refresh();
 assert.equal(metricCalls, 2, 'a visible panel must accept a second metrics snapshot');
 assert.match(host.querySelectorAll('.sbox-runtime-metric-line')[0].attrs.d, / C /,
 	'two live samples must render as a smoothed trend line');
+await runtimePanel.refresh();
+assert.equal(metricCalls, 3, 'a visible panel must tolerate one unavailable snapshot');
+assert.doesNotMatch(host.textContent, /Unavailable/,
+	'a single unavailable snapshot must keep the last displayed metrics visible');
+assert.equal(host.querySelectorAll('.sbox-runtime-metric-area').length, 3,
+	'a single unavailable snapshot must preserve the graph history');
 assert.equal([...timers.values()].filter((timer) => timer.delay === 2000).length, 1,
 	'visible service must schedule exactly one next metrics poll');
 runtimePanel.setActive(false);
