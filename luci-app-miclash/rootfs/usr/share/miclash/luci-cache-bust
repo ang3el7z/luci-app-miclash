@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -eu
+
+rm -rf /tmp/luci-indexcache /tmp/luci-indexcache.* /tmp/luci-modulecache /tmp/luci-modulecache.*
+rm -rf /var/luci-indexcache /var/luci-indexcache.* /var/luci-modulecache /var/luci-modulecache.*
+
+for package_db in /lib/apk/db/installed /usr/lib/opkg/status; do
+	[ -f "$package_db" ] && [ ! -L "$package_db" ] || continue
+	touch "$package_db" || exit 1
+	exit 0
+done
