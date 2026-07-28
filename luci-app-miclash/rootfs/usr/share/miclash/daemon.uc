@@ -1049,6 +1049,10 @@ export function compose(runtime, overrides) {
 		});
 		let updates_domain = modules.updates.create({
 			runtime, operations: operation_manager, service: service_adapter,
+			versions: () => {
+				let info = bounded_system_info(runtime);
+				return { miclash: info.app_version, mihomo: info.mihomo?.version };
+			},
 			settings: domain_settings
 		});
 		let app_update_domain = modules.app_update_scheduler.create({
@@ -1085,10 +1089,12 @@ export function compose(runtime, overrides) {
 			kind: arguments.kind, channel: arguments.channel, version: null
 		});
 		app.update_miclash = (arguments) => updates_domain.update_miclash({
-			version: null, channel: arguments.channel
+			version: arguments.version, channel: arguments.channel,
+			action: arguments.action
 		}, arguments.source);
 		app.update_mihomo = (arguments) => updates_domain.update_mihomo({
-			version: null, channel: arguments.channel
+			version: arguments.version, channel: arguments.channel,
+			action: arguments.action
 		}, arguments.source);
 		app.update_rollback_mihomo = (arguments) => {
 			let previous_id = updates_domain.status().previous_id;
@@ -1365,11 +1371,14 @@ export function compose(runtime, overrides) {
 				subscription_update: (url, source) => url == null
 					? subscription_domain.update({ profile: 'config.yaml', url: null }, source)
 					: subscription_domain.replace({ profile: 'config.yaml', url }, source),
-				update_miclash: (source) => updates_domain.update_miclash({
-					version: null, channel: null
+				update_release: (kind) => updates_domain.release_info({
+					kind, version: null, channel: null
+				}),
+				update_miclash: (action, version, source) => updates_domain.update_miclash({
+					action, version, channel: null
 				}, source),
-				update_mihomo: (source) => updates_domain.update_mihomo({
-					version: null, channel: null
+				update_mihomo: (action, version, source) => updates_domain.update_mihomo({
+					action, version, channel: null
 				}, source),
 				settings_set: app.settings_set,
 				guard_transition

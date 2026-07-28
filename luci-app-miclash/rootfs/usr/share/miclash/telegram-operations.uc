@@ -25,13 +25,14 @@ function operation(value) {
 	return value;
 };
 
-export function create(app, outbox, render) {
+export function create(app, outbox, render, wake_delivery) {
 	if (type(app) != 'object' || type(app.runtime?.clock?.now) != 'function' ||
 	    type(app.runtime?.random?.hex) != 'function' ||
 	    type(app.operations?.subscribe) != 'function' ||
 	    type(app.operations?.list) != 'function' || type(app.operations?.get) != 'function' ||
 	    type(outbox?.enqueue) != 'function' || type(outbox?.update) != 'function' ||
-	    type(outbox?.pending) != 'function' || type(render) != 'function') invalid();
+	    type(outbox?.pending) != 'function' || type(render) != 'function' ||
+	    type(wake_delivery) != 'function') invalid();
 	let closed = false;
 	function active() { if (closed) errors.fail('INTERRUPTED'); };
 	function receipt_id(operation_id) { return 'operation.' + operation_id; };
@@ -61,6 +62,8 @@ export function create(app, outbox, render) {
 			state,
 			payload: payload({ ...record, state }, entry.payload)
 		});
+		if (state == 'success' || state == 'failure' || state == 'interrupted')
+			wake_delivery();
 		return true;
 	};
 	let unsubscribe = app.operations.subscribe((record) => {
@@ -111,6 +114,7 @@ export function create(app, outbox, render) {
 							kind: 'system.reboot', stage: 'complete', progress: 100,
 							boot_id_before: entry.payload.boot_id_before, error: null
 						} });
+						wake_delivery();
 						recovered++;
 					}
 					continue;

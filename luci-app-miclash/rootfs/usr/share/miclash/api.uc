@@ -678,17 +678,25 @@ export function method_table(app, transfers) {
 			let channel = safe_id(arguments.channel);
 			return domain_read('update_release', { kind, channel });
 		}),
-		update_miclash: method({ channel: '', source: '' }, (arguments) => {
+		update_miclash: method({ channel: '', source: '', action: '', version: '' }, (arguments) => {
 			exact(arguments, { channel: { type: 'string', required: true },
-				source: { type: 'string' } });
+				source: { type: 'string' }, action: { type: 'string', required: true },
+				version: { type: 'string', required: true } });
 			return domain_operation('update_miclash', {
-				channel: safe_id(arguments.channel), source: source(arguments) });
+				channel: safe_id(arguments.channel),
+				action: schema.enum_value(arguments.action,
+					[ 'install', 'update', 'reinstall', 'downgrade' ]),
+				version: safe_id(arguments.version), source: source(arguments) });
 		}),
-		update_mihomo: method({ channel: '', source: '' }, (arguments) => {
+		update_mihomo: method({ channel: '', source: '', action: '', version: '' }, (arguments) => {
 			exact(arguments, { channel: { type: 'string', required: true },
-				source: { type: 'string' } });
+				source: { type: 'string' }, action: { type: 'string', required: true },
+				version: { type: 'string', required: true } });
 			return domain_operation('update_mihomo', {
-				channel: safe_id(arguments.channel), source: source(arguments) });
+				channel: safe_id(arguments.channel),
+				action: schema.enum_value(arguments.action,
+					[ 'install', 'update', 'reinstall', 'downgrade' ]),
+				version: safe_id(arguments.version), source: source(arguments) });
 		}),
 		update_rollback_mihomo: method({ source: '' }, (arguments) => {
 			exact(arguments, { source: { type: 'string' } });

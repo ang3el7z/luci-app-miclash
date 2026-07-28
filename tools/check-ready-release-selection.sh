@@ -45,6 +45,8 @@ test_exact_package_transition() (
     eval "$(require_function "$installer" normalize_version)"
     eval "$(require_function "$installer" installed_miclash_version)"
     eval "$(require_function "$installer" rc_to_stable_transition)"
+    eval "$(require_function "$installer" version_relation)"
+    eval "$(require_function "$installer" validate_install_action)"
     eval "$(require_function "$installer" verify_installed_miclash_version)"
     eval "$(require_function "$installer" install_miclash_package)"
 
@@ -57,6 +59,14 @@ test_exact_package_transition() (
     install_arguments=''
     die() { return 1; }
     opkg() {
+        if [ "$1" = compare-versions ]; then
+            case "$2:$3:$4" in
+                2.5.1:'<<':2.5.2|2.5.2:'<<':2.6.0|2.5.2:'>>':2.5.1|2.6.0:'>>':2.5.2)
+                    return 0
+                    ;;
+                *) return 1 ;;
+            esac
+        fi
         case "$1" in
             install)
                 install_arguments="$*"
@@ -76,56 +86,63 @@ test_exact_package_transition() (
     esac
 
     INSTALL_ACTION=reinstall
-    MICLASH_INSTALLED_VER=2.5.2_rc5-r1
-    installed_version=2.5.2_rc5-r1
+    MICLASH_INSTALLED_VER=2.5.2-r1
+    installed_version=2.5.2-r1
     install_arguments=''
+    validate_install_action
     install_miclash_package
     case " $install_arguments " in
         *' --force-reinstall '*) ;;
         *) echo 'opkg RC-to-stable reinstall did not force reinstall' >&2; exit 1 ;;
     esac
     case " $install_arguments " in
-        *' --force-downgrade '*) ;;
-        *) echo 'opkg RC-to-stable reinstall did not authorize the selected downgrade' >&2; exit 1 ;;
-    esac
-
-    INSTALL_ACTION=update
-    installed_version=2.5.2_rc5-r1
-    opkg() {
-        case "$1" in
-            install) install_arguments="$*" ;;
-            list-installed) printf 'luci-app-miclash - %s\n' "$installed_version" ;;
-            *) return 1 ;;
-        esac
-    }
-    if install_miclash_package >/dev/null 2>&1; then
-        echo 'installer accepted a successful package-manager no-op' >&2
-        exit 1
-    fi
-
-    MICLASH_INSTALLED_VER=2.6.0-r1
-    installed_version=2.6.0-r1
-    install_arguments=''
-    opkg() {
-        case "$1" in
-            install)
-                install_arguments="$*"
-                installed_version=2.5.2-r1
-                ;;
-            list-installed) printf 'luci-app-miclash - %s\n' "$installed_version" ;;
-            *) return 1 ;;
-        esac
-    }
-    install_miclash_package
-    case " $install_arguments " in
         *' --force-downgrade '*)
-            echo 'ordinary stable downgrade was authorized implicitly' >&2
+            echo 'equal-version reinstall unexpectedly enabled downgrade' >&2
             exit 1
             ;;
     esac
 
+    INSTALL_ACTION=update
+    MICLASH_INSTALLED_VER=2.5.1-r1
+    installed_version=2.5.1-r1
+    validate_install_action
+    install_miclash_package
+
+    INSTALL_ACTION=downgrade
+    MICLASH_INSTALLED_VER=2.6.0-r1
+    installed_version=2.6.0-r1
+    install_arguments=''
+    validate_install_action
+    install_miclash_package
+    case " $install_arguments " in
+        *' --force-downgrade '*) ;;
+        *) echo 'explicit stable downgrade did not enable force-downgrade' >&2; exit 1 ;;
+    esac
+
+    INSTALL_ACTION=update
+    MICLASH_INSTALLED_VER=2.6.0-r1
+    if validate_install_action >/dev/null 2>&1; then
+        echo 'update mode accepted an older target' >&2
+        exit 1
+    fi
+
+    INSTALL_ACTION=downgrade
+    MICLASH_INSTALLED_VER=2.5.1-r1
+    if validate_install_action >/dev/null 2>&1; then
+        echo 'downgrade mode accepted a newer target' >&2
+        exit 1
+    fi
+
+    INSTALL_ACTION=reinstall
+    MICLASH_INSTALLED_VER=2.5.1-r1
+    if validate_install_action >/dev/null 2>&1; then
+        echo 'reinstall mode accepted a different target' >&2
+        exit 1
+    fi
+
     PKG_MGR=apk
     PKG_FILE=/tmp/luci-app-miclash-2.5.2.apk
+    INSTALL_ACTION=update
     MICLASH_INSTALLED_VER=2.5.1-r1
     installed_version=2.5.2_rc5-r1
     install_arguments=''
@@ -156,12 +173,42 @@ test_exact_package_transition() (
     esac
 
     INSTALL_ACTION=reinstall
+    MICLASH_INSTALLED_VER=2.5.2-r1
+    installed_version=2.5.2-r1
     install_arguments=''
+    validate_install_action
     install_miclash_package
+    case " $install_arguments " in
+        *' --force-reinstall '*) ;;
+        *) echo 'explicit apk reinstall did not force reinstall' >&2; exit 1 ;;
+    esac
     case " $install_arguments " in
         *' --force-overwrite '*) ;;
         *) echo 'explicit apk reinstall did not enable conflict overwrites' >&2; exit 1 ;;
     esac
+)
+
+test_reinstall_core_policy() (
+    eval "$(require_function "$installer" hard_reinstall_mihomo)"
+
+    INSTALL_ACTION=reinstall
+    STATUS_FILE=/tmp/miclash/updates/handoff-test.status
+    if hard_reinstall_mihomo; then
+        echo 'backend MiClash reinstall unexpectedly requested Mihomo removal' >&2
+        exit 1
+    fi
+
+    STATUS_FILE=
+    hard_reinstall_mihomo || {
+        echo 'interactive reinstall no longer refreshes Mihomo' >&2
+        exit 1
+    }
+
+    INSTALL_ACTION=update
+    if hard_reinstall_mihomo; then
+        echo 'ordinary update unexpectedly requested Mihomo removal' >&2
+        exit 1
+    fi
 )
 
 test_installer_download_fallback() (
@@ -268,6 +315,7 @@ test_transition_download_fallback() (
 test_installer_download_fallback
 test_transition_download_fallback
 test_exact_package_transition
+test_reinstall_core_policy
 
 run_installer() {
     if command -v ash >/dev/null 2>&1; then

@@ -288,11 +288,62 @@ rc_to_stable_transition() {
     esac
 }
 
+version_relation() {
+    installed_norm="$(normalize_version "$1")"
+    target_norm="$(normalize_version "$2")"
+    [ -n "$installed_norm" ] && [ -n "$target_norm" ] || return 1
+    if [ "$installed_norm" = "$target_norm" ]; then
+        printf '%s' equal
+        return 0
+    fi
+    if rc_to_stable_transition "$installed_norm" "$target_norm"; then
+        printf '%s' older
+        return 0
+    fi
+    case "$PKG_MGR" in
+        opkg)
+            if opkg compare-versions "$installed_norm" '<<' "$target_norm"; then
+                printf '%s' older
+            elif opkg compare-versions "$installed_norm" '>>' "$target_norm"; then
+                printf '%s' newer
+            else
+                return 1
+            fi
+            ;;
+        apk)
+            relation="$(apk version -t "$installed_norm" "$target_norm" 2>/dev/null)" ||
+                return 1
+            case "$relation" in
+                '<') printf '%s' older ;;
+                '=') printf '%s' equal ;;
+                '>') printf '%s' newer ;;
+                *) return 1 ;;
+            esac
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_install_action() {
+    if [ -z "$MICLASH_INSTALLED_VER" ]; then
+        [ "$INSTALL_ACTION" = install ] ||
+            die "MiClash is not installed; action ${INSTALL_ACTION} is invalid"
+        return 0
+    fi
+    relation="$(version_relation "$MICLASH_INSTALLED_VER" "$MICLASH_RELEASE_NORM")" ||
+        die "Unable to compare installed and target MiClash versions"
+    case "$INSTALL_ACTION:$relation" in
+        update:older|reinstall:equal|downgrade:newer) return 0 ;;
+        *) die "MiClash action ${INSTALL_ACTION} does not match version relation ${relation}" ;;
+    esac
+}
+
 install_miclash_package() {
     case "$PKG_MGR" in
         apk)
             if [ "$INSTALL_ACTION" = "reinstall" ]; then
-                apk add "$PKG_FILE" --allow-untrusted --force-overwrite \
+                apk add "$PKG_FILE" --allow-untrusted --force-reinstall \
+                    --force-overwrite \
                     || die "Failed to reinstall MiClash .apk"
             else
                 apk add "$PKG_FILE" --allow-untrusted \
@@ -301,14 +352,11 @@ install_miclash_package() {
             ;;
         opkg)
             if [ "$INSTALL_ACTION" = "reinstall" ]; then
-                if rc_to_stable_transition "$MICLASH_INSTALLED_VER" \
-                    "$MICLASH_RELEASE_NORM"; then
-                    opkg install --force-reinstall --force-downgrade "$PKG_FILE" \
-                        || die "Failed to reinstall MiClash .ipk"
-                else
-                    opkg install --force-reinstall "$PKG_FILE" \
-                        || die "Failed to reinstall MiClash .ipk"
-                fi
+                opkg install --force-reinstall "$PKG_FILE" \
+                    || die "Failed to reinstall MiClash .ipk"
+            elif [ "$INSTALL_ACTION" = "downgrade" ]; then
+                opkg install --force-downgrade "$PKG_FILE" \
+                    || die "Failed to downgrade MiClash .ipk"
             elif rc_to_stable_transition "$MICLASH_INSTALLED_VER" \
                 "$MICLASH_RELEASE_NORM"; then
                 opkg install --force-downgrade "$PKG_FILE" \
@@ -1020,6 +1068,10 @@ repair_installed_miclashd_self_update_stop() {
         [ "$(stat -c '%u:%a:%h' "$path" 2>/dev/null)" = '0:755:1' ]
 }
 
+hard_reinstall_mihomo() {
+    [ "$INSTALL_ACTION" = "reinstall" ] && [ -z "${STATUS_FILE:-}" ]
+}
+
 install_miclash() {
     case "$INSTALL_ACTION" in
         update)    log "Updating MiClash to v${MICLASH_VER}..." ;;
@@ -1042,7 +1094,7 @@ install_miclash() {
         create_app_update_marker \
             || die "Failed to prepare app update service state"
     fi
-    if [ "$INSTALL_ACTION" = "reinstall" ]; then
+    if hard_reinstall_mihomo; then
         create_marker "$HARD_REINSTALL_MARKER" || die "Failed to prepare hard reinstall"
     fi
 
@@ -1066,7 +1118,7 @@ install_miclash() {
         rm -f "$PKG_FILE"
     fi
 
-    if [ "$INSTALL_ACTION" = "reinstall" ]; then
+    if hard_reinstall_mihomo; then
         rm -f /opt/clash/bin/clash || die "Failed to remove Mihomo kernel after hard reinstall"
     fi
 }
@@ -1189,7 +1241,7 @@ run_app_mode() {
     [ -n "$MICLASH_TARGET_TAG" ] || die "missing --target-tag"
     STATUS_TARGET_VERSION="$MICLASH_TARGET_TAG"
     case "$INSTALL_ACTION" in
-        install|update|reinstall) ;;
+        install|update|reinstall|downgrade) ;;
         *) die "unsupported app mode: $INSTALL_ACTION" ;;
     esac
 
@@ -1200,6 +1252,7 @@ run_app_mode() {
     ensure_curl
     fetch_miclash_release
     detect_installed_miclash
+    validate_install_action
     reject_unauthorized_cross_major
     pkg_update
     install_deps

@@ -765,6 +765,24 @@ msgstr "Обновить MiClash до %s"
 msgid "Update Mihomo to %s"
 msgstr "Обновить Mihomo до %s"
 
+msgid "Downgrade MiClash to %s"
+msgstr "Понизить MiClash до %s"
+
+msgid "Downgrade Mihomo to %s"
+msgstr "Понизить Mihomo до %s"
+
+msgid "Downgrade Kernel to %s"
+msgstr "Понизить ядро до %s"
+
+msgid "Reinstall MiClash %s"
+msgstr "Переустановить MiClash %s"
+
+msgid "Reinstall Mihomo %s"
+msgstr "Переустановить Mihomo %s"
+
+msgid "Update action is unavailable."
+msgstr "Действие с обновлением недоступно."
+
 msgid "Reinstall MiClash"
 msgstr "Переустановить MiClash"
 

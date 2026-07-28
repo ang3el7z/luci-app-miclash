@@ -601,11 +601,22 @@ function resolveAppActionState() {
 		};
 	}
 
+	if (cmp === 1) {
+		return {
+			kind: 'downgrade',
+			targetVersion: latest,
+			iconName: 'download',
+			className: 'cbi-button-negative',
+			title: _('Downgrade MiClash to %s').format(latest)
+		};
+	}
+
 	return {
 		kind: 'reinstall',
+		targetVersion: latest || local,
 		iconName: 'refresh',
 		className: 'cbi-button-neutral',
-		title: _('Reinstall MiClash')
+		title: _('Reinstall MiClash %s').format(latest || local)
 	};
 }
 
@@ -640,11 +651,22 @@ function resolveKernelActionState() {
 		};
 	}
 
+	if (cmp === 1) {
+		return {
+			kind: 'downgrade',
+			targetVersion: latest,
+			iconName: 'download',
+			className: 'cbi-button-negative',
+			title: _('Downgrade Mihomo to %s').format(latest)
+		};
+	}
+
 	return {
 		kind: 'reinstall',
+		targetVersion: latest || local,
 		iconName: 'refresh',
 		className: 'cbi-button-neutral',
-		title: _('Reinstall Mihomo')
+		title: _('Reinstall Mihomo %s').format(latest || local)
 	};
 }
 
@@ -822,13 +844,17 @@ function setStoredOperationToken(kind, operation) {
 	} catch (e) {}
 }
 
-async function startMiClashUpdateJob(kind, args) {
+async function startMiClashUpdateJob(kind, request) {
 	await clearMiClashUpdateStatus();
+	if (!request || !request.action || !request.version)
+		throw new Error(_('Update action is unavailable.'));
 	const reply = kind === 'kernel'
 		? await configApi.update_mihomo(normalizeReleaseChannel(
-			appState.settings?.mihomoReleaseChannel), 'luci')
+			appState.settings?.mihomoReleaseChannel), 'luci',
+			request.action, request.version)
 		: await configApi.update_miclash(normalizeReleaseChannel(
-			appState.settings?.miclashReleaseChannel), 'luci');
+			appState.settings?.miclashReleaseChannel), 'luci',
+			request.action, request.version);
 	appState.pendingUpdateOperation = reply;
 	setStoredOperationToken('update', reply);
 	return true;
@@ -926,7 +952,7 @@ async function installMiClashFromSettings(actionKind) {
 	try {
 		await logUiAction('info', 'MiClash package update started');
 		notify('info', _('Updating MiClash package on router...'));
-		await startMiClashUpdateJob('app', ['--target-tag', release.version, '--mode', mode]);
+		await startMiClashUpdateJob('app', { action: mode, version: release.version });
 		await pollMiClashUpdateJob(_('Updating MiClash package on router...'));
 	} catch (e) {
 		if (isRpcReconnectLikeError(e)) {
@@ -949,12 +975,15 @@ async function installMiClashFromSettings(actionKind) {
 	return true;
 }
 
-async function downloadMihomoKernel(downloadUrl, version, arch) {
+async function downloadMihomoKernel(downloadUrl, version, arch, actionKind) {
 	try {
 		await logUiAction('info', 'mihomo kernel update started');
 		setOperationStatus('running', _('Preparing Mihomo kernel update...'));
 		notify('info', _('Updating mihomo kernel on router...'));
-		await startMiClashUpdateJob('kernel', ['--url', downloadUrl]);
+		await startMiClashUpdateJob('kernel', {
+			action: String(actionKind || 'update'),
+			version: version
+		});
 		const status = await pollMiClashUpdateJob(_('Updating mihomo kernel on router...'));
 		const message = String(status.message || '').trim();
 		await logUiAction('info', message || 'mihomo kernel installed');
@@ -969,7 +998,7 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 	}
 }
 
-async function installKernelFromSettings() {
+async function installKernelFromSettings(actionKind) {
 	setOperationStatus('running', _('Preparing Mihomo kernel update...'));
 	const arch = await detectSystemArchitecture();
 	const release = await getLatestMihomoRelease();
@@ -978,7 +1007,8 @@ async function installKernelFromSettings() {
 	if (!release) throw new Error(_('Failed to load kernel information: %s').format(_('Unavailable')));
 	if (!asset || !asset.browser_download_url) throw new Error(_('Failed to load kernel information: %s').format(_('Download failed')));
 
-	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
+	const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch,
+		actionKind);
 	if (!ok) return false;
 
 	appState.kernelStatus = await getMihomoStatus();
@@ -1005,11 +1035,20 @@ async function openKernelModal() {
 		const asset = findKernelAsset(release, arch);
 		const localVersion = normalizeVersion(status.version);
 		const latestVersion = normalizeVersion(release ? release.version : '');
+		const compared = compareNumericVersions(localVersion, latestVersion);
 
 		let downloadLabel = _('Download Kernel');
-		if (status.installed && release && localVersion && latestVersion && localVersion === latestVersion) {
+		let actionKind = 'install';
+		let actionClass = 'cbi-button cbi-button-apply';
+		if (status.installed && release && compared === 0) {
+			actionKind = 'reinstall';
 			downloadLabel = _('Reinstall Kernel');
+		} else if (status.installed && release && compared === 1) {
+			actionKind = 'downgrade';
+			actionClass = 'cbi-button cbi-button-negative';
+			downloadLabel = _('Downgrade Kernel to %s').format(latestVersion);
 		} else if (status.installed && release) {
+			actionKind = 'update';
 			downloadLabel = _('Download Update');
 		}
 
@@ -1024,10 +1063,11 @@ async function openKernelModal() {
 		if (release && asset) {
 			buttons.push({
 				label: downloadLabel,
-				className: 'cbi-button cbi-button-apply',
+				className: actionClass,
 				onClick: async function(ctx) {
 					ctx.button.textContent = _('Downloading...');
-					const ok = await downloadMihomoKernel(asset.browser_download_url, release.version, arch);
+					const ok = await downloadMihomoKernel(
+						asset.browser_download_url, release.version, arch, actionKind);
 					if (ok) {
 						await refreshHeaderAndControl();
 						ctx.closeModal();
@@ -2577,7 +2617,7 @@ function updateHeaderAndControlDom() {
 	if (appAction && !appAction.classList.contains('sbox-version-action-busy')) {
 		appAction.hidden = !appState.systemMetadataReady;
 		const appActionState = resolveAppActionState();
-		appAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
+		appAction.classList.remove('cbi-button-positive', 'cbi-button-neutral', 'cbi-button-negative');
 		appAction.classList.add(appActionState.className);
 		appAction.innerHTML = buildVersionActionIcon(appActionState);
 		appAction.title = appActionState.title;
@@ -2599,7 +2639,7 @@ function updateHeaderAndControlDom() {
 	if (kernelAction && !kernelAction.classList.contains('sbox-version-action-busy')) {
 		kernelAction.hidden = !appState.systemMetadataReady;
 		const kernelActionState = resolveKernelActionState();
-		kernelAction.classList.remove('cbi-button-positive', 'cbi-button-neutral');
+		kernelAction.classList.remove('cbi-button-positive', 'cbi-button-neutral', 'cbi-button-negative');
 		kernelAction.classList.add(kernelActionState.className);
 		kernelAction.innerHTML = buildVersionActionIcon(kernelActionState);
 		kernelAction.title = kernelActionState.title;
@@ -3030,11 +3070,12 @@ function bindControlAndHeaderEvents() {
 	if (kernelAction) {
 		const runKernelAction = () => {
 			if (kernelAction.classList.contains('sbox-version-action-busy')) return;
+			const kernelActionKind = resolveKernelActionState().kind;
 
 			kernelAction.classList.add('sbox-version-action-busy');
 			kernelAction.innerHTML = '<span class="sbox-spinner"></span>';
 
-			installKernelFromSettings().then(() => {
+			installKernelFromSettings(kernelActionKind).then(() => {
 				renderSettingsPane();
 			}).catch((e) => {
 				setOperationError(e);

@@ -1110,6 +1110,24 @@ msgstr "将 MiClash 更新到 %s"
 msgid "Update Mihomo to %s"
 msgstr "将 Mihomo 更新到 %s"
 
+msgid "Downgrade MiClash to %s"
+msgstr "将 MiClash 降级到 %s"
+
+msgid "Downgrade Mihomo to %s"
+msgstr "将 Mihomo 降级到 %s"
+
+msgid "Downgrade Kernel to %s"
+msgstr "将内核降级到 %s"
+
+msgid "Reinstall MiClash %s"
+msgstr "重新安装 MiClash %s"
+
+msgid "Reinstall Mihomo %s"
+msgstr "重新安装 Mihomo %s"
+
+msgid "Update action is unavailable."
+msgstr "更新操作不可用。"
+
 msgid "Updating MiClash package on router..."
 msgstr "正在路由器上更新 MiClash 软件包..."
 

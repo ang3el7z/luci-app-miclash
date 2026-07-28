@@ -9,6 +9,7 @@ import * as telegram_menu from 'miclash.telegram-menu';
 import * as telegram_outbox from 'miclash.telegram-outbox';
 import * as telegram_operations from 'miclash.telegram-operations';
 import * as telegram_transport from 'miclash.telegram-transport';
+import * as update_action_contract from 'miclash.update-action';
 
 const OFFSET_NAME = 'telegram-offset.json';
 // miclashd serves ubus and timers on one event loop. Telegram long polling would
@@ -157,15 +158,16 @@ function operation_message(record) {
 	return 'Queued ' + record.kind + ' (' + record.id + ')';
 };
 
-function event_text(event) {
+function event_text(locale, event) {
 	let labels = {
-		failure: 'Failure', guard_outage: 'Guard outage', fail_closed: 'Guard blocked',
-		direct_fallback: 'Direct fallback', recovery: 'Recovery',
-		internet_restored: 'Internet restored', update_outcome: 'Update',
-		subscription_outcome: 'Subscription', memory_action: 'Memory',
-		memory_outcome: 'Memory'
+		failure: 'event_failure', guard_outage: 'event_guard_outage',
+		fail_closed: 'event_fail_closed', direct_fallback: 'event_direct_fallback',
+		recovery: 'event_recovery', internet_restored: 'event_internet_restored',
+		update_outcome: 'event_update', subscription_outcome: 'event_subscription',
+		memory_action: 'event_memory', memory_outcome: 'event_memory'
 	};
-	let label = labels[event?.type] ?? 'MiClash';
+	let key = labels[event?.type], label = key == null ?
+		'MiClash' : telegram_i18n.text(locale, key);
 	let details = type(event?.message) == 'string' ? event.message :
 		(type(event?.title) == 'string' ? event.title : 'State changed');
 	return label + ': ' + details;
@@ -275,6 +277,10 @@ export function panel_model(app, screen) {
 		safe_call(() => app.memory_status(), {}) : {};
 	let update_status = type(app.updates_status) == 'function' ?
 		safe_call(() => app.updates_status(), {}) : {};
+	let miclash_release = screen == 'updates' && type(app.update_release) == 'function' ?
+		safe_call(() => app.update_release('miclash'), null) : null;
+	let mihomo_release = screen == 'updates' && type(app.update_release) == 'function' ?
+		safe_call(() => app.update_release('mihomo'), null) : null;
 	let configured_url = wanted?.core?.subscription_url_config_yaml;
 	if (type(configured_url) != 'string' || !length(configured_url))
 		configured_url = wanted?.core?.subscription_url;
@@ -289,6 +295,13 @@ export function panel_model(app, screen) {
 	if (miclash_update_state == 'unknown')
 		miclash_update_state = wanted?.updates?.auto_major_miclash === true ? 'enabled' : 'disabled';
 	let baseline = memory.baseline_rss_kb == null ? '' : kibibytes(memory.baseline_rss_kb);
+	let miclash_installed = info.app_version ?? update_status.miclash?.installed ?? '';
+	let miclash_available = miclash_release?.version ??
+		update_status.automatic_miclash?.latest_version ??
+		update_status.miclash?.available ?? update_status.available_miclash ?? '';
+	let mihomo_installed = info.mihomo?.version ?? update_status.mihomo?.installed ?? '';
+	let mihomo_available = mihomo_release?.version ??
+		update_status.mihomo?.available ?? update_status.available_mihomo ?? '';
 	return {
 		miclash_version: info.app_version ?? status?.versions?.miclash ?? 'unknown',
 		miclash_state: running ? 'running' : 'stopped',
@@ -316,11 +329,14 @@ export function panel_model(app, screen) {
 		memory_state: memory.enabled === false ? 'disabled' : (memory.phase ?? 'unknown'),
 		last_memory_action: memory.last_action ?? 'not_required',
 		updates: {
-			miclash_installed: info.app_version ?? update_status.miclash?.installed ?? '',
-			miclash_available: update_status.automatic_miclash?.latest_version ??
-				update_status.miclash?.available ?? update_status.available_miclash ?? '',
-			mihomo_installed: info.mihomo?.version ?? update_status.mihomo?.installed ?? '',
-			mihomo_available: update_status.mihomo?.available ?? update_status.available_mihomo ?? ''
+			miclash_installed,
+			miclash_available,
+			miclash_action: update_action_contract.classify(
+				miclash_installed, miclash_available),
+			mihomo_installed,
+			mihomo_available,
+			mihomo_action: update_action_contract.classify(
+				mihomo_installed, mihomo_available)
 		}
 	};
 };
@@ -337,7 +353,7 @@ export function create(app) {
 	for (let method in [ 'status', 'health', 'memory_status', 'diagnostics_summary',
 		'diagnostics_create_report', 'diagnostics_open_report',
 		'logs_read', 'service_start', 'service_stop', 'service_restart', 'service_reload',
-		'reboot', 'subscription_update', 'update_miclash', 'update_mihomo',
+		'reboot', 'subscription_update', 'update_release', 'update_miclash', 'update_mihomo',
 		'settings_set', 'guard_transition' ])
 		if (type(app[method]) != 'function')
 			invalid();
@@ -352,6 +368,7 @@ export function create(app) {
 		failures: 0
 	};
 	let timer = null;
+	let delivery_timer = null, delivery_due = null;
 	let command_times = [];
 	let transport = telegram_transport.create(app);
 	let outbox = null, operation_bridge = null;
@@ -425,6 +442,10 @@ export function create(app) {
 		if (screen == 'settings') model.administrators = join('\n', settings.user_ids ?? []);
 		if (screen == 'admin_input') model.admin_action = session.awaiting?.kind;
 		if (screen == 'confirm_admin_remove') model.administrator = session.awaiting?.admin_id ?? '';
+		if (screen == 'confirm_update_miclash' || screen == 'confirm_update_mihomo') {
+			model.update_action = session.awaiting?.action;
+			model.update_version = session.awaiting?.version;
+		}
 		let rendered = telegram_menu.render(screen, model, locale,
 			session.generation);
 		let parse_mode = null;
@@ -662,7 +683,9 @@ export function create(app) {
 	function receipt_payload(record, previous) {
 		let value = {
 			kind: record.kind, stage: record.stage, progress: record.progress,
-			error: record.error?.code ?? null
+			error: record.error?.code ?? null,
+			action: record.update_action ?? previous?.action ?? null,
+			version: record.update_version ?? previous?.version ?? null
 		};
 		if (record.kind == 'diagnostics.report')
 			value = { ...value,
@@ -681,7 +704,7 @@ export function create(app) {
 		return 'main';
 	};
 
-	function operation_label(locale, kind) {
+	function operation_label(locale, kind, payload) {
 		let labels = {
 			'subscription.update': 'operation_subscription_update',
 			'service.start': 'operation_service_start', 'service.stop': 'operation_service_stop',
@@ -689,6 +712,11 @@ export function create(app) {
 			'updates.miclash': 'operation_updates_miclash', 'updates.mihomo': 'operation_updates_mihomo',
 			'guard.transition': 'operation_guard_transition'
 		};
+		let component = match(kind, /^updates\.(miclash|mihomo)$/)?.[1];
+		let action = payload?.action;
+		if (component != null && (action == 'install' || action == 'update' ||
+		    action == 'reinstall' || action == 'downgrade'))
+			return telegram_i18n.text(locale, 'operation_' + action + '_' + component);
 		return labels[kind] == null ? kind : telegram_i18n.text(locale, labels[kind]);
 	};
 
@@ -696,7 +724,7 @@ export function create(app) {
 		let state_key = entry.state == 'success' ? 'operation_success' :
 			(entry.state == 'interrupted' ? 'operation_interrupted' : 'operation_failure');
 		let text = telegram_i18n.text(entry.locale, 'operation_result', {
-			operation: operation_label(entry.locale, entry.kind),
+			operation: operation_label(entry.locale, entry.kind, entry.payload),
 			state: telegram_i18n.text(entry.locale, state_key)
 		});
 		if (entry.payload?.error != null) text += '\n\n' + entry.payload.error;
@@ -730,7 +758,7 @@ export function create(app) {
 				{ delivered: true } : false;
 		}
 		if (entry.audience == 'automatic') {
-			let text = event_text(entry.payload);
+			let text = event_text(entry.locale, entry.payload);
 			if (type(entry.payload?.count) == 'int' && entry.payload.count > 1)
 				text += ' (x' + entry.payload.count + ')';
 			return transport.send(settings, entry.chat_id, text, null) == null ? false :
@@ -793,14 +821,81 @@ export function create(app) {
 		}
 		return true;
 	};
+	function deliverable(entry) {
+		if (entry?.kind == 'diagnostics.report' &&
+		    diagnostic_jobs[entry.operation_id] != null)
+			return false;
+		return entry?.state != 'queued' && entry?.state != 'running' &&
+			entry?.state != 'verifying';
+	};
+	function schedule_delivery(delay) {
+		if (!state.running)
+			return false;
+		let settings = configuration(app);
+		if (!settings.available || !settings.enabled || !settings.configured)
+			return false;
+		delay = type(delay) == 'int' && delay > 0 ? delay : 0;
+		let due = app.runtime.clock.now() + delay;
+		if (delivery_timer != null && delivery_due != null && delivery_due <= due)
+			return false;
+		if (delivery_timer?.cancel != null)
+			delivery_timer.cancel();
+		delivery_timer = null;
+		delivery_due = null;
+		try {
+			let candidate = app.runtime.clock.set_timeout(delay, () => {
+				delivery_timer = null;
+				delivery_due = null;
+				try { outbox.attempt(); }
+				catch (error) { log_failure('receipt delivery failed'); }
+				let next = null, now = app.runtime.clock.now();
+				try {
+					for (let entry in outbox.pending()) {
+						if (!deliverable(entry)) continue;
+						let remaining = max(0, entry.next_attempt_at - now);
+						if (next == null || remaining < next) next = remaining;
+					}
+				}
+				catch (error) {}
+				if (next != null) schedule_delivery(next);
+			});
+			if (candidate == null || type(candidate.cancel) != 'function')
+				return false;
+			delivery_timer = candidate;
+			delivery_due = due;
+			return true;
+		}
+		catch (error) {
+			log_failure('receipt delivery scheduling failed');
+			return false;
+		}
+	};
+	function schedule_pending_delivery() {
+		let next = null, now = app.runtime.clock.now();
+		try {
+			for (let entry in outbox.pending()) {
+				if (!deliverable(entry)) continue;
+				let remaining = max(0, entry.next_attempt_at - now);
+				if (next == null || remaining < next) next = remaining;
+			}
+		}
+		catch (error) { return false; }
+		return next == null ? false : schedule_delivery(next);
+	};
 	function resume_delivery() {
 		if (operation_bridge == null)
-			operation_bridge = telegram_operations.create(app, outbox, receipt_payload);
+			operation_bridge = telegram_operations.create(app, outbox, receipt_payload,
+				() => schedule_pending_delivery());
 		subscribe_diagnostics();
 		try { operation_bridge.recover(); } catch (error) {}
+		schedule_pending_delivery();
 		return true;
 	};
 	function suspend_delivery() {
+		if (delivery_timer?.cancel != null)
+			delivery_timer.cancel();
+		delivery_timer = null;
+		delivery_due = null;
 		suspend_diagnostics();
 		if (operation_bridge != null) {
 			try { operation_bridge.close(); } catch (error) {}
@@ -835,8 +930,13 @@ export function create(app) {
 		function response(value, parse_mode) {
 			return { response: value, record: null, parse_mode };
 		};
-		function mutation(record) {
-			if (destination != null) operation_bridge.track(record, destination);
+		function mutation(record, details) {
+			if (destination != null)
+				operation_bridge.track(details == null ? record : {
+					...record,
+					update_action: details.action,
+					update_version: details.version
+				}, destination);
 			return { response: operation_message(record), record };
 		};
 		if (command.name == 'status')
@@ -873,9 +973,11 @@ export function create(app) {
 		if (command.name == 'update_subscription')
 			return mutation(app.subscription_update(null, 'telegram'));
 		if (command.name == 'update_miclash')
-			return mutation(app.update_miclash('telegram'));
+			return mutation(app.update_miclash(command.argument?.action,
+				command.argument?.version, 'telegram'), command.argument);
 		if (command.name == 'update_mihomo')
-			return mutation(app.update_mihomo('telegram'));
+			return mutation(app.update_mihomo(command.argument?.action,
+				command.argument?.version, 'telegram'), command.argument);
 		if (command.name == 'guard_on')
 			return mutation(app.guard_transition(true, 'telegram'));
 		if (command.name == 'guard_off')
@@ -910,8 +1012,17 @@ export function create(app) {
 		if (target == 'reboot') return dispatch({ name: 'reboot_router', argument: null }, destination);
 		if (target == 'update_subscription')
 			return dispatch({ name: 'update_subscription', argument: null }, destination);
-		if (target == 'update_miclash') return dispatch({ name: 'update_miclash', argument: null }, destination);
-		if (target == 'update_mihomo') return dispatch({ name: 'update_mihomo', argument: null }, destination);
+		if (target == 'update_miclash' || target == 'update_mihomo') {
+			let intent = session.awaiting;
+			if (intent?.kind != 'update_action' || intent.target != target ||
+			    app.runtime.clock.now() > intent.expires_at)
+				invalid();
+			session.awaiting = null;
+			return dispatch({ name: target, argument: {
+				action: intent.action,
+				version: intent.version
+			} }, destination);
+		}
 		if (target == 'guard_on') return dispatch({ name: 'guard_on', argument: null }, destination);
 		if (target == 'guard_off') return dispatch({ name: 'guard_off', argument: null }, destination);
 		if (target == 'check_updates') return { response: true, record: null };
@@ -964,6 +1075,26 @@ export function create(app) {
 			else if (action.name == 'cancel') {
 				session.awaiting = null;
 				show_panel('subscription', settings, identity);
+			}
+			else if (action.name == 'confirm' &&
+			         (action.target == 'update_miclash' || action.target == 'update_mihomo')) {
+				let component = substr(action.target, 7);
+				let model = panel_model(app, 'updates');
+				let update_action = model?.updates?.[component + '_action'];
+				let version = model?.updates?.[component + '_available'];
+				if (update_action != 'install' && update_action != 'update' &&
+				    update_action != 'reinstall' && update_action != 'downgrade')
+					invalid();
+				if (type(version) != 'string' || !length(version))
+					invalid();
+				session.awaiting = {
+					kind: 'update_action',
+					target: action.target,
+					action: update_action,
+					version,
+					expires_at: app.runtime.clock.now() + 600000
+				};
+				show_panel('confirm_' + action.target, settings, identity);
 			}
 			else if (action.name == 'confirm')
 				show_panel('confirm_' + action.target, settings, identity);
@@ -1267,6 +1398,7 @@ export function create(app) {
 			return false;
 		resume_delivery();
 		state.running = true;
+		schedule_pending_delivery();
 		return true;
 	};
 	controller.stop = () => {

@@ -6,7 +6,7 @@ function clone(value) { return value == null ? null : json(sprintf('%J', value))
 
 function environment() {
 	let entries = [], subscriber = null, records = [], postcheck = false,
-		boot_id = 'boot-before', daemon_ready = true;
+		boot_id = 'boot-before', daemon_ready = true, delivery_wakes = 0;
 	let outbox = {
 		enqueue: (entry) => { push(entries, clone(entry)); return true; },
 		update: (id, patch) => {
@@ -37,9 +37,10 @@ function environment() {
 		kind: record.kind, stage: record.stage, progress: record.progress,
 		error: record.error?.code ?? null,
 		report_id: record.report_id ?? previous?.report_id ?? null
-	}));
+	}), () => { delivery_wakes++; return true; });
 	return {
 		app, outbox, entries, records, bridge,
+		wakes: () => delivery_wakes,
 		publish: (record) => subscriber(clone(record)),
 		postcheck: (value) => postcheck = value,
 		boot: (value) => boot_id = value,
@@ -69,13 +70,16 @@ assert_equal(env.entries[0].state, 'queued');
 env.publish({ ...queued, state: 'running', stage: 'reload', progress: 60 });
 assert_equal(env.entries[0].state, 'running');
 assert_equal(env.entries[0].payload.progress, 60);
+assert_equal(env.wakes(), 0);
 env.publish({ ...queued, state: 'success', stage: 'complete', progress: 100 });
 assert_equal(env.entries[0].state, 'verifying',
 	'success must wait for a fresh postcondition');
+assert_equal(env.wakes(), 0);
 push(env.records, { ...queued, state: 'success', stage: 'complete', progress: 100 });
 env.postcheck(true);
 assert_equal(env.bridge.recover(), 1);
 assert_equal(env.entries[0].state, 'success');
+assert_equal(env.wakes(), 1);
 
 let failed = environment(), failed_record = operation('queued', 'updates.mihomo');
 failed.bridge.track(failed_record, { chat_id: '42', message_id: 11, locale: 'en' });
@@ -83,6 +87,7 @@ failed.publish({ ...failed_record, state: 'failure', stage: 'install', progress:
 	error: { code: 'HEALTH_FAILED', message: 'HEALTH_FAILED' } });
 assert_equal(failed.entries[0].state, 'failure');
 assert_equal(failed.entries[0].payload.error, 'HEALTH_FAILED');
+assert_equal(failed.wakes(), 1);
 
 let diagnostic = environment(), diagnostic_record = operation('queued', 'diagnostics.report');
 diagnostic.bridge.track({ ...diagnostic_record, report_id: 'rpt_0123456789abcdef0123456789abcdef' },
