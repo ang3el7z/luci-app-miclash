@@ -27,8 +27,8 @@ assert.match(panel, /function setActive\(value\)/,
 	'panel must expose service-aware visibility control');
 assert.match(panel, /doc\.hidden/,
 	'panel must pause background polling in hidden browser tabs');
-assert.match(panel, /'aria-live': 'off'/,
-	'frame-by-frame metric animation must not flood screen-reader announcements');
+assert.doesNotMatch(panel, /requestAnimationFrame|interpolateSnapshot/,
+	'live values must use each received sample directly instead of counting through invented intermediate rates');
 assert.doesNotMatch(panel, /(?:WebSocket|external-controller|token=|fs\.|exec\s*\()/,
 	'panel must not expose panel credentials or call the backend directly');
 assert.match(panel, /sbox-runtime-metric-upload/);
@@ -102,22 +102,9 @@ const documentMock = {
 };
 let nextTimer = 0;
 const timers = new Map();
-let nextAnimationFrame = 0;
-const animationFrames = new Map();
-function runAnimationFrame(timestamp) {
-	const frames = [ ...animationFrames.values() ];
-	animationFrames.clear();
-	frames.forEach((callback) => callback(timestamp));
-}
 const windowMock = {
 	setTimeout(callback, delay) { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; },
-	clearTimeout(id) { timers.delete(id); },
-	requestAnimationFrame(callback) {
-		const id = ++nextAnimationFrame;
-		animationFrames.set(id, callback);
-		return id;
-	},
-	cancelAnimationFrame(id) { animationFrames.delete(id); }
+	clearTimeout(id) { timers.delete(id); }
 };
 const baseclass = { extend: (value) => value };
 if (typeof ''.format !== 'function') {
@@ -162,23 +149,16 @@ assert.equal(host.querySelectorAll('.sbox-runtime-metric-scale').length, 3,
 assert.equal(host.querySelectorAll('.sbox-runtime-metric-sparkline')[0].namespaceURI,
 	'http://www.w3.org/2000/svg', 'trend graphics must use the SVG namespace');
 assert.match(host.querySelectorAll('.sbox-runtime-metric-area')[0].attrs.d,
-	/^M 0 5 L 206 5 L 206 48 L 0 48 Z$/,
-	'the first live sample must draw at its current level instead of the baseline');
+	/^M 0 48[\s\S]*206 42\.5 L 206 48 L 0 48 Z$/,
+	'the first live sample must extend a sixty-point zero baseline using the original traffic scale');
 assert.match(host.textContent, /Uploaded7\.50 KiB\/s[\s\S]*Downloaded16 KiB\/s[\s\S]*Connections95/,
 	'metric cards must present rates and active connection count');
 await runtimePanel.refresh();
 assert.equal(metricCalls, 2, 'a visible panel must accept a second metrics snapshot');
-assert.equal(animationFrames.size, 1,
-	'a new snapshot must begin a browser animation instead of replacing the displayed rates');
-runAnimationFrame(1000);
-runAnimationFrame(2000);
-assert.match(host.textContent, /Uploaded11\.3 KiB\/s[\s\S]*Downloaded24 KiB\/s[\s\S]*Connections96/,
-	'mid-animation cards must display interpolated values');
-assert.match(host.querySelectorAll('.sbox-runtime-metric-line')[0].attrs.d, / C /,
-	'the animated live sample must remain a smoothed trend line');
-runAnimationFrame(3000);
 assert.match(host.textContent, /Uploaded15 KiB\/s[\s\S]*Downloaded32 KiB\/s[\s\S]*Connections97/,
-	'the animated cards must settle on the latest metrics snapshot');
+	'each received speed sample must replace the display directly without synthesized intermediate rates');
+assert.match(host.querySelectorAll('.sbox-runtime-metric-line')[0].attrs.d, / C /,
+	'the discrete live samples must still render as a smoothed trend line');
 await runtimePanel.refresh();
 assert.equal(metricCalls, 3, 'a visible panel must tolerate one unavailable snapshot');
 assert.doesNotMatch(host.textContent, /Unavailable/,
