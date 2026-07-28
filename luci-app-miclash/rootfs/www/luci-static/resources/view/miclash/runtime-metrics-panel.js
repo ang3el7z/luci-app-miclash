@@ -31,28 +31,61 @@ function pushSample(samples, value) {
 	if (samples.length > MAX_SAMPLES) samples.splice(0, samples.length - MAX_SAMPLES);
 }
 
-function sparkline(values) {
-	const points = values.length ? values : [ 0 ];
-	const maximum = Math.max(1, ...points);
-	const width = 240;
-	const height = 48;
-	const step = points.length > 1 ? width / (points.length - 1) : width;
-	const path = points.map((value, index) => {
-		const x = Math.round(index * step * 100) / 100;
-		const y = Math.round((height - (number(value) / maximum) * (height - 5)) * 100) / 100;
-		return x + ',' + y;
-	}).join(' ');
-	return E('svg', {
-		'class': 'sbox-runtime-metric-sparkline', 'viewBox': '0 0 ' + width + ' ' + height,
-		'preserveAspectRatio': 'none', 'aria-hidden': 'true', 'focusable': 'false'
-	}, [ E('polyline', { 'class': 'sbox-runtime-metric-line', 'points': path }) ]);
+function chartPath(points) {
+	if (points.length < 2)
+		return 'M ' + points[0].x + ' ' + points[0].y + ' L 206 ' + points[0].y;
+	let path = 'M ' + points[0].x + ' ' + points[0].y;
+	for (let index = 0; index < points.length - 1; index++) {
+		const previous = points[index - 1] || points[index];
+		const current = points[index];
+		const next = points[index + 1];
+		const after = points[index + 2] || next;
+		const controlOneX = Math.round((current.x + (next.x - previous.x) / 6) * 100) / 100;
+		const controlOneY = Math.round((current.y + (next.y - previous.y) / 6) * 100) / 100;
+		const controlTwoX = Math.round((next.x - (after.x - current.x) / 6) * 100) / 100;
+		const controlTwoY = Math.round((next.y - (after.y - current.y) / 6) * 100) / 100;
+		path += ' C ' + controlOneX + ' ' + controlOneY + ' ' + controlTwoX + ' ' + controlTwoY +
+			' ' + next.x + ' ' + next.y;
+	}
+	return path;
 }
 
-function metricCard(id, label, value, footer, samples) {
-	return E('article', { 'id': id, 'class': 'sbox-settings-card sbox-runtime-metric-card' }, [
+function sparkline(values, id, formatScale) {
+	const points = values.length ? values : [ 0 ];
+	const maximum = Math.max(1, ...points);
+	const width = 206;
+	const height = 48;
+	const step = points.length > 1 ? width / (points.length - 1) : width;
+	const coordinates = points.map((value, index) => ({
+		x: Math.round(index * step * 100) / 100,
+		y: Math.round((height - (number(value) / maximum) * (height - 5)) * 100) / 100
+	}));
+	const line = chartPath(coordinates);
+	const area = line + ' L ' + width + ' ' + height + ' L 0 ' + height + ' Z';
+	const gradientId = id + '-gradient';
+	return E('svg', {
+		'class': 'sbox-runtime-metric-sparkline', 'viewBox': '0 0 240 52',
+		'preserveAspectRatio': 'none', 'aria-hidden': 'true', 'focusable': 'false'
+	}, [
+		E('defs', {}, E('linearGradient', { 'id': gradientId, 'x1': '0', 'y1': '0', 'x2': '0', 'y2': '1' }, [
+			E('stop', { 'class': 'sbox-runtime-metric-area-start', 'offset': '0%' }),
+			E('stop', { 'class': 'sbox-runtime-metric-area-end', 'offset': '100%' })
+		])),
+		E('path', { 'class': 'sbox-runtime-metric-area', 'd': area, 'fill': 'url(#' + gradientId + ')' }),
+		E('path', { 'class': 'sbox-runtime-metric-line', 'd': line }),
+		E('g', { 'class': 'sbox-runtime-metric-scale' }, [
+			E('text', { 'x': '239', 'y': '12', 'text-anchor': 'end' }, formatScale(maximum)),
+			E('text', { 'x': '239', 'y': '36', 'text-anchor': 'end' }, formatScale(maximum / 2))
+		])
+	]);
+}
+
+function metricCard(id, label, value, footer, samples, variant, formatScale) {
+	return E('article', { 'id': id, 'class': 'sbox-settings-card sbox-runtime-metric-card ' +
+		'sbox-runtime-metric-card--' + variant }, [
 		E('div', { 'class': 'sbox-runtime-metric-label' }, label),
 		E('div', { 'class': 'sbox-runtime-metric-value' }, value),
-		sparkline(samples),
+		sparkline(samples, id, formatScale),
 		E('div', { 'class': 'sbox-runtime-metric-footer' }, footer)
 	]);
 }
@@ -100,11 +133,14 @@ function create(options) {
 		host.replaceChildren(E('div', { 'class': 'sbox-runtime-metrics-grid', 'role': 'status',
 			'aria-live': 'polite', 'aria-atomic': 'true' }, [
 			metricCard('sbox-runtime-metric-upload', _('Uploaded'), uploadRate,
-				available ? _('Total: %s').format(formatBytes(snapshot.upload_total)) : unavailable, samples.upload),
+				available ? _('Total: %s').format(formatBytes(snapshot.upload_total)) : unavailable, samples.upload,
+				'upload', (value) => formatBytes(value, '/s')),
 			metricCard('sbox-runtime-metric-download', _('Downloaded'), downloadRate,
-				available ? _('Total: %s').format(formatBytes(snapshot.download_total)) : unavailable, samples.download),
+				available ? _('Total: %s').format(formatBytes(snapshot.download_total)) : unavailable, samples.download,
+				'download', (value) => formatBytes(value, '/s')),
 			metricCard('sbox-runtime-metric-connections', _('Connections'), connectionCount,
-				available ? _('Memory: %s').format(formatBytes(snapshot.memory_bytes)) : unavailable, samples.connections)
+				available ? _('Memory: %s').format(formatBytes(snapshot.memory_bytes)) : unavailable, samples.connections,
+				'connections', formatCount)
 		]));
 	}
 

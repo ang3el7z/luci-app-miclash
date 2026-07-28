@@ -36,6 +36,18 @@ assert.match(css, /\.sbox-runtime-metrics-grid\s*\{[^}]*grid-template-columns:\s
 	'desktop metrics must use three equal cards');
 assert.match(css, /@media \(max-width: 760px\)[\s\S]*?\.sbox-runtime-metrics-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s,
 	'metric cards must stack on narrow screens like the rest of the interface');
+assert.match(css, /\.sbox-runtime-metric-card--upload\s*\{[^}]*--sbox-runtime-metric-line:/s,
+	'upload trend must use its LuCI theme colour');
+assert.match(css, /\.sbox-runtime-metric-card--download\s*\{[^}]*--sbox-runtime-metric-line:/s,
+	'download trend must use its LuCI theme colour');
+assert.match(css, /\.sbox-runtime-metric-card--connections\s*\{[^}]*--sbox-runtime-metric-line:/s,
+	'connection trend must use its LuCI theme colour');
+assert.match(css, /\.sbox-runtime-metric-scale\s*\{[^}]*font-size:/s,
+	'trend scale must remain readable within a LuCI card');
+assert.match(css, /\.sbox-runtime-metric-area-start\s*\{[^}]*stop-color:/s,
+	'trend area must begin with the card colour');
+assert.match(css, /\.sbox-runtime-metric-area-end\s*\{[^}]*stop-opacity:/s,
+	'trend area must fade to the baseline');
 
 class MiniNode {
 	constructor(tag, attrs) {
@@ -118,8 +130,19 @@ assert.equal(metricCalls, 1, 'starting the service must fetch one typed metrics 
 assert.equal(host.hidden, false, 'running service must reveal the metrics block');
 assert.equal(host.querySelectorAll('.sbox-runtime-metric-card').length, 3,
 	'visible metrics block must contain the three native cards');
+assert.equal(host.querySelectorAll('.sbox-runtime-metric-area').length, 3,
+	'live metric cards must render a filled trend area');
+assert.equal(host.querySelectorAll('.sbox-runtime-metric-scale').length, 3,
+	'live metric cards must render a right-side trend scale');
+assert.match(host.querySelectorAll('.sbox-runtime-metric-area')[0].attrs.d,
+	/^M 0 5 L 206 5 L 206 48 L 0 48 Z$/,
+	'the first live sample must draw at its current level instead of the baseline');
 assert.match(host.textContent, /Uploaded7\.50 KiB\/s[\s\S]*Downloaded16 KiB\/s[\s\S]*Connections95/,
 	'metric cards must present rates and active connection count');
+await runtimePanel.refresh();
+assert.equal(metricCalls, 2, 'a visible panel must accept a second metrics snapshot');
+assert.match(host.querySelectorAll('.sbox-runtime-metric-line')[0].attrs.d, / C /,
+	'two live samples must render as a smoothed trend line');
 assert.equal([...timers.values()].filter((timer) => timer.delay === 2000).length, 1,
 	'visible service must schedule exactly one next metrics poll');
 runtimePanel.setActive(false);

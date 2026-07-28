@@ -219,8 +219,26 @@
 	gap: 12px;
 }
 .sbox-runtime-metric-card {
-	min-height: 154px;
+	--sbox-runtime-metric-line: var(--sbox-accent);
+	min-height: 164px;
 	gap: 6px;
+}
+.sbox-runtime-metric-card--upload {
+	--sbox-runtime-metric-line: var(--sbox-info);
+}
+.sbox-runtime-metric-card--download {
+	--sbox-runtime-metric-line: var(--sbox-accent);
+}
+.sbox-runtime-metric-card--connections {
+	--sbox-runtime-metric-line: var(--sbox-success);
+}
+@supports (color: color-mix(in srgb, CanvasText 50%, transparent)) {
+	.sbox-runtime-metric-card--download {
+		--sbox-runtime-metric-line: color-mix(in srgb, var(--sbox-accent) 76%, var(--sbox-warn));
+	}
+	.sbox-runtime-metric-card--connections {
+		--sbox-runtime-metric-line: color-mix(in srgb, var(--sbox-success) 72%, var(--sbox-info));
+	}
 }
 .sbox-runtime-metric-label {
 	color: var(--sbox-muted);
@@ -241,15 +259,34 @@
 .sbox-runtime-metric-sparkline {
 	display: block;
 	width: 100%;
-	height: 46px;
+	height: 52px;
 	margin-top: auto;
-	color: var(--sbox-accent);
+	color: var(--sbox-runtime-metric-line);
+}
+.sbox-runtime-metric-area-start {
+	stop-color: var(--sbox-runtime-metric-line);
+	stop-opacity: .34;
+}
+.sbox-runtime-metric-area-end {
+	stop-color: var(--sbox-runtime-metric-line);
+	stop-opacity: .04;
 }
 .sbox-runtime-metric-line {
 	fill: none;
 	stroke: currentColor;
 	stroke-width: 2.2;
 	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.sbox-runtime-metric-scale {
+	fill: var(--sbox-muted);
+	font-size: 8px;
+	font-family: inherit;
+	font-weight: 600;
+	letter-spacing: -.01em;
+	paint-order: stroke;
+	stroke: var(--sbox-panel);
+	stroke-width: 2px;
 	stroke-linejoin: round;
 }
 .sbox-runtime-metric-footer {
