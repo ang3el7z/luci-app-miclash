@@ -118,6 +118,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/miclash
 	chmod 0700 $(1)/etc/miclash
 	$(INSTALL_DATA) ./rootfs/usr/share/miclash/mutation-lock.sh $(1)/usr/share/miclash/
+	$(INSTALL_BIN) ./rootfs/usr/share/miclash/luci-cache-bust $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-remove $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-release $(1)/usr/share/miclash/
 	$(INSTALL_BIN) ./rootfs/usr/share/miclash/package-upgrade-recover $(1)/usr/share/miclash/
@@ -287,8 +288,8 @@ rm -rf "$$ROOT/opt/clash/history" "$$ROOT/etc/miclash/backups" || exit 1
 		/etc/init.d/miclashd start || exit 1
 		recover_upgrade_state || exit 1
 	fi
-	# Drop LuCI server-side caches so updated MiClash assets are used immediately.
-	rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache*
+	# Give the next LuCI navigation a new asset version after an app update.
+	/usr/share/miclash/luci-cache-bust || exit 1
 
 	# On first install the default config.yaml is just a usable example
 	# (no real proxies configured). Prevent auto-start on next boot so the
