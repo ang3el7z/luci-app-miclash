@@ -161,12 +161,18 @@ assert.match(host.querySelectorAll('.sbox-runtime-metric-line')[0].attrs.d, / C 
 	'the discrete live samples must still render as a smoothed trend line');
 await runtimePanel.refresh();
 assert.equal(metricCalls, 3, 'a visible panel must tolerate one unavailable snapshot');
-assert.doesNotMatch(host.textContent, /Unavailable/,
-	'a single unavailable snapshot must keep the last displayed metrics visible');
-assert.equal(host.querySelectorAll('.sbox-runtime-metric-area').length, 3,
-	'a single unavailable snapshot must preserve the graph history');
+assert.equal(host.hidden, true,
+	'a running service without available metrics must hide the entire metrics section');
+assert.equal(host.children.length, 0,
+	'an unavailable metrics section must not leave stale cards on the page');
+await runtimePanel.refresh();
+assert.equal(metricCalls, 4, 'the hidden metrics section must retry the typed metrics API');
+assert.equal(host.hidden, false,
+	'a successful metrics snapshot must reveal the section again');
+assert.equal(host.querySelectorAll('.sbox-runtime-metric-card').length, 3,
+	'a recovered metrics section must render all cards again');
 assert.equal([...timers.values()].filter((timer) => timer.delay === 2000).length, 1,
-	'visible service must schedule exactly one next metrics poll');
+	'active service must schedule exactly one next metrics poll');
 runtimePanel.setActive(false);
 assert.equal(host.hidden, true, 'stopping the service must hide the metrics block immediately');
 assert.equal(timers.size, 0, 'stopping the service must cancel the live poll');

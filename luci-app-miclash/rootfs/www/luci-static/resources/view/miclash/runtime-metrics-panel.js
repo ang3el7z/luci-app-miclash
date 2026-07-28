@@ -144,28 +144,27 @@ function create(options) {
 
 	function paint() {
 		if (!host) return;
-		host.hidden = !active;
-		if (!active) {
+		const current = snapshot;
+		const available = current?.available === true;
+		host.hidden = !active || !available;
+		if (!active || !available) {
 			host.replaceChildren();
 			return;
 		}
-		const current = snapshot;
-		const available = current?.available === true;
-		const unavailable = _('Unavailable');
-		const uploadRate = available ? formatBytes(current.upload_rate, '/s') : unavailable;
-		const downloadRate = available ? formatBytes(current.download_rate, '/s') : unavailable;
-		const connectionCount = available ? formatCount(current.connections) : unavailable;
+		const uploadRate = formatBytes(current.upload_rate, '/s');
+		const downloadRate = formatBytes(current.download_rate, '/s');
+		const connectionCount = formatCount(current.connections);
 		host.replaceChildren(E('div', { 'class': 'sbox-runtime-metrics-grid', 'aria-live': 'off' }, [
 			metricCard(doc, 'sbox-runtime-metric-upload', _('Uploaded'), uploadRate,
-				available ? _('Total: %s').format(formatBytes(current.upload_total)) : unavailable,
+				_('Total: %s').format(formatBytes(current.upload_total)),
 				samples.upload,
 				'upload', (value) => formatBytes(value, '/s'), 60000),
 			metricCard(doc, 'sbox-runtime-metric-download', _('Downloaded'), downloadRate,
-				available ? _('Total: %s').format(formatBytes(current.download_total)) : unavailable,
+				_('Total: %s').format(formatBytes(current.download_total)),
 				samples.download,
 				'download', (value) => formatBytes(value, '/s'), 60000),
 			metricCard(doc, 'sbox-runtime-metric-connections', _('Connections'), connectionCount,
-				available ? _('Memory: %s').format(formatBytes(current.memory_bytes)) : unavailable,
+				_('Memory: %s').format(formatBytes(current.memory_bytes)),
 				samples.connections,
 				'connections', formatCount, 10)
 		]));
@@ -188,7 +187,7 @@ function create(options) {
 			return;
 		}
 		if (next.available !== true) {
-			if (snapshot?.available !== true) snapshot = { running: true, available: false };
+			snapshot = { running: true, available: false };
 			paint();
 			return;
 		}
@@ -205,7 +204,7 @@ function create(options) {
 			if (!destroyed && active) ingest(next);
 		}).catch(() => {
 			if (!destroyed && active) {
-				if (snapshot?.available !== true) snapshot = { running: true, available: false };
+				snapshot = { running: true, available: false };
 				paint();
 			}
 		}).finally(() => {
