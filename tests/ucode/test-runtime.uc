@@ -280,7 +280,12 @@ assert_equal(http_response([ chunk_prefix + '1\r\nx\r\n0\r\nX-Test: yes\r\n\r\n'
 assert_throws(() => http_response([ chunk_prefix + '0\r\nBad Trailer\r\n\r\n', '' ]), 'INVALID_RESPONSE');
 assert_throws(() => http_response([ chunk_prefix + '0\r\n\r\ntrailing', '' ]), 'INVALID_RESPONSE');
 assert_throws(() => http_response([ chunk_prefix + '1\r\nx\r\n0\r\n', '' ]), 'INVALID_RESPONSE');
-assert_throws(() => http_response([ chunk_prefix + '10001\r\n', '' ]), 'RESPONSE_TOO_LARGE');
+let metrics_body = '';
+for (let i = 0; i < 17; i++) metrics_body += sprintf('%4096s', 'x');
+let metrics_prefix = 'HTTP/1.1 200 OK\r\nContent-Length: ' + length(metrics_body) + '\r\n\r\n';
+assert_equal(length(http_response([ metrics_prefix + metrics_body, '' ]).body), length(metrics_body),
+	'the loopback HTTP adapter must accept a Mihomo connections snapshot above 64 KiB');
+assert_throws(() => http_response([ chunk_prefix + '80001\r\n', '' ]), 'RESPONSE_TOO_LARGE');
 assert_throws(() => http_response([ chunk_prefix + 'FFFFFFFFFFFFFFFF\r\n', '' ]), 'INVALID_RESPONSE');
 let length_prefix = 'HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n';
 assert_throws(() => http_response([ length_prefix + 'x', 'trailing', '' ]), 'INVALID_RESPONSE');

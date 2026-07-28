@@ -149,7 +149,7 @@ function clock_adapter() {
 
 export function create_http_adapter(clock, socket) {
 	const MAX_HEADER = 16384;
-	const MAX_BODY = 65536;
+	const MAX_BODY = 524288;
 	const TIMEOUT_MS = 2000;
 	if (type(clock?.now) != 'function' || type(socket?.connect) != 'function' ||
 	    type(socket?.poll) != 'function')

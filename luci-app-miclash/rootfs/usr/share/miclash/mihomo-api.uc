@@ -2,7 +2,7 @@ import { fail } from 'miclash.errors';
 import { profile_name } from 'miclash.schema';
 
 const MAX_CONFIG = 1048576;
-const MAX_RESPONSE = 65536;
+const MAX_RESPONSE = 524288;
 const MAX_DEPTH = 16;
 const HTTPS_HELPER = '/usr/libexec/miclash/mihomo-https.uc';
 const METHODS = { GET: true, PUT: true, POST: true };

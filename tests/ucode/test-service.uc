@@ -143,7 +143,21 @@ let ambiguous = env({ files: {
 } });
 assert_throws(() => mihomo_api.request(ambiguous.rt, 'GET', '/version'), 'INVALID_ARGUMENT');
 let oversized_body = '';
-for (let i = 0; i < 17; i++) oversized_body += sprintf('%4096s', 'x');
+for (let i = 0; i < 129; i++) oversized_body += sprintf('%4096s', 'x');
+let connections_body = '{"uploadTotal":1,"downloadTotal":2,"memory":3,"connections":[';
+for (let i = 0; i < 700; i++) {
+	if (i) connections_body += ',';
+	connections_body += '{"id":"' + i + '","metadata":{"host":"' + sprintf('%96s', 'x') + '"}}';
+}
+connections_body += ']}';
+assert_true(length(connections_body) > 65536 && length(connections_body) < 524288);
+let connections_env = env({ replies: {
+	'GET:/connections': { status: 200, body: connections_body }
+} });
+let connections = mihomo_api.request(connections_env.rt, 'GET', '/connections');
+assert_equal(connections.ok, true);
+assert_equal(length(connections.data.connections), 700,
+	'Mihomo connections snapshots above 64 KiB must remain available to runtime metrics');
 let https_env = env({ files: {
 	'/opt/clash/config.yaml': 'external-controller-tls: 127.0.0.1:9443\nsecret: ' + SECRET + '\n'
 } });
