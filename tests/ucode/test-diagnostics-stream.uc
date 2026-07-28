@@ -42,6 +42,9 @@ writer.end_array();
 writer.end_object();
 let result = writer.finish();
 assert_equal(json(filesystem.readfile(result.path)).logs[2], 'three');
+assert_equal(filesystem.readfile(result.path),
+	'{\n  "schema_version": 4,\n  "logs": [\n    "one",\n    "two",\n    "three"\n  ]\n}',
+	'diagnostic reports are formatted for humans');
 assert_equal(result.sha256, runtime.digest.sha256_file(result.path));
 assert_equal(result.size, length(filesystem.readfile(result.path)));
 
@@ -64,7 +67,7 @@ let maximum_path = '/tmp/miclash/maximum-stream.json';
 let maximum_writer = diagnostics_json.create(runtime,
 	filesystem.open(maximum_path, 'wx', 0o600));
 maximum_writer.begin_object();
-maximum_writer.field('payload', sprintf('%16777202s', 'x'));
+maximum_writer.field('payload', sprintf('%16777197s', 'x'));
 maximum_writer.end_object();
 let maximum_result = maximum_writer.finish();
 assert_equal(maximum_result.size, 16777216,
@@ -144,7 +147,7 @@ assert_equal(completed.sha256, runtime.digest.sha256_file(completed.path));
 report.output.abort();
 assert_throws(() => output.field('after_publication', true), 'INTERNAL');
 let retained_abort_reader = store.open_report(completed.id);
-assert_equal(retained_abort_reader.read(64), '{"ok":true}',
+assert_equal(retained_abort_reader.read(64), '{\n  "ok": true\n}',
 	'post-publication writer misuse cannot remove the published report');
 assert_equal(retained_abort_reader.close(), true);
 assert_throws(() => store.open_report(completed.id), 'NOT_FOUND');
@@ -255,7 +258,7 @@ concurrent_output.begin_object(); concurrent_output.field('reader', true); concu
 let concurrent = store.finish(concurrent_stage.id, concurrent_output.finish());
 let first_reader = store.open_report(concurrent.id);
 assert_throws(() => store.open_report(concurrent.id), 'NOT_FOUND');
-assert_equal(first_reader.read(64), '{"reader":true}');
+assert_equal(first_reader.read(64), '{\n  "reader": true\n}');
 assert_equal(first_reader.close(), true);
 
 let failing_stage = store.begin({ mode: 'lite', required_bytes: 4096 });

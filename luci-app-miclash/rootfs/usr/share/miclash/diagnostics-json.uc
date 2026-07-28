@@ -51,14 +51,20 @@ export function create(runtime, target) {
 		catch (error) { terminal(); }
 		bytes += length(value);
 	};
+	function indentation(depth) {
+		let output = '';
+		for (let index = 0; index < depth; index++) output += '  ';
+		return output;
+	};
 	function separator(container) {
 		if (container.count++) write(',');
+		write('\n' + indentation(length(stack)));
 	};
 	function object_member(name) {
 		let container = stack[length(stack) - 1];
 		if (container?.kind != 'object' || type(name) != 'string') terminal();
 		separator(container);
-		write(sprintf('%J', name) + ':');
+		write(sprintf('%J', name) + ': ');
 	};
 	function array_value() {
 		let container = stack[length(stack) - 1];
@@ -79,6 +85,7 @@ export function create(runtime, target) {
 	function close(kind, token) {
 		let container = pop(stack);
 		if (container?.kind != kind) terminal();
+		if (container.count) write('\n' + indentation(length(stack)));
 		write(token);
 	};
 	return {
