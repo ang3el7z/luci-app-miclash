@@ -4,9 +4,10 @@ import * as runtime_metrics from 'miclash.runtime-metrics';
 let running = false, calls = [];
 let replies = {
 	'/traffic': { ok: true, data: {
-		up: 7680, down: 16794, upTotal: 10485760, downTotal: 55155098
+		up: 7680, down: 16794
 	} },
 	'/connections': { ok: true, data: {
+		uploadTotal: 10485760, downloadTotal: 55155098,
 		memory: 55889100, connections: [ {}, {}, {} ]
 	} }
 };

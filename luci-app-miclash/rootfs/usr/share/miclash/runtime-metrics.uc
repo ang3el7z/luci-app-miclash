@@ -35,8 +35,8 @@ export function create(dependencies) {
 
 		let upload_rate = nonnegative(traffic.data.up);
 		let download_rate = nonnegative(traffic.data.down);
-		let upload_total = nonnegative(traffic.data.upTotal);
-		let download_total = nonnegative(traffic.data.downTotal);
+		let upload_total = nonnegative(connections.data.uploadTotal);
+		let download_total = nonnegative(connections.data.downloadTotal);
 		let memory_bytes = nonnegative(connections.data.memory);
 		if (upload_rate == null || download_rate == null || upload_total == null ||
 			download_total == null || memory_bytes == null)
