@@ -27,6 +27,8 @@ assert.match(panel, /function setActive\(value\)/,
 	'panel must expose service-aware visibility control');
 assert.match(panel, /doc\.hidden/,
 	'panel must pause background polling in hidden browser tabs');
+assert.match(panel, /'aria-live': 'off'/,
+	'frame-by-frame metric animation must not flood screen-reader announcements');
 assert.doesNotMatch(panel, /(?:WebSocket|external-controller|token=|fs\.|exec\s*\()/,
 	'panel must not expose panel credentials or call the backend directly');
 assert.match(panel, /sbox-runtime-metric-upload/);
@@ -100,9 +102,22 @@ const documentMock = {
 };
 let nextTimer = 0;
 const timers = new Map();
+let nextAnimationFrame = 0;
+const animationFrames = new Map();
+function runAnimationFrame(timestamp) {
+	const frames = [ ...animationFrames.values() ];
+	animationFrames.clear();
+	frames.forEach((callback) => callback(timestamp));
+}
 const windowMock = {
 	setTimeout(callback, delay) { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; },
-	clearTimeout(id) { timers.delete(id); }
+	clearTimeout(id) { timers.delete(id); },
+	requestAnimationFrame(callback) {
+		const id = ++nextAnimationFrame;
+		animationFrames.set(id, callback);
+		return id;
+	},
+	cancelAnimationFrame(id) { animationFrames.delete(id); }
 };
 const baseclass = { extend: (value) => value };
 if (typeof ''.format !== 'function') {
@@ -118,10 +133,12 @@ const moduleApi = new Function('baseclass', 'E', '_', 'window', 'document', pane
 let metricCalls = 0;
 const runtimePanel = moduleApi.create({
 	api: {
-		async runtimeMetrics() {
-			metricCalls++;
-			if (metricCalls === 3) return { running: true, available: false };
-			return { running: true, available: true, upload_rate: 7680, download_rate: 16384,
+	async runtimeMetrics() {
+		metricCalls++;
+		if (metricCalls === 3) return { running: true, available: false };
+		if (metricCalls === 2) return { running: true, available: true, upload_rate: 15360, download_rate: 32768,
+			upload_total: 10501120, download_total: 53477376, connections: 97, memory_bytes: 56890100 };
+		return { running: true, available: true, upload_rate: 7680, download_rate: 16384,
 				upload_total: 10485760, download_total: 52428800, connections: 95, memory_bytes: 55889100 };
 		},
 		destroy() {}
@@ -151,8 +168,17 @@ assert.match(host.textContent, /Uploaded7\.50 KiB\/s[\s\S]*Downloaded16 KiB\/s[\
 	'metric cards must present rates and active connection count');
 await runtimePanel.refresh();
 assert.equal(metricCalls, 2, 'a visible panel must accept a second metrics snapshot');
+assert.equal(animationFrames.size, 1,
+	'a new snapshot must begin a browser animation instead of replacing the displayed rates');
+runAnimationFrame(1000);
+runAnimationFrame(2000);
+assert.match(host.textContent, /Uploaded11\.3 KiB\/s[\s\S]*Downloaded24 KiB\/s[\s\S]*Connections96/,
+	'mid-animation cards must display interpolated values');
 assert.match(host.querySelectorAll('.sbox-runtime-metric-line')[0].attrs.d, / C /,
-	'two live samples must render as a smoothed trend line');
+	'the animated live sample must remain a smoothed trend line');
+runAnimationFrame(3000);
+assert.match(host.textContent, /Uploaded15 KiB\/s[\s\S]*Downloaded32 KiB\/s[\s\S]*Connections97/,
+	'the animated cards must settle on the latest metrics snapshot');
 await runtimePanel.refresh();
 assert.equal(metricCalls, 3, 'a visible panel must tolerate one unavailable snapshot');
 assert.doesNotMatch(host.textContent, /Unavailable/,

@@ -27,6 +27,23 @@ function formatCount(value) {
 	return String(Math.round(number(value)));
 }
 
+function interpolate(from, to, progress) {
+	return number(from) + (number(to) - number(from)) * progress;
+}
+
+function interpolateSnapshot(from, to, progress) {
+	return {
+		running: true,
+		available: true,
+		upload_rate: interpolate(from.upload_rate, to.upload_rate, progress),
+		download_rate: interpolate(from.download_rate, to.download_rate, progress),
+		upload_total: interpolate(from.upload_total, to.upload_total, progress),
+		download_total: interpolate(from.download_total, to.download_total, progress),
+		connections: interpolate(from.connections, to.connections, progress),
+		memory_bytes: interpolate(from.memory_bytes, to.memory_bytes, progress)
+	};
+}
+
 function pushSample(samples, value) {
 	samples.push(number(value));
 	if (samples.length > MAX_SAMPLES) samples.splice(0, samples.length - MAX_SAMPLES);
@@ -122,8 +139,10 @@ function create(options) {
 	let active = false;
 	let destroyed = false;
 	let pollTimer = null;
+	let animationFrame = null;
 	let refreshPromise = null;
 	let snapshot = null;
+	let transition = null;
 	const samples = { upload: [], download: [], connections: [] };
 
 	function clearPoll() {
@@ -131,11 +150,68 @@ function create(options) {
 		pollTimer = null;
 	}
 
+	function clearAnimation() {
+		if (animationFrame != null && typeof win.cancelAnimationFrame === 'function')
+			win.cancelAnimationFrame(animationFrame);
+		animationFrame = null;
+	}
+
 	function reset() {
+		clearAnimation();
 		snapshot = null;
+		transition = null;
 		samples.upload = [];
 		samples.download = [];
 		samples.connections = [];
+	}
+
+	function displayedSnapshot() {
+		if (!transition) return snapshot;
+		return interpolateSnapshot(transition.from, transition.to, transition.progress);
+	}
+
+	function displayedSamples(name, current) {
+		const values = samples[name].slice();
+		if (transition) pushSample(values, current);
+		return values;
+	}
+
+	function finishTransition() {
+		if (!transition) return;
+		snapshot = transition.to;
+		pushSample(samples.upload, snapshot.upload_rate);
+		pushSample(samples.download, snapshot.download_rate);
+		pushSample(samples.connections, snapshot.connections);
+		transition = null;
+		clearAnimation();
+	}
+
+	function animate(timestamp) {
+		animationFrame = null;
+		if (destroyed || !active || doc.hidden || !transition) return;
+		if (transition.startedAt == null) transition.startedAt = number(timestamp);
+		transition.progress = Math.min(1, Math.max(0, (number(timestamp) - transition.startedAt) / POLL_MS));
+		if (transition.progress >= 1) finishTransition();
+		paint();
+		if (transition && typeof win.requestAnimationFrame === 'function')
+			animationFrame = win.requestAnimationFrame(animate);
+	}
+
+	function startTransition(next) {
+		finishTransition();
+		if (!snapshot) {
+			snapshot = next;
+			pushSample(samples.upload, snapshot.upload_rate);
+			pushSample(samples.download, snapshot.download_rate);
+			pushSample(samples.connections, snapshot.connections);
+			return;
+		}
+		transition = { from: snapshot, to: next, progress: 0, startedAt: null };
+		if (typeof win.requestAnimationFrame === 'function')
+			animationFrame = win.requestAnimationFrame(animate);
+		else {
+			finishTransition();
+		}
 	}
 
 	function paint() {
@@ -145,21 +221,27 @@ function create(options) {
 			host.replaceChildren();
 			return;
 		}
-		const available = snapshot?.available === true;
+		const current = displayedSnapshot();
+		const available = current?.available === true;
 		const unavailable = _('Unavailable');
-		const uploadRate = available ? formatBytes(snapshot.upload_rate, '/s') : unavailable;
-		const downloadRate = available ? formatBytes(snapshot.download_rate, '/s') : unavailable;
-		const connectionCount = available ? formatCount(snapshot.connections) : unavailable;
-		host.replaceChildren(E('div', { 'class': 'sbox-runtime-metrics-grid', 'role': 'status',
-			'aria-live': 'polite', 'aria-atomic': 'true' }, [
+		const uploadRate = available ? formatBytes(current.upload_rate, '/s') : unavailable;
+		const downloadRate = available ? formatBytes(current.download_rate, '/s') : unavailable;
+		const connectionCount = available ? formatCount(current.connections) : unavailable;
+		const uploadSamples = available ? displayedSamples('upload', current.upload_rate) : samples.upload;
+		const downloadSamples = available ? displayedSamples('download', current.download_rate) : samples.download;
+		const connectionSamples = available ? displayedSamples('connections', current.connections) : samples.connections;
+		host.replaceChildren(E('div', { 'class': 'sbox-runtime-metrics-grid', 'aria-live': 'off' }, [
 			metricCard(doc, 'sbox-runtime-metric-upload', _('Uploaded'), uploadRate,
-				available ? _('Total: %s').format(formatBytes(snapshot.upload_total)) : unavailable, samples.upload,
+				available ? _('Total: %s').format(formatBytes(current.upload_total)) : unavailable,
+				uploadSamples,
 				'upload', (value) => formatBytes(value, '/s')),
 			metricCard(doc, 'sbox-runtime-metric-download', _('Downloaded'), downloadRate,
-				available ? _('Total: %s').format(formatBytes(snapshot.download_total)) : unavailable, samples.download,
+				available ? _('Total: %s').format(formatBytes(current.download_total)) : unavailable,
+				downloadSamples,
 				'download', (value) => formatBytes(value, '/s')),
 			metricCard(doc, 'sbox-runtime-metric-connections', _('Connections'), connectionCount,
-				available ? _('Memory: %s').format(formatBytes(snapshot.memory_bytes)) : unavailable, samples.connections,
+				available ? _('Memory: %s').format(formatBytes(current.memory_bytes)) : unavailable,
+				connectionSamples,
 				'connections', formatCount)
 		]));
 	}
@@ -185,10 +267,7 @@ function create(options) {
 			paint();
 			return;
 		}
-		snapshot = next;
-		pushSample(samples.upload, snapshot.upload_rate);
-		pushSample(samples.download, snapshot.download_rate);
-		pushSample(samples.connections, snapshot.connections);
+		startTransition(next);
 		paint();
 	}
 
@@ -209,7 +288,10 @@ function create(options) {
 	}
 
 	function visibilityChanged() {
-		if (doc.hidden) clearPoll();
+		if (doc.hidden) {
+			clearPoll();
+			finishTransition();
+		}
 		else if (active) refresh();
 	}
 
@@ -240,6 +322,7 @@ function create(options) {
 		if (destroyed) return;
 		destroyed = true;
 		clearPoll();
+		clearAnimation();
 		doc.removeEventListener('visibilitychange', visibilityChanged);
 		if (typeof api.destroy === 'function') api.destroy();
 		host = null;
