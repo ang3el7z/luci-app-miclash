@@ -557,30 +557,28 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "$api/releases/tags/${GITHUB_REF_NAME}" > "$release_json"
 
-          for file in "${non_manifest[@]}"; do
-            name="$(basename "$file")"
-            encoded_name="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$name")"
-            asset_id="$(python3 - "$release_json" "$name" <<'PY'
+          mapfile -t stale_asset_ids < <(python3 - "$release_json" <<'PY'
           import json
           import pathlib
           import sys
 
           data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-          wanted = sys.argv[2]
           for asset in data.get("assets", []):
-              if asset.get("name") == wanted:
+              if asset.get("name") != "miclash-release-manifest.json":
                   print(asset["id"])
-                  break
           PY
-          )"
+          )
+          for asset_id in "${stale_asset_ids[@]}"; do
+            curl -sS --fail-with-body -L -X DELETE \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api/releases/assets/${asset_id}"
+          done
 
-            if [ -n "$asset_id" ]; then
-              curl -sS --fail-with-body -L -X DELETE \
-                -H "Accept: application/vnd.github+json" \
-                -H "Authorization: Bearer ${GH_TOKEN}" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "$api/releases/assets/${asset_id}"
-            fi
+          for file in "${non_manifest[@]}"; do
+            name="$(basename "$file")"
+            encoded_name="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$name")"
 
             curl -sS --fail-with-body -L -X POST \
               -H "Accept: application/vnd.github+json" \
@@ -621,8 +619,12 @@ jobs:
           published = collections.Counter(asset.get("name") for asset in release.get("assets", []))
           missing = [name for name in expected if published[name] == 0]
           duplicate = [name for name in expected if published[name] > 1]
-          if missing or duplicate:
-              raise SystemExit(f"missing={missing}; duplicate={duplicate}")
+          expected_names = set(expected)
+          unexpected = sorted(name for name in published
+                              if name != "miclash-release-manifest.json" and name not in expected_names)
+          if missing or duplicate or unexpected:
+              raise SystemExit(
+                  f"missing={missing}; duplicate={duplicate}; unexpected={unexpected}")
           if published["miclash-release-manifest.json"] != 0:
               raise SystemExit("publication manifest appeared before final upload")
           PY

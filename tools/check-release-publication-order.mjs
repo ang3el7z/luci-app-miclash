@@ -25,6 +25,10 @@ assert.match(workflow, /if \[ -n "\$asset_id" \]/,
 	'a missing old publication marker must be tolerated');
 assert.match(workflow, /Verify Published Non-Manifest Assets[\s\S]*duplicate|Verify Published Non-Manifest Assets[\s\S]*missing/i,
 	'published non-manifest assets must be checked for missing or duplicate names');
+assert.match(workflow, /Upload Non-Manifest Release Assets[\s\S]*stale_asset_ids[\s\S]*-X DELETE/,
+	'stale published assets must be deleted before uploading the current release files');
+assert.match(workflow, /Verify Published Non-Manifest Assets[\s\S]*unexpected/i,
+	'published non-manifest assets must be checked for unexpected names');
 assert.doesNotMatch(workflow, /Upload Publication Manifest Last[\s\S]*\n\s*- name:/,
 	'no later workflow step may mutate release publication after the manifest marker');
 
