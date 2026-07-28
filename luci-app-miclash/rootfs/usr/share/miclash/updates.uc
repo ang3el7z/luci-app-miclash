@@ -2,6 +2,7 @@ import * as errors from 'miclash.errors';
 import * as http from 'miclash.http';
 import * as storage from 'miclash.storage';
 import * as platform from 'miclash.platform';
+import * as update_action_contract from 'miclash.update-action';
 
 const MIHOMO_LATEST =
 	'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest';
@@ -267,6 +268,13 @@ function version(value) {
 
 function channel(value) {
 	if (value != 'release' && value != 'prerelease')
+		invalid();
+	return value;
+};
+
+function update_action(value) {
+	if (value != 'install' && value != 'update' &&
+	    value != 'reinstall' && value != 'downgrade')
 		invalid();
 	return value;
 };
@@ -1001,7 +1009,7 @@ export function create(app) {
 	    type(app?.runtime?.digest?.sha256) != 'function' ||
 	    type(app?.runtime?.random?.hex) != 'function' ||
 	    type(app?.operations?.submit) != 'function' || type(app?.service?.observe) != 'function' ||
-	    type(app?.settings?.get) != 'function')
+	    type(app?.settings?.get) != 'function' || type(app?.versions) != 'function')
 		invalid();
 	cleanup_orphaned_updates(app.runtime);
 	let current = app.runtime.fs.lstat(BINARY);
@@ -1042,9 +1050,12 @@ export function create(app) {
 	function update_mihomo(...args) {
 		if (length(args) != 2) invalid();
 		let options = args[0], source = args[1];
-		exact(options, { version: true, channel: true });
+		exact(options, { version: true, channel: true, action: true });
 		let selected_channel = configured_channel('mihomo', options.channel);
 		let requested = options.version == null ? null : version(options.version);
+		let selected_action = update_action(options.action ?? 'update');
+		if (options.action != null)
+			update_action_contract.validate(selected_action, app.versions()?.mihomo, requested);
 		return app.operations.submit('updates.mihomo', source, {}, (ctx) => {
 			let candidate = null, resolved = null, installed = null;
 			let transaction = { applied: null, sha256: null,
@@ -1059,6 +1070,7 @@ export function create(app) {
 				remove_owned(app.runtime, candidate);
 				candidate = null;
 				set_status({ state: 'success', kind: 'mihomo', stage: 'done',
+					action: selected_action,
 					operation_id: ctx.id, version: resolved.version,
 					expected_version: resolved.version,
 					sha256: installed.sha256,
@@ -1081,6 +1093,7 @@ export function create(app) {
 					candidate = null;
 				}
 				set_status({ state: 'failure', kind: 'mihomo', stage: transaction.stage,
+					action: selected_action,
 					operation_id: ctx.id, version: resolved?.version ?? requested,
 					expected_version: resolved?.version ?? requested,
 					sha256: transaction.sha256,
@@ -1142,11 +1155,14 @@ export function create(app) {
 		});
 	};
 	function submit_miclash(options, source, pre_enqueue) {
-		exact(options, { version: true, channel: true });
+		exact(options, { version: true, channel: true, action: true });
 		if (pre_enqueue != null && type(pre_enqueue) != 'function')
 			invalid();
 		let selected_channel = configured_channel('miclash', options.channel);
 		let requested = options.version == null ? null : version(options.version);
+		let selected_action = update_action(options.action ?? 'update');
+		if (options.action != null)
+			update_action_contract.validate(selected_action, app.versions()?.miclash, requested);
 		return app.operations.submit('updates.miclash', source, {}, (ctx) => {
 			let candidate = null, handoff = null, resolved = null;
 			let applied_hash = null, published = null;
@@ -1176,7 +1192,7 @@ export function create(app) {
 				let reply = run_checked(app.runtime, candidate.shell,
 					{ command: BUSYBOX, args: [
 					'ash', candidate.path, 'app', '--target-tag', resolved.version,
-					'--mode', 'update', '--status-file', handoff_path, '--token', token,
+					'--mode', selected_action, '--status-file', handoff_path, '--token', token,
 					'--service-was-running', service_was_running ? '1' : '0'
 				], timeout_ms: 600000 }, [ candidate ]);
 				if (!response_ok(reply))
@@ -1196,6 +1212,7 @@ export function create(app) {
 				remove_owned(app.runtime, candidate);
 				candidate = null;
 				set_status({ state: 'success', kind: 'miclash', stage: 'done',
+					action: selected_action,
 					operation_id: ctx.id, version: resolved.version, sha256: applied_hash,
 					expected_version: resolved.version,
 					published_checksum_verified: published,
@@ -1227,6 +1244,7 @@ export function create(app) {
 							transaction.stage = 'cleanup';
 						}
 				set_status({ state: 'failure', kind: 'miclash', stage: transaction.stage,
+					action: selected_action,
 					operation_id: ctx.id, version: resolved?.version ?? requested,
 					expected_version: resolved?.version ?? requested,
 					sha256: candidate?.hash ?? null,

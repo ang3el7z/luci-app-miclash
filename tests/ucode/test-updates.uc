@@ -278,6 +278,10 @@ function environment(options) {
 	let ops = operations.create(runtime);
 	let app = {
 		runtime, operations: ops, service,
+		versions: () => ({
+			miclash: options.app_version ?? '1.0.0',
+			mihomo: options.mihomo_version ?? '1.0.0'
+		}),
 		settings: { get: () => ({ updates: {
 			mihomo_release_channel: options.channel ?? 'release',
 			miclash_release_channel: options.miclash_channel ?? 'release'
@@ -341,6 +345,13 @@ verified.clock.advance(0);
 assert_equal(verified.ops.get(verified_op.id).state, 'success');
 assert_equal(verified.updater.status().published_checksum_verified, true);
 assert_equal(length(verified.service_calls), 0);
+let explicit_install = environment({ mihomo_version: '' });
+let explicit_install_op = explicit_install.updater.update_mihomo({
+	version: 'v1.2.3', action: 'install'
+}, 'luci');
+explicit_install.clock.advance(0);
+assert_equal(explicit_install.ops.get(explicit_install_op.id).state, 'success',
+	'explicit Mihomo install action was rejected when the kernel was missing');
 let bounded_unpack = [];
 for (let call in verified.process.calls) {
 	assert_true(call.command != '/bin/gzip', 'raw gzip cannot expand without a byte ceiling');
@@ -350,6 +361,10 @@ for (let call in verified.process.calls) {
 assert_equal(length(bounded_unpack), 1);
 assert_equal(length(bounded_unpack[0].args), 3);
 assert_equal(bounded_unpack[0].args[2], '1024');
+assert_throws(() => environment({ mihomo_version: '1.3.0' }).updater.update_mihomo(
+	{ version: 'v1.2.3', action: 'update' }, 'luci'), 'INVALID_ARGUMENT');
+assert_throws(() => environment({ mihomo_version: '1.0.0' }).updater.update_mihomo(
+	{ version: 'v1.2.3', action: 'downgrade' }, 'luci'), 'INVALID_ARGUMENT');
 
 // A 256 MB router cannot afford full ucode strings for both the old and new
 // Mihomo binaries. Large executables must only move through bounded fs reads.
@@ -755,8 +770,37 @@ assert_equal(length(ash_calls), 2);
 assert_equal(ash_calls[0].args[1], '-n');
 assert_true(index(ash_calls[1].args, '--target-tag') >= 0);
 assert_true(index(ash_calls[1].args, '--service-was-running') >= 0);
+assert_equal(ash_calls[1].args[index(ash_calls[1].args, '--mode') + 1], 'update');
 for (let name in app_update.filesystem.lsdir('/tmp/miclash/updates'))
 	assert_true(index(name, 'handoff') < 0, 'handoff is consumed and removed');
+
+let reinstall_app = environment({ app_version: '9.9.9' });
+let reinstall_app_op = reinstall_app.updater.update_miclash(
+	{ version: 'v9.9.9', action: 'reinstall' }, 'luci');
+reinstall_app.clock.advance(0);
+assert_equal(reinstall_app.ops.get(reinstall_app_op.id).state, 'success');
+let reinstall_ash = [];
+for (let call in reinstall_app.process.calls)
+	if (call.command == '/bin/busybox') push(reinstall_ash, call);
+assert_equal(reinstall_ash[1].args[index(reinstall_ash[1].args, '--mode') + 1],
+	'reinstall');
+assert_equal(reinstall_app.updater.status().action, 'reinstall');
+
+let downgrade_app = environment({ app_version: '10.0.0' });
+let downgrade_app_op = downgrade_app.updater.update_miclash(
+	{ version: 'v9.9.9', action: 'downgrade' }, 'luci');
+downgrade_app.clock.advance(0);
+assert_equal(downgrade_app.ops.get(downgrade_app_op.id).state, 'success');
+let downgrade_ash = [];
+for (let call in downgrade_app.process.calls)
+	if (call.command == '/bin/busybox') push(downgrade_ash, call);
+assert_equal(downgrade_ash[1].args[index(downgrade_ash[1].args, '--mode') + 1],
+	'downgrade');
+assert_equal(downgrade_app.updater.status().action, 'downgrade');
+assert_throws(() => environment().updater.update_miclash(
+	{ version: 'v9.9.9', action: 'replace' }, 'luci'), 'INVALID_ARGUMENT');
+assert_throws(() => environment({ app_version: '10.0.0' }).updater.update_miclash(
+	{ version: 'v9.9.9', action: 'update' }, 'luci'), 'INVALID_ARGUMENT');
 
 let running_app_update = environment({ running: true });
 let running_app_op = running_app_update.updater.update_miclash(

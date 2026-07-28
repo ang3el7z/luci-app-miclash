@@ -61,6 +61,27 @@ function button(locale, key, generation_value, action, target) {
 	return { text: i18n.text(locale, key),
 		callback_data: callback(generation_value, action, target) };
 };
+function update_visual(action) {
+	if (action == 'update') return { icon: '🟢', arrow: '↑' };
+	if (action == 'reinstall') return { icon: '🔄', arrow: '=' };
+	if (action == 'downgrade') return { icon: '🔴', arrow: '↓' };
+	if (action == 'install') return { icon: '📥', arrow: '→' };
+	return { icon: '❔', arrow: '?' };
+};
+function update_button(locale, component, model, generation_value) {
+	let action = nested(model, 'updates', component + '_action', locale);
+	if (action != 'install' && action != 'update' &&
+	    action != 'reinstall' && action != 'downgrade')
+		action = 'update';
+	let key = action + '_' + component;
+	if (action == 'update') key = 'update_' + component + '_to';
+	return {
+		text: i18n.text(locale, key, {
+			version: nested(model, 'updates', component + '_available', locale)
+		}),
+		callback_data: callback(generation_value, 'confirm', 'update_' + component)
+	};
+};
 function markup(rows) { return { inline_keyboard: rows }; };
 function back(locale, generation_value, target) {
 	return [ button(locale, 'back', generation_value, 'back', target ?? 'main') ];
@@ -196,15 +217,21 @@ export function render(screen, model, locale, generation_value) {
 			back(locale, generation_value, 'settings') ];
 	}
 	else if (screen == 'updates') {
+		let miclash_visual = update_visual(model?.updates?.miclash_action);
+		let mihomo_visual = update_visual(model?.updates?.mihomo_action);
 		text = i18n.text(locale, 'updates_body', {
+			miclash_icon: miclash_visual.icon,
 			miclash_installed: nested(model, 'updates', 'miclash_installed', locale),
+			miclash_arrow: miclash_visual.arrow,
 			miclash_available: nested(model, 'updates', 'miclash_available', locale),
+			mihomo_icon: mihomo_visual.icon,
 			mihomo_installed: nested(model, 'updates', 'mihomo_installed', locale),
+			mihomo_arrow: mihomo_visual.arrow,
 			mihomo_available: nested(model, 'updates', 'mihomo_available', locale)
 		});
 		rows = [ [ button(locale, 'check_updates', generation_value, 'execute', 'check_updates') ],
-			[ button(locale, 'update_miclash', generation_value, 'confirm', 'update_miclash') ],
-			[ button(locale, 'update_mihomo', generation_value, 'confirm', 'update_mihomo') ],
+			[ update_button(locale, 'miclash', model, generation_value) ],
+			[ update_button(locale, 'mihomo', model, generation_value) ],
 			back(locale, generation_value) ];
 	}
 	else if (screen == 'guard') {
@@ -241,7 +268,21 @@ export function render(screen, model, locale, generation_value) {
 		rows = [ [ button(locale, 'confirm', generation_value, 'execute', 'diagnostic_full') ],
 			back(locale, generation_value, 'diagnostics') ];
 	}
-	else if (match(screen, /^confirm_(stop|guard_off|reboot|update_miclash|update_mihomo)$/)) {
+	else if (match(screen, /^confirm_update_(miclash|mihomo)$/)) {
+		let component = match(screen, /^confirm_update_(miclash|mihomo)$/)[1];
+		let action = model?.update_action ?? model?.updates?.[component + '_action'];
+		if (action != 'install' && action != 'update' &&
+		    action != 'reinstall' && action != 'downgrade')
+			errors.fail('INVALID_ARGUMENT');
+		text = i18n.text(locale, 'confirm_' + action + '_' + component + '_body', {
+			version: model?.update_version ??
+				nested(model, 'updates', component + '_available', locale)
+		});
+		rows = [ [ button(locale, 'confirm', generation_value, 'execute',
+			'update_' + component) ],
+			[ button(locale, 'back', generation_value, 'back', 'updates') ] ];
+	}
+	else if (match(screen, /^confirm_(stop|guard_off|reboot)$/)) {
 		let target = substr(screen, 8);
 		text = i18n.text(locale, screen + '_body');
 		rows = [ [ button(locale, 'confirm', generation_value, 'execute', target) ],

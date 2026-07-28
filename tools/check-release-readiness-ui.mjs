@@ -106,7 +106,14 @@ assert.deepEqual(evaluatedAction('1.0.0', '1.1.0', false), {
 	kind: 'update', targetVersion: '1.1.0', iconName: 'download',
 	className: 'cbi-button-positive', title: 'Update MiClash to 1.1.0'
 });
-assert.equal(evaluatedAction('1.1.0', '1.1.0', false).title, 'Reinstall MiClash');
+assert.deepEqual(evaluatedAction('1.1.0', '1.1.0', false), {
+	kind: 'reinstall', targetVersion: '1.1.0', iconName: 'refresh',
+	className: 'cbi-button-neutral', title: 'Reinstall MiClash 1.1.0'
+});
+assert.deepEqual(evaluatedAction('1.2.0', '1.1.0', false), {
+	kind: 'downgrade', targetVersion: '1.1.0', iconName: 'download',
+	className: 'cbi-button-negative', title: 'Downgrade MiClash to 1.1.0'
+});
 assert.equal(evaluatedAction('1.0.0', '2.0.0', false).scheduled, undefined);
 assert.equal(evaluatedAction('1.0.0', '1.1.0', true).scheduled, undefined);
 assert.equal(evaluatedAction('1.0.0', '2.0.0', true, 'prerelease').scheduled, undefined);
@@ -116,9 +123,31 @@ assert.deepEqual(evaluatedKernelAction(true, '1.0.0', '1.1.0'), {
 	kind: 'update', targetVersion: '1.1.0', iconName: 'download',
 	className: 'cbi-button-positive', title: 'Update Mihomo to 1.1.0'
 });
-assert.equal(evaluatedKernelAction(true, '1.1.0', '1.1.0').title, 'Reinstall Mihomo');
+assert.deepEqual(evaluatedKernelAction(true, '1.1.0', '1.1.0'), {
+	kind: 'reinstall', targetVersion: '1.1.0', iconName: 'refresh',
+	className: 'cbi-button-neutral', title: 'Reinstall Mihomo 1.1.0'
+});
+assert.deepEqual(evaluatedKernelAction(true, '1.2.0', '1.1.0'), {
+	kind: 'downgrade', targetVersion: '1.1.0', iconName: 'download',
+	className: 'cbi-button-negative', title: 'Downgrade Mihomo to 1.1.0'
+});
 assert.equal(evaluatedKernelAction(false, '', '1.1.0').targetVersion, undefined);
 assert.match(configSource, /data-target-version/,
 	'scheduled-night indicator must expose its target version');
+assert.match(configSource,
+	/configApi\.update_miclash\([^;]+request\.action,\s*request\.version\)/s,
+	'LuCI must pass the explicit MiClash action and exact target version');
+assert.match(configSource,
+	/configApi\.update_mihomo\([^;]+request\.action,\s*request\.version\)/s,
+	'LuCI must pass the explicit Mihomo action and exact target version');
+const kernelModalStart = configSource.indexOf('async function openKernelModal()');
+const kernelModalEnd = configSource.indexOf('async function getMihomoStatus()', kernelModalStart);
+const kernelModalSource = configSource.slice(kernelModalStart, kernelModalEnd);
+assert.match(kernelModalSource,
+	/downloadMihomoKernel\(\s*asset\.browser_download_url, release\.version, arch,\s*actionKind\)/s,
+	'the Mihomo modal must preserve its explicit install/update/reinstall/downgrade action');
+assert.match(configSource,
+	/classList\.remove\('cbi-button-positive', 'cbi-button-neutral', 'cbi-button-negative'\)/,
+	'header refresh must replace themed positive, neutral and negative action colors');
 
 console.log('release readiness UI contract passed');

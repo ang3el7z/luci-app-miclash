@@ -15,6 +15,8 @@ function repeated(value, count) {
 	return output;
 };
 
+function clone(value) { return json(sprintf('%J', value)); };
+
 assert_equal(locale('en'), 'en');
 assert_equal(locale('en-us'), 'en');
 assert_equal(locale('ru'), 'ru');
@@ -38,7 +40,7 @@ assert_equal(i18n.telegram_language('en'), '');
 
 assert_equal(i18n.text('ru', 'operation_accepted', { operation: 'MiClash' }),
 	'Операция MiClash принята');
-assert_equal(i18n.text('unknown', 'back'), 'Back');
+assert_equal(i18n.text('unknown', 'back'), '◀️ Back');
 assert_throws(() => i18n.text('en', 'operation_accepted', { unknown: 'value' }),
 	'INVALID_ARGUMENT');
 assert_throws(() => i18n.text('en', 'missing_key'), 'INVALID_ARGUMENT');
@@ -76,7 +78,9 @@ let model = {
 	diagnostics: 'All required components are ready',
 	updates: {
 		miclash_installed: '2.0.4', miclash_available: '2.1.0',
-		mihomo_installed: '1.19.29', mihomo_available: '1.19.30'
+		miclash_action: 'update',
+		mihomo_installed: '1.19.29', mihomo_available: '1.19.30',
+		mihomo_action: 'update'
 	}
 };
 
@@ -92,6 +96,38 @@ for (let language in [ 'en', 'ru', 'zh-cn' ]) {
 			assert_true(length(button.callback_data) <= 64);
 		}
 }
+
+let main_ru = menu.render('main', model, 'ru', 7);
+assert_match(main_ru.reply_markup.inline_keyboard[0][0].text, /^📊 /);
+assert_match(main_ru.reply_markup.inline_keyboard[1][0].text, /^🔗 /);
+
+let updates_ru = menu.render('updates', model, 'ru', 7);
+assert_match(updates_ru.text, /🟢 MiClash: 2\.0\.4 ↑ 2\.1\.0/);
+assert_equal(updates_ru.reply_markup.inline_keyboard[1][0].text,
+	'⬆️ Обновить MiClash до 2.1.0');
+
+let reinstall_model = clone(model);
+reinstall_model.updates.miclash_available = '2.0.4';
+reinstall_model.updates.miclash_action = 'reinstall';
+let reinstall_ru = menu.render('updates', reinstall_model, 'ru', 8);
+assert_match(reinstall_ru.text, /🔄 MiClash: 2\.0\.4 = 2\.0\.4/);
+assert_equal(reinstall_ru.reply_markup.inline_keyboard[1][0].text,
+	'🔄 Переустановить MiClash 2.0.4');
+
+let downgrade_model = clone(model);
+downgrade_model.updates.miclash_available = '1.9.9';
+downgrade_model.updates.miclash_action = 'downgrade';
+let downgrade_ru = menu.render('updates', downgrade_model, 'ru', 9);
+assert_match(downgrade_ru.text, /🔴 MiClash: 2\.0\.4 ↓ 1\.9\.9/);
+assert_equal(downgrade_ru.reply_markup.inline_keyboard[1][0].text,
+	'⬇️ Понизить MiClash до 1.9.9');
+let confirm_downgrade_ru = menu.render('confirm_update_miclash', {
+	...downgrade_model,
+	update_action: 'downgrade',
+	update_version: '1.9.9'
+}, 'ru', 10);
+assert_match(confirm_downgrade_ru.text, /Понизить MiClash до 1\.9\.9/);
+assert_match(confirm_downgrade_ru.text, /более старая версия/);
 
 let completed = menu.render('operation_result', {
 	operation_result: 'Subscription update: completed', operation_failed: false

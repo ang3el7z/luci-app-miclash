@@ -1219,10 +1219,6 @@
 	.sbox-overview-protection {
 		grid-column: 1 / -1;
 	}
-	.sbox-overview-protection .sbox-diagnostics-facts {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 5px 16px;
-	}
 }
 @media (max-width: 760px) {
 	.sbox-settings-page {
@@ -1230,9 +1226,6 @@
 	}
 	.sbox-overview-card {
 		grid-column: 1 / -1;
-	}
-	.sbox-overview-protection .sbox-diagnostics-facts {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 	.sbox-routing-config-grid,
 	.sbox-settings-pair-grid,
@@ -1272,7 +1265,6 @@
 	.sbox-interface-section {
 		padding: 10px;
 	}
-	.sbox-overview-protection .sbox-diagnostics-facts,
 	.sbox-notification-events .sbox-management-switches,
 	.sbox-management-facts {
 		grid-template-columns: minmax(0, 1fr);

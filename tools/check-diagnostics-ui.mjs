@@ -51,9 +51,9 @@ assert.match(css, /\.sbox-diagnostics-state\s*\{[^}]*color:\s*var\(--sbox-text\)
 	'component values must use the same readable value color as adjacent overview cards');
 assert.match(css, /\.sbox-diagnostics-state-ok\s+\.sbox-diagnostics-state-icon\s*\{[^}]*var\(--sbox-success\)/s,
 	'only the component indicator dot should carry the semantic success color');
-assert.match(css,
-	/@media \(max-width: 1050px\)[\s\S]*?\.sbox-overview-protection \.sbox-diagnostics-facts\s*\{[^}]*grid-template-columns:\s*repeat\(2,/,
-	'medium-width Memory Guard facts must form a balanced two-column grid');
+assert.doesNotMatch(css,
+	/\.sbox-overview-protection \.sbox-diagnostics-facts\s*\{[^}]*grid-template-columns:/s,
+	'Memory Guard facts must remain stacked at every viewport width');
 assert.match(panelSource,
 	/sbox-overview-health sbox-overview-components[\s\S]*?_\('Components'\)/,
 	'the loaded Components card must use its spacing class and concise title');

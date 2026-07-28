@@ -7,6 +7,7 @@ function operation(kind) {
 };
 
 let last_notification_arguments = null, last_log_arguments = null;
+let last_miclash_update_arguments = null, last_mihomo_update_arguments = null;
 let app = {
 	status: () => ({ state: 'ready' }), overview: () => ({ state: 'current' }),
 	health: () => ({ ok: true }),
@@ -30,8 +31,16 @@ let app = {
 	config_external_adopt: () => operation('config.external_adopt'),
 	subscription_get: () => ({ profile: 'config.yaml', url: '' }),
 	subscription_set: () => operation('subscription.set'), subscription_update: () => operation('subscription.update'),
-	update_release: () => ({ version: 'v2.0.3' }), update_miclash: () => operation('updates.miclash'),
-	update_mihomo: () => operation('updates.mihomo'), update_rollback_mihomo: () => operation('updates.rollback'),
+	update_release: () => ({ version: 'v2.0.3' }),
+	update_miclash: (arguments) => {
+		last_miclash_update_arguments = arguments;
+		return operation('updates.miclash');
+	},
+	update_mihomo: (arguments) => {
+		last_mihomo_update_arguments = arguments;
+		return operation('updates.mihomo');
+	},
+	update_rollback_mihomo: () => operation('updates.rollback'),
 	memory_status: () => ({ phase: 'monitoring' }), memory_settings: () => ({ enabled: true }),
 	memory_reset_baseline: () => operation('memory.reset'), diagnostics_summary: () => ({ ok: true }),
 	diagnostics_create_report: () => ({
@@ -91,6 +100,19 @@ assert_true(type(methods.network_recover.call({ args: { source: 'luci' } }).oper
 assert_equal(methods.developer_uninstall.call({ args: { source: 'luci' } }).accepted, true);
 assert_equal(methods.config_apply.call({ args: {
 	profile: '../config.yaml', content: 'mode: rule\n', source: 'luci'
+} }).error.code, 'INVALID_ARGUMENT');
+assert_true(type(methods.update_miclash.call({ args: {
+	channel: 'release', source: 'luci', action: 'reinstall', version: 'v2.5.4'
+} }).operation_id) == 'string');
+assert_equal(last_miclash_update_arguments.action, 'reinstall');
+assert_equal(last_miclash_update_arguments.version, 'v2.5.4');
+assert_true(type(methods.update_mihomo.call({ args: {
+	channel: 'release', source: 'luci', action: 'downgrade', version: 'v1.19.10'
+} }).operation_id) == 'string');
+assert_equal(last_mihomo_update_arguments.action, 'downgrade');
+assert_equal(last_mihomo_update_arguments.version, 'v1.19.10');
+assert_equal(methods.update_miclash.call({ args: {
+	channel: 'release', source: 'luci', action: 'replace', version: 'v2.5.4'
 } }).error.code, 'INVALID_ARGUMENT');
 assert_equal(methods.telegram_settings.call({ args: {} }).token, '[REDACTED]');
 let safe_settings = methods.settings_get.call({ args: {} });

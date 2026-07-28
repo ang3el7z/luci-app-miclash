@@ -174,6 +174,20 @@ function environment(changes) {
 			return { service: { state: 'running' }, token: 'status-secret' };
 		},
 		health: () => { record_call('health', []); return { state: 'ok', detail: 'healthy' }; },
+		system_info: () => ({
+			app_version: options.app_version ?? '2.5.4',
+			mihomo: { version: options.mihomo_version ?? '1.19.30' }
+		}),
+		updates_status: () => ({
+			automatic_miclash: { latest_version: 'v2.5.3', readiness: 'ready' }
+		}),
+		update_release: (kind) => {
+			record_call('update_release', [ kind ]);
+			return kind == 'miclash'
+				? { version: options.miclash_release ?? 'v2.5.4',
+					ready: true, readiness: 'ready' }
+				: { version: options.mihomo_release ?? 'v1.19.30' };
+		},
 		memory_status: () => {
 			record_call('memory_status', []);
 			return { used_percent: 47, token: 'memory-secret' };
@@ -239,10 +253,10 @@ function environment(changes) {
 		reboot: () => record_call('reboot', []),
 		subscription_update: (url, source) => operation('subscription_update',
 			'subscription.update', [ url, source ], source, { url }),
-		update_miclash: (source) => operation('update_miclash', 'updates.miclash',
-			[ source ], source),
-		update_mihomo: (source) => operation('update_mihomo', 'updates.mihomo',
-			[ source ], source),
+		update_miclash: (action, version, source) => operation(
+			'update_miclash', 'updates.miclash', [ action, version, source ], source),
+		update_mihomo: (action, version, source) => operation(
+			'update_mihomo', 'updates.mihomo', [ action, version, source ], source),
 		settings_set: (patch, source) => operation('settings_set', 'settings.set',
 			[ patch, source ], source, { patch }),
 		guard_transition: (enabled, source) => operation('guard_transition',
@@ -334,6 +348,26 @@ assert_equal(production_panel.memory_state, 'warming_up');
 assert_equal(production_panel.last_memory_action, 'not_required');
 assert_equal(production_panel.guard_observed, 'enabled');
 assert_equal(production_panel.updates.miclash_available, 'v2.0.4');
+
+let fresh_updates_panel = telegram.panel_model({
+	runtime: {},
+	settings_get: () => ({ core: {}, guard: {}, updates: {} }),
+	status: () => ({}), health: () => ({}),
+	system_info: () => ({
+		app_version: '2.5.4', mihomo: { version: '1.19.30' }
+	}),
+	updates_status: () => ({
+		automatic_miclash: { latest_version: 'v2.5.3', readiness: 'ready' }
+	}),
+	update_release: (kind) => kind == 'miclash'
+		? { version: 'v2.5.4', ready: true, readiness: 'ready' }
+		: { version: 'v1.19.29' }
+}, 'updates');
+assert_equal(fresh_updates_panel.updates.miclash_available, 'v2.5.4',
+	'Telegram used the stale nightly scheduler version instead of a fresh release');
+assert_equal(fresh_updates_panel.updates.miclash_action, 'reinstall');
+assert_equal(fresh_updates_panel.updates.mihomo_available, 'v1.19.29');
+assert_equal(fresh_updates_panel.updates.mihomo_action, 'downgrade');
 
 let offset_path = '/etc/miclash/telegram-offset.json';
 
@@ -952,7 +986,7 @@ let notification_cases = [
 	[ 'guard_outage', 'Guard%20outage' ]
 ];
 for (let item in notification_cases) {
-	let family = environment();
+	let family = environment({ locale: 'en' });
 	let family_controller = telegram.create(family.app);
 	assert_equal(family_controller.send_event({
 		type: item[0], severity: 'warning', component: 'test',
@@ -970,6 +1004,19 @@ for (let item in notification_cases) {
 	for (let secret in [ 'family-secret', 'context-secret', 'user:pass' ])
 		assert_equal(index(request_url + request_body, secret), -1, item[0] + ' leaked ' + secret);
 }
+
+// Automatic notifications follow the configured Telegram locale too.
+let localized_notice = environment({ locale: 'ru' });
+let localized_notice_controller = telegram.create(localized_notice.app);
+assert_equal(localized_notice_controller.send_event({
+	type: 'failure', severity: 'error', component: 'routing',
+	title: 'Routing failed', message: 'Маршрут недоступен',
+	dedupe_key: 'failure/routing', occurred_at: 1710000000000,
+	recovery_of: null, context: {}
+}), true);
+assert_match(localized_notice.requests[0].body,
+	/text=%D0%9E%D1%88%D0%B8%D0%B1%D0%BA%D0%B0%3A%20/,
+	'automatic notification label ignored the Russian bot locale');
 
 // Notification subscription formats supported events and isolates Telegram failure.
 let notify_env = environment({ send_failure: true });
@@ -1018,6 +1065,42 @@ assert_equal(panel_controller.handle_update(callback(2004, 'g4:execute:stop')), 
 	assert_equal(panel_env.submitted[0].kind, 'service.stop');
 assert_equal(panel_controller.handle_update(callback(2004, 'g4:execute:stop')), false,
 	'duplicate callback executed twice');
+
+// The confirmed release action and exact target survive the callback round trip.
+// A lower release must never be silently converted into an ordinary update.
+let downgrade_env = environment({
+	locale: 'en',
+	app_version: '2.5.4',
+	miclash_release: 'v2.5.3'
+});
+let downgrade_controller = telegram.create(downgrade_env.app);
+assert_equal(downgrade_controller.handle_update(update(2050, '/start')), true);
+assert_equal(downgrade_controller.handle_update(
+	callback(2051, 'g1:open:updates')), true);
+assert_equal(downgrade_controller.handle_update(
+	callback(2052, 'g2:confirm:update_miclash')), true);
+assert_equal(downgrade_controller.handle_update(
+	callback(2053, 'g3:execute:update_miclash')), true);
+let downgrade_call = null;
+for (let index = length(downgrade_env.domain_calls) - 1; index >= 0; index--)
+	if (downgrade_env.domain_calls[index].method == 'update_miclash') {
+		downgrade_call = downgrade_env.domain_calls[index];
+		break;
+	}
+assert_equal(downgrade_call.method, 'update_miclash');
+assert_equal(downgrade_call.args[0], 'downgrade');
+assert_equal(downgrade_call.args[1], 'v2.5.3');
+assert_equal(downgrade_call.args[2], 'telegram');
+let downgrade_completed = { ...downgrade_env.submitted[0], state: 'success',
+	stage: 'complete', progress: 100, error: null };
+downgrade_env.submitted[0] = downgrade_completed;
+downgrade_env.operation_subscribers[0](downgrade_completed);
+assert_equal(downgrade_controller.poll_once(), true);
+let downgrade_result = null;
+for (let request in downgrade_env.requests)
+	if (request_method(request) == 'editMessageText') downgrade_result = request;
+assert_match(downgrade_result.body, /Downgrade%20MiClash/,
+	'completed downgrade was mislabeled as an update');
 
 let direct_env = environment(), direct_controller = telegram.create(direct_env.app);
 assert_equal(direct_controller.handle_update(update(2100, '/stop_service')), false);
@@ -1105,6 +1188,30 @@ assert_match(completion_edit.body, /(^|&)chat_id=42(&|$)/);
 assert_match(completion_edit.body, /(^|&)message_id=50(&|$)/);
 assert_match(completion_edit.body, /(^|&)text=[^&]+/);
 assert_equal(completion_controller.status().panel_screen, 'operation_result');
+
+// Production uses the external long-poll process and telegram_ingest(); it never
+// calls controller.poll_once(). A terminal operation must therefore wake its
+// own durable receipt delivery loop.
+let ingest_completion_env = environment();
+let ingest_completion_controller = telegram.create(ingest_completion_env.app);
+assert_equal(ingest_completion_controller.start(), true);
+assert_equal(ingest_completion_controller.ingest(update(3060, '/start')).handled, true);
+assert_equal(ingest_completion_controller.ingest(
+	callback(3061, 'g1:open:subscription')).handled, true);
+assert_equal(ingest_completion_controller.ingest(
+	callback(3062, 'g2:execute:update_subscription')).handled, true);
+let ingest_completed = { ...ingest_completion_env.submitted[0], state: 'success',
+	stage: 'complete', progress: 100, error: null };
+ingest_completion_env.submitted[0] = ingest_completed;
+ingest_completion_env.operation_subscribers[0](ingest_completed);
+ingest_completion_env.clock.advance(0);
+let ingest_completion_edit = null;
+for (let request in ingest_completion_env.requests)
+	if (request_method(request) == 'editMessageText')
+		ingest_completion_edit = request;
+assert_true(ingest_completion_edit != null,
+	'external telegram_ingest flow did not deliver the terminal operation receipt');
+assert_equal(ingest_completion_controller.status().pending_deliveries, 0);
 
 let expired_env = environment(), expired_controller = telegram.create(expired_env.app);
 expired_controller.handle_update(update(3100, '/start'));
