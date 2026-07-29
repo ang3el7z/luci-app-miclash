@@ -25,17 +25,14 @@ export function verifyReleaseManifest({ manifestPath, assetsDir }) {
 	assert.equal(lstatSync(assetsDir).isDirectory(), true, 'assets directory is invalid');
 	const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 	exactKeys(manifest, [ 'schema_version', 'tag', 'source_tag_sha', 'synced_build_sha', 'installer',
-		'transition_installer', 'artifacts' ],
+		'artifacts' ],
 		'release manifest');
 	assert.equal(manifest.schema_version, 1);
 	assert.match(manifest.tag,
 		/^v[0-9]+\.[0-9]+\.[0-9]+(?:(?:[.-][0-9A-Za-z][0-9A-Za-z.-]*)|(?:_rc[0-9]+))?$/);
 	assert.match(manifest.source_tag_sha, COMMIT_PATTERN);
 	assert.match(manifest.synced_build_sha, COMMIT_PATTERN);
-	for (const [ field, filename ] of [
-		[ 'installer', 'install-miclash.sh' ],
-		[ 'transition_installer', 'install-miclash-upgrade-0-9-x-to-2.x.x.sh' ]
-	]) {
+	for (const [ field, filename ] of [ [ 'installer', 'install-miclash.sh' ] ]) {
 		const installer = manifest[field];
 		exactKeys(installer, [ 'filename', 'size', 'sha256' ], field);
 		assert.equal(installer.filename, filename);
@@ -85,8 +82,6 @@ export function verifyReleaseManifest({ manifestPath, assetsDir }) {
 			`${artifact.sha256}  ${artifact.filename}\n`);
 	}
 	const expectedFiles = [ MANIFEST_NAME, 'install-miclash.sh', 'install-miclash.sh.sha256',
-		'install-miclash-upgrade-0-9-x-to-2.x.x.sh',
-		'install-miclash-upgrade-0-9-x-to-2.x.x.sh.sha256',
 		...filenames.flatMap((filename) => [ filename, `${filename}.sha256` ]) ].sort();
 	assert.deepEqual(readdirSync(assetsDir).sort(), expectedFiles,
 		'release directory contains stale, missing, or unmanifested files');
@@ -124,11 +119,9 @@ function runBuilderContracts() {
 		writeBuild(artifacts, 'a-ipk', ipk, Buffer.from('ipk fixture\n'));
 		const options = {
 			artifactsDir: artifacts, tag: 'v1.2.3_rc1', sourceTagSha: 'a'.repeat(40),
-			syncedBuildSha: 'b'.repeat(40), installerPath: join(root, 'install-miclash.sh'),
-			transitionInstallerPath: join(root, 'install-miclash-upgrade-0-9-x-to-2.x.x.sh')
+			syncedBuildSha: 'b'.repeat(40), installerPath: join(root, 'install-miclash.sh')
 		};
 		writeFileSync(options.installerPath, '#!/bin/sh\nexit 0\n');
-		writeFileSync(options.transitionInstallerPath, '#!/bin/sh\nexit 0\n');
 		process.env.GH_TOKEN = 'must-never-appear-in-release-output';
 		buildReleaseManifest({ ...options, outputDir: first });
 		buildReleaseManifest({ ...options, outputDir: second });
@@ -201,8 +194,6 @@ function runRepositoryContracts() {
 	assert.match(release, /RELEASE_METADATA_PATH="\$\{\{ github\.workspace \}\}\/release-metadata\.json"/);
 	assert.match(release, /node tools\/build-release-manifest\.mjs/);
 	assert.match(release, /--installer install-miclash\.sh/);
-	assert.match(release, /--transition-installer install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
-		'release manifest must include the standalone transition installer');
 	assert.match(release, /git rev-parse HEAD[\s\S]*SOURCE_TAG_SHA/,
 		'release assets must be generated from the tagged source checkout');
 	assert.match(release, /node tools\/check-release-manifest\.mjs/);
@@ -215,8 +206,6 @@ function runRepositoryContracts() {
 		release.indexOf('Upload Publication Manifest Last'),
 		'publication manifest must be uploaded only after asset verification');
 	assert.match(release, /\.sha256/);
-	assert.match(release, /install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
-		'release workflow must stage and publish the transition installer');
 	assert.doesNotMatch(release,
 		/^\s*grep -Eq .*usr\/libexec\/miclash\/migrate\\\.uc.*\$package_entries/m,
 		'release workflow must not require the retired migration helper');
@@ -258,8 +247,6 @@ function runRepositoryContracts() {
 		'check-hard-reinstall-marker.sh', 'check-ready-release-selection.sh',
 		'check-update-status-protocol.sh' ])
 		assert.match(checks, new RegExp(gate.replace('.', '\\.')));
-	assert.match(checks, /sh -n install-miclash\.sh install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
-		'CI shell syntax gate must parse the standalone transition installer');
 
 	const docs = [ 'README.md', 'README.ru.md', 'README.zh-cn.md' ];
 	const commands = [ '/start', '/menu' ];
@@ -270,19 +257,6 @@ function runRepositoryContracts() {
 		assert.doesNotMatch(text, /23\.05/, `${path} still documents unsupported OpenWrt 23.05`);
 		for (const token of required)
 			assert.ok(text.toLowerCase().includes(token.toLowerCase()), `${path} is missing ${token}`);
-		assert.match(text, /v0\.9\.x[\s\S]*v2\.x/i,
-			`${path} must document the one-time v0.9.x to v2.x transition`);
-		assert.match(text, /install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh/,
-			`${path} must name the standalone transition installer`);
-		assert.match(text,
-			/wget --no-proxy -qO- https:\/\/raw\.githubusercontent\.com\/ang3el7z\/luci-app-miclash\/main\/install-miclash-upgrade-0-9-x-to-2\.x\.x\.sh \| ash/,
-			`${path} must expose the one-line v0.9 clean upgrade`);
-		assert.doesNotMatch(text, /mktemp -d \/tmp\/miclash-v09-clean/,
-			`${path} must not expose internal release-selection code`);
-		for (const token of [ 'install-miclash.sh', '/root/miclash-v09-backup-',
-			'rollback', 'journal', 'guard' ])
-			assert.ok(text.toLowerCase().includes(token.toLowerCase()),
-				`${path} transition documentation is missing ${token}`);
 		const commandBlocks = [ ...text.matchAll(/```text\r?\n([\s\S]*?)```/g) ];
 		assert.equal(commandBlocks.length, 1, `${path} must contain one Telegram command block`);
 		const documentedCommands = [ ...commandBlocks[0][1].matchAll(/\/subscription URL|\/[a-z_]+/g) ]
@@ -296,18 +270,6 @@ function runRepositoryContracts() {
 		assert.doesNotMatch(text, /releases\/latest|package="luci-app-miclash[-_]/,
 			`${path} must not construct a package from a possibly incomplete latest release`);
 	}
-	const transitionInstaller = readFileSync('install-miclash-upgrade-0-9-x-to-2.x.x.sh', 'utf8');
-	assert.match(transitionInstaller, /releases\?per_page=20/);
-	assert.match(transitionInstaller, /jsonfilter/);
-	assert.match(transitionInstaller, /\^v2\\\.\[0-9\]\+\\\.\[0-9\]\+\$/);
-	assert.match(transitionInstaller, /miclash-release-manifest\.json/);
-	assert.match(transitionInstaller, /release_ready "\$candidate"/);
-	for (const [ path, expression ] of Object.entries({
-		'README.ru.md': /пакет завершит установку ошибкой|повторите конфигурацию пакета/i,
-		'README.zh-cn.md': /软件包安装会明确失败|重新执行 package configuration/i
-	}))
-		assert.doesNotMatch(readFileSync(path, 'utf8'), expression,
-			`${path} retains orphaned v0.9 transition recovery prose`);
 }
 
 function parseArguments(values) {

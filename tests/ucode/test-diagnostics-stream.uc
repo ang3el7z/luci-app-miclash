@@ -48,6 +48,23 @@ assert_equal(filesystem.readfile(result.path),
 assert_equal(result.sha256, runtime.digest.sha256_file(result.path));
 assert_equal(result.size, length(filesystem.readfile(result.path)));
 
+let nested_path = '/tmp/miclash/nested-stream.json';
+let nested_writer = diagnostics_json.create(runtime,
+	filesystem.open(nested_path, 'wx', 0o600));
+nested_writer.begin_object();
+nested_writer.field('system', {
+	versions: { miclash: '2.6.2', mihomo: 'v1.19.13' },
+	architecture: 'x86_64'
+});
+nested_writer.begin_array_field('items');
+nested_writer.item({ name: 'one', values: [ 1, 2 ] });
+nested_writer.end_array();
+nested_writer.end_object();
+let nested_result = nested_writer.finish();
+assert_equal(filesystem.readfile(nested_result.path),
+	'{\n  "system": {\n    "versions": {\n      "miclash": "2.6.2",\n      "mihomo": "v1.19.13"\n    },\n    "architecture": "x86_64"\n  },\n  "items": [\n    {\n      "name": "one",\n      "values": [\n        1,\n        2\n      ]\n    }\n  ]\n}',
+	'nested values match JSON.stringify(value, null, 2) formatting');
+
 let string_path = '/tmp/miclash/streamed-string.json';
 let string_writer = diagnostics_json.create(runtime,
 	filesystem.open(string_path, 'wx', 0o600));

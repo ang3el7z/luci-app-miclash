@@ -4,7 +4,6 @@ set -eu
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 installer="$repo_root/install-miclash.sh"
-transition_installer="$repo_root/install-miclash-upgrade-0-9-x-to-2.x.x.sh"
 fixtures="$repo_root/tests/fixtures/releases"
 
 apk() {
@@ -17,16 +16,14 @@ opkg() {
     printf '%s\n' 'luci-app-miclash - 0.9.2-r1'
 }
 
-for package_installer in "$installer" "$transition_installer"; do
-    version_function="$(sed -n '/^installed_miclash_version() {$/,/^}$/p' "$package_installer")"
-    [ -n "$version_function" ] || {
-        echo "installed version parser is missing from $package_installer" >&2
-        exit 1
-    }
-    eval "$version_function"
-    [ "$(installed_miclash_version apk)" = 0.9.2-r1 ]
-    [ "$(installed_miclash_version opkg)" = 0.9.2-r1 ]
-done
+version_function="$(sed -n '/^installed_miclash_version() {$/,/^}$/p' "$installer")"
+[ -n "$version_function" ] || {
+    echo "installed version parser is missing from $installer" >&2
+    exit 1
+}
+eval "$version_function"
+[ "$(installed_miclash_version apk)" = 0.9.2-r1 ]
+[ "$(installed_miclash_version opkg)" = 0.9.2-r1 ]
 
 function_body() {
     sed -n "/^$2() {$/,/^}$/p" "$1"
@@ -265,55 +262,7 @@ test_installer_download_fallback() (
     [ "$proxy_calls" -eq 0 ]
 )
 
-test_transition_download_fallback() (
-    eval "$(require_function "$transition_installer" github_proxy_url)"
-    eval "$(require_function "$transition_installer" retryable_curl_code)"
-    eval "$(require_function "$transition_installer" download_once)"
-    eval "$(require_function "$transition_installer" download)"
-    calls=0
-    proxy_calls=0
-    curl_result=28
-    say() { :; }
-    curl() {
-        calls=$((calls + 1))
-        output=''
-        previous=''
-        for argument in "$@"; do
-            [ "$previous" != --output ] || output="$argument"
-            previous="$argument"
-        done
-        case "$*" in
-            *https://gh-proxy.com/https://github.com/*)
-                proxy_calls=$((proxy_calls + 1))
-                printf 'installer' >"$output"
-                return 0
-                ;;
-        esac
-        return "$curl_result"
-    }
-    target="$(mktemp)"
-    trap 'rm -f "$target"' EXIT
-    download \
-        'https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.0.2/install-miclash.sh' \
-        "$target"
-    [ "$(cat "$target")" = installer ]
-    [ "$calls" -eq 2 ]
-    [ "$proxy_calls" -eq 1 ]
-
-    calls=0
-    proxy_calls=0
-    curl_result=22
-    if download \
-        'https://github.com/ang3el7z/luci-app-miclash/releases/download/v2.0.2/missing' \
-        "$target"; then
-        exit 1
-    fi
-    [ "$calls" -eq 1 ]
-    [ "$proxy_calls" -eq 0 ]
-)
-
 test_installer_download_fallback
-test_transition_download_fallback
 test_exact_package_transition
 test_reinstall_core_policy
 

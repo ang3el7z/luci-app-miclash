@@ -21,7 +21,6 @@ MICLASH_IPK_SHA256_URL=""
 MICLASH_VER=""
 MICLASH_TAG_NAME=""
 MICLASH_TARGET_TAG=""
-MICLASH_CLEAN_INSTALL_PROTOCOL="miclash-clean-install-v2"
 MICLASH_TEST_FIXTURE_DIR=""
 MICLASH_CATALOG_FILE=""
 MICLASH_FETCHED_FILE=""
@@ -389,7 +388,7 @@ cross_major_update() {
 
 reject_unauthorized_cross_major() {
     if cross_major_update "$MICLASH_INSTALLED_VER" "$MICLASH_VER"; then
-        die "Direct cross-major MiClash updates are refused; use the dedicated transition installer"
+        die "Direct cross-major MiClash updates are not supported"
     fi
 }
 
@@ -1123,35 +1122,6 @@ install_miclash() {
     fi
 }
 
-run_clean_install_mode() {
-    MICLASH_TARGET_TAG=""
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-            --target-tag)
-                [ "$#" -gt 1 ] || die "missing value for --target-tag"
-                MICLASH_TARGET_TAG="$2"
-                shift 2
-                ;;
-            *) die "unknown clean-install argument: $1" ;;
-        esac
-    done
-    printf '%s\n' "$MICLASH_TARGET_TAG" | grep -Eq '^v2\.[0-9]+\.[0-9]+$' ||
-        die "clean v0.9 upgrade requires a stable v2 target"
-    detect_openwrt
-    detect_arch
-    detect_installed_miclash
-    [ -z "$MICLASH_INSTALLED_VER" ] || die "clean-install requires the old package to be removed first"
-    prepare_work_dir
-    ensure_curl
-    fetch_miclash_release
-    INSTALL_ACTION="install"
-    pkg_update
-    install_deps
-    install_miclash
-    install_mihomo
-    echo "MiClash package and fresh Mihomo core installed; services remain stopped"
-}
-
 operation_terminal_for_status() {
     terminal_status_file="$1"
     case "$terminal_status_file" in
@@ -1562,9 +1532,6 @@ elif [ "${1:-}" = "ready-release-selection-test" ]; then
 elif [ "${1:-}" = "app" ]; then
     shift
     run_app_mode "$@"
-elif [ "${1:-}" = "clean-install" ]; then
-    shift
-    run_clean_install_mode "$@"
 else
     main "$@"
 fi

@@ -83,19 +83,17 @@ function atomicWrite(destination, content) {
 }
 
 export function buildReleaseManifest({
-	artifactsDir, outputDir, installerPath, transitionInstallerPath, tag, sourceTagSha, syncedBuildSha
+	artifactsDir, outputDir, installerPath, tag, sourceTagSha, syncedBuildSha
 }) {
 	assert.equal(typeof artifactsDir, 'string');
 	assert.equal(typeof outputDir, 'string');
 	assert.equal(typeof installerPath, 'string');
-	assert.equal(typeof transitionInstallerPath, 'string');
 	assert.match(tag, TAG_PATTERN, 'release tag is invalid');
 	assert.match(sourceTagSha, COMMIT_PATTERN, 'source tag SHA is invalid');
 	assert.match(syncedBuildSha, COMMIT_PATTERN, 'synced build SHA is invalid');
 	const artifactsRoot = resolve(artifactsDir);
 	const outputRoot = resolve(outputDir);
 	const installerSource = resolve(installerPath);
-	const transitionInstallerSource = resolve(transitionInstallerPath);
 	assert.ok(existsSync(artifactsRoot) && statSync(artifactsRoot).isDirectory(),
 		'artifacts directory does not exist');
 	assert.equal(basename(installerSource), 'install-miclash.sh',
@@ -105,13 +103,6 @@ export function buildReleaseManifest({
 		'installer source must not be a symlink');
 	assert.equal(lstatSync(installerSource).isFile(), true,
 		'installer source must be a regular file');
-	assert.equal(basename(transitionInstallerSource), 'install-miclash-upgrade-0-9-x-to-2.x.x.sh',
-		'transition installer source has an unexpected filename');
-	assert.ok(existsSync(transitionInstallerSource), 'transition installer source does not exist');
-	assert.equal(lstatSync(transitionInstallerSource).isSymbolicLink(), false,
-		'transition installer source must not be a symlink');
-	assert.equal(lstatSync(transitionInstallerSource).isFile(), true,
-		'transition installer source must be a regular file');
 	assert.notEqual(artifactsRoot, outputRoot, 'output directory must differ from artifacts directory');
 	const builds = metadataFiles(artifactsRoot).map(readBuild);
 	assert.ok(builds.length > 0, `no ${METADATA_NAME} files found`);
@@ -141,8 +132,7 @@ export function buildReleaseManifest({
 			});
 		}
 		const installers = [
-			[ 'installer', 'install-miclash.sh', installerSource ],
-			[ 'transition_installer', 'install-miclash-upgrade-0-9-x-to-2.x.x.sh', transitionInstallerSource ]
+			[ 'installer', 'install-miclash.sh', installerSource ]
 		];
 		const installerEntries = {};
 		for (const [ field, filename, source ] of installers) {
@@ -159,7 +149,6 @@ export function buildReleaseManifest({
 			source_tag_sha: sourceTagSha,
 			synced_build_sha: syncedBuildSha,
 			installer: installerEntries.installer,
-			transition_installer: installerEntries.transition_installer,
 			artifacts
 		};
 		atomicWrite(join(outputRoot, MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -186,13 +175,12 @@ function parseArguments(values) {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
 	const args = parseArguments(process.argv.slice(2));
-	for (const name of [ 'artifacts-dir', 'output-dir', 'installer', 'transition-installer', 'tag', 'source-tag-sha', 'synced-build-sha' ])
+	for (const name of [ 'artifacts-dir', 'output-dir', 'installer', 'tag', 'source-tag-sha', 'synced-build-sha' ])
 		assert.ok(args[name], `missing --${name}`);
 	const manifest = buildReleaseManifest({
 		artifactsDir: args['artifacts-dir'],
 		outputDir: args['output-dir'],
 		installerPath: args.installer,
-		transitionInstallerPath: args['transition-installer'],
 		tag: args.tag,
 		sourceTagSha: args['source-tag-sha'],
 		syncedBuildSha: args['synced-build-sha']
