@@ -98,7 +98,6 @@ function telegram_settings_value(app) {
 		app.settings_get()?.telegram;
 	if (type(settings) != 'object')
 		settings = {};
-	settings = redact.value('telegram', settings);
 	return settings;
 };
 

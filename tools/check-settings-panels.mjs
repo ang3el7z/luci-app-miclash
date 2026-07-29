@@ -102,16 +102,20 @@ assert.doesNotMatch(settings, /Save management settings|data-action[^\n]*save/,
 	'management panel still owns a separate save button');
 assert.doesNotMatch(settings, /backup_outcome|Backup result/,
 	'removed Backup notification remains in Settings');
-assert.match(settings, /function telegramTokenMask\(length\)/,
-	'Telegram token mask must derive its length from backend metadata');
-assert.match(settings, /status\.bot_configured === true \? telegramTokenMask\(status\.bot_length\) : ''/,
-	'Telegram token display must use the safe token-specific status fields');
+assert.match(settings, /const token = typeof settings\.token === 'string' \? settings\.token : ''/,
+	'Telegram settings must hydrate the saved token into the local input');
+assert.match(settings, /'value': token,/,
+	'Telegram token input must retain the saved token while password masking is active');
+assert.match(settings, /Promise\.resolve\(\)\.then\(\(\) => api\.telegram_settings\(\)\)/,
+	'Telegram settings must load the saved token before the visibility toggle is used');
+assert.match(settings, /telegramSettings: reply \|\| \{\}/,
+	'Telegram settings response must remain separate from the redacted general settings payload');
 assert.match(settings, /function updateTelegramTokenReveal\(\)/,
 	'Telegram token reveal must track whether the current field is empty');
 assert.match(settings, /reveal\.hidden = !length;/,
 	'Telegram token reveal must disappear when the current field is empty');
-assert.doesNotMatch(settings, /DISPLAY_MASK/,
-	'Telegram token display must not use a fixed-length mask');
+assert.doesNotMatch(settings, /telegramTokenMask|DISPLAY_MASK/,
+	'Telegram token field must hold the actual value rather than a synthetic mask');
 assert.doesNotMatch(settings, /Poller is running|Poller is stopped/,
 	'Telegram poller implementation status must not clutter Settings');
 assert.doesNotMatch(settings, /telegram_token_reveal|telegram-token-reveal/,
@@ -155,8 +159,6 @@ assert.equal(module.exactTelegramId('9007199254740993123456789'), true);
 assert.equal(module.exactTelegramId('9e18'), false);
 assert.equal(module.exactTelegramToken('123456:telegram-secret'), true);
 assert.equal(module.exactTelegramToken('not-a-token'), false);
-assert.equal(module.telegramTokenMask(0), '');
-assert.equal(module.telegramTokenMask(22), '**********************');
 assert.equal(Object.keys(module.MEMORY_FIELDS).length, 14);
 
 let releaseRefresh;
@@ -168,7 +170,7 @@ const refreshApi = {
 	memorySettings: async () => ({}),
 	memoryResetBaseline: async () => ({}),
 	telegram_status: () => { refreshCalls++; return refreshGate; },
-	telegram_settings: async () => ({}),
+	telegram_settings: () => { refreshCalls++; return refreshGate; },
 	telegram_test: async () => ({}),
 	notificationSettings: async () => ({}),
 	testNotification: async () => ({}),
@@ -199,7 +201,7 @@ const firstRefresh = refreshPanel.refresh(true);
 await Promise.resolve();
 const secondRefresh = refreshPanel.refresh(true);
 await Promise.resolve();
-assert.equal(refreshCalls, 3, 'overlapping Settings refresh issued duplicate RPCs');
+assert.equal(refreshCalls, 4, 'overlapping Settings refresh issued duplicate RPCs');
 releaseRefresh({});
 await Promise.all([ firstRefresh, secondRefresh ]);
 refreshPanel.destroy();

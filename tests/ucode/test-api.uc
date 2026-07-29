@@ -114,7 +114,8 @@ assert_equal(last_mihomo_update_arguments.version, 'v1.19.10');
 assert_equal(methods.update_miclash.call({ args: {
 	channel: 'release', source: 'luci', action: 'replace', version: 'v2.5.4'
 } }).error.code, 'INVALID_ARGUMENT');
-assert_equal(methods.telegram_settings.call({ args: {} }).token, '[REDACTED]');
+assert_equal(methods.telegram_settings.call({ args: {} }).token, '123:secret',
+	'authenticated Telegram settings return the saved token for the local visibility toggle');
 let safe_settings = methods.settings_get.call({ args: {} });
 assert_equal(safe_settings.telegram.token, '[REDACTED]');
 assert_equal(safe_settings.notifications.syslog_events[0], 'guard_outage');
