@@ -794,7 +794,8 @@ assert_equal(length(barrier.submitted), 0);
 assert_equal(length(barrier.audit), 0, 'later update crossed persistence barrier');
 assert_equal(barrier_controller.status().last_error, 'INTERNAL');
 assert_equal(barrier_controller.status().retry_after_ms, 1000);
-assert_equal(active_timers(barrier.clock), 0);
+assert_equal(active_timers(barrier.clock), 1,
+	'controller startup retains the independently armed polling timer');
 assert_match(barrier.requests[0].url, /\/getUpdates\?offset=800&timeout=25/);
 barrier.filesystem.fail_on = null;
 assert_equal(barrier_controller.poll_once(), true);
@@ -803,7 +804,8 @@ assert_equal(json(barrier.filesystem.readfile(offset_path)).last_update_id, 800)
 assert_equal(barrier_controller.status().last_update_id, 801);
 assert_equal(length(barrier.submitted), 0);
 assert_equal(barrier_controller.status().retry_after_ms, 0);
-assert_equal(active_timers(barrier.clock), 0);
+assert_equal(active_timers(barrier.clock), 1,
+	'one successful manual poll must not cancel the polling timer');
 
 // Telegram 429 honors retry_after; network failures back off exponentially.
 let limited_poll = environment({ poll_replies: [ {
@@ -814,7 +816,8 @@ let limited_poll = environment({ poll_replies: [ {
 let limited_controller = telegram.create(limited_poll.app);
 assert_equal(limited_controller.poll_once(), false);
 assert_equal(limited_controller.status().retry_after_ms, 7000);
-let network = environment({ poll_replies: [ 'DOWNLOAD_FAILED', 'DOWNLOAD_FAILED' ] });
+let network = environment({ poll_replies: [ 'DOWNLOAD_FAILED', 'DOWNLOAD_FAILED',
+	{ status: 200, headers: {}, body: '{"ok":true,"result":[]}' } ] });
 let network_controller = telegram.create(network.app);
 assert_equal(network_controller.poll_once(), false);
 assert_equal(network_controller.status().retry_after_ms, 1000);
@@ -822,14 +825,23 @@ assert_equal(network.logs[length(network.logs) - 1],
 	'telegram: poll failed: DOWNLOAD_FAILED');
 assert_equal(network_controller.poll_once(), false);
 assert_equal(network_controller.status().retry_after_ms, 2000);
+assert_equal(length(network.logs), 1,
+	'a retry must not repeat the same Telegram transport warning in the log');
+assert_equal(network_controller.poll_once(), true);
+assert_equal(network.logs[length(network.logs) - 1],
+	'telegram: polling recovered after 2 failures');
 
-// Start/stop only represents controller availability; the worker owns polling timers.
+// Starting Telegram must arm the poll timer immediately; otherwise a controller
+// can report running forever without receiving updates.
 let lifecycle = environment();
 let lifecycle_controller = telegram.create(lifecycle.app);
 assert_equal(lifecycle_controller.start(), true);
 assert_equal(lifecycle_controller.start(), false);
 assert_equal(lifecycle_controller.status().running, true);
-assert_equal(active_timers(lifecycle.clock), 0);
+assert_equal(active_timers(lifecycle.clock), 1);
+lifecycle.clock.advance(0);
+assert_equal(length(lifecycle.requests), 1);
+assert_equal(lifecycle_controller.status().last_success_at, lifecycle.clock.now());
 assert_equal(lifecycle_controller.stop(), true);
 assert_equal(lifecycle_controller.stop(), false);
 assert_equal(lifecycle_controller.status().running, false);
@@ -873,7 +885,8 @@ assert_equal(request_diagnostic(diagnostic_stop_controller, 711, 'lite'), true);
 diagnostic_stop.emit_report('success', 'complete', 100);
 assert_equal(diagnostic_stop.report_opens(), 1);
 assert_equal(diagnostic_stop.report_closes(), 1);
-assert_equal(active_timers(diagnostic_stop.clock), 1);
+assert_equal(active_timers(diagnostic_stop.clock), 2,
+	'polling and the pending document retry use independent timers');
 assert_equal(length(diagnostic_stop.operation_subscribers), 2);
 assert_equal(diagnostic_stop_controller.status().pending_deliveries, 1);
 assert_equal(diagnostic_stop_controller.stop(), true);
@@ -904,7 +917,8 @@ assert_equal(snapshot_controller.start(), true);
 assert_equal(snapshot_controller.poll_once(), true);
 assert_equal(snapshot_reads, 3, 'menu panel reread settings more than once');
 assert_equal(length(snapshot.submitted), 0);
-assert_equal(active_timers(snapshot.clock), 0);
+assert_equal(active_timers(snapshot.clock), 1,
+	'the controller keeps polling after a successful settings snapshot');
 
 // A controller records disabled/incomplete settings without creating a timer.
 for (let change in [ 'disabled', 'incomplete' ]) {
@@ -920,7 +934,7 @@ for (let change in [ 'disabled', 'incomplete' ]) {
 	assert_equal(length(inactive.requests), 0, change);
 }
 
-// A settings read error remains distinguishable and has no controller timer.
+// A settings read error remains distinguishable while the polling timer stays armed for retry.
 let settings_error = environment();
 let settings_error_controller = telegram.create(settings_error.app);
 assert_equal(settings_error_controller.start(), true);
@@ -929,7 +943,7 @@ assert_equal(settings_error_controller.poll_once(), false);
 assert_equal(settings_error_controller.status().running, true);
 assert_equal(settings_error_controller.status().last_error, 'SETTINGS_UNAVAILABLE');
 assert_equal(settings_error_controller.status().retry_after_ms, 1000);
-assert_equal(active_timers(settings_error.clock), 0);
+assert_equal(active_timers(settings_error.clock), 1);
 assert_equal(length(settings_error.requests), 0);
 
 // The authorized command limiter is bounded and audited without IDs, token, URL, or text.
@@ -1271,6 +1285,7 @@ assert_equal(methods.telegram_settings.args.ubus_rpc_session, '');
 assert_equal(length(keys(methods.telegram_test.args)), 1);
 assert_equal(methods.telegram_test.args.ubus_rpc_session, '');
 let telegram_settings = methods.telegram_settings.call({ args: {} });
-assert_equal(telegram_settings.token, '[REDACTED]');
+assert_equal(telegram_settings.token, api_env.settings.telegram.token,
+	'Telegram Settings may hydrate its password field without a reveal-time request');
 assert_equal(telegram_settings.user_id, api_env.settings.telegram.user_id);
 assert_equal(methods.telegram_test.call({ args: {} }).sent, true);

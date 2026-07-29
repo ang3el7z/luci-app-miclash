@@ -1,6 +1,6 @@
 import * as errors from 'miclash.errors';
 
-const CONNECT_TIMEOUT_MS = 2000;
+const CONNECT_TIMEOUT_MS = 8000;
 const REQUEST_TIMEOUT_MS = 5000;
 const RESPONSE_LIMIT = 65536;
 const MESSAGE_LIMIT = 4096;

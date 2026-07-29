@@ -385,6 +385,9 @@ export function create(app) {
 	function log_failure(message) {
 		try { app.logger?.warn('telegram: ' + message); } catch (error) {}
 	};
+	function log_info(message) {
+		try { app.logger?.info('telegram: ' + message); } catch (error) {}
+	};
 
 	function audit(action, result, update_id) {
 		try {
@@ -1352,19 +1355,24 @@ export function create(app) {
 					session.command_sync_next_at = app.runtime.clock.now() + 60000;
 				}
 			}
+			let recovered_after = state.failures;
 			state.last_success_at = app.runtime.clock.now();
 			state.last_error = null;
 			state.retry_after_ms = 0;
 			state.failures = 0;
+			if (recovered_after > 0)
+				log_info('polling recovered after ' + recovered_after + ' failures');
 			return true;
 		}
 		catch (error) {
+			let previous_error = state.last_error;
 			state.failures++;
 			let failure = errors.normalize(error);
 			state.last_error = failure.code;
 			state.retry_after_ms = min(MAX_BACKOFF_MS,
 				1000 * (1 << min(state.failures - 1, 6)));
-			log_failure('poll failed: ' + failure.code);
+			if (state.failures == 1 || previous_error != failure.code)
+				log_failure('poll failed: ' + failure.code);
 			return false;
 		}
 	};
@@ -1398,6 +1406,7 @@ export function create(app) {
 			return false;
 		resume_delivery();
 		state.running = true;
+		schedule(0);
 		schedule_pending_delivery();
 		return true;
 	};
