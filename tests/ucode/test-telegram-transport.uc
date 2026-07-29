@@ -55,7 +55,8 @@ assert_equal(transport.set_commands(settings, 'ru', [
 assert_equal(length(env.requests), 6);
 for (let index, request in env.requests) {
 	assert_match(request.url, /^https:\/\/api\.telegram\.org\/bot123456:telegram-secret\//);
-	assert_equal(request.connect_timeout_ms, 2000);
+	assert_equal(request.connect_timeout_ms, 8000,
+		'Telegram requests tolerate brief WAN/TLS connection stalls');
 	assert_equal(request.timeout_ms, index == 0 ? 30000 : 5000);
 	assert_equal(request.max_redirects, 0);
 	assert_equal(request.max_bytes, 65536);
