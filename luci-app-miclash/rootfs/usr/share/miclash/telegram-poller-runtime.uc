@@ -11,7 +11,7 @@ export function create(app) {
 	    type(app.end) != 'function')
 		invalid();
 
-	let failures = 0, stopping = false, ended = false;
+	let failures = 0, last_failure = null, stopping = false, ended = false;
 	let timer = null, kill_timer = null, child = null, session = null, connection = null;
 	let cycle;
 
@@ -56,9 +56,26 @@ export function create(app) {
 			errors.fail('INTERNAL');
 	};
 
-	function warn(error) {
-		let code = errors.normalize(error).code;
+	function report(success, error, retry_after_ms) {
+		if (connection == null)
+			return;
+		try { connection.call('miclash', 'telegram_poll_report', {
+			success, error, retry_after_ms
+		}); } catch (ignored) {}
+	};
+
+	function warn(code) {
+		if (failures != 1 && last_failure == code)
+			return;
+		last_failure = code;
 		try { app.logger?.warn('Telegram poll failed: ' + code); } catch (ignored) {}
+	};
+
+	function recovered() {
+		if (failures > 0)
+			try { app.logger?.info('Telegram polling recovered after ' + failures + ' failures'); } catch (ignored) {}
+		failures = 0;
+		last_failure = null;
 	};
 
 	function retry(error, delay) {
@@ -66,12 +83,17 @@ export function create(app) {
 			try { session.abort(); } catch (ignored) {}
 			session = null;
 		}
-		disconnect();
-		if (stopping)
+		if (stopping) {
+			disconnect();
 			return finish();
+		}
 		failures++;
-		warn(error);
-		schedule(delay ?? app.retry_delay_ms(failures), cycle);
+		let code = errors.normalize(error).code;
+		let retry_after_ms = delay ?? app.retry_delay_ms(failures);
+		report(false, code, retry_after_ms);
+		warn(code);
+		disconnect();
+		schedule(retry_after_ms, cycle);
 	};
 
 	function process_complete(code, plan) {
@@ -89,8 +111,10 @@ export function create(app) {
 			let response = completed.complete(code);
 			let reply = plan.complete(response);
 			if (reply.retry_after_ms > 0) {
-				disconnect();
 				failures++;
+				report(false, 'RATE_LIMITED', reply.retry_after_ms);
+				warn('RATE_LIMITED');
+				disconnect();
 				return schedule(reply.retry_after_ms, cycle);
 			}
 			for (let update in reply.updates) {
@@ -98,7 +122,8 @@ export function create(app) {
 				if (ingested?.retryable === true)
 					errors.fail('INTERNAL');
 			}
-			failures = 0;
+			report(true, '', 0);
+			recovered();
 			disconnect();
 			schedule(0, cycle);
 		}

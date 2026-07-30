@@ -12,14 +12,12 @@ import * as telegram_transport from 'miclash.telegram-transport';
 import * as update_action_contract from 'miclash.update-action';
 
 const OFFSET_NAME = 'telegram-offset.json';
-// miclashd serves ubus and timers on one event loop. Telegram long polling would
-// monopolize that loop and make unrelated LuCI RPC calls time out, so use a
-// bounded short poll and leave an explicit gap before the next request.
+// miclashd serves ubus on one event loop. The separate miclash-telegram-poller
+// owns Telegram long polling so network waits never block unrelated LuCI RPC.
 const MAX_MESSAGE_BYTES = 3500;
 const MAX_COMMANDS = 5;
 const RATE_WINDOW_MS = 60000;
 const MAX_BACKOFF_MS = 60000;
-const SUCCESS_DELAY_MS = 3000;
 const MAX_DOCUMENT_ATTEMPTS = 3;
 const HELP = '/start /menu';
 
@@ -367,7 +365,6 @@ export function create(app) {
 		retry_after_ms: 0,
 		failures: 0
 	};
-	let timer = null;
 	let delivery_timer = null, delivery_due = null;
 	let command_times = [];
 	let transport = telegram_transport.create(app);
@@ -1304,6 +1301,30 @@ export function create(app) {
 		return { handled: outcome.handled === true, retryable: outcome.retryable === true,
 			last_update_id: state.last_update_id };
 	};
+	controller.poll_report = (report) => {
+		if (type(report) != 'object' || type(report.success) != 'bool' ||
+		    type(report.error) != 'string' || type(report.retry_after_ms) != 'int' ||
+		    report.retry_after_ms < 0 || report.retry_after_ms > 3600000)
+			invalid();
+		let now = app.runtime.clock.now();
+		state.last_poll_at = now;
+		if (report.success) {
+			if (length(report.error) || report.retry_after_ms != 0)
+				invalid();
+			state.last_success_at = now;
+			state.last_error = null;
+			state.retry_after_ms = 0;
+			state.failures = 0;
+			return true;
+		}
+		let failure = report.error == 'RATE_LIMITED' ? report.error : errors.normalize(report.error).code;
+		if (failure == 'INTERNAL' && report.error != 'INTERNAL')
+			invalid();
+		state.failures++;
+		state.last_error = failure;
+		state.retry_after_ms = report.retry_after_ms;
+		return true;
+	};
 	controller.poll_once = () => {
 		let settings = configuration(app);
 		if (!settings.available) {
@@ -1315,9 +1336,6 @@ export function create(app) {
 		}
 		if (!settings.enabled || !settings.configured) {
 			state.running = false;
-			if (timer?.cancel != null)
-				timer.cancel();
-			timer = null;
 			state.last_error = null;
 			state.retry_after_ms = 0;
 			state.failures = 0;
@@ -1376,46 +1394,18 @@ export function create(app) {
 			return false;
 		}
 	};
-	function schedule(delay) {
-		let candidate = null;
-		try { candidate = app.runtime.clock.set_timeout(delay, () => {
-			timer = null;
-			if (!state.running)
-				return;
-			controller.poll_once();
-			if (!state.running)
-				return;
-			try { schedule(state.retry_after_ms > 0 ? state.retry_after_ms : SUCCESS_DELAY_MS); }
-			catch (error) {
-				state.running = false;
-				state.last_error = 'INTERNAL';
-				state.retry_after_ms = 0;
-			}
-		}); }
-		catch (error) { errors.fail('INTERNAL'); }
-		if (candidate == null || type(candidate.cancel) != 'function') {
-			try { candidate?.cancel?.(); } catch (error) {}
-			errors.fail('INTERNAL');
-		}
-		timer = candidate;
-		return true;
-	};
 	controller.start = () => {
 		let settings = configuration(app);
 		if (state.running || !settings.available || !settings.enabled || !settings.configured)
 			return false;
 		resume_delivery();
 		state.running = true;
-		schedule(0);
 		schedule_pending_delivery();
 		return true;
 	};
 	controller.stop = () => {
 		let was_running = state.running;
 		state.running = false;
-		if (timer?.cancel != null)
-			timer.cancel();
-		timer = null;
 		suspend_delivery();
 		return was_running;
 	};

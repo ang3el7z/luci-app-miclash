@@ -16,7 +16,7 @@ const expectedNames = 'status,overview,health,operation_get,operation_list,' +
 	'subscription_get,subscription_set,subscription_update,update_release,update_miclash,' +
 	'update_mihomo,update_rollback_mihomo,memory_status,memory_reset_baseline,memory_settings,' +
 	'diagnostics_summary,diagnostics_create_report,diagnostics_route_test,' +
-	'telegram_status,telegram_settings,telegram_test,telegram_ingest,' +
+	'telegram_status,telegram_settings,telegram_test,telegram_ingest,telegram_poll_report,' +
 	'devices_list,devices_timezones,devices_policy_list,devices_policy_set,devices_policy_delete,' +
 	'notifications_settings,notifications_test,notifications_list,logs_read,system_info,' +
 	'network_interfaces,ruleset_list,ruleset_read,ruleset_write,ruleset_delete,' +
@@ -46,7 +46,7 @@ for (const method of fixture.methods) {
 		`${method.name} must have one exact canonical contract`);
 	assert.ok(method.access === 'read' || method.access === 'write' || method.access === 'internal',
 		`${method.name} has no exact read/write/internal classification`);
-	assert.equal(method.access, method.name === 'telegram_ingest' ? 'internal' :
+	assert.equal(method.access, [ 'telegram_ingest', 'telegram_poll_report' ].includes(method.name) ? 'internal' :
 		(expectedRead.has(method.name) ? 'read' : 'write'),
 		`${method.name} violates the reviewed least-privilege partition`);
 }

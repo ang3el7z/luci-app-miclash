@@ -1385,6 +1385,7 @@ export function compose(runtime, overrides) {
 			};
 			telegram_controller = modules.telegram.create(telegram_app);
 			app.telegram_ingest = (update) => telegram_controller.ingest(update);
+			app.telegram_poll_report = (report) => telegram_controller.poll_report(report);
 			sync_telegram_channel();
 			telegram_domain.configure(telegram_settings);
 			let telegram_closed = false;

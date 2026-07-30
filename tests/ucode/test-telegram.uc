@@ -794,8 +794,8 @@ assert_equal(length(barrier.submitted), 0);
 assert_equal(length(barrier.audit), 0, 'later update crossed persistence barrier');
 assert_equal(barrier_controller.status().last_error, 'INTERNAL');
 assert_equal(barrier_controller.status().retry_after_ms, 1000);
-assert_equal(active_timers(barrier.clock), 1,
-	'controller startup retains the independently armed polling timer');
+assert_equal(active_timers(barrier.clock), 0,
+	'external polling does not arm a miclashd timer');
 assert_match(barrier.requests[0].url, /\/getUpdates\?offset=800&timeout=25/);
 barrier.filesystem.fail_on = null;
 assert_equal(barrier_controller.poll_once(), true);
@@ -804,8 +804,8 @@ assert_equal(json(barrier.filesystem.readfile(offset_path)).last_update_id, 800)
 assert_equal(barrier_controller.status().last_update_id, 801);
 assert_equal(length(barrier.submitted), 0);
 assert_equal(barrier_controller.status().retry_after_ms, 0);
-assert_equal(active_timers(barrier.clock), 1,
-	'one successful manual poll must not cancel the polling timer');
+assert_equal(active_timers(barrier.clock), 0,
+	'manual poll coverage must not create a production polling timer');
 
 // Telegram 429 honors retry_after; network failures back off exponentially.
 let limited_poll = environment({ poll_replies: [ {
@@ -831,16 +831,22 @@ assert_equal(network_controller.poll_once(), true);
 assert_equal(network.logs[length(network.logs) - 1],
 	'telegram: polling recovered after 2 failures');
 
-// Starting Telegram must arm the poll timer immediately; otherwise a controller
-// can report running forever without receiving updates.
+// The separate miclash-telegram-poller owns network long polling. miclashd
+// must stay responsive to unrelated ubus reads while receiving worker telemetry.
 let lifecycle = environment();
 let lifecycle_controller = telegram.create(lifecycle.app);
 assert_equal(lifecycle_controller.start(), true);
 assert_equal(lifecycle_controller.start(), false);
 assert_equal(lifecycle_controller.status().running, true);
-assert_equal(active_timers(lifecycle.clock), 1);
-lifecycle.clock.advance(0);
-assert_equal(length(lifecycle.requests), 1);
+assert_equal(active_timers(lifecycle.clock), 0,
+	'the controller must not create a second synchronous Telegram poller');
+assert_equal(lifecycle_controller.poll_report({
+	success: false, error: 'DOWNLOAD_FAILED', retry_after_ms: 1000
+}), true);
+assert_equal(lifecycle_controller.status().last_error, 'DOWNLOAD_FAILED');
+assert_equal(lifecycle_controller.poll_report({
+	success: true, error: '', retry_after_ms: 0
+}), true);
 assert_equal(lifecycle_controller.status().last_success_at, lifecycle.clock.now());
 assert_equal(lifecycle_controller.stop(), true);
 assert_equal(lifecycle_controller.stop(), false);
@@ -885,8 +891,8 @@ assert_equal(request_diagnostic(diagnostic_stop_controller, 711, 'lite'), true);
 diagnostic_stop.emit_report('success', 'complete', 100);
 assert_equal(diagnostic_stop.report_opens(), 1);
 assert_equal(diagnostic_stop.report_closes(), 1);
-assert_equal(active_timers(diagnostic_stop.clock), 2,
-	'polling and the pending document retry use independent timers');
+assert_equal(active_timers(diagnostic_stop.clock), 1,
+	'only the pending document retry owns a controller timer');
 assert_equal(length(diagnostic_stop.operation_subscribers), 2);
 assert_equal(diagnostic_stop_controller.status().pending_deliveries, 1);
 assert_equal(diagnostic_stop_controller.stop(), true);
@@ -917,8 +923,8 @@ assert_equal(snapshot_controller.start(), true);
 assert_equal(snapshot_controller.poll_once(), true);
 assert_equal(snapshot_reads, 3, 'menu panel reread settings more than once');
 assert_equal(length(snapshot.submitted), 0);
-assert_equal(active_timers(snapshot.clock), 1,
-	'the controller keeps polling after a successful settings snapshot');
+assert_equal(active_timers(snapshot.clock), 0,
+	'the controller does not schedule network polling after a settings snapshot');
 
 // A controller records disabled/incomplete settings without creating a timer.
 for (let change in [ 'disabled', 'incomplete' ]) {
@@ -934,7 +940,7 @@ for (let change in [ 'disabled', 'incomplete' ]) {
 	assert_equal(length(inactive.requests), 0, change);
 }
 
-// A settings read error remains distinguishable while the polling timer stays armed for retry.
+// A settings read error remains distinguishable without adding a controller timer.
 let settings_error = environment();
 let settings_error_controller = telegram.create(settings_error.app);
 assert_equal(settings_error_controller.start(), true);
@@ -943,7 +949,7 @@ assert_equal(settings_error_controller.poll_once(), false);
 assert_equal(settings_error_controller.status().running, true);
 assert_equal(settings_error_controller.status().last_error, 'SETTINGS_UNAVAILABLE');
 assert_equal(settings_error_controller.status().retry_after_ms, 1000);
-assert_equal(active_timers(settings_error.clock), 1);
+assert_equal(active_timers(settings_error.clock), 0);
 assert_equal(length(settings_error.requests), 0);
 
 // The authorized command limiter is bounded and audited without IDs, token, URL, or text.
@@ -1254,7 +1260,7 @@ assert_true(index(command_env.requests[2].body, 'language_code=ru') >= 0);
 let api_env = environment();
 let controller = telegram.create(api_env.app);
 assert_equal(sprintf('%J', sort(keys(controller))), sprintf('%J', sort([
-	'configure', 'start', 'stop', 'status', 'test', 'poll_once', 'handle_update', 'ingest', 'send_event'
+	'configure', 'start', 'stop', 'status', 'test', 'poll_once', 'poll_report', 'handle_update', 'ingest', 'send_event'
 ])));
 let minimal_app = {
 	status: () => ({}), overview: () => ({}), health: () => ({}), operation_get: () => null,
@@ -1272,18 +1278,21 @@ let minimal_app = {
 	telegram_status: () => controller.status(),
 	telegram_settings: () => api_env.settings.telegram,
 	telegram_test: () => controller.test(),
-	telegram_ingest: (update) => controller.ingest(update)
+	telegram_ingest: (update) => controller.ingest(update),
+	telegram_poll_report: (report) => controller.poll_report(report)
 };
 let methods = api.method_table(minimal_app);
 assert_true(methods.telegram_status != null);
 assert_true(methods.telegram_settings != null);
 assert_true(methods.telegram_test != null);
+assert_true(methods.telegram_poll_report != null);
 assert_equal(length(keys(methods.telegram_status.args)), 1);
 assert_equal(methods.telegram_status.args.ubus_rpc_session, '');
 assert_equal(length(keys(methods.telegram_settings.args)), 1);
 assert_equal(methods.telegram_settings.args.ubus_rpc_session, '');
 assert_equal(length(keys(methods.telegram_test.args)), 1);
 assert_equal(methods.telegram_test.args.ubus_rpc_session, '');
+assert_equal(methods.telegram_poll_report.args.ubus_rpc_session, '');
 let telegram_settings = methods.telegram_settings.call({ args: {} });
 assert_equal(telegram_settings.token, api_env.settings.telegram.token,
 	'Telegram Settings may hydrate its password field without a reveal-time request');
