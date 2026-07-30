@@ -9,8 +9,8 @@ const application = readFileSync('luci-app-miclash/rootfs/usr/share/miclash/appl
 
 assert.doesNotMatch(settings, /Promise\.all\(\[ api\.settings_get\(\), api\.memoryStatus\(\), api\.telegram_status\(\) \]\)/,
 	'Settings must not hold Memory and Telegram behind one combined RPC wait');
-assert.match(settings, /let settingsReady = false, memoryReady = false, telegramReady = false/,
-	'Settings must track readiness of each independently loaded card');
+assert.match(settings, /let settingsReady = false, memoryReady = false, telegramStatusReady = false, telegramSettingsReady = false/,
+	'Settings must track readiness of Memory and both independent Telegram responses');
 assert.doesNotMatch(devices, /Promise\.all\(\[ api\.devicesList\(\), api\.devicePolicies\(\), api\.deviceTimezones\(\) \]\)/,
 	'Devices must not hold the list behind timezone loading');
 assert.match(devices, /let devicesReady = false, policiesReady = false, timezonesReady = false/,

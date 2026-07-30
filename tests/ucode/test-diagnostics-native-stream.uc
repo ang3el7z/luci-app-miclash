@@ -3,7 +3,9 @@ import { sha256_file } from 'digest';
 import * as diagnostics_json from 'miclash.diagnostics-json';
 
 let fs = require('fs');
-let path = '/tmp/miclash-diagnostics-native-stream.json';
+let directory = fs.realpath('/tmp');
+assert_true(type(directory) == 'string' && length(directory), 'native temporary directory is canonical');
+let path = directory + '/miclash-diagnostics-native-stream.json';
 try { fs.unlink(path); } catch (error) {}
 
 let handle = fs.open(path, 'w', 0o600);
@@ -18,7 +20,8 @@ let runtime = {
 			return result === true || (result == null && resource.error() == null);
 		},
 		close: (resource) => resource.close(),
-		fstat: (resource) => fs.stat('/proc/self/fd/' + resource.fileno()),
+		fstat: (resource) => fs.stat('/proc/self/fd/' + resource.fileno()) ??
+			fs.stat('/dev/fd/' + resource.fileno()),
 		lstat: (name) => fs.lstat(name),
 		realpath: (name) => fs.realpath(name)
 	},
