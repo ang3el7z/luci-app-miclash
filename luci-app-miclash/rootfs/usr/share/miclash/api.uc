@@ -509,7 +509,8 @@ export function method_table(app, transfers) {
 		'network_recover', 'developer_uninstall',
 		'config_list', 'config_read',
 		'config_validate', 'config_apply', 'operational_settings_apply', 'config_swap',
-		'settings_get', 'settings_set', 'guard_transition', 'set_draining', 'telegram_ingest'
+		'settings_get', 'settings_set', 'guard_transition', 'set_draining', 'telegram_ingest',
+		'telegram_poll_report'
 	]) if (type(app?.[name]) != 'function')
 		errors.fail('INVALID_ARGUMENT');
 
@@ -768,6 +769,11 @@ export function method_table(app, transfers) {
 		telegram_ingest: method({ update: {} }, (arguments) => {
 			exact(arguments, { update: { type: 'object', required: true } });
 			return app.telegram_ingest(arguments.update);
+		}),
+		telegram_poll_report: method({ success: false, error: '', retry_after_ms: 0 }, (arguments) => {
+			exact(arguments, { success: { type: 'bool', required: true },
+				error: { type: 'string', required: true }, retry_after_ms: { type: 'int', required: true } });
+			return app.telegram_poll_report(arguments);
 		}),
 		devices_list: method(empty, (arguments) => {
 			exact(arguments, {});

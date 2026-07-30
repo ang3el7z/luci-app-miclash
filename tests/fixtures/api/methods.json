@@ -38,6 +38,7 @@
     { "name": "telegram_settings", "params": [], "operation": false, "access": "read" },
     { "name": "telegram_test", "params": [], "operation": false, "access": "write" },
     { "name": "telegram_ingest", "params": ["update"], "operation": false, "access": "internal" },
+    { "name": "telegram_poll_report", "params": ["success", "error", "retry_after_ms"], "operation": false, "access": "internal" },
     { "name": "devices_list", "params": [], "operation": false, "access": "read" },
     { "name": "devices_timezones", "params": [], "operation": false, "access": "read" },
     { "name": "devices_policy_list", "params": [], "operation": false, "access": "read" },

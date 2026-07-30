@@ -2,7 +2,7 @@ import * as poller_runtime from 'miclash.telegram-poller-runtime';
 import { assert_equal, assert_true } from 'testlib';
 
 function environment(options) {
-	let timers = [], processes = [], signals = [], ingested = [], disconnects = 0, ended = 0;
+	let timers = [], processes = [], signals = [], ingested = [], reports = [], logs = [], disconnects = 0, ended = 0;
 	let enabled = options?.enabled !== false;
 	let connection = {
 		call: (object, method, payload) => {
@@ -11,6 +11,10 @@ function environment(options) {
 			if (method == 'telegram_ingest') {
 				push(ingested, payload.update);
 				return { retryable: false };
+			}
+			if (method == 'telegram_poll_report') {
+				push(reports, payload);
+				return { recorded: true };
 			}
 			return null;
 		},
@@ -63,9 +67,12 @@ function environment(options) {
 			return true;
 		},
 		end: () => { ended++; },
-		logger: { warn: () => {} }
+		logger: {
+			warn: (message) => push(logs, 'warn: ' + message),
+			info: (message) => push(logs, 'info: ' + message)
+		}
 	};
-	return { app, timers, processes, signals, ingested,
+	return { app, timers, processes, signals, ingested, reports, logs,
 		disconnects: () => disconnects, ended: () => ended };
 };
 
@@ -76,6 +83,9 @@ assert_equal(length(normal.processes), 1);
 normal.processes[0].callback(0);
 assert_equal(length(normal.ingested), 1);
 assert_equal(normal.ingested[0].update_id, 11);
+assert_equal(sprintf('%J', normal.reports), sprintf('%J', [ {
+	success: true, error: '', retry_after_ms: 0
+} ]), 'the external long-poll worker reports a completed poll to miclashd');
 assert_equal(normal.disconnects(), 1);
 assert_equal(normal.timers[length(normal.timers) - 1].delay, 0,
 	'successful polling rearms immediately');
@@ -115,5 +125,22 @@ idle_poller.start();
 idle_poller.shutdown();
 assert_equal(idle.timers[0].active, false);
 assert_equal(idle.ended(), 1);
+
+let failed = environment();
+let failed_poller = poller_runtime.create(failed.app);
+failed_poller.start();
+failed.processes[0].callback(1);
+assert_equal(sprintf('%J', failed.reports), sprintf('%J', [ {
+	success: false, error: 'DOWNLOAD_FAILED', retry_after_ms: 1000
+} ]), 'the daemon receives polling failures without performing the network request itself');
+assert_equal(length(failed.logs), 1);
+failed.timers[length(failed.timers) - 1].callback();
+failed.processes[1].callback(1);
+assert_equal(length(failed.logs), 1,
+	'identical Telegram polling failures are logged once per outage');
+failed.timers[length(failed.timers) - 1].callback();
+failed.processes[2].callback(0);
+assert_equal(failed.logs[length(failed.logs) - 1],
+	'info: Telegram polling recovered after 2 failures');
 
 print('Telegram poller runtime tests passed\n');
